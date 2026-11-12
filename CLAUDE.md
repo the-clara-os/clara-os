@@ -1,11 +1,17 @@
 # ClaraOS: working notes for Claude
 
-Read DESIGN.md and ROADMAP.md first. This project is capped at about 100K
-tokens of assistant usage per day, so one session is one roadmap slice:
-state the slice, build it, finish with `make test` green on both
-architectures, bump the patch version, update ROADMAP.md, stage with
-`git add -A`, and stop. Never
-commit or push; commits are GPG-signed by Julio in his own terminal.
+Read DESIGN.md and ROADMAP.md first. One session is one roadmap slice: state
+the slice, build it, finish with `make test` green on both architectures,
+bump the patch version, update ROADMAP.md, stage with `git add -A`, and stop.
+Never commit or push; commits are GPG-signed by Julio in his own terminal.
+
+Budget: assistant work on this project is capped at 50 dollars per day, at
+list prices. `tools/session-cost.py` adds up what the day's Claude Code
+sessions in this repository have cost; run it when a slice is finished and
+report the figure. Never say a session stayed within the cap without having
+measured it. The money goes on context, not on tool calls: every message
+sent after five idle minutes re-sends the whole conversation at full price,
+so start each slice in a fresh session instead of continuing a long one.
 
 Build with `make` (expects Homebrew llvm and lld under /opt/homebrew/opt;
 override with `LLVM=` and `LLD=`). `make test` boots both architectures
