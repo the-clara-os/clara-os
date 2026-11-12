@@ -54,6 +54,33 @@ typedef struct {
     uint64_t             Attribute;
 } EFI_MEMORY_DESCRIPTOR;
 
+/* Descriptors in a memory map are desc_size bytes apart, which can be more
+ * than the structure above. */
+static inline const EFI_MEMORY_DESCRIPTOR *efi_region(const void *map, uint64_t desc_size, uint64_t i)
+{
+    return (const void *)((const uint8_t *)map + i * desc_size);
+}
+
+/* Is this kind of region ordinary memory, whoever is using it? The map also
+ * lists device and reserved address space, which can lie far above RAM. */
+static inline int efi_is_ram(uint32_t type)
+{
+    switch (type) {
+    case EfiLoaderCode:
+    case EfiLoaderData:
+    case EfiBootServicesCode:
+    case EfiBootServicesData:
+    case EfiRuntimeServicesCode:
+    case EfiRuntimeServicesData:
+    case EfiConventionalMemory:
+    case EfiACPIReclaimMemory:
+    case EfiACPIMemoryNVS:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
 enum efi_allocate_type { AllocateAnyPages, AllocateMaxAddress, AllocateAddress };
 
 typedef struct EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL;

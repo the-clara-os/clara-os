@@ -5,10 +5,24 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define CLARA_VERSION "0.0.3"
+#define CLARA_VERSION "0.0.4"
 
 #define PAGE_SHIFT 12
 #define PAGE_SIZE  (1ULL << PAGE_SHIFT)
+
+/* Nothing below this address is handed out or mapped. Frame 0 would be
+ * mistaken for a failed allocation and a null pointer has to fault; on x86
+ * the first megabyte also holds the firmware's leftovers and, later, the
+ * code that starts the other processors. */
+#define LOW_LIMIT 0x100000ULL
+
+/* RAM is mapped at its own address (vm.c), so a cast is all it takes to
+ * reach a physical address. The cast lives here so that every place that
+ * relies on that can be found. */
+static inline void *phys_ptr(uint64_t pa)
+{
+    return (void *)(uintptr_t)pa;
+}
 
 struct framebuffer {
     volatile uint32_t *pixels; /* 32 bits per pixel; NULL when there is no display */
@@ -36,9 +50,10 @@ struct boot_info {
     struct boot_file *files;   /* in directory order, or NULL */
 };
 
-/* boot.c: the stack kmain starts on. It is part of the kernel image. */
+/* boot.c: the stack kmain starts on. It is part of the kernel image, and its
+ * lowest page is a guard that vm_init unmaps. */
 #define KERNEL_STACK_SIZE (64 * 1024)
-extern uint8_t kernel_stack[KERNEL_STACK_SIZE];
+extern uint8_t kernel_stack[PAGE_SIZE + KERNEL_STACK_SIZE];
 
 /* console.c: text goes to the serial port and, after fbcon_init, to the
  * screen. %d %u %x %X %s %c %p and %% are supported, with zero padding and
@@ -67,6 +82,19 @@ uint64_t pmm_alloc(uint64_t pages);  /* adjacent frames, lowest first; 0 when no
 void     pmm_free(uint64_t addr, uint64_t pages);
 void     pmm_selftest(void);
 
+/* vm.c: the kernel's address space, in pages of PAGE_SIZE. RAM, the screen
+ * and devices sit at their physical addresses. */
+#define VM_WRITE  1u
+#define VM_EXEC   2u
+#define VM_DEVICE 4u /* device registers: not cached, not reordered */
+#define VM_HEAP_BASE 0x0000400000000000ULL /* reserved for the Lisp heap: */
+#define VM_HEAP_SIZE 0x0000400000000000ULL /* 64 TiB, starting at 64 TiB */
+void     vm_init(const struct boot_info *bi);
+void     vm_map(uint64_t va, uint64_t pa, uint64_t pages, unsigned flags); /* read-only data unless flags say more */
+void     vm_unmap(uint64_t va, uint64_t pages);
+uint64_t vm_lookup(uint64_t va); /* the physical page behind va, or 0 when nothing is mapped there */
+void     vm_selftest(void);
+
 /* string.c */
 void  *memset(void *dst, int c, size_t n);
 void  *memcpy(void *dst, const void *src, size_t n);
@@ -80,6 +108,14 @@ void arch_halt(void) __attribute__((noreturn));
 /* Call fn(arg) with the stack pointer at top, which must be 16-byte aligned. */
 void arch_switch_stack(void *top, void (*fn)(struct boot_info *), struct boot_info *arg)
     __attribute__((noreturn));
+void arch_map_devices(void);  /* vm_map the device registers the code above touches */
+
+/* arch/<arch>/mmu.c: what a page-table entry holds, for the walk in vm.c */
+int      arch_mmu_levels(void);                      /* how many levels of tables the processor walks */
+uint64_t arch_pte_table(uint64_t pa);                /* an entry that points at the next table */
+uint64_t arch_pte_page(uint64_t pa, unsigned flags); /* an entry that maps a page, flags as for vm_map */
+void     arch_mmu_switch(uint64_t root);             /* use the tables under root from now on */
+void     arch_tlb_flush(uint64_t va);                /* after changing va's entry in tables in use */
 
 /* main.c */
 void kmain(struct boot_info *bi) __attribute__((noreturn));

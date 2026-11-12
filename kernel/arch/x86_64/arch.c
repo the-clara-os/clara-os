@@ -35,6 +35,19 @@ void arch_serial_putc(char c)
     outb(COM1, (uint8_t)c);
 }
 
+/* The serial port is reached through I/O ports and needs no mapping. The
+ * local APIC's registers do: the kernel leaves them alone until M4, but the
+ * firmware's fault handlers read the APIC ID from them, and would fault in
+ * their turn if the page were missing. */
+void arch_map_devices(void)
+{
+    uint32_t lo, hi;
+
+    __asm__("rdmsr" : "=a"(lo), "=d"(hi) : "c"(0x1bu)); /* IA32_APIC_BASE */
+    uint64_t base = ((uint64_t)hi << 32 | lo) & 0x000ffffffffff000ULL;
+    vm_map(base, base, 1, VM_WRITE | VM_DEVICE);
+}
+
 void arch_halt(void)
 {
     for (;;)

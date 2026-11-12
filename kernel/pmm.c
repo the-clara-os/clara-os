@@ -3,18 +3,12 @@
  *
  * The firmware's memory map says what is RAM and what was free when the
  * kernel took the machine. Only conventional memory is handed out so far.
- * Boot-services memory is free on paper, but the processor still uses two
- * things the firmware left inside it: the page tables, and the exception
- * vectors whose register dump on the serial port is all the kernel has for a
- * fault handler. It stays out until both are the kernel's own (M3, M4); then
- * all of it can go to pmm_free. */
+ * Boot-services memory is free on paper, but the processor still uses the
+ * exception vectors the firmware left inside it: their register dump on the
+ * serial port is all the kernel has for a fault handler. It stays out until
+ * the kernel has vectors of its own (M4); then all of it can go to pmm_free. */
 #include "efi.h"
 #include "kernel.h"
-
-/* Nothing below this address is handed out. Frame 0 would be mistaken for a
- * failed allocation, and on x86 the first megabyte belongs to the firmware's
- * leftovers and, later, to the code that starts the other processors. */
-#define LOW_LIMIT 0x100000ULL
 
 static uint64_t *g_bitmap; /* bit i is frame g_first + i */
 static uint64_t g_first;   /* the lowest frame of RAM */
@@ -28,32 +22,6 @@ static const char *const type_names[EfiMaxMemoryType] = {
     "unusable",           "ACPI reclaim", "ACPI NVS",     "MMIO",
     "MMIO port space",    "PAL code",     "persistent",
 };
-
-/* Is this kind of region ordinary memory, whoever is using it? The firmware
- * also lists device and reserved address space, which can lie far above RAM
- * and must not stretch the bitmap. */
-static int is_ram(uint32_t type)
-{
-    switch (type) {
-    case EfiLoaderCode:
-    case EfiLoaderData:
-    case EfiBootServicesCode:
-    case EfiBootServicesData:
-    case EfiRuntimeServicesCode:
-    case EfiRuntimeServicesData:
-    case EfiConventionalMemory:
-    case EfiACPIReclaimMemory:
-    case EfiACPIMemoryNVS:
-        return 1;
-    default:
-        return 0;
-    }
-}
-
-static const EFI_MEMORY_DESCRIPTOR *region(const struct boot_info *bi, uint64_t i)
-{
-    return (const void *)((const uint8_t *)bi->memory_map + i * bi->desc_size);
-}
 
 /* The part of a region that can be handed out: free memory above LOW_LIMIT.
  * Returns its length in frames and stores where it starts. */
@@ -88,14 +56,14 @@ void pmm_init(const struct boot_info *bi)
 
     /* What the map holds, and how far RAM extends. */
     for (uint64_t i = 0; i < regions; i++) {
-        const EFI_MEMORY_DESCRIPTOR *d = region(bi, i);
+        const EFI_MEMORY_DESCRIPTOR *d = efi_region(bi->memory_map, bi->desc_size, i);
         uint64_t end = d->PhysicalStart + (d->NumberOfPages << PAGE_SHIFT);
 
         if (d->Type < EfiMaxMemoryType)
             pages[d->Type] += d->NumberOfPages;
         else
             other += d->NumberOfPages;
-        if (!is_ram(d->Type))
+        if (!efi_is_ram(d->Type))
             continue;
         ram += d->NumberOfPages;
         if (d->PhysicalStart < low)
@@ -118,15 +86,15 @@ void pmm_init(const struct boot_info *bi)
      * and begins with every frame in use. */
     uint64_t bitmap_pages = (g_frames + 8 * PAGE_SIZE - 1) / (8 * PAGE_SIZE);
     for (uint64_t i = 0; i < regions && !g_bitmap; i++)
-        if (free_part(region(bi, i), &start) >= bitmap_pages)
-            g_bitmap = (uint64_t *)(uintptr_t)start;
+        if (free_part(efi_region(bi->memory_map, bi->desc_size, i), &start) >= bitmap_pages)
+            g_bitmap = phys_ptr(start);
     if (!g_bitmap)
         panic("no free region can hold the %llu pages of the page-frame bitmap", bitmap_pages);
     memset(g_bitmap, 0xff, bitmap_pages << PAGE_SHIFT);
 
     /* Free what the firmware says is free, then take the bitmap's own frames back. */
     for (uint64_t i = 0; i < regions; i++) {
-        uint64_t count = free_part(region(bi, i), &start);
+        uint64_t count = free_part(efi_region(bi->memory_map, bi->desc_size, i), &start);
 
         if (count) {
             mark((start >> PAGE_SHIFT) - g_first, count, 0);
@@ -191,7 +159,7 @@ void pmm_free(uint64_t addr, uint64_t pages)
  * salt, or check that they still hold it. */
 static void pattern(uint64_t addr, uint64_t pages, uint64_t salt, int check)
 {
-    volatile uint64_t *word = (volatile uint64_t *)(uintptr_t)addr;
+    volatile uint64_t *word = phys_ptr(addr);
 
     for (uint64_t i = 0; i < pages * (PAGE_SIZE / 8); i++) {
         uint64_t want = (addr + i * 8) ^ salt;

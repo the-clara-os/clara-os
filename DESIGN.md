@@ -77,6 +77,31 @@ manager, and the applications are Lisp programs loaded into that world.
 - C11, freestanding, no libc, `-Wall -Wextra -Werror`. The targets are LLP64,
   so `long` is 32 bits: the kernel uses the stdint types and never `long`.
 
+## The address space (decided in M3, 2026-11-12)
+
+One address space and one set of page tables, in 4 KiB pages on both
+architectures (kernel/vm.c).
+
+- RAM is mapped at its own address: in RAM a virtual address is the
+  physical address. Page tables, device queues and everything else that
+  deals in physical addresses need no translation, and `phys_ptr()` is the
+  one place where that cast is written.
+- The screen and device registers sit at their own addresses too, mapped
+  one by one by the code that uses them. What nobody mapped faults.
+- The first megabyte is never mapped, so a null pointer faults.
+- The kernel image stays where the firmware loaded it and is mapped by
+  section: code and constants read-only, data not executable. It is not
+  moved to the upper half of the address space. A higher-half kernel leaves
+  the lower half to user programs, and here there are none; moving would
+  mean applying the image's relocations a second time and translating
+  between physical and virtual addresses from then on. The price is that C
+  code has no fixed address, so a saved heap must never hold one.
+- 64 TiB starting at 64 TiB (`VM_HEAP_BASE`) are reserved for the Lisp
+  heap: the same addresses on every machine and every boot, which is what a
+  saved heap image needs. The region is above any physical address the two
+  machines have, and inside the 47 bits both architectures offer without
+  x86_64's upper half or AArch64's second table register.
+
 ## Conventions
 
 - C: lower_snake_case for functions and files. Kernel-wide symbols carry
@@ -89,8 +114,9 @@ manager, and the applications are Lisp programs loaded into that world.
 - One C struct per hardware or firmware table, laid out as the specification
   says, with a comment on any padding or reserved slot that matters.
 - Numbers from specifications cite the document when they are not obvious.
-- A physical address is a `uint64_t`, never a pointer. Memory is handed out
-  in 4 KiB page frames on both architectures (kernel/pmm.c).
+- A physical address is a `uint64_t`, and `phys_ptr()` makes a pointer of
+  one. Memory is handed out in 4 KiB page frames on both architectures
+  (kernel/pmm.c).
 - No early abstraction: write it for one architecture, make it work on the
   second, then extract the shared interface.
 - Third-party material is vendored unmodified with its license beside it
