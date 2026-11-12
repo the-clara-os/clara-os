@@ -1,6 +1,6 @@
 # ClaraOS
 
-Website: <https://the-clara-os.github.io/clara-os/>
+Website: <https://claraos.org>
 
 A small operating system for x86_64 and AArch64, written in C to be read and
 understood from the first instruction up. It is not a Unix and does not try

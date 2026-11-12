@@ -86,15 +86,9 @@ The world:
 Later, in no order: a compiler written in Lisp; virtio-net and TCP/IP;
 outline fonts; sound; CLOS.
 
-The website, <https://the-clara-os.github.io/clara-os/>, is built from this
-file by site/build.py: the milestone list above, with its version numbers,
-is what the page shows, so keep the form of those entries. Left open there:
-
-- site/boot.png is a screenshot of version 0.0.4, to be replaced by hand
-  when the boot report has changed enough to matter.
-- Where the logo, site/sun.png, came from and under what license is not
-  recorded.
-- The site has no domain of its own.
+The website, <https://claraos.org>, is built from this file by
+site/build.py: the milestone list above, with its version numbers, is what
+the page shows, so keep the form of those entries.
 
 Infrastructure, for sessions with budget left over:
 
@@ -212,3 +206,13 @@ No milestone yet, to be picked up when they start to matter:
 - When ExitBootServices fails for good, the handoff says so through the
   firmware's console, which the specification no longer promises will work
   by then.
+- site/boot.png, on the website, is a screenshot of version 0.0.4, to be
+  replaced by hand when the boot report has changed enough to matter.
+- Where the logo, site/sun.png, came from and under what license is not
+  recorded.
+- www.claraos.org has no DNS record; only the bare domain reaches the
+  website.
+- claraos.org has not been verified for the GitHub organization (the Pages
+  API shows no protected domain state). Verifying it is what stops someone
+  else from claiming the name on GitHub Pages if the site is ever switched
+  off.
