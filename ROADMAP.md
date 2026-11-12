@@ -30,10 +30,16 @@ Substrate:
   the UEFI file protocol before ExitBootServices, lisp/boot.lisp being the
   first, for M6. Boot-services memory is counted but not reclaimed: that
   moved to M4, for the reason given under M4 in the loose ends below.
-- [ ] **M3 virtual memory.** Our own page tables on both architectures
-  (4 KiB pages), kernel mapped high, a large reserved region for the Lisp
-  heap, framebuffer and MMIO mapped on purpose, the firmware's tables
-  dropped.
+- [x] **M3 virtual memory** (2026-11-12, version 0.0.4). The kernel's own
+  page tables on both architectures, in 4 KiB pages: the walk in
+  kernel/vm.c, the entry formats and the switch in
+  kernel/arch/<arch>/mmu.c. RAM is mapped at its own address, and so are
+  the screen and the device registers in use, each by name. The first
+  megabyte is never mapped, and 64 TiB starting at 64 TiB are reserved for
+  the Lisp heap. The kernel image is mapped section by section from its own
+  PE headers: code cannot be written, data cannot be run. A guard page lies
+  under the boot stack. The firmware's tables are out of use. The image was
+  to be mapped high and is not: DESIGN.md, "The address space", says why.
 - [ ] **M4 exceptions and interrupts.** x86_64 IDT and exception handlers
   with a register dump; AArch64 vector table and EL1 exception dump; APIC
   and GIC initialisation from ACPI MADT; a timer tick on both (LAPIC timer,
@@ -104,53 +110,46 @@ Infrastructure, for sessions with budget left over:
   ExitBootServices; a fault on purpose; odd boot files (dot files, a
   subdirectory, an empty file, a 300 KB one, a long name, an accented
   name); 128 MiB and 4 GiB of memory; AArch64 without hvf; booting
-  build/claraos.img instead of the ESP directory.
+  build/claraos.img instead of the ESP directory. M3 added: accesses that
+  must fault (a write to code or to constants, running data, a null
+  pointer, the guard page, an unmapped heap address), and `-cpu max` on
+  both architectures.
 
 Shortcuts and loose ends, under the milestone that settles each one. A
 session reads its own group before it starts, and whatever it leaves open
 is added here in the same change.
 
-M3:
-
-- The kernel keeps running on the firmware's page tables.
-- Physical addresses are used as pointers, which works only under the
-  firmware's identity mapping: the page-frame bitmap and the self-test's
-  writes in kernel/pmm.c, and from `struct boot_info` the memory map, the
-  boot files, the framebuffer and the ACPI root pointer. The AArch64 UART
-  is reachable for the same reason. Each needs a mapping of its own.
-- The handoff does not record where the kernel image was loaded or how big
-  it is. EFI_LOADED_IMAGE_PROTOCOL, which kernel/boot.c already opens, has
-  both. The firmware lists the whole image, code, data and the boot stack,
-  as one "loader code" region, so the memory map cannot say which pages to
-  map read-only or no-execute; the PE section table can.
-- The image is relocated for the address the firmware loaded it at.
-  Running it at a high address means applying the PE base relocations a
-  second time, or leaving it where it is.
-- The boot stack is 64 KiB inside the kernel image, with nothing to stop
-  an overflow from running into kernel data. It is not page-aligned, so a
-  guard page needs it moved or padded.
-- The memory report gives totals per region type. The region-by-region
-  dump of M1 is gone, and may be wanted back while the page tables are
-  built.
-
 M4:
 
 - Boot-services memory, 30 to 45 MiB under QEMU, stays out of the
   page-frame allocator, because the processor still uses what the firmware
-  left in it. Measured on both architectures: the page tables are in
-  boot-services data; on x86_64 the IDT is in boot-services data and its
-  handlers in boot-services code; on AArch64 the vector table is in
-  boot-services code. M2 was to reclaim this memory and could not. Once the
-  tables (M3) and the vectors (M4) are the kernel's own, every region of
-  those two types goes to `pmm_free`.
+  left in it: on x86_64 the IDT (boot-services data) and its handlers
+  (boot-services code), on AArch64 the vector table (boot-services code).
+  M2 was to reclaim this memory and could not. Once the vectors are the
+  kernel's own, every region of those two types goes to `pmm_free`.
 - Until then the firmware's handlers are the only fault report there is: a
-  register dump on the serial port, nothing on the screen. Reclaiming any
-  earlier would silence it.
+  register dump on the serial port, nothing on the screen. They keep
+  working under the kernel's page tables because vm_init leaves
+  boot-services code writable and executable, AArch64 keeps SCTLR_EL1.WXN
+  off, and x86_64 maps the local APIC page, from which they read the
+  processor's ID. When the memory is reclaimed, map it as plain data and
+  turn WXN on.
+- A kernel stack overflow hits the guard page, and then the handler has no
+  stack to run on. AArch64 still prints a dump, marked as a recursive
+  exception; x86_64 resets without a word. The kernel's own handlers need a
+  stack of their own for this case (an IST entry on x86_64).
 - x86_64 runs on the firmware's GDT. It is in runtime-services data, so the
   reclaim leaves it intact, but the kernel should load its own with the
   IDT.
-- The page-frame allocator has no lock. It must not be called from an
-  interrupt handler, and from M5 on not from two threads at once.
+- Neither the page-frame allocator nor vm_map has a lock. They must not be
+  called from an interrupt handler, and from M5 on not from two threads at
+  once.
+
+M6a:
+
+- The heap region is reserved and empty. A frame mapped there can also be
+  reached at its physical address, like all RAM; decide whether heap frames
+  lose that second mapping.
 
 M6b:
 
@@ -172,11 +171,18 @@ M6c, M8:
 
 - The console is output only: no cursor and no keyboard.
 
+M10:
+
+- The kernel image runs wherever the firmware loaded it, so the address of
+  a C function changes with the machine and the build. A saved heap has to
+  name the substrate's functions by index or by name, never by address.
+
 No milestone yet, to be picked up when they start to matter:
 
-- The first megabyte of RAM is never handed out. Frame 0 would look like a
-  failed allocation, and x86 needs memory below 1 MiB to start the other
-  processors, which this roadmap does not do yet.
+- The first megabyte of RAM is never handed out or mapped. Frame 0 would
+  look like a failed allocation, a null pointer has to fault, and x86 needs
+  memory below 1 MiB to start the other processors, which this roadmap does
+  not do yet.
 - The allocator finds free frames with a linear scan of its bitmap, lowest
   address first. A long run on a fragmented machine reads the whole
   bitmap, and there is no way to ask for an aligned run, such as 2 MiB for
@@ -185,6 +191,21 @@ No milestone yet, to be picked up when they start to matter:
   the attribute bits; QEMU and UTM set none that matter. `pmm_free` takes
   any frame the bitmap covers that is in use, holes that are not RAM
   included: it trusts its caller.
+- The page tables use 4 KiB pages only, about 2 MiB of tables for each GiB
+  of RAM, and vm_unmap leaves an emptied table where it is.
+- All RAM is mapped writable at its own address, free frames and the
+  firmware's leftovers included, so a stray write that lands in RAM is not
+  caught.
+- The screen is mapped like RAM. A real display wants write-combining (the
+  PAT on x86_64, a non-cacheable attribute on AArch64); under QEMU and UTM
+  it makes no difference.
+- Runtime-services code is mapped as data. Nothing calls UEFI runtime
+  services; calling one would need that memory executable.
+- Five-level paging on x86_64 is written but has never run: OVMF leaves it
+  off, even with `-cpu max`.
+- A fault dump gives addresses, not names. To find the function, subtract
+  the "kernel image at" address printed at boot and look the offset up in
+  the build; nothing does that yet.
 - The handoff does not give back a memory-map buffer that turned out too
   small, or the pages of a boot file it failed to read: a few pages, at
   most once per boot.

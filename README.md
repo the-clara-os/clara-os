@@ -7,11 +7,12 @@ understood from the first instruction up. It is not a Unix and does not try
 to run Linux software. The kernel is its own UEFI application: the firmware
 loads `BOOTX64.EFI` or `BOOTAA64.EFI`, and from `efi_main` on it is ClaraOS.
 
-Status: milestone 2. Both architectures boot under QEMU with EDK2 firmware
+Status: milestone 3. Both architectures boot under QEMU with EDK2 firmware
 (the same firmware and machine types UTM uses), read their boot files from
-the ESP, take the machine from the firmware, and start on their own stack
-with a page-frame allocator built from the firmware's memory map. A text
-console on the serial port and on the screen reports each step.
+the ESP, take the machine from the firmware, and run on their own stack and
+their own page tables, with a page-frame allocator built from the
+firmware's memory map. A text console on the serial port and on the screen
+reports each step.
 [ROADMAP.md](ROADMAP.md) has what comes next, [DESIGN.md](DESIGN.md) the
 ideas and conventions.
 

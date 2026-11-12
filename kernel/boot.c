@@ -12,7 +12,7 @@
 static EFI_SYSTEM_TABLE *g_st;
 static struct boot_info g_boot;
 
-__attribute__((aligned(16))) uint8_t kernel_stack[KERNEL_STACK_SIZE];
+__attribute__((aligned(4096))) uint8_t kernel_stack[PAGE_SIZE + KERNEL_STACK_SIZE];
 
 static void efi_puts(const CHAR16 *s)
 {
@@ -28,7 +28,7 @@ static void *efi_alloc(uint64_t bytes)
 
     if (EFI_ERROR(g_st->BootServices->AllocatePages(AllocateAnyPages, EfiLoaderData, pages, &addr)))
         return NULL;
-    return (void *)(uintptr_t)addr;
+    return phys_ptr(addr);
 }
 
 static int guid_eq(const EFI_GUID *a, const EFI_GUID *b)
@@ -87,7 +87,7 @@ static void find_framebuffer(void)
     default: /* PixelBltOnly: nothing we can write to */
         return;
     }
-    fb->pixels = (volatile uint32_t *)(uintptr_t)gop->Mode->FrameBufferBase;
+    fb->pixels = phys_ptr(gop->Mode->FrameBufferBase);
     fb->width = info->HorizontalResolution;
     fb->height = info->VerticalResolution;
     fb->pitch = info->PixelsPerScanLine;

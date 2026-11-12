@@ -26,12 +26,14 @@ void kmain(struct boot_info *bi)
     fbcon_set_color(FBCON_TEXT);
 
     /* The address of a local variable says which stack this is. */
-    if ((uintptr_t)&bi - (uintptr_t)kernel_stack >= sizeof kernel_stack)
+    if ((uintptr_t)&bi - (uintptr_t)(kernel_stack + PAGE_SIZE) >= KERNEL_STACK_SIZE)
         panic("kmain is not running on the kernel stack");
-    kprintf("kernel stack: %u KiB at %p\n", (unsigned)(sizeof kernel_stack >> 10), (void *)kernel_stack);
+    kprintf("kernel stack: %u KiB at %p\n", KERNEL_STACK_SIZE >> 10, (void *)(kernel_stack + PAGE_SIZE));
 
     pmm_init(bi);
     pmm_selftest();
+    vm_init(bi);
+    vm_selftest();
     report_boot_files(bi);
     kprintf("ACPI RSDP %p, device tree %p\n", bi->acpi_rsdp, bi->dtb);
     if (bi->fb.pixels)
