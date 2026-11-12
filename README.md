@@ -1,5 +1,7 @@
 # ClaraOS
 
+Website: <https://the-clara-os.github.io/clara-os/>
+
 A small operating system for x86_64 and AArch64, written in C to be read and
 understood from the first instruction up. It is not a Unix and does not try
 to run Linux software. The kernel is its own UEFI application: the firmware
@@ -31,6 +33,7 @@ Layout:
     kernel/arch/     one directory per architecture: the only assembly and the only MMIO addresses
     lisp/            Lisp sources; the build copies them to the ESP's \clara directory, read at boot
     fonts/           the console font, Spleen 8x16, which tools/bdf2c.py turns into kernel/font.c
+    site/            the website: one page, filled in from ROADMAP.md by site/build.py (`make site`)
     tools/           run.sh (QEMU), boottest.sh (headless check and screenshot), mkimage.sh (UTM disk)
 
 ## Running in UTM

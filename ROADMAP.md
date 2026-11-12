@@ -80,6 +80,16 @@ The world:
 Later, in no order: a compiler written in Lisp; virtio-net and TCP/IP;
 outline fonts; sound; CLOS.
 
+The website, <https://the-clara-os.github.io/clara-os/>, is built from this
+file by site/build.py: the milestone list above, with its version numbers,
+is what the page shows, so keep the form of those entries. Left open there:
+
+- site/boot.png is a screenshot of version 0.0.4, to be replaced by hand
+  when the boot report has changed enough to matter.
+- Where the logo, site/sun.png, came from and under what license is not
+  recorded.
+- The site has no domain of its own.
+
 Infrastructure, for sessions with budget left over:
 
 - GitHub Actions: build and headless boot test on Ubuntu (clang, lld,

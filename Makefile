@@ -16,7 +16,7 @@ COMMON_SRCS := $(wildcard kernel/*.c)
 HEADERS     := $(wildcard kernel/*.h)
 BOOT_FILES  := $(patsubst lisp/%,$(BOOTDIR)/%,$(wildcard lisp/*.lisp))
 
-.PHONY: all test image font clean
+.PHONY: all test image font site clean
 all:
 
 # $(1) arch  $(2) clang target  $(3) extra CFLAGS  $(4) EFI file name  $(5) lld machine
@@ -53,6 +53,10 @@ image: all
 # Regenerate kernel/font.c after changing the font or tools/bdf2c.py.
 font:
 	python3 -I tools/bdf2c.py fonts/spleen-8x16.bdf fonts/LICENSE.spleen kernel/font.c
+
+# The website, the way .github/workflows/site.yml builds it for GitHub Pages.
+site:
+	python3 -I site/build.py $(BUILD)/site
 
 clean:
 	rm -rf $(BUILD)

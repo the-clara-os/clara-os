@@ -54,3 +54,8 @@ Rules:
   a limit, a check that was only run by hand. Saying it in the summary at
   the end is not enough; the next session starts from the files. Before
   starting a milestone, read its group there.
+- The website is site/index.html, filled in by site/build.py from ROADMAP.md
+  and the console font (`make site`, then open build/site/index.html), and
+  published by .github/workflows/site.yml on every push to main that touches
+  them. The page reads the milestone entries of ROADMAP.md, so keep their
+  form.
