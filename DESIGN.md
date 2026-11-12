@@ -45,7 +45,9 @@ manager, and the applications are Lisp programs loaded into that world.
 - **The image is the system.** Booting means loading a saved heap image from
   disk and resuming it with the window manager running. Until images exist,
   the boot handoff reads Lisp source files from the ESP through the UEFI
-  file protocol before ExitBootServices, so no disk driver is needed early.
+  file protocol before ExitBootServices, so no disk driver is needed early:
+  every file in the ESP's `\clara` directory, which the build fills from
+  lisp/.
 - **Threads are substrate threads.** A Lisp thread is a kernel thread with a
   Lisp-visible dynamic-binding stack. The garbage collector stops the world;
   precise, non-moving mark-sweep first, something better when it hurts.
@@ -56,7 +58,7 @@ manager, and the applications are Lisp programs loaded into that world.
 ## Platform decisions
 
 - UEFI only, on both architectures. No BIOS path, no multiboot, no separate
-  bootloader: the kernel is the EFI application (`efi_main` in kernel/main.c)
+  bootloader: the kernel is the EFI application (`efi_main` in kernel/boot.c)
   and ExitBootServices is the moment the machine becomes ours.
 - One source tree, one toolchain. clang and lld targeting `*-unknown-windows`
   produce the PE/COFF images the firmware wants. Architecture-specific code
@@ -68,8 +70,10 @@ manager, and the applications are Lisp programs loaded into that world.
   (EDK2 exposes ACPI, not a device tree, on the virt machine), PCIe for
   device discovery, virtio for the drivers.
 - Tests are boots. `make test` boots both architectures headless; no
-  milestone lands without it passing on both. Lisp code is also tested on
-  the host under SBCL.
+  milestone lands without it passing on both. Substrate code that can check
+  itself does so during the boot and panics when a check fails, so a boot
+  that reaches its last line has passed. Lisp code is also tested on the
+  host under SBCL.
 - C11, freestanding, no libc, `-Wall -Wextra -Werror`. The targets are LLP64,
   so `long` is 32 bits: the kernel uses the stdint types and never `long`.
 
@@ -85,6 +89,8 @@ manager, and the applications are Lisp programs loaded into that world.
 - One C struct per hardware or firmware table, laid out as the specification
   says, with a comment on any padding or reserved slot that matters.
 - Numbers from specifications cite the document when they are not obvious.
+- A physical address is a `uint64_t`, never a pointer. Memory is handed out
+  in 4 KiB page frames on both architectures (kernel/pmm.c).
 - No early abstraction: write it for one architecture, make it work on the
   second, then extract the shared interface.
 - Third-party material is vendored unmodified with its license beside it

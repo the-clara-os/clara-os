@@ -28,3 +28,19 @@ void arch_halt(void)
     for (;;)
         __asm__ volatile("wfi");
 }
+
+/* The first argument travels in x0. The frame pointer and the link register
+ * are cleared: there is no frame above fn and nowhere for it to return to. */
+void arch_switch_stack(void *top, void (*fn)(struct boot_info *), struct boot_info *arg)
+{
+    register struct boot_info *x0 __asm__("x0") = arg;
+    register void *x9 __asm__("x9") = top;
+    register void (*x10)(struct boot_info *) __asm__("x10") = fn;
+
+    __asm__ volatile("mov sp, x9\n"
+                     "mov x29, xzr\n"
+                     "mov x30, xzr\n"
+                     "br x10"
+                     : : "r"(x0), "r"(x9), "r"(x10));
+    __builtin_unreachable();
+}

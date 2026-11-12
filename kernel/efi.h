@@ -17,6 +17,7 @@ typedef uint64_t EFI_VIRTUAL_ADDRESS;
 #define EFI_ERROR_BIT         0x8000000000000000ULL
 #define EFI_INVALID_PARAMETER (EFI_ERROR_BIT | 2)
 #define EFI_BUFFER_TOO_SMALL  (EFI_ERROR_BIT | 5)
+#define EFI_OUT_OF_RESOURCES  (EFI_ERROR_BIT | 9)
 #define EFI_NOT_FOUND         (EFI_ERROR_BIT | 14)
 #define EFI_ERROR(s)          (((EFI_STATUS)(s) & EFI_ERROR_BIT) != 0)
 
@@ -53,6 +54,8 @@ typedef struct {
     uint64_t             Attribute;
 } EFI_MEMORY_DESCRIPTOR;
 
+enum efi_allocate_type { AllocateAnyPages, AllocateMaxAddress, AllocateAddress };
+
 typedef struct EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL;
 struct EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL {
     void *Reset;
@@ -65,13 +68,16 @@ struct EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL {
 typedef struct {
     EFI_TABLE_HEADER Hdr;
     void *RaiseTPL, *RestoreTPL;
-    void *AllocatePages, *FreePages;
+    EFI_STATUS (*AllocatePages)(uint32_t allocate_type, uint32_t memory_type, UINTN pages,
+                                EFI_PHYSICAL_ADDRESS *memory);
+    void *FreePages;
     EFI_STATUS (*GetMemoryMap)(UINTN *size, EFI_MEMORY_DESCRIPTOR *map, UINTN *key,
                                UINTN *desc_size, uint32_t *desc_version);
     void *AllocatePool, *FreePool;
     void *CreateEvent, *SetTimer, *WaitForEvent, *SignalEvent, *CloseEvent, *CheckEvent;
     void *InstallProtocolInterface, *ReinstallProtocolInterface, *UninstallProtocolInterface;
-    void *HandleProtocol, *Reserved, *RegisterProtocolNotify, *LocateHandle, *LocateDevicePath;
+    EFI_STATUS (*HandleProtocol)(EFI_HANDLE handle, const EFI_GUID *protocol, void **interface);
+    void *Reserved, *RegisterProtocolNotify, *LocateHandle, *LocateDevicePath;
     void *InstallConfigurationTable;
     void *LoadImage, *StartImage, *Exit, *UnloadImage;
     EFI_STATUS (*ExitBootServices)(EFI_HANDLE image, UINTN map_key);
@@ -106,6 +112,53 @@ typedef struct {
     EFI_CONFIGURATION_TABLE         *ConfigurationTable;
 } EFI_SYSTEM_TABLE;
 
+/* Loaded Image Protocol: where this image came from */
+typedef struct {
+    uint32_t          Revision;        /* 4 bytes of padding follow */
+    EFI_HANDLE        ParentHandle;
+    EFI_SYSTEM_TABLE *SystemTable;
+    EFI_HANDLE        DeviceHandle;    /* the volume the image was read from */
+    void             *FilePath;
+    void             *Reserved;
+    uint32_t          LoadOptionsSize; /* 4 bytes of padding follow */
+    void             *LoadOptions;
+    void             *ImageBase;
+    uint64_t          ImageSize;
+    uint32_t          ImageCodeType, ImageDataType;
+    void             *Unload;
+} EFI_LOADED_IMAGE_PROTOCOL;
+
+/* Simple File System Protocol and File Protocol */
+typedef struct EFI_FILE_PROTOCOL EFI_FILE_PROTOCOL;
+struct EFI_FILE_PROTOCOL {
+    uint64_t Revision;
+    EFI_STATUS (*Open)(EFI_FILE_PROTOCOL *self, EFI_FILE_PROTOCOL **file, const CHAR16 *name,
+                       uint64_t mode, uint64_t attributes);
+    EFI_STATUS (*Close)(EFI_FILE_PROTOCOL *self);
+    void *Delete;
+    /* On a directory, Read returns one EFI_FILE_INFO per call and a size of 0 at the end. */
+    EFI_STATUS (*Read)(EFI_FILE_PROTOCOL *self, UINTN *size, void *buffer);
+    void *Write, *GetPosition, *SetPosition, *GetInfo, *SetInfo, *Flush;
+};
+
+typedef struct EFI_SIMPLE_FILE_SYSTEM_PROTOCOL EFI_SIMPLE_FILE_SYSTEM_PROTOCOL;
+struct EFI_SIMPLE_FILE_SYSTEM_PROTOCOL {
+    uint64_t Revision;
+    EFI_STATUS (*OpenVolume)(EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *self, EFI_FILE_PROTOCOL **root);
+};
+
+typedef struct {
+    uint64_t Size;                 /* of this structure, the name included */
+    uint64_t FileSize;             /* in bytes */
+    uint64_t PhysicalSize;
+    uint8_t  CreateTime[16], LastAccessTime[16], ModificationTime[16]; /* EFI_TIME */
+    uint64_t Attribute;
+    CHAR16   FileName[];           /* null-terminated */
+} EFI_FILE_INFO;
+
+#define EFI_FILE_MODE_READ 0x1ULL
+#define EFI_FILE_DIRECTORY 0x10ULL  /* an Attribute bit */
+
 /* Graphics Output Protocol */
 enum efi_pixel_format {
     PixelRedGreenBlueReserved8BitPerColor,
@@ -137,6 +190,10 @@ typedef struct {
     EFI_GRAPHICS_OUTPUT_PROTOCOL_MODE *Mode;
 } EFI_GRAPHICS_OUTPUT_PROTOCOL;
 
+#define EFI_LOADED_IMAGE_PROTOCOL_GUID \
+    { 0x5b1b31a1, 0x9562, 0x11d2, { 0x8e, 0x3f, 0x00, 0xa0, 0xc9, 0x69, 0x72, 0x3b } }
+#define EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_GUID \
+    { 0x964e5b22, 0x6459, 0x11d2, { 0x8e, 0x39, 0x00, 0xa0, 0xc9, 0x69, 0x72, 0x3b } }
 #define EFI_GRAPHICS_OUTPUT_PROTOCOL_GUID \
     { 0x9042a9de, 0x23dc, 0x4a38, { 0x96, 0xfb, 0x7a, 0xde, 0xd0, 0x80, 0x51, 0x6a } }
 #define EFI_ACPI_20_TABLE_GUID \

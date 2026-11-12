@@ -40,3 +40,19 @@ void arch_halt(void)
     for (;;)
         __asm__ volatile("cli; hlt");
 }
+
+/* This target follows the Microsoft x64 calling convention: the first
+ * argument in rcx, the stack 16-byte aligned at the call, and 32 bytes of
+ * home space for the callee above its return address. The registers are
+ * named so that none of the operands lands in rbp, which is cleared to end
+ * the chain of frames. */
+void arch_switch_stack(void *top, void (*fn)(struct boot_info *), struct boot_info *arg)
+{
+    __asm__ volatile("mov %%rax, %%rsp\n"
+                     "sub $32, %%rsp\n"
+                     "xor %%ebp, %%ebp\n"
+                     "call *%%rdx\n"
+                     "ud2"
+                     : : "a"(top), "d"(fn), "c"(arg));
+    __builtin_unreachable();
+}
