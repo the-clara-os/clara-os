@@ -45,14 +45,36 @@ static void find_framebuffer(void)
 
     if (EFI_ERROR(g_st->BootServices->LocateProtocol(&gop_guid, NULL, (void **)&gop)))
         return;
-    if (!gop || !gop->Mode || !gop->Mode->Info || gop->Mode->Info->PixelFormat == PixelBltOnly)
+    if (!gop || !gop->Mode || !gop->Mode->Info)
         return;
     EFI_GRAPHICS_OUTPUT_MODE_INFORMATION *info = gop->Mode->Info;
-    g_boot.fb.pixels = (volatile uint32_t *)(uintptr_t)gop->Mode->FrameBufferBase;
-    g_boot.fb.width = info->HorizontalResolution;
-    g_boot.fb.height = info->VerticalResolution;
-    g_boot.fb.pitch = info->PixelsPerScanLine;
-    g_boot.fb.format = info->PixelFormat;
+    struct framebuffer *fb = &g_boot.fb;
+
+    /* Every GOP framebuffer has 32-bit pixels. The formats differ in which
+     * bits hold which colour. */
+    switch (info->PixelFormat) {
+    case PixelRedGreenBlueReserved8BitPerColor:
+        fb->red_mask = 0x0000ff;
+        fb->green_mask = 0x00ff00;
+        fb->blue_mask = 0xff0000;
+        break;
+    case PixelBlueGreenRedReserved8BitPerColor: /* QEMU and UTM */
+        fb->red_mask = 0xff0000;
+        fb->green_mask = 0x00ff00;
+        fb->blue_mask = 0x0000ff;
+        break;
+    case PixelBitMask:
+        fb->red_mask = info->RedMask;
+        fb->green_mask = info->GreenMask;
+        fb->blue_mask = info->BlueMask;
+        break;
+    default: /* PixelBltOnly: nothing we can write to */
+        return;
+    }
+    fb->pixels = (volatile uint32_t *)(uintptr_t)gop->Mode->FrameBufferBase;
+    fb->width = info->HorizontalResolution;
+    fb->height = info->VerticalResolution;
+    fb->pitch = info->PixelsPerScanLine;
 }
 
 /* Snapshot the memory map and take the machine from the firmware. The first
@@ -112,7 +134,7 @@ static void report_memory(const struct boot_info *bi)
         uint64_t end = d->PhysicalStart + bytes;
         const char *name = d->Type < EfiMaxMemoryType ? mem_type_names[d->Type] : "?";
 
-        kprintf("  %012lx-%012lx %6lu KiB  %s\n", d->PhysicalStart, end - 1, bytes >> 10, name);
+        kprintf("  %012llx-%012llx %6llu KiB  %s\n", d->PhysicalStart, end - 1, bytes >> 10, name);
         switch (d->Type) {
         case EfiConventionalMemory:
         case EfiBootServicesCode:
@@ -130,24 +152,25 @@ static void report_memory(const struct boot_info *bi)
             break;
         }
     }
-    kprintf("%u regions, %lu MiB usable RAM, highest RAM address %lx\n", n, usable >> 20, top);
+    kprintf("%u regions, %llu MiB usable RAM, highest RAM address %llx\n", n, usable >> 20, top);
 }
 
 void kmain(struct boot_info *bi)
 {
     arch_early_init();
+    fbcon_init(&bi->fb);
+
+    fbcon_set_color(FBCON_ACCENT);
     kprintf("\nClaraOS %s on %s: the machine is ours\n", CLARA_VERSION, arch_name);
+    fbcon_set_color(FBCON_TEXT);
     report_memory(bi);
     kprintf("ACPI RSDP %p, device tree %p\n", bi->acpi_rsdp, bi->dtb);
-
-    if (bi->fb.pixels) {
-        kprintf("framebuffer %ux%u, pitch %u, format %u, at %p\n", bi->fb.width, bi->fb.height,
-                bi->fb.pitch, bi->fb.format, (void *)bi->fb.pixels);
-        fb_fill(&bi->fb, 0, bi->fb.height, 0x1e, 0x1b, 0x2e);
-        fb_fill(&bi->fb, bi->fb.height / 2 - 8, bi->fb.height / 2 + 8, 0xff, 0x79, 0xc6);
-    } else {
+    if (bi->fb.pixels)
+        kprintf("framebuffer %ux%u at %p, pitch %u, masks r %06x g %06x b %06x\n", bi->fb.width,
+                bi->fb.height, (void *)bi->fb.pixels, bi->fb.pitch, bi->fb.red_mask,
+                bi->fb.green_mask, bi->fb.blue_mask);
+    else
         kprintf("framebuffer: none\n");
-    }
     kprintf("clara: nothing more to do, halting\n");
     arch_halt();
 }

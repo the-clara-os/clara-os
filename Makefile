@@ -14,7 +14,7 @@ LDFLAGS := /nologo /subsystem:efi_application /entry:efi_main /nodefaultlib /deb
 COMMON_SRCS := $(wildcard kernel/*.c)
 HEADERS     := $(wildcard kernel/*.h)
 
-.PHONY: all test image clean
+.PHONY: all test image font clean
 all:
 
 # $(1) arch  $(2) clang target  $(3) extra CFLAGS  $(4) EFI file name  $(5) lld machine
@@ -41,6 +41,10 @@ test: all
 
 image: all
 	tools/mkimage.sh
+
+# Regenerate kernel/font.c after changing the font or tools/bdf2c.py.
+font:
+	python3 -I tools/bdf2c.py fonts/spleen-8x16.bdf fonts/LICENSE.spleen kernel/font.c
 
 clean:
 	rm -rf $(BUILD)

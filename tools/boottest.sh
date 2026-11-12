@@ -1,30 +1,54 @@
 #!/bin/sh
-# Headless boot check: boot one arch under QEMU and wait for the kernel's last line.
-# usage: tools/boottest.sh <x86_64|aarch64>     env: TIMEOUT=90
+# Headless boot check: boot one arch under QEMU, wait for the kernel's last
+# line on the serial port, then save what the screen shows as a PNG.
+# usage: tools/boottest.sh <x86_64|aarch64>
+# env:   TIMEOUT=90   MARKER="text to wait for"   (plus what tools/run.sh reads)
 set -eu
 arch=${1:?usage: tools/boottest.sh <arch>}
-marker="clara: nothing more to do"
+marker=${MARKER:-clara: nothing more to do}
 timeout=${TIMEOUT:-90}
 log=build/boot-$arch.log
+shot=build/screen-$arch.png
+sock=build/monitor-$arch.sock
+mkdir -p build
+rm -f "$shot" "$sock"
 : > "$log"
 
-SERIAL="file:$log" tools/run.sh "$arch" -display none -monitor none \
+SERIAL="file:$log" tools/run.sh "$arch" -display none -monitor "unix:$sock,server=on,wait=off" \
     > "build/qemu-$arch.log" 2>&1 < /dev/null &
 pid=$!
+
+# Give the last line time to reach the screen, then ask the QEMU monitor for
+# a screenshot and to quit, and wait up to five seconds for it to do so.
+screenshot_and_quit() {
+    { sleep 0.5; printf 'screendump %s -f png\nquit\n' "$PWD/$shot"; } \
+        | nc -w 5 -U "$sock" > /dev/null 2>&1 || true
+    n=0
+    while kill -0 "$pid" 2>/dev/null && [ "$n" -lt 50 ]; do
+        sleep 0.1
+        n=$((n + 1))
+    done
+}
+
+stop_qemu() {
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+}
+
 i=0
 while [ "$i" -lt "$timeout" ]; do
     if grep -q "$marker" "$log"; then
-        kill "$pid" 2>/dev/null || true
-        wait "$pid" 2>/dev/null || true
-        echo "boottest $arch: ok after ${i}s"
+        screenshot_and_quit
+        stop_qemu
+        [ -s "$shot" ] && screen="screen saved to $shot" || screen="no screenshot"
+        echo "boottest $arch: ok after ${i}s, $screen"
         exit 0
     fi
     kill -0 "$pid" 2>/dev/null || break
     sleep 1
     i=$((i + 1))
 done
-kill "$pid" 2>/dev/null || true
-wait "$pid" 2>/dev/null || true
+stop_qemu
 echo "boottest $arch: FAILED, no '$marker' within ${timeout}s"
 echo "--- qemu ---"; cat "build/qemu-$arch.log"
 echo "--- serial ---"; tail -40 "$log"
