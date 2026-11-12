@@ -5,7 +5,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define CLARA_VERSION "0.0.1"
+#define CLARA_VERSION "0.0.2"
 
 struct framebuffer {
     volatile uint32_t *pixels; /* 32 bits per pixel; NULL when there is no display */
