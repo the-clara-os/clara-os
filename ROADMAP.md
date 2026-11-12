@@ -5,13 +5,17 @@ Each milestone is sized for one working session. A milestone is done when
 (DESIGN.md: a C substrate under a Lisp world, booting into a window manager)
 was decided on 2026-11-11 and the milestones below follow from it.
 
+Every finished piece of work, a milestone or an infrastructure item, bumps
+the patch version (`CLARA_VERSION` in kernel/kernel.h), and its entry here
+records the version it shipped as.
+
 Substrate:
 
-- [x] **M0 boot** (2026-11-11). Kernel as the UEFI application on both
+- [x] **M0 boot** (2026-11-11, version 0.0.1). Kernel as the UEFI application on both
   architectures; ExitBootServices with the memory-map retry; memory map,
   ACPI RSDP and GOP framebuffer captured; serial output (COM1, PL011);
   `kprintf`; QEMU run and headless test scripts; GPT/FAT32 image for UTM.
-- [x] **M1 console** (2026-11-12). Spleen 8x16 bitmap font, converted from
+- [x] **M1 console** (2026-11-12, version 0.0.2). Spleen 8x16 bitmap font, converted from
   BDF by tools/bdf2c.py; a text console on the framebuffer (kernel/fbcon.c)
   that mirrors the serial port, with wrapping, tabs, three colours and
   scrolling that repaints only the cells that changed; `panic()`; any GOP

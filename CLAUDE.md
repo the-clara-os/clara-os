@@ -3,7 +3,8 @@
 Read DESIGN.md and ROADMAP.md first. This project is capped at about 100K
 tokens of assistant usage per day, so one session is one roadmap slice:
 state the slice, build it, finish with `make test` green on both
-architectures, update ROADMAP.md, stage with `git add -A`, and stop. Never
+architectures, bump the patch version, update ROADMAP.md, stage with
+`git add -A`, and stop. Never
 commit or push; commits are GPG-signed by Julio in his own terminal.
 
 Build with `make` (expects Homebrew llvm and lld under /opt/homebrew/opt;
@@ -28,3 +29,6 @@ Rules:
   values are `%llu` and `%llx`, pointers are `%p` with a `void *`.
 - kernel/font.c is generated. Change tools/bdf2c.py or the font and run
   `make font`; never edit it by hand.
+- The version is `CLARA_VERSION` in kernel/kernel.h. Every finished piece
+  of work bumps the patch number in the same change, and its ROADMAP.md
+  entry records the version.
