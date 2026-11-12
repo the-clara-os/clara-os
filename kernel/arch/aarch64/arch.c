@@ -2,9 +2,8 @@
 
 const char *const arch_name = "aarch64";
 
-/* PL011 UART of the QEMU/UTM "virt" machine. Device memory stays reachable
- * after ExitBootServices because we still run on the firmware's page tables.
- * TODO: take the address from the device tree instead of assuming it. */
+/* PL011 UART of the QEMU/UTM "virt" machine. The address is assumed, not
+ * read from ACPI yet (ROADMAP.md). */
 #define UART_BASE   0x09000000ULL
 #define UARTDR      (*(volatile uint32_t *)(UART_BASE + 0x00))
 #define UARTFR      (*(volatile uint32_t *)(UART_BASE + 0x18))
@@ -21,6 +20,11 @@ void arch_serial_putc(char c)
     while (UARTFR & UARTFR_TXFF)
         ;
     UARTDR = (uint8_t)c;
+}
+
+void arch_map_devices(void)
+{
+    vm_map(UART_BASE, UART_BASE, 1, VM_WRITE | VM_DEVICE);
 }
 
 void arch_halt(void)

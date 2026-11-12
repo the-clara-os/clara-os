@@ -2,8 +2,18 @@
 
 Read DESIGN.md and ROADMAP.md first. One session is one roadmap slice: state
 the slice, build it, finish with `make test` green on both architectures,
-bump the patch version, update ROADMAP.md, stage with `git add -A`, and stop.
-Never commit or push; commits are GPG-signed by Julio in his own terminal.
+bump the patch version, update ROADMAP.md, and open the pull request. Julio
+reviews and merges it.
+
+Pull requests (Julio, 2026-11-12: "feel free to create the PR straight away
+in github"). Work on a `julio/<topic>` branch off main. Never `git commit`
+here: commits must be signed, and the local key needs Julio at the
+keyboard. `python3 tools/api-commit.py <message-file>` sends the working
+tree to GitHub as one commit that GitHub signs, creating the branch there
+if needed, and moves the local branch onto it. Then `gh pr create --base main`
+with a title in his style, `feat(m3): Virtual Memory`, and a body that says
+what changed, how it was checked, and every decision that departs from the
+roadmap. Never merge, and never push to main.
 
 Budget: assistant work on this project is capped at 50 dollars per day, at
 list prices. `tools/session-cost.py` adds up what the day's Claude Code
@@ -42,11 +52,16 @@ Rules:
   a check fails, so `make test` covers it. A check that needs a temporary
   change to the sources (a forced fault, an exhaustive loop) is run once and
   taken out again.
-- A physical address is a `uint64_t`, not a pointer (kernel/pmm.c).
+- A physical address is a `uint64_t`; `phys_ptr()` makes a pointer of one,
+  which works because RAM is mapped at its own address (kernel/vm.c).
 - Until M4 a fault lands in the firmware's exception handlers, which print a
-  register dump on serial: read build/boot-<arch>.log. They and the page
-  tables in use live in boot-services memory, which is why the allocator
-  leaves that memory alone.
+  register dump on serial: read build/boot-<arch>.log. They live in
+  boot-services memory, which is why the allocator leaves that memory alone
+  and vm_init keeps it executable. A kernel stack overflow on x86_64 resets
+  the machine with no dump at all.
+- To check that an access faults, force it with a temporary change and run
+  `MARKER=xception TIMEOUT=10 tools/boottest.sh <arch>`. x86_64 gives the
+  cause in ExceptionData and CR2, AArch64 in ESR and FAR.
 - lisp/*.lisp is copied to the ESP's \clara directory, and the handoff
   (kernel/boot.c) reads every file there into a `struct boot_file`.
 - Whatever a session leaves open goes into ROADMAP.md in the same change,
