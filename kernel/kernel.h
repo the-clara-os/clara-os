@@ -11,7 +11,7 @@ struct framebuffer {
     volatile uint32_t *pixels; /* 32 bits per pixel; NULL when there is no display */
     uint32_t width, height;    /* in pixels */
     uint32_t pitch;            /* pixels per scanline, >= width */
-    uint32_t format;           /* enum efi_pixel_format: 0 RGBx, 1 BGRx */
+    uint32_t red_mask, green_mask, blue_mask; /* the bits of a pixel that hold each colour */
 };
 
 /* What the boot handoff learned from the firmware before taking the machine. */
@@ -24,14 +24,25 @@ struct boot_info {
     void    *dtb;              /* flattened device tree, or NULL */
 };
 
-/* console.c: text goes to the serial port for now. %d %u %x %X %s %c %p and
- * %% are supported, with zero padding and width; l/ll/z all mean 64 bits. */
+/* console.c: text goes to the serial port and, after fbcon_init, to the
+ * screen. %d %u %x %X %s %c %p and %% are supported, with zero padding and
+ * width. The compiler checks the arguments: 64-bit ones are %llu, %llx. */
 void kputc(char c);
 void kputs(const char *s);
-void kprintf(const char *fmt, ...);
-void kvprintf(const char *fmt, va_list ap);
-void fb_fill(const struct framebuffer *fb, uint32_t y0, uint32_t y1,
-             uint8_t r, uint8_t g, uint8_t b);
+void kprintf(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+void kvprintf(const char *fmt, va_list ap) __attribute__((format(printf, 1, 0)));
+void panic(const char *fmt, ...) __attribute__((noreturn, format(printf, 1, 2)));
+
+/* fbcon.c: the text console on the framebuffer */
+enum fbcon_color { FBCON_TEXT, FBCON_ACCENT, FBCON_ALERT, FBCON_COLORS };
+void fbcon_init(const struct framebuffer *fb);
+void fbcon_putc(char c);
+void fbcon_set_color(enum fbcon_color color);
+
+/* font.c, generated from fonts/spleen-8x16.bdf by tools/bdf2c.py */
+#define FONT_WIDTH  8
+#define FONT_HEIGHT 16
+const uint8_t *font_glyph(char c); /* FONT_HEIGHT bytes, one per scanline, leftmost pixel in bit 7 */
 
 /* string.c */
 void  *memset(void *dst, int c, size_t n);

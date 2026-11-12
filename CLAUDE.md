@@ -8,9 +8,10 @@ commit or push; commits are GPG-signed by Julio in his own terminal.
 
 Build with `make` (expects Homebrew llvm and lld under /opt/homebrew/opt;
 override with `LLVM=` and `LLD=`). `make test` boots both architectures
-headless under QEMU in about ten seconds. `make run-aarch64` and
-`make run-x86_64` open a QEMU window with serial on the terminal; `make image`
-produces the UTM disk.
+headless under QEMU in about ten seconds and saves what each screen shows to
+build/screen-<arch>.png; look at those images when a change touches the
+display. `make run-aarch64` and `make run-x86_64` open a QEMU window with
+serial on the terminal; `make image` produces the UTM disk.
 
 Rules:
 
@@ -23,3 +24,7 @@ Rules:
   greps the serial log for the kernel's last line.
 - Small readable code over frameworks. Abstract after the second
   architecture works, not before.
+- `kprintf` and `panic` are checked by the compiler like printf: 64-bit
+  values are `%llu` and `%llx`, pointers are `%p` with a `void *`.
+- kernel/font.c is generated. Change tools/bdf2c.py or the font and run
+  `make font`; never edit it by hand.

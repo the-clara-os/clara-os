@@ -11,8 +11,12 @@ Substrate:
   architectures; ExitBootServices with the memory-map retry; memory map,
   ACPI RSDP and GOP framebuffer captured; serial output (COM1, PL011);
   `kprintf`; QEMU run and headless test scripts; GPT/FAT32 image for UTM.
-- [ ] **M1 console.** Bitmap font, framebuffer text console mirroring the
-  serial port, `panic()`, scrolling.
+- [x] **M1 console** (2026-11-12). Spleen 8x16 bitmap font, converted from
+  BDF by tools/bdf2c.py; a text console on the framebuffer (kernel/fbcon.c)
+  that mirrors the serial port, with wrapping, tabs, three colours and
+  scrolling that repaints only the cells that changed; `panic()`; any GOP
+  pixel layout, through colour masks; `kprintf` arguments checked by the
+  compiler; `make test` saves a screenshot of each architecture.
 - [ ] **M2 physical memory.** Page-frame allocator built from the EFI map,
   our own kernel stack, boot-services memory reclaimed. Files read from the
   ESP through the UEFI file protocol during the handoff, for M6.
@@ -74,8 +78,8 @@ Infrastructure, for sessions with budget left over:
   0x09000000 in kernel/arch/aarch64/arch.c.
 - `make run-*` with a GDB stub and a debugging recipe for PE images.
 
-Shortcuts taken in M0, to be removed by the milestones above:
+Shortcuts taken so far, to be removed by the milestones above:
 
 - The kernel keeps running on the firmware's page tables and stack (M2, M3).
-- Only 32-bit RGBx and BGRx framebuffers are handled (M1).
 - The memory-map snapshot is a fixed 32 KiB buffer (M2).
+- The console is output only: no cursor and no keyboard (M6c, M8).

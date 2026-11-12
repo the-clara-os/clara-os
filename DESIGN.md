@@ -87,3 +87,5 @@ manager, and the applications are Lisp programs loaded into that world.
 - Numbers from specifications cite the document when they are not obvious.
 - No early abstraction: write it for one architecture, make it work on the
   second, then extract the shared interface.
+- Third-party material is vendored unmodified with its license beside it
+  (fonts/), and a generated file names its generator in its first line.

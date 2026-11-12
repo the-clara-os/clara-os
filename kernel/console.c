@@ -1,10 +1,13 @@
 #include "kernel.h"
 
+/* Every character goes to the serial port and, once fbcon_init has found a
+ * display, to the screen as well. */
 void kputc(char c)
 {
     if (c == '\n')
         arch_serial_putc('\r');
     arch_serial_putc(c);
+    fbcon_putc(c);
 }
 
 void kputs(const char *s)
@@ -101,25 +104,16 @@ void kprintf(const char *fmt, ...)
     va_end(ap);
 }
 
-static uint32_t fb_pixel(const struct framebuffer *fb, uint8_t r, uint8_t g, uint8_t b)
+/* Say why, in the alert colour, and stop the machine. */
+void panic(const char *fmt, ...)
 {
-    if (fb->format == 0) /* RGBx */
-        return (uint32_t)r | (uint32_t)g << 8 | (uint32_t)b << 16;
-    return (uint32_t)b | (uint32_t)g << 8 | (uint32_t)r << 16; /* BGRx: QEMU and UTM */
-}
+    va_list ap;
 
-/* Paint scanlines [y0, y1) a solid colour. */
-void fb_fill(const struct framebuffer *fb, uint32_t y0, uint32_t y1,
-             uint8_t r, uint8_t g, uint8_t b)
-{
-    if (!fb->pixels)
-        return;
-    uint32_t px = fb_pixel(fb, r, g, b);
-    if (y1 > fb->height)
-        y1 = fb->height;
-    for (uint32_t y = y0; y < y1; y++) {
-        volatile uint32_t *row = fb->pixels + (uint64_t)y * fb->pitch;
-        for (uint32_t x = 0; x < fb->width; x++)
-            row[x] = px;
-    }
+    fbcon_set_color(FBCON_ALERT);
+    kputs("\npanic: ");
+    va_start(ap, fmt);
+    kvprintf(fmt, ap);
+    va_end(ap);
+    kputc('\n');
+    arch_halt();
 }
