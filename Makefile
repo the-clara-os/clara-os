@@ -5,6 +5,7 @@ LLD    ?= /opt/homebrew/opt/lld/bin
 LD     := $(LLD)/lld-link
 BUILD  := build
 ESP    := $(BUILD)/esp/EFI/BOOT
+BOOTDIR := $(BUILD)/esp/clara
 
 CFLAGS := -std=c11 -O2 -g -Wall -Wextra -Werror \
           -ffreestanding -fno-builtin -fno-stack-protector -fno-stack-check \
@@ -13,6 +14,7 @@ LDFLAGS := /nologo /subsystem:efi_application /entry:efi_main /nodefaultlib /deb
 
 COMMON_SRCS := $(wildcard kernel/*.c)
 HEADERS     := $(wildcard kernel/*.h)
+BOOT_FILES  := $(patsubst lisp/%,$(BOOTDIR)/%,$(wildcard lisp/*.lisp))
 
 .PHONY: all test image font clean
 all:
@@ -31,6 +33,12 @@ endef
 
 $(eval $(call ARCH_RULES,x86_64,x86_64-unknown-windows,-mno-red-zone,BOOTX64.EFI,x64))
 $(eval $(call ARCH_RULES,aarch64,aarch64-unknown-windows,,BOOTAA64.EFI,arm64))
+
+# The boot handoff reads every file in the ESP's \clara directory.
+$(BOOTDIR)/%: lisp/%
+	@mkdir -p $(dir $@)
+	cp $< $@
+all: $(BOOT_FILES)
 
 run-%: all
 	tools/run.sh $*
