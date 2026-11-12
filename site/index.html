@@ -1,0 +1,154 @@
+<!doctype html>
+<!-- The source of the ClaraOS website. site/build.py fills in the {{...}} marks:
+     the version and the roadmap come from ROADMAP.md, and {{spleen:text}} is
+     drawn with the console's own font, fonts/spleen-8x16.bdf. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ClaraOS</title>
+<meta name="description" content="A small operating system for x86_64 and AArch64, written to be read: a C kernel under a world written in Lisp.">
+<meta property="og:title" content="ClaraOS">
+<meta property="og:description" content="A small operating system for x86_64 and AArch64, written to be read: a C kernel under a world written in Lisp.">
+<meta property="og:image" content="https://the-clara-os.github.io/clara-os/sun.png">
+<link rel="icon" href="sun.png">
+<style>
+/* Above the horizon the page is the console: its two colours and its accent
+   are the ones in kernel/fbcon.c, and the type is its font. Below, the same
+   two colours swap places. The sun is the only warm thing and the only
+   round one. */
+:root {
+  --paper: #1e1b2e;
+  --ink: #e8e3f4;
+  --accent: #ff79c6;
+  --sun: linear-gradient(100deg, #f37121, #f7a522 55%, #fcd71d);
+  --day: #e8e3f4;
+  --text: #1e1b2e;
+  --muted: #5a5470;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --day: #15131f; --text: #e8e3f4; --muted: #a59fba; }
+}
+
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--day);
+  color: var(--text);
+  font: 1.125rem/1.62 Charter, "Bitstream Charter", "Sitka Text", Cambria, Georgia, serif;
+}
+.frame { max-width: 66rem; margin: 0 auto; padding-left: clamp(1.25rem, 5vw, 3.5rem); padding-right: clamp(1.25rem, 5vw, 3.5rem); }
+
+/* Text in the console's font: one drawing per word, so lines break between words. */
+.spleen { display: inline-flex; flex-wrap: wrap; column-gap: calc(var(--px) * 8px); vertical-align: top; }
+.spleen svg { display: block; width: calc(var(--px) * var(--n) * 8px); height: calc(var(--px) * 16px); fill: currentColor; shape-rendering: crispEdges; }
+
+.screen { position: relative; overflow: hidden; background: var(--paper); color: var(--ink); }
+.screen::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 4px; background: var(--sun); }
+.screen .frame { position: relative; padding-top: clamp(1.5rem, 4vw, 3rem); padding-bottom: clamp(11rem, 34vw, 15rem); }
+.boot { --px: 1; margin: 0; opacity: .72; }
+.ours { --px: 2; margin: 32px 0 0; color: var(--accent); font-size: 1rem; line-height: 1; }
+.sun {
+  position: absolute; right: clamp(1.25rem, 7vw, 5rem); bottom: 0;
+  width: clamp(9rem, 26vw, 15rem); height: auto;
+  transform: translateY(8%);
+  animation: rise 1.6s cubic-bezier(.16, .8, .3, 1) both;
+}
+@keyframes rise { from { transform: translateY(88%); } }
+@media (prefers-reduced-motion: reduce) { .sun { animation: none; } }
+@media (min-width: 62rem) {
+  .screen .frame { padding-bottom: 7rem; }
+  .ours { --px: 3; margin-top: 48px; max-width: calc(100% - 20rem); }
+}
+
+main { padding-top: 3.5rem; padding-bottom: 5rem; }
+p { max-width: 36rem; margin: 0 0 1.1rem; }
+.lede { max-width: 31rem; font-size: clamp(1.3rem, 2.6vw, 1.6rem); line-height: 1.38; margin-bottom: 1.4rem; }
+a { color: inherit; text-decoration: underline; text-decoration-color: #f37121; text-decoration-thickness: 2px; text-underline-offset: 3px; }
+a:hover { text-decoration-thickness: 4px; }
+a:focus-visible { outline: 3px solid #f7a522; outline-offset: 3px; }
+.links { display: flex; flex-wrap: wrap; align-items: center; gap: .75rem 1.75rem; margin-top: 2rem; }
+.links .source { background: var(--text); color: var(--day); padding: .55rem 1.1rem; text-decoration: none; }
+.links .source:hover { text-decoration: underline; text-decoration-thickness: 2px; }
+
+section { margin-top: 5rem; }
+h2 { --px: 2; margin: 0 0 1.6rem; font-size: 1rem; line-height: 1; }
+
+.roadmap { display: grid; grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr)); gap: 2rem 3.5rem; max-width: 46rem; margin: 2.2rem 0; }
+.roadmap h3 { margin: 0 0 .5rem; font-size: 1em; }
+.roadmap ol { list-style: none; margin: 0; padding: 0; }
+.roadmap li { display: grid; grid-template-columns: .8rem 2.5rem 1fr auto; column-gap: .55rem; align-items: baseline; padding: .18rem 0; color: var(--muted); }
+.roadmap li::before { content: ""; align-self: center; width: .7rem; height: .7rem; border: 2px solid currentColor; border-radius: 50%; }
+.roadmap li.done { color: var(--text); }
+.roadmap li.done::before { border: 0; background: var(--sun); }
+.roadmap .version { font-size: .9em; color: var(--muted); }
+
+figure { margin: 2.5rem 0 0; }
+figure img { display: block; width: min(100%, 800px); height: auto; }
+figcaption { max-width: 36rem; margin-top: .7rem; font-size: .95rem; color: var(--muted); }
+
+pre { max-width: 46rem; margin: 1.6rem 0; padding: 1.1rem 1.3rem; overflow-x: auto; background: var(--paper); color: var(--ink); font: .88rem/1.65 ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+pre .note { opacity: .6; }
+
+footer { padding-top: 2rem; padding-bottom: 3rem; font-size: .95rem; color: var(--muted); }
+footer p { max-width: 40rem; }
+</style>
+</head>
+<body>
+
+<header class="screen">
+  <div class="frame">
+    <p class="boot">{{spleen:ClaraOS: taking the machine from the firmware}}</p>
+    <h1 class="ours">{{spleen:ClaraOS {{version}} on aarch64:}} {{spleen:the machine is ours}}</h1>
+    <img class="sun" src="sun.png" alt="The ClaraOS logo: a sun" width="512" height="512">
+  </div>
+</header>
+
+<main class="frame">
+  <p class="lede">A small operating system for x86_64 and AArch64, written to be read from the first instruction up.</p>
+  <p>Those two lines at the top are what the kernel prints when it takes over from the firmware. ClaraOS is a Lisp machine in the making: a C kernel small enough for one person to hold in their head, under a world written in Common Lisp. The plan is to boot into a window manager whose applications are Lisp programs. It is not a Unix, and it does not try to run Linux software.</p>
+  <p class="links">
+    <a class="source" href="https://github.com/the-clara-os/clara-os">Read the source</a>
+    <a href="https://github.com/the-clara-os/clara-os/blob/main/DESIGN.md">Design</a>
+    <a href="https://github.com/the-clara-os/clara-os/blob/main/ROADMAP.md">Roadmap</a>
+  </p>
+
+  <section id="shape">
+    <h2>{{spleen:The shape}}</h2>
+    <p><strong>The substrate</strong> is the C kernel. It brings up the processor, hands out memory, runs threads, takes interrupts, and holds the Lisp runtime itself: the reader, the evaluator and the garbage collector.</p>
+    <p><strong>The world</strong> is Lisp: the console and the REPL, the logic of the drivers, the filesystem, the window manager and every application.</p>
+    <p><strong>One address space</strong>, one heap, no user mode. Lisp code cannot forge a pointer, so protection comes from the language and not from page tables. An application that fails is a condition for the window manager to handle.</p>
+    <p><strong>The Lisp</strong> is a subset of Common Lisp, chosen so that every file also loads under SBCL on an ordinary computer, where it is written and tested.</p>
+    <p><strong>The image is the system.</strong> Booting will mean loading a saved heap from disk and carrying on where it stopped, with the window manager running.</p>
+  </section>
+
+  <section id="status">
+    <h2>{{spleen:Where it is}}</h2>
+    <p>Version {{version}}. {{done}} of {{total}} milestones are finished, the latest being {{latest}}. A milestone counts as finished when the machine boots and passes its own checks on both architectures.</p>
+    {{roadmap}}
+    <p>The <a href="https://github.com/the-clara-os/clara-os/blob/main/ROADMAP.md">roadmap</a> says what each milestone holds and what was left open along the way.</p>
+    <figure>
+      <img src="boot.png" alt="The ClaraOS console after booting: the memory map, the page-frame allocator and virtual memory self-tests passing, and the first boot file read." width="800" height="600" loading="lazy">
+      <figcaption>The screen after version 0.0.4 boots on AArch64 under QEMU.</figcaption>
+    </figure>
+  </section>
+
+  <section id="run">
+    <h2>{{spleen:Run it}}</h2>
+    <p>On macOS with Homebrew. clang builds both architectures and QEMU boots them, with the same firmware UTM uses.</p>
+<pre><code>brew install llvm lld qemu
+git clone https://github.com/the-clara-os/clara-os
+cd clara-os
+make test          <span class="note"># boot both architectures without a window</span>
+make run-aarch64   <span class="note"># a QEMU window, the serial port on your terminal</span></code></pre>
+    <p>The <a href="https://github.com/the-clara-os/clara-os#running-in-utm">README</a> has the steps for running it in UTM.</p>
+  </section>
+</main>
+
+<footer class="frame">
+  <p>ClaraOS is free software under the GPL-3.0. The console font, which also draws the headings on this page, is Spleen by Frederic Cambus.</p>
+</footer>
+
+</body>
+</html>
