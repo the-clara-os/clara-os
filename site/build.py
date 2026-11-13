@@ -6,7 +6,9 @@ usage: python3 -I site/build.py [out-dir]      (default: build/site)
 The page is site/index.html with its {{...}} marks filled in from the
 repository, so that the site cannot fall behind it:
 
-  {{version}} {{done}} {{total}} {{latest}} {{roadmap}}
+  {{version}}
+      CLARA_VERSION in kernel/kernel.h
+  {{done}} {{total}} {{latest}} {{roadmap}}
       from the milestone list in ROADMAP.md
   {{spleen:some text}}
       the text drawn with the console's font, fonts/spleen-8x16.bdf, one
@@ -105,8 +107,12 @@ def main():
         sys.exit("site/build.py: could not find the milestone list in ROADMAP.md")
     font = load_font(read("fonts", "spleen-8x16.bdf"))
 
+    version = re.search(r'#define CLARA_VERSION "([\d.]+)"', read("kernel", "kernel.h"))
+    if not version:
+        sys.exit("site/build.py: could not find CLARA_VERSION in kernel/kernel.h")
+
     values = {
-        "version": done[-1][2],
+        "version": version.group(1),
         "done": str(len(done)),
         "total": str(len(items)),
         "latest": f"{done[-1][0]}, {done[-1][1]}",

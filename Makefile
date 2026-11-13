@@ -1,8 +1,13 @@
-# ClaraOS build. Needs Homebrew llvm, lld and qemu (brew install llvm lld qemu).
-LLVM   ?= /opt/homebrew/opt/llvm/bin
-CC     := $(LLVM)/clang
-LLD    ?= /opt/homebrew/opt/lld/bin
-LD     := $(LLD)/lld-link
+# ClaraOS build. Needs clang, lld and qemu with EDK2 firmware.
+#   macOS:  brew install llvm lld qemu
+#   Ubuntu: apt install clang lld make qemu-system-x86 qemu-system-arm ovmf qemu-efi-aarch64 netcat-openbsd
+# Homebrew keeps llvm and lld out of the PATH, so they are looked for where it
+# puts them; anywhere else clang and lld-link come from the PATH. LLVM= and
+# LLD= name other directories.
+LLVM   ?= $(wildcard /opt/homebrew/opt/llvm/bin)
+LLD    ?= $(wildcard /opt/homebrew/opt/lld/bin)
+CC     := $(if $(LLVM),$(LLVM)/)clang
+LD     := $(if $(LLD),$(LLD)/)lld-link
 BUILD  := build
 ESP    := $(BUILD)/esp/EFI/BOOT
 BOOTDIR := $(BUILD)/esp/clara

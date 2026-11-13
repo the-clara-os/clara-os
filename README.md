@@ -1,5 +1,7 @@
 # ClaraOS
 
+[![CI](https://github.com/the-clara-os/clara-os/actions/workflows/ci.yml/badge.svg)](https://github.com/the-clara-os/clara-os/actions/workflows/ci.yml)
+
 Website: <https://claraos.org>
 
 A small operating system for x86_64 and AArch64, written in C to be read and
@@ -18,15 +20,23 @@ ideas and conventions.
 
 ## Building
 
-On macOS with Homebrew. clang cross-compiles both targets as PE/COFF and
-lld links them; no GNU toolchain is involved.
+clang cross-compiles both targets as PE/COFF and lld links them; no GNU
+toolchain is involved. On macOS the tools come from Homebrew:
 
     brew install llvm lld qemu
+
+On Ubuntu they come from the distribution. That is also where every pull
+request is built and booted, by [.github/workflows/ci.yml](.github/workflows/ci.yml):
+
+    sudo apt install clang lld make qemu-system-x86 qemu-system-arm ovmf qemu-efi-aarch64 netcat-openbsd
+
+Then, on either:
+
     make              # build/esp: EFI/BOOT/BOOTX64.EFI and BOOTAA64.EFI, and the boot files in clara/
     make test         # boot both headless, wait for the kernel's last line, save build/screen-<arch>.png
     make run-aarch64  # QEMU window, serial on the terminal; hvf-accelerated on Apple silicon
     make run-x86_64   # same, emulated (TCG), so the firmware takes a few seconds
-    make image        # build/claraos.img, a GPT + FAT32 raw disk for UTM
+    make image        # build/claraos.img, a GPT + FAT32 raw disk for UTM; needs macOS
 
 Layout:
 
