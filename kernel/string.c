@@ -20,6 +20,15 @@ void *memcpy(void *dst, const void *src, size_t n)
     return dst;
 }
 
+int memcmp(const void *a, const void *b, size_t n)
+{
+    const uint8_t *x = a, *y = b;
+    for (; n--; x++, y++)
+        if (*x != *y)
+            return *x - *y;
+    return 0;
+}
+
 size_t strlen(const char *s)
 {
     size_t n = 0;

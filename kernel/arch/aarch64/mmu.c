@@ -74,10 +74,10 @@ void arch_mmu_switch(uint64_t root)
         pa_range = 5; /* 48 bits, all that 4 KiB pages reach without LPA2 */
     tcr = TCR_T0SZ(16) | TCR_WALK0 | TCR_TG0_4K | TCR_T1SZ(16) | TCR_EPD1 | TCR_TG1_4K | TCR_IPS(pa_range);
 
-    /* WXN off: boot-services code is mapped writable and executable so that
-     * the firmware's fault handlers keep working until M4. */
+    /* WXN on: whatever can be written cannot be run, even if an entry in
+     * the tables were to say otherwise. */
     __asm__("mrs %0, sctlr_el1" : "=r"(sctlr));
-    sctlr = (sctlr | SCTLR_M | SCTLR_C | SCTLR_I) & ~SCTLR_WXN;
+    sctlr |= SCTLR_M | SCTLR_C | SCTLR_I | SCTLR_WXN;
 
     __asm__ volatile("dsb sy\n"
                      "msr sctlr_el1, %[off]\n"

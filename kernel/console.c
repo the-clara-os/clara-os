@@ -1,5 +1,7 @@
 #include "kernel.h"
 
+static int g_serial_only;
+
 /* Every character goes to the serial port and, once fbcon_init has found a
  * display, to the screen as well. */
 void kputc(char c)
@@ -7,7 +9,14 @@ void kputc(char c)
     if (c == '\n')
         arch_serial_putc('\r');
     arch_serial_putc(c);
-    fbcon_putc(c);
+    if (!g_serial_only)
+        fbcon_putc(c);
+}
+
+/* For a report of trouble that may lie in drawing on the screen itself. */
+void console_serial_only(void)
+{
+    g_serial_only = 1;
 }
 
 void kputs(const char *s)
@@ -109,6 +118,7 @@ void panic(const char *fmt, ...)
 {
     va_list ap;
 
+    arch_interrupts_off();
     fbcon_set_color(FBCON_ALERT);
     kputs("\npanic: ");
     va_start(ap, fmt);

@@ -5,7 +5,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define CLARA_VERSION "0.0.5"
+#define CLARA_VERSION "0.0.6"
 
 #define PAGE_SHIFT 12
 #define PAGE_SIZE  (1ULL << PAGE_SHIFT)
@@ -63,6 +63,7 @@ void kputs(const char *s);
 void kprintf(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 void kvprintf(const char *fmt, va_list ap) __attribute__((format(printf, 1, 0)));
 void panic(const char *fmt, ...) __attribute__((noreturn, format(printf, 1, 2)));
+void console_serial_only(void); /* leave the screen alone from now on */
 
 /* fbcon.c: the text console on the framebuffer */
 enum fbcon_color { FBCON_TEXT, FBCON_ACCENT, FBCON_ALERT, FBCON_COLORS };
@@ -81,6 +82,7 @@ void     pmm_init(const struct boot_info *bi);
 uint64_t pmm_alloc(uint64_t pages);  /* adjacent frames, lowest first; 0 when no run is long enough */
 void     pmm_free(uint64_t addr, uint64_t pages);
 void     pmm_selftest(void);
+void     pmm_reclaim(const struct boot_info *bi); /* boot-services memory, once the processor uses none of it */
 
 /* vm.c: the kernel's address space, in pages of PAGE_SIZE. RAM, the screen
  * and devices sit at their physical addresses. */
@@ -94,10 +96,30 @@ void     vm_map(uint64_t va, uint64_t pa, uint64_t pages, unsigned flags); /* re
 void     vm_unmap(uint64_t va, uint64_t pages);
 uint64_t vm_lookup(uint64_t va); /* the physical page behind va, or 0 when nothing is mapped there */
 void     vm_selftest(void);
+uint64_t vm_image_offset(uint64_t addr); /* how far into the kernel image addr is, or 0 when it is outside */
+
+/* fault.c: memory accesses that the page tables refuse */
+enum mem_access { MEM_READ, MEM_WRITE, MEM_EXEC };
+struct mem_fault {
+    uint64_t addr;
+    enum mem_access access;
+    int mapped;                /* something is mapped at addr, and it does not allow the access */
+};
+int  fault_probing(const struct mem_fault *mf); /* for the handlers: was this exception provoked on purpose? */
+void fault_describe(const struct mem_fault *mf);
+int  fault_in_stack_guard(uint64_t addr);
+void fault_selftest(void);
+
+/* timer.c */
+#define TIMER_HZ 100
+void     timer_tick(void);     /* called from the architecture's timer interrupt */
+uint64_t timer_ticks(void);    /* since the timer was started */
+void     timer_selftest(void);
 
 /* string.c */
 void  *memset(void *dst, int c, size_t n);
 void  *memcpy(void *dst, const void *src, size_t n);
+int    memcmp(const void *a, const void *b, size_t n);
 size_t strlen(const char *s);
 
 /* arch/<arch>/arch.c */
@@ -109,6 +131,23 @@ void arch_halt(void) __attribute__((noreturn));
 void arch_switch_stack(void *top, void (*fn)(struct boot_info *), struct boot_info *arg)
     __attribute__((noreturn));
 void arch_map_devices(void);  /* vm_map the device registers the code above touches */
+
+/* arch/<arch>/exception.c: the processor's exceptions, in the kernel's hands */
+void arch_exceptions_init(void);
+
+/* arch/<arch>/interrupt.c: the interrupt controller and the timer, as ACPI describes them */
+void arch_interrupts_init(void);
+void arch_interrupts_on(void);
+void arch_interrupts_off(void);
+void arch_wait(void);         /* sleep until an interrupt arrives */
+
+/* arch/<arch>/entry.S: probes. Each tries one access and returns 0 when it
+ * went through; when it faults, the exception handler makes it return 1. */
+int  arch_probe_read(uint64_t addr);
+int  arch_probe_write(uint64_t addr, uint8_t value);
+int  arch_probe_exec(uint64_t addr);  /* call addr */
+int  arch_probe_push(uint64_t sp);    /* push once with the stack pointer at sp */
+void arch_probe_nothing(void);        /* code that is safe to call */
 
 /* arch/<arch>/mmu.c: what a page-table entry holds, for the walk in vm.c */
 int      arch_mmu_levels(void);                      /* how many levels of tables the processor walks */

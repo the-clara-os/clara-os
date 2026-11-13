@@ -1,8 +1,9 @@
 # ClaraOS continuous integration: the same `make` and `make test` as on the
 # Mac, on Ubuntu. Both kernels are built with -Werror, then each one boots
 # headless under QEMU with EDK2 firmware until its last line arrives on the
-# serial port (tools/boottest.sh). The runners have no hardware acceleration
-# for QEMU, so both machines are emulated. The website is built as well: it
+# serial port (tools/boottest.sh), AArch64 twice, once for each version of
+# its interrupt controller. The runners have no hardware acceleration for
+# QEMU, so every machine is emulated. The website is built as well: it
 # reads ROADMAP.md, and stops building when a milestone entry loses its form.
 
 name: CI

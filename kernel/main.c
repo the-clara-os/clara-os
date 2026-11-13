@@ -1,5 +1,6 @@
 /* The kernel proper. The boot handoff (boot.c) has taken the machine from the
  * firmware; kmain starts on the kernel's own stack and never returns. */
+#include "acpi.h"
 #include "kernel.h"
 
 /* Each file with the start of its first line, to show that the contents
@@ -25,6 +26,9 @@ void kmain(struct boot_info *bi)
     kprintf("\nClaraOS %s on %s: the machine is ours\n", CLARA_VERSION, arch_name);
     fbcon_set_color(FBCON_TEXT);
 
+    /* From here on a fault is reported by the kernel, not by the firmware. */
+    arch_exceptions_init();
+
     /* The address of a local variable says which stack this is. */
     if ((uintptr_t)&bi - (uintptr_t)(kernel_stack + PAGE_SIZE) >= KERNEL_STACK_SIZE)
         panic("kmain is not running on the kernel stack");
@@ -34,8 +38,17 @@ void kmain(struct boot_info *bi)
     pmm_selftest();
     vm_init(bi);
     vm_selftest();
+
+    /* The stack, the exception vectors and now the page tables are the
+     * kernel's own, so nothing the firmware left behind is in use. */
+    pmm_reclaim(bi);
+    fault_selftest();
+
+    acpi_init(bi->acpi_rsdp);
+    arch_interrupts_init();
+    timer_selftest();
+
     report_boot_files(bi);
-    kprintf("ACPI RSDP %p, device tree %p\n", bi->acpi_rsdp, bi->dtb);
     if (bi->fb.pixels)
         kprintf("framebuffer %ux%u at %p, pitch %u, masks r %06x g %06x b %06x\n", bi->fb.width,
                 bi->fb.height, (void *)bi->fb.pixels, bi->fb.pitch, bi->fb.red_mask,

@@ -99,20 +99,44 @@ uint64_t vm_lookup(uint64_t va)
     return e && (*e & PTE_PRESENT) ? *e & PTE_ADDR : 0;
 }
 
+/* The section table of the kernel's own image, and how many entries it has. */
+static const struct pe_section *image_sections(unsigned *count)
+{
+    const struct pe_dos_header *dos = (const void *)__ImageBase;
+    const struct pe_header *pe = (const void *)(__ImageBase + dos->e_lfanew);
+
+    if (dos->e_magic != PE_DOS_MAGIC || pe->signature != PE_SIGNATURE)
+        panic("no PE image at %p", (void *)__ImageBase);
+    *count = pe->sections;
+    return (const void *)((const uint8_t *)(pe + 1) + pe->optional_header_size);
+}
+
+/* The image is loaded at a different address on every machine, so a fault
+ * report gives a place in it as an offset, which is also what the tools
+ * that know the function names want (CLAUDE.md). */
+uint64_t vm_image_offset(uint64_t addr)
+{
+    unsigned count;
+    const struct pe_section *s = image_sections(&count);
+    uint64_t offset = addr - (uint64_t)(uintptr_t)__ImageBase;
+
+    for (unsigned i = 0; i < count; i++, s++)
+        if (offset - s->virtual_address < s->virtual_size)
+            return offset;
+    return 0;
+}
+
 /* The kernel's own image: its headers, then every section with the access
  * its PE flags ask for, over the plain mapping the image got as RAM. */
 static void map_image(void)
 {
     uint64_t base = (uint64_t)(uintptr_t)__ImageBase;
-    const struct pe_dos_header *dos = (const void *)__ImageBase;
-    const struct pe_header *pe = (const void *)(__ImageBase + dos->e_lfanew);
-    const struct pe_section *s = (const void *)((const uint8_t *)(pe + 1) + pe->optional_header_size);
+    unsigned sections;
+    const struct pe_section *s = image_sections(&sections);
 
-    if (dos->e_magic != PE_DOS_MAGIC || pe->signature != PE_SIGNATURE)
-        panic("no PE image at %p", (void *)__ImageBase);
     kprintf("kernel image at %p\n", (void *)__ImageBase);
     vm_map(base, base, 1, 0);
-    for (unsigned i = 0; i < pe->sections; i++, s++) {
+    for (unsigned i = 0; i < sections; i++, s++) {
         int write = (s->characteristics & PE_SECTION_WRITE) != 0;
         int exec = (s->characteristics & PE_SECTION_EXECUTE) != 0;
         uint64_t pages = (s->virtual_size + PAGE_SIZE - 1) >> PAGE_SHIFT;
@@ -144,10 +168,9 @@ void vm_init(const struct boot_info *bi)
             start = LOW_LIMIT;
         if (!efi_is_ram(d->Type) || start >= end)
             continue;
-        /* RAM is data, except boot-services code: the firmware's fault
-         * handlers run from there, and until M4 they are the only ones. */
-        vm_map(start, start, (end - start) >> PAGE_SHIFT,
-               d->Type == EfiBootServicesCode ? VM_WRITE | VM_EXEC : VM_WRITE);
+        /* RAM is data, whatever the firmware kept there: the only code the
+         * processor runs from now on is the kernel image's. */
+        vm_map(start, start, (end - start) >> PAGE_SHIFT, VM_WRITE);
         ram += (end - start) >> PAGE_SHIFT;
     }
     map_image();
@@ -167,8 +190,8 @@ void vm_init(const struct boot_info *bi)
 }
 
 /* Map one frame at each end of the heap region and reach it both ways, then
- * check what must stay unmapped. Whether a forbidden access really faults
- * cannot be tested from here before the kernel can survive a fault (M4). */
+ * check what must stay unmapped. This reads the tables; whether the
+ * processor really refuses a forbidden access is for fault_selftest. */
 void vm_selftest(void)
 {
     static const uint64_t where[2] = {VM_HEAP_BASE, VM_HEAP_BASE + VM_HEAP_SIZE - PAGE_SIZE};

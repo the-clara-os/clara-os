@@ -9,12 +9,15 @@ understood from the first instruction up. It is not a Unix and does not try
 to run Linux software. The kernel is its own UEFI application: the firmware
 loads `BOOTX64.EFI` or `BOOTAA64.EFI`, and from `efi_main` on it is ClaraOS.
 
-Status: milestone 3. Both architectures boot under QEMU with EDK2 firmware
+Status: milestone 4. Both architectures boot under QEMU with EDK2 firmware
 (the same firmware and machine types UTM uses), read their boot files from
-the ESP, take the machine from the firmware, and run on their own stack and
-their own page tables, with a page-frame allocator built from the
-firmware's memory map. A text console on the serial port and on the screen
-reports each step.
+the ESP, and take the machine from the firmware. From then on they use
+nothing of the firmware's: they run on their own stack, page tables and
+exception vectors, and the page-frame allocator has all the free memory
+there is. A fault is reported in words, with every register. The interrupt
+controller is found through ACPI, and a timer ticks a hundred times a
+second. A text console on the serial port and on the screen reports each
+step.
 [ROADMAP.md](ROADMAP.md) has what comes next, [DESIGN.md](DESIGN.md) the
 ideas and conventions.
 
@@ -33,7 +36,8 @@ request is built and booted, by [.github/workflows/ci.yml](.github/workflows/ci.
 Then, on either:
 
     make              # build/esp: EFI/BOOT/BOOTX64.EFI and BOOTAA64.EFI, and the boot files in clara/
-    make test         # boot both headless, wait for the kernel's last line, save build/screen-<arch>.png
+    make test         # boot both headless, wait for the kernel's last line, save build/screen-<arch>.png;
+                      # AArch64 boots twice, once for each version of its interrupt controller
     make run-aarch64  # QEMU window, serial on the terminal; hvf-accelerated on Apple silicon
     make run-x86_64   # same, emulated (TCG), so the firmware takes a few seconds
     make image        # build/claraos.img, a GPT + FAT32 raw disk for UTM; needs macOS
