@@ -90,11 +90,18 @@ The website, <https://claraos.org>, is built from this file by
 site/build.py: the milestone list above, with its version numbers, is what
 the page shows, so keep the form of those entries.
 
+Infrastructure, done:
+
+- **CI** (2026-11-13, version 0.0.5). .github/workflows/ci.yml builds both
+  kernels on Ubuntu and boots them under QEMU, for every pull request and
+  every push to main, then builds the website; the serial logs and a
+  screenshot of each machine are kept with the run. The Makefile and
+  tools/run.sh find the compiler and the firmware on Ubuntu as they do
+  under Homebrew. The website takes its version from kernel/kernel.h, since
+  a version no longer has to belong to a milestone.
+
 Infrastructure, for sessions with budget left over:
 
-- GitHub Actions: build and headless boot test on Ubuntu (clang, lld,
-  qemu-system-x86 and qemu-system-arm, ovmf and qemu-efi-aarch64), and the
-  SBCL host tests.
 - Read the UART base from ACPI (SPCR or DBG2) instead of assuming
   0x09000000 in kernel/arch/aarch64/arch.c.
 - `make run-*` with a GDB stub and a debugging recipe for PE images.
@@ -103,8 +110,9 @@ Infrastructure, for sessions with budget left over:
   written, read back and freed; a stale map key on the first
   ExitBootServices; a fault on purpose; odd boot files (dot files, a
   subdirectory, an empty file, a 300 KB one, a long name, an accented
-  name); 128 MiB and 4 GiB of memory; AArch64 without hvf; booting
-  build/claraos.img instead of the ESP directory. M3 added: accesses that
+  name); 128 MiB and 4 GiB of memory; booting build/claraos.img instead
+  of the ESP directory. (AArch64 without hvf was on this list; CI runs it
+  on every pull request now.) M3 added: accesses that
   must fault (a write to code or to constants, running data, a null
   pointer, the guard page, an unmapped heap address), and `-cpu max` on
   both architectures.
@@ -165,6 +173,11 @@ M6c, M8:
 
 - The console is output only: no cursor and no keyboard.
 
+M7:
+
+- CI runs no Lisp tests, because there are none. When the SBCL host tests
+  join `make test`, the workflow has to install SBCL.
+
 M10:
 
 - The kernel image runs wherever the firmware loaded it, so the address of
@@ -206,6 +219,14 @@ No milestone yet, to be picked up when they start to matter:
 - When ExitBootServices fails for good, the handoff says so through the
   firmware's console, which the specification no longer promises will work
   by then.
+- The CI check, `build-and-boot`, is not required by the ruleset on main:
+  a pull request can still be merged while it fails or before it has run.
+  Requiring it is a change to the ruleset, to be made once the workflow is
+  on main, so that no open pull request is left without the check.
+- CI covers Ubuntu only, with clang 18 and QEMU 8.2 where the Mac has
+  clang 23 and QEMU 11. Nothing builds or boots on macOS except by hand.
+- `make image` needs macOS (hdiutil), so CI neither builds nor boots the
+  disk image that UTM gets.
 - site/boot.png, on the website, is a screenshot of version 0.0.4, to be
   replaced by hand when the boot report has changed enough to matter.
 - Where the logo, site/sun.png, came from and under what license is not

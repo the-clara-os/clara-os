@@ -13,7 +13,9 @@ tree to GitHub as one commit that GitHub signs, creating the branch there
 if needed, and moves the local branch onto it. Then `gh pr create --base main`
 with a title in his style, `feat(m3): Virtual Memory`, and a body that says
 what changed, how it was checked, and every decision that departs from the
-roadmap. Never merge, and never push to main.
+roadmap. Never merge, and never push to main. The pull request is built and
+booted once more on Ubuntu (.github/workflows/ci.yml): watch that run with
+`gh pr checks --watch`, and the slice is not finished until it passes.
 
 Budget: assistant work on this project is capped at 50 dollars per day, at
 list prices. `tools/session-cost.py` adds up what the day's Claude Code
@@ -23,8 +25,9 @@ measured it. The money goes on context, not on tool calls: every message
 sent after five idle minutes re-sends the whole conversation at full price,
 so start each slice in a fresh session instead of continuing a long one.
 
-Build with `make` (expects Homebrew llvm and lld under /opt/homebrew/opt;
-override with `LLVM=` and `LLD=`). `make test` boots both architectures
+Build with `make` (Homebrew's llvm and lld under /opt/homebrew/opt when they
+are there, otherwise clang and lld-link from the PATH; `LLVM=` and `LLD=`
+name other directories). `make test` boots both architectures
 headless under QEMU in about ten seconds and saves what each screen shows to
 build/screen-<arch>.png; look at those images when a change touches the
 display. `make run-aarch64` and `make run-x86_64` open a QEMU window with
@@ -70,8 +73,21 @@ Rules:
   the end is not enough; the next session starts from the files. Before
   starting a milestone, read its group there.
 - The website, https://claraos.org, is site/index.html, filled in by
-  site/build.py from ROADMAP.md
+  site/build.py from ROADMAP.md, kernel/kernel.h (the version)
   and the console font (`make site`, then open build/site/index.html), and
   published by .github/workflows/site.yml on every push to main that touches
   them. The page reads the milestone entries of ROADMAP.md, so keep their
   form.
+- CI (.github/workflows/ci.yml) runs `make`, `make test` and `make site` on
+  Ubuntu for every pull request and every push to main. Ubuntu's clang and
+  QEMU are older than Homebrew's, and the runners have no hardware
+  acceleration, so both machines are emulated there: the code has to build
+  without warnings under both compilers, and a boot check must not depend
+  on how fast the machine is. The tools `make test` needs are installed in
+  the workflow's first step and listed at the top of the Makefile; a new
+  one goes into both in the same change. The serial logs and screenshots of
+  a run are in its artifact, boot-reports.
+- To see a change the way CI will before pushing it, with Docker running:
+  an ubuntu:24.04 container with the packages from the workflow, a copy of
+  the tree without build/, and `make test` in it. build/ itself must not be
+  shared with the container: the objects in it come from another compiler.

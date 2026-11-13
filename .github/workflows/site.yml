@@ -6,6 +6,7 @@ on:
     paths:
       - 'site/**'
       - 'ROADMAP.md'
+      - 'kernel/kernel.h'
       - 'fonts/spleen-8x16.bdf'
       - '.github/workflows/site.yml'
   workflow_dispatch:
@@ -32,8 +33,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
-      # The page takes its version and its roadmap from ROADMAP.md and draws
-      # its headings with the console font, so it is built, not copied.
+      # The page takes its version from kernel/kernel.h and its roadmap from
+      # ROADMAP.md, and draws its headings with the console font, so it is
+      # built, not copied.
       - name: Build the Site
         run: python3 -I site/build.py _site
 
