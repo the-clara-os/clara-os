@@ -1,4 +1,4 @@
-#include "kernel.h"
+#include "arch.h"
 
 const char *const arch_name = "aarch64";
 
@@ -29,19 +29,25 @@ void arch_map_devices(void)
 
 void arch_halt(void)
 {
+    __asm__ volatile("msr daifset, #0xf");
+    interrupt_quiet();
     for (;;)
         __asm__ volatile("wfi");
 }
 
 /* The first argument travels in x0. The frame pointer and the link register
- * are cleared: there is no frame above fn and nowhere for it to return to. */
+ * are cleared: there is no frame above fn and nowhere for it to return to.
+ * The processor has two stack pointers at EL1, and the firmware runs on
+ * SP_EL1. The kernel proper takes SP_EL0, selected here, and keeps SP_EL1
+ * for its exception handlers (exception.c). */
 void arch_switch_stack(void *top, void (*fn)(struct boot_info *), struct boot_info *arg)
 {
     register struct boot_info *x0 __asm__("x0") = arg;
     register void *x9 __asm__("x9") = top;
     register void (*x10)(struct boot_info *) __asm__("x10") = fn;
 
-    __asm__ volatile("mov sp, x9\n"
+    __asm__ volatile("msr spsel, #0\n"
+                     "mov sp, x9\n"
                      "mov x29, xzr\n"
                      "mov x30, xzr\n"
                      "br x10"

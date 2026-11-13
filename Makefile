@@ -17,8 +17,10 @@ CFLAGS := -std=c11 -O2 -g -Wall -Wextra -Werror \
           -mno-stack-arg-probe -mgeneral-regs-only -fshort-wchar -Ikernel
 LDFLAGS := /nologo /subsystem:efi_application /entry:efi_main /nodefaultlib /debug:dwarf
 
+ASFLAGS := -g -Ikernel -Wa,--fatal-warnings
+
 COMMON_SRCS := $(wildcard kernel/*.c)
-HEADERS     := $(wildcard kernel/*.h)
+HEADERS     := $(wildcard kernel/*.h kernel/arch/*/*.h)
 BOOT_FILES  := $(patsubst lisp/%,$(BOOTDIR)/%,$(wildcard lisp/*.lisp))
 
 .PHONY: all test image font site clean
@@ -26,10 +28,13 @@ all:
 
 # $(1) arch  $(2) clang target  $(3) extra CFLAGS  $(4) EFI file name  $(5) lld machine
 define ARCH_RULES
-$(1)_OBJS := $$(patsubst kernel/%.c,$(BUILD)/$(1)/%.o,$(COMMON_SRCS) $$(wildcard kernel/arch/$(1)/*.c))
+$(1)_OBJS := $$(patsubst kernel/%,$(BUILD)/$(1)/%.o,$$(basename $(COMMON_SRCS) $$(wildcard kernel/arch/$(1)/*.c kernel/arch/$(1)/*.S)))
 $(BUILD)/$(1)/%.o: kernel/%.c $(HEADERS)
 	@mkdir -p $$(dir $$@)
 	$(CC) $(CFLAGS) --target=$(2) $(3) -c $$< -o $$@
+$(BUILD)/$(1)/%.o: kernel/%.S $(HEADERS)
+	@mkdir -p $$(dir $$@)
+	$(CC) $(ASFLAGS) --target=$(2) -c $$< -o $$@
 $(ESP)/$(4): $$($(1)_OBJS)
 	@mkdir -p $$(dir $$@)
 	$(LD) $(LDFLAGS) /machine:$(5) /out:$$@ $$^
@@ -48,9 +53,13 @@ all: $(BOOT_FILES)
 run-%: all
 	tools/run.sh $*
 
+# AArch64 boots twice, once for each version of its interrupt controller:
+# version 3 as UTM runs it, accelerated where the host can, and version 2
+# emulated, because QEMU's hvf has no version 2.
 test: all
 	tools/boottest.sh x86_64
-	tools/boottest.sh aarch64
+	tools/boottest.sh aarch64 -machine gic-version=3
+	NAME=aarch64-gic2 NO_HVF=1 tools/boottest.sh aarch64 -machine gic-version=2
 
 image: all
 	tools/mkimage.sh

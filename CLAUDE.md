@@ -15,7 +15,8 @@ with a title in his style, `feat(m3): Virtual Memory`, and a body that says
 what changed, how it was checked, and every decision that departs from the
 roadmap. Never merge, and never push to main. The pull request is built and
 booted once more on Ubuntu (.github/workflows/ci.yml): watch that run with
-`gh pr checks --watch`, and the slice is not finished until it passes.
+`gh pr checks --watch`, and the slice is not finished until it passes. The
+ruleset on main requires that check, `build-and-boot`, before a merge.
 
 Budget: assistant work on this project is capped at 50 dollars per day, at
 list prices. `tools/session-cost.py` adds up what the day's Claude Code
@@ -28,8 +29,8 @@ so start each slice in a fresh session instead of continuing a long one.
 Build with `make` (Homebrew's llvm and lld under /opt/homebrew/opt when they
 are there, otherwise clang and lld-link from the PATH; `LLVM=` and `LLD=`
 name other directories). `make test` boots both architectures
-headless under QEMU in about ten seconds and saves what each screen shows to
-build/screen-<arch>.png; look at those images when a change touches the
+headless under QEMU in about twenty seconds and saves what each screen shows
+to build/screen-<arch>.png; look at those images when a change touches the
 display. `make run-aarch64` and `make run-x86_64` open a QEMU window with
 serial on the terminal; `make image` produces the UTM disk.
 
@@ -54,17 +55,33 @@ Rules:
 - Substrate code checks itself during boot (`pmm_selftest`) and panics when
   a check fails, so `make test` covers it. A check that needs a temporary
   change to the sources (a forced fault, an exhaustive loop) is run once and
-  taken out again.
+  taken out again. Look at what `make` says before trusting such a run: a
+  build that fails leaves the previous kernel in build/esp, and the boot
+  test then passes on a kernel that does not have the change.
 - A physical address is a `uint64_t`; `phys_ptr()` makes a pointer of one,
   which works because RAM is mapped at its own address (kernel/vm.c).
-- Until M4 a fault lands in the firmware's exception handlers, which print a
-  register dump on serial: read build/boot-<arch>.log. They live in
-  boot-services memory, which is why the allocator leaves that memory alone
-  and vm_init keeps it executable. A kernel stack overflow on x86_64 resets
-  the machine with no dump at all.
-- To check that an access faults, force it with a temporary change and run
-  `MARKER=xception TIMEOUT=10 tools/boottest.sh <arch>`. x86_64 gives the
-  cause in ExceptionData and CR2, AArch64 in ESR and FAR.
+- A fault is reported by the kernel itself, on serial and on the screen:
+  read build/boot-<arch>.log. The report gives the place as an offset into
+  the kernel image, and
+  `/opt/homebrew/opt/llvm/bin/llvm-symbolizer --relative-address --obj=build/esp/EFI/BOOT/BOOTAA64.EFI 0x3c20`
+  names the function that offset is in (no line number).
+- `fault_selftest` (kernel/fault.c) provokes the accesses the address space
+  must refuse, at every boot, through the probes in entry.S. A new kind of
+  protection gets a case there. To read the report of a fault that is not
+  survived, force one with a temporary change and run
+  `MARKER=xception TIMEOUT=10 tools/boottest.sh <arch>`.
+- An interrupt handler runs with interrupts off and must not allocate page
+  frames, map memory or print, apart from reporting what should never
+  happen. Neither the allocator nor the console has a lock.
+- `make test` boots three machines: x86_64, AArch64 with GIC version 3,
+  and AArch64 emulated with GIC version 2, whose files in build/ are named
+  aarch64-gic2. QEMU's hvf has no version 2, and UTM uses version 3.
+  tools/boottest.sh passes any further arguments on to QEMU, which is how
+  to try another machine: `tools/boottest.sh aarch64 -smp 4 -cpu max`.
+- Assembly lives in kernel/arch/<arch>/entry.S and nowhere else. On x86_64
+  it follows the Microsoft calling convention, like the C around it:
+  arguments in rcx and rdx, 32 bytes of home space above the return
+  address. What the files of one architecture share is in its arch.h.
 - lisp/*.lisp is copied to the ESP's \clara directory, and the handoff
   (kernel/boot.c) reads every file there into a `struct boot_file`.
 - Whatever a session leaves open goes into ROADMAP.md in the same change,

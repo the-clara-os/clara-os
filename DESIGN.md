@@ -63,7 +63,9 @@ manager, and the applications are Lisp programs loaded into that world.
 - One source tree, one toolchain. clang and lld targeting `*-unknown-windows`
   produce the PE/COFF images the firmware wants. Architecture-specific code
   lives under kernel/arch/<arch>/ behind the few `arch_*` functions declared
-  in kernel/kernel.h; everything else compiles for both.
+  in kernel/kernel.h; everything else compiles for both. Each of the two
+  directories has one assembly file, entry.S, for what C cannot say, and
+  one header, arch.h, for what its own files share.
 - Serial first. Every milestone is observable on the serial port before
   anything is drawn, and the boot test reads the serial log.
 - The firmware describes the hardware. ACPI tables on both architectures
@@ -101,6 +103,44 @@ architectures (kernel/vm.c).
   saved heap image needs. The region is above any physical address the two
   machines have, and inside the 47 bits both architectures offer without
   x86_64's upper half or AArch64's second table register.
+- The only memory that can be run is the kernel image's code. All other
+  RAM is data, the firmware's old code included, and on AArch64 the
+  processor is also told that whatever can be written cannot be run.
+
+## Exceptions and interrupts (decided in M4, 2026-11-13)
+
+- The kernel installs its own exception vectors first, before it touches
+  memory management, so a fault anywhere after the first line of the boot
+  report is the kernel's to report. Once its page tables are in place as
+  well, nothing of the firmware's is in use: boot-services memory joins
+  the free page frames, and it is overwritten on the way in, so that a
+  boot which still depended on it would fail there and then.
+- A fault the kernel did not provoke stops the machine. The kernel says
+  what happened in words ("a write to 0x..., which is read-only"), where
+  in its image, and what was in every register, on the serial port and on
+  the screen, and halts. The only faults it recovers from are those of the
+  self-test's probes, which provoke one fault of each kind at every boot
+  and check how it comes back.
+- A stack that overflows cannot be reported on the stack it happened on,
+  so a handler never depends on that stack. On AArch64 the kernel proper
+  runs on SP_EL0 and every exception is taken on SP_EL1, which points at a
+  stack kept for the purpose. On x86_64 handlers run on the stack they
+  interrupted, and the double fault that follows a failed push has a spare
+  stack, named in the TSS.
+- Whatever the cause, the entry code in entry.S saves every register in a
+  frame and hands the frame to C, and what C leaves in the frame is what
+  the interrupted code resumes with. That is how a probe is made to resume
+  somewhere else, and how threads will be switched.
+- An interrupt handler runs with interrupts off, never allocates memory,
+  never maps any, and returns. Anything longer belongs to a thread. The
+  timer is the only source so far; devices will deliver theirs to Lisp as
+  events.
+- The interrupt controller comes from ACPI, not from an assumed address:
+  the MADT names the local APIC and the I/O APICs on x86_64, and on
+  AArch64 the GIC, whose versions 2 and 3 are both driven because QEMU
+  offers the first and UTM asks for the second.
+- Time is a count of ticks, `TIMER_HZ` of them a second, from the local
+  APIC's timer on x86_64 and the generic timer on AArch64.
 
 ## Conventions
 

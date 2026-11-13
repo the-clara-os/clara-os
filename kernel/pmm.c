@@ -2,11 +2,11 @@
  * the lowest address of RAM to the highest, set while the frame is in use.
  *
  * The firmware's memory map says what is RAM and what was free when the
- * kernel took the machine. Only conventional memory is handed out so far.
- * Boot-services memory is free on paper, but the processor still uses the
- * exception vectors the firmware left inside it: their register dump on the
- * serial port is all the kernel has for a fault handler. It stays out until
- * the kernel has vectors of its own (M4); then all of it can go to pmm_free. */
+ * kernel took the machine. Conventional memory is handed out from the
+ * start. Boot-services memory is free on paper too, but the processor goes
+ * on using what the firmware left in it, page tables, a stack and exception
+ * vectors, until the kernel has put its own in their place. pmm_reclaim
+ * adds that memory then. */
 #include "efi.h"
 #include "kernel.h"
 
@@ -23,14 +23,18 @@ static const char *const type_names[EfiMaxMemoryType] = {
     "MMIO port space",    "PAL code",     "persistent",
 };
 
-/* The part of a region that can be handed out: free memory above LOW_LIMIT.
- * Returns its length in frames and stores where it starts. */
-static uint64_t free_part(const EFI_MEMORY_DESCRIPTOR *d, uint64_t *start)
+/* The part of a region that can be handed out, when the region is of the
+ * kind asked for: conventional memory, or else boot-services memory. That
+ * part is what lies above LOW_LIMIT. Returns its length in frames and
+ * stores where it starts. */
+static uint64_t usable_part(const EFI_MEMORY_DESCRIPTOR *d, int boot_services, uint64_t *start)
 {
     uint64_t end = d->PhysicalStart + (d->NumberOfPages << PAGE_SHIFT);
+    int wanted = boot_services ? d->Type == EfiBootServicesCode || d->Type == EfiBootServicesData
+                               : d->Type == EfiConventionalMemory;
 
     *start = d->PhysicalStart < LOW_LIMIT ? LOW_LIMIT : d->PhysicalStart;
-    return d->Type == EfiConventionalMemory && end > *start ? (end - *start) >> PAGE_SHIFT : 0;
+    return wanted && end > *start ? (end - *start) >> PAGE_SHIFT : 0;
 }
 
 static int in_use(uint64_t i)
@@ -86,7 +90,7 @@ void pmm_init(const struct boot_info *bi)
      * and begins with every frame in use. */
     uint64_t bitmap_pages = (g_frames + 8 * PAGE_SIZE - 1) / (8 * PAGE_SIZE);
     for (uint64_t i = 0; i < regions && !g_bitmap; i++)
-        if (free_part(efi_region(bi->memory_map, bi->desc_size, i), &start) >= bitmap_pages)
+        if (usable_part(efi_region(bi->memory_map, bi->desc_size, i), 0, &start) >= bitmap_pages)
             g_bitmap = phys_ptr(start);
     if (!g_bitmap)
         panic("no free region can hold the %llu pages of the page-frame bitmap", bitmap_pages);
@@ -94,7 +98,7 @@ void pmm_init(const struct boot_info *bi)
 
     /* Free what the firmware says is free, then take the bitmap's own frames back. */
     for (uint64_t i = 0; i < regions; i++) {
-        uint64_t count = free_part(efi_region(bi->memory_map, bi->desc_size, i), &start);
+        uint64_t count = usable_part(efi_region(bi->memory_map, bi->desc_size, i), 0, &start);
 
         if (count) {
             mark((start >> PAGE_SHIFT) - g_first, count, 0);
@@ -104,9 +108,8 @@ void pmm_init(const struct boot_info *bi)
     mark(((uintptr_t)g_bitmap >> PAGE_SHIFT) - g_first, bitmap_pages, 1);
     g_free -= bitmap_pages;
 
-    kprintf("page frames: %llu of %llu free (%llu MiB), %llu of boot services memory not yet reclaimed\n",
-            g_free, ram, g_free >> (20 - PAGE_SHIFT),
-            pages[EfiBootServicesCode] + pages[EfiBootServicesData]);
+    kprintf("page frames: %llu of %llu free (%llu MiB), boot-services memory not counted yet\n", g_free, ram,
+            g_free >> (20 - PAGE_SHIFT));
     kprintf("page-frame bitmap: %llu KiB at %p\n", bitmap_pages << 2, (void *)g_bitmap);
 }
 
@@ -169,6 +172,28 @@ static void pattern(uint64_t addr, uint64_t pages, uint64_t salt, int check)
         else if (word[i] != want)
             panic("pmm self-test: %llx holds %llx, not %llx", addr + i * 8, (uint64_t)word[i], want);
     }
+}
+
+/* Boot-services memory joins the free frames. Call this once the processor
+ * is off the firmware's page tables, stack and exception vectors, all of
+ * which lie in that memory. Every frame is overwritten before it is freed:
+ * a boot that still needed something in there fails now, where a boot test
+ * sees it, and not on the day the frame is handed out. */
+void pmm_reclaim(const struct boot_info *bi)
+{
+    uint64_t regions = bi->memory_map_size / bi->desc_size, reclaimed = 0, start;
+
+    for (uint64_t i = 0; i < regions; i++) {
+        uint64_t count = usable_part(efi_region(bi->memory_map, bi->desc_size, i), 1, &start);
+
+        if (!count)
+            continue;
+        pattern(start, count, 0x4444444444444444ULL, 0);
+        pmm_free(start, count);
+        reclaimed += count;
+    }
+    kprintf("page frames: %llu more from boot-services memory, overwritten first: %llu free (%llu MiB)\n",
+            reclaimed, g_free, g_free >> (20 - PAGE_SHIFT));
 }
 
 /* Exercise the allocator on real memory. A check that fails is a panic, so a
