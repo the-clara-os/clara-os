@@ -9,7 +9,7 @@ understood from the first instruction up. It is not a Unix and does not try
 to run Linux software. The kernel is its own UEFI application: the firmware
 loads `BOOTX64.EFI` or `BOOTAA64.EFI`, and from `efi_main` on it is ClaraOS.
 
-Status: milestone 5. Both architectures boot under QEMU with EDK2 firmware
+Status: milestone 6a. Both architectures boot under QEMU with EDK2 firmware
 (the same firmware and machine types UTM uses), read their boot files from
 the ESP, and take the machine from the firmware. From then on they use
 nothing of the firmware's: they run on their own stack, page tables and
@@ -17,8 +17,11 @@ exception vectors, and the page-frame allocator has all the free memory
 there is. A fault is reported in words, with every register. The interrupt
 controller is found through ACPI, and a timer ticks a hundred times a
 second. Threads take turns on that tick, sleep, share locks, and can all be
-stopped at once, which is what the Lisp collector will need. A text console
-on the serial port and on the screen reports each step.
+stopped at once, which is what the Lisp collector will need. The Lisp
+runtime has its objects, its heap, symbols and packages, a reader and a
+printer: at the end of the boot the kernel reads the forms typed on the
+serial port and prints each one back. There is no evaluator yet. A text
+console on the serial port and on the screen reports each step.
 [ROADMAP.md](ROADMAP.md) has what comes next, [DESIGN.md](DESIGN.md) the
 ideas and conventions.
 
@@ -37,9 +40,11 @@ request is built and booted, by [.github/workflows/ci.yml](.github/workflows/ci.
 Then, on either:
 
     make              # build/esp: EFI/BOOT/BOOTX64.EFI and BOOTAA64.EFI, and the boot files in clara/
-    make test         # boot both headless, wait for the kernel's last line, save build/screen-<arch>.png;
+    make test         # boot both headless, type tools/session.txt at each kernel and compare its answers,
+                      # wait for the kernel's last line, save build/screen-<arch>.png;
                       # AArch64 boots twice, once for each version of its interrupt controller
-    make run-aarch64  # QEMU window, serial on the terminal; hvf-accelerated on Apple silicon
+    make run-aarch64  # QEMU window, serial on the terminal: type a form there, Ctrl-D ends;
+                      # hvf-accelerated on Apple silicon
     make run-x86_64   # same, emulated (TCG), so the firmware takes a few seconds
     make image        # build/claraos.img, a GPT + FAT32 raw disk for UTM; needs macOS
 
@@ -47,10 +52,12 @@ Layout:
 
     kernel/          architecture-independent code and the UEFI handoff (boot.c)
     kernel/arch/     one directory per architecture: the only assembly and the only MMIO addresses
+    kernel/lisp/     the Lisp runtime: objects and the heap, symbols and packages, the reader, the printer
     lisp/            Lisp sources; the build copies them to the ESP's \clara directory, read at boot
     fonts/           the console font, Spleen 8x16, which tools/bdf2c.py turns into kernel/font.c
     site/            the website: one page, filled in from ROADMAP.md by site/build.py (`make site`)
-    tools/           run.sh (QEMU), boottest.sh (headless check and screenshot), mkimage.sh (UTM disk)
+    tools/           run.sh (QEMU), boottest.sh (headless check, typed session and screenshot),
+                     session.txt (what the check types and what must come back), mkimage.sh (UTM disk)
 
 ## Running in UTM
 
@@ -60,9 +67,12 @@ Layout:
    of memory is plenty.
 3. Remove the drive UTM created. Drives, Import, pick `build/claraos.img`
    (VirtIO or NVMe interface, either works).
-4. Add a Serial device with mode "Built-in Terminal": the kernel talks there.
+4. Add a Serial device with mode "Built-in Terminal": the kernel talks there,
+   and it is the only place to type until there is a keyboard driver.
 5. Start. The display and the serial window both show the boot report,
-   which ends with `clara: nothing more to do`.
+   which ends at a prompt. A form typed in the serial window, `(a b . c)`
+   say, is read and printed back on both. Ctrl-D ends it, and the kernel
+   halts with `clara: nothing more to do`.
 
 UTM copies the image into the VM bundle, so after a rebuild either import it
 again or replace the copy inside the `.utm` bundle (Show Package Contents,

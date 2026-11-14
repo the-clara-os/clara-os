@@ -76,9 +76,25 @@ Substrate:
 
 The Lisp runtime, in the substrate:
 
-- [ ] **M6a objects and reader.** Tagged 64-bit words, fixnums, conses,
-  symbols and packages, strings, vectors; a bump allocator in the heap
-  region; the reader and the printer; `(print (read))` over serial.
+- [x] **M6a objects and reader** (2026-11-14, version 0.0.8). The first
+  part of the Lisp runtime, in kernel/lisp/. A Lisp value is a tagged
+  64-bit word: a fixnum of 63 bits, a character, or the address of an
+  object in the heap, with a tag of their own for conses and for symbols.
+  Every object begins with a header word, so the heap can be walked from
+  end to end; it lies in the region reserved for it, begins with NIL, and
+  grows a page frame at a time (heap.c). Symbols live in packages, each
+  with its internal and its external symbols: KEYWORD, COMMON-LISP and
+  COMMON-LISP-USER are there from the start (symbol.c). A string holds
+  Unicode code points, and text outside the heap is UTF-8. The reader
+  (read.c) takes Common Lisp's syntax for lists, symbols with their
+  packages and escapes, integers, strings, characters, vectors, quotes and
+  comments, and refuses what this Lisp has no objects for yet, floats and
+  ratios among them. The printer (print.c) writes what the reader reads
+  back as the same object. The serial port is read as well as written:
+  the kernel ends its boot by reading the forms typed there and printing
+  each one back, until Ctrl-D. Every boot reads and prints some hundred
+  texts, has some seventy refused, and walks the heap; `make test` types a
+  session at each machine and compares the answers (tools/session.txt).
 - [ ] **M6b evaluator.** The interpreter: lambda, closures, special forms,
   special variables, multiple values, macros, `defstruct`, a core of
   built-in functions; `boot.lisp` loaded from the ESP at startup.
@@ -163,20 +179,53 @@ Infrastructure, for sessions with budget left over:
   scheduler broken on purpose, to see that it notices: no lock around the
   shared total, no parking after a sleep, no end of turn on the tick, a
   register left out of a switch, a sleep one tick short, no guard page, a
-  frame not given back by thread_join.
+  frame not given back by thread_join. From M6a: typing by hand through
+  a FIFO, with backspace and Delete, a tab, lines that end in a carriage
+  return, a line feed and both, Ctrl-D in the middle of a line and in the
+  middle of a form, characters outside ASCII typed and taken back; 400
+  forms pasted at once, 23 KB, none lost, on x86_64 and on AArch64; a
+  string that never ends, typed until the 8 KiB the loop keeps were full;
+  the session on the disk image with 4 GiB and four processors, and on
+  x86_64 with `-cpu max`, 128 MiB and four processors; how much stack the
+  deepest nesting takes; the whole of `make test` in an Ubuntu container.
+  And the self-test and the session with the runtime broken on purpose,
+  to see that they notice: a page too few mapped for the heap, a string
+  one word short, a symbol made anew at every read, nothing inherited
+  from the packages a package uses, a table that forgets its symbols when
+  it grows, a printer that never writes bars, a reader that does not fold
+  case, floats read as symbols, a dotted tail dropped, an integer too
+  large let through, UTF-8 longer than it need be let through, no limit
+  on nesting in the reader or in the printer, typed characters not
+  echoed.
 
 Shortcuts and loose ends, under the milestone that settles each one. A
 session reads its own group before it starts, and whatever it leaves open
 is added here in the same change.
 
-M6a:
-
-- The heap region is reserved and empty. A frame mapped there can also be
-  reached at its physical address, like all RAM; decide whether heap frames
-  lose that second mapping.
-
 M6b:
 
+- The reader does not know backquote and comma, which macros are written
+  with, and refuses them. It refuses the rest of the `#` syntax as well:
+  `#+` and `#-`, which the sources shared with SBCL will want (M7), `#.`,
+  `#nR`, `#*`, `#C`, `#P`, `#S`, `#n=`.
+- COMMON-LISP holds five symbols: NIL, T, QUOTE, FUNCTION and `*PACKAGE*`.
+  A name such as CAR is made in the package it is read in, until the
+  evaluator has put it in COMMON-LISP first. Nothing can be taken out of a
+  package's table, so there is no `unintern`, and there is no `export` or
+  `import` either: a symbol is external from the moment it is made, as
+  the substrate's own and every keyword are, or never.
+- `*PACKAGE*` has one value for the whole machine, kept in the symbol.
+  Special variables that can be bound are the evaluator's to bring.
+- Integers are fixnums, 63 bits. The reader refuses a larger one with an
+  error, and a float or a ratio; what arithmetic does when a result does
+  not fit is still to be decided.
+- Lists nest by recursion in C in the reader and in the printer, 64 deep
+  at most (`LISP_DEPTH`): reading at that depth takes about 18 KiB of the
+  thread's 64 KiB of stack on x86_64. A deeper list is refused by the
+  reader and cut short with a `#` by the printer. This belongs with the
+  evaluator's stack, the next item.
+- The printer does not notice a list that leads back into itself, and
+  would print it for ever. Nothing can build one yet.
 - A thread's stack is 64 KiB (`THREAD_STACK_SIZE`), the same for all and
   fixed, which an interpreter that recurses in C will find small. Decide
   which thread the evaluator runs on, how much stack it gets, and how it
@@ -197,6 +246,24 @@ M6b:
 
 M6c:
 
+- The heap only grows. When no page frame is left for it the kernel
+  panics: there is no collector to run first, and no condition to signal.
+  Every object's header has a byte for the collector to mark in, which
+  nothing uses.
+- The reader, the printer and the packages keep objects in C variables
+  while they work, and make more objects meanwhile. That is safe as long
+  as a collection starts only at a safe point, never inside an allocation,
+  and none of them comes to a safe point; the reader takes its text whole
+  for that reason, and whoever reads from the serial port waits between
+  two reads, not inside one. The collector has to be built that way, or
+  they have to say what they hold.
+- What the self-test makes stays in the heap, about 170 KiB, and so does
+  its package, CLARA.SELF-TEST, which is taken off the list of packages
+  and has nothing else pointing at it.
+- An error in the reader is a status in C, with words and a place, and
+  the loop on the serial port prints it. Once there are conditions it is
+  one. That loop is C as well and knows nothing of evaluation: the REPL
+  takes its place.
 - Nothing calls `thread_safe_point` except the self-test. The interpreter
   has to, often enough that the world stops promptly (at every call and
   every turn of a loop, say), and never with a lock held. A thread that
@@ -210,10 +277,19 @@ M6c:
 
 M6c, M8:
 
-- The console is output only: no cursor and no keyboard.
+- The console has no cursor and no keyboard. A line can be typed on the
+  serial port (`kgetline`), with backspace for all its editing, and what
+  is typed is echoed on the screen.
 
 M7:
 
+- One thread at a time may use the Lisp runtime: the heap, the packages'
+  tables and `*PACKAGE*` take no lock, and only the boot thread uses them
+  so far.
+- Letters fold to upper case in the reader, and the printer tells the two
+  cases apart, for ASCII only: `é` stays as it is where SBCL makes `É` of
+  it. A character has one of the ten names in read.c, or `U+` and its
+  code point.
 - CI runs no Lisp tests, because there are none. When the SBCL host tests
   join `make test`, the workflow has to install SBCL.
 - An interrupt has no way to reach Lisp. The handlers are C, and the
@@ -232,6 +308,12 @@ M7:
 
 M8:
 
+- No interrupt arrives for a character on the serial port. `kgetline`
+  looks at the port once a tick and sleeps in between, so a character
+  waits up to 10 ms, and what arrives meanwhile has to fit in the UART's
+  FIFO: 16 characters on the PL011, or 32, by its revision, and 14 on
+  the 16550 as it is set up. QEMU holds the rest back; a real serial line
+  would lose it.
 - Whether to keep GIC version 2 at all is best decided here, when device
   interrupts would have to be written and tested for both versions. UTM
   never uses version 2; QEMU's virt machine has it unless told otherwise,
@@ -332,10 +414,20 @@ No milestone yet, to be picked up when they start to matter:
   machine describes how its devices' interrupt lines are wired.
 - QEMU's hvf has no GIC version 2, which is why `make test` boots AArch64
   a second time, emulated.
-- Neither M4 nor M5 has been booted in UTM itself. UTM runs AArch64 under
-  hvf with GIC version 3, four processors and 4 GiB, and that was checked
-  with Homebrew's QEMU 11 from the disk image; UTM brings QEMU 10.0 and a
-  display device of its own.
+- None of M4, M5 and M6a has been booted in UTM itself. UTM runs AArch64
+  under hvf with GIC version 3, four processors and 4 GiB, and that was
+  checked with Homebrew's QEMU 11 from the disk image; UTM brings QEMU
+  10.0 and a display device of its own. A virtual machine there has no
+  serial device unless one is added (README.md), and without one the
+  kernel waits at its prompt for good: there is nowhere else to type
+  until M8.
+- The screen has glyphs for ASCII only (kernel/font.c). A character
+  outside it takes one cell, with the font's sign for a glyph it does not
+  have.
+- A string takes 32 bits for every character, whatever the characters
+  are.
+- On AArch64 `arch_early_init` switches the PL011's FIFOs on, and leaves
+  the rest of the UART as the firmware set it up.
 - The handoff does not give back a memory-map buffer that turned out too
   small, or the pages of a boot file it failed to read: a few pages, at
   most once per boot.
@@ -346,7 +438,7 @@ No milestone yet, to be picked up when they start to matter:
   clang 23 and QEMU 11. Nothing builds or boots on macOS except by hand.
 - `make image` needs macOS (hdiutil), so CI neither builds nor boots the
   disk image that UTM gets.
-- site/boot.png, on the website, is a screenshot of version 0.0.7, to be
+- site/boot.png, on the website, is a screenshot of version 0.0.8, to be
   replaced by hand when the boot report has changed enough to matter:
   build/screen-aarch64.png after `make test` is the same picture of the
   current kernel.

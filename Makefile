@@ -19,8 +19,8 @@ LDFLAGS := /nologo /subsystem:efi_application /entry:efi_main /nodefaultlib /deb
 
 ASFLAGS := -g -Ikernel -Wa,--fatal-warnings
 
-COMMON_SRCS := $(wildcard kernel/*.c)
-HEADERS     := $(wildcard kernel/*.h kernel/arch/*/*.h)
+COMMON_SRCS := $(wildcard kernel/*.c kernel/lisp/*.c)
+HEADERS     := $(wildcard kernel/*.h kernel/lisp/*.h kernel/arch/*/*.h)
 BOOT_FILES  := $(patsubst lisp/%,$(BOOTDIR)/%,$(wildcard lisp/*.lisp))
 
 .PHONY: all test image font site clean
