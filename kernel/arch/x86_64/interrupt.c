@@ -172,9 +172,15 @@ void arch_interrupts_on(void)
     __asm__ volatile("sti");
 }
 
-void arch_interrupts_off(void)
+int arch_interrupts_off(void)
 {
-    __asm__ volatile("cli");
+    uint64_t flags;
+
+    __asm__ volatile("pushfq\n"
+                     "popq %0\n"
+                     "cli"
+                     : "=r"(flags));
+    return flags >> 9 & 1; /* IF */
 }
 
 void arch_wait(void)

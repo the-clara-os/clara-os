@@ -17,7 +17,7 @@ static struct mem_fault g_seen; /* and this is how the handler described it */
 
 int fault_in_stack_guard(uint64_t addr)
 {
-    return addr - (uint64_t)(uintptr_t)kernel_stack < PAGE_SIZE;
+    return addr - thread_stack_guard() < PAGE_SIZE;
 }
 
 /* For the handlers: is a probe waiting for this exception? mf is NULL when
@@ -42,7 +42,7 @@ void fault_describe(const struct mem_fault *mf)
     kprintf("%s 0x%llx, %s\n", act[mf->access], mf->addr,
             mf->mapped ? refused[mf->access] : "where nothing is mapped");
     if (fault_in_stack_guard(mf->addr))
-        kputs("  that is the guard page under the kernel stack: the stack has overflowed\n");
+        kprintf("  that is the guard page under the stack of thread %s: the stack has overflowed\n", thread_name());
     else if (mf->addr < LOW_LIMIT)
         kputs("  an address that low is a null pointer, most likely\n");
 }
@@ -63,16 +63,38 @@ static int probe(enum mem_access access, uint64_t addr, uint8_t value)
     return faulted;
 }
 
+/* The running thread's stack overflows: the stack pointer is at the guard
+ * page and the next push lands in it. The handler cannot run on that
+ * stack, and this passes only when it has another to run on. Interrupts
+ * are off meanwhile: the probe's notes are one set for the whole machine,
+ * and a thread that lost the processor here would find another's in them. */
+void fault_stack_selftest(void)
+{
+    int on = arch_interrupts_off();
+
+    g_seen_memory = 0;
+    g_probing = 1;
+    int faulted = arch_probe_push(thread_stack_guard() + PAGE_SIZE);
+    g_probing = 0;
+    int in_guard = faulted && g_seen_memory && fault_in_stack_guard(g_seen.addr);
+    if (on)
+        arch_interrupts_on();
+    if (!in_guard)
+        panic("fault self-test: a push into the guard page under the stack of thread %s %s", thread_name(),
+              faulted ? "came back as something else" : "went through");
+}
+
 /* Every access below is one the address space must refuse, apart from the
  * first three, which show that a probe does not cry wolf. Each fault has
  * to come back as what it is: the address, the kind of access, and whether
- * anything is mapped there. */
+ * anything is mapped there. This runs once, before there are other threads
+ * to share the probe's notes with. */
 void fault_selftest(void)
 {
     static const uint8_t constant = 0x5a;
     static uint8_t data;
     uint64_t code = (uint64_t)(uintptr_t)arch_probe_nothing;
-    uint64_t guard = (uint64_t)(uintptr_t)kernel_stack;
+    uint64_t guard = thread_stack_guard();
     uint64_t frame = pmm_alloc(1);
     const struct {
         const char *what;
@@ -112,17 +134,7 @@ void fault_selftest(void)
         survived++;
     }
     pmm_free(frame, 1);
-
-    /* The stack overflows: the stack pointer is at the guard page and the
-     * next push lands in it. The handler cannot run on that stack, and
-     * this passes only when it has another to run on. */
-    g_seen_memory = 0;
-    g_probing = 1;
-    int faulted = arch_probe_push(guard + PAGE_SIZE);
-    g_probing = 0;
-    if (!faulted || !g_seen_memory || !fault_in_stack_guard(g_seen.addr))
-        panic("fault self-test: a push into the stack's guard page %s",
-              faulted ? "came back as something else" : "went through");
+    fault_stack_selftest();
     survived++;
 
     kprintf("exceptions: self-test passed, %u faults provoked and survived\n", survived);

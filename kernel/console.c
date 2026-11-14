@@ -1,16 +1,54 @@
 #include "kernel.h"
 
 static int g_serial_only;
+static struct lock g_lock;
+
+/* A thread has the console to itself for the length of one call, so that
+ * what two threads print does not mix inside it. With interrupts off there
+ * is nobody to wait for and no way to wait: that is the boot before it
+ * lets interrupts in, a handler, a fault report or a panic, and it prints
+ * at once, into the middle of another thread's line if it must. Says
+ * whether the lock was taken. */
+static int enter(void)
+{
+    int on = arch_interrupts_off();
+
+    if (on) {
+        arch_interrupts_on();
+        lock_acquire(&g_lock);
+    }
+    return on;
+}
+
+static void leave(int locked)
+{
+    if (locked)
+        lock_release(&g_lock);
+}
 
 /* Every character goes to the serial port and, once fbcon_init has found a
  * display, to the screen as well. */
-void kputc(char c)
+static void put_char(char c)
 {
     if (c == '\n')
         arch_serial_putc('\r');
     arch_serial_putc(c);
     if (!g_serial_only)
         fbcon_putc(c);
+}
+
+static void put_string(const char *s)
+{
+    while (*s)
+        put_char(*s++);
+}
+
+void kputc(char c)
+{
+    int locked = enter();
+
+    put_char(c);
+    leave(locked);
 }
 
 /* For a report of trouble that may lie in drawing on the screen itself. */
@@ -21,8 +59,10 @@ void console_serial_only(void)
 
 void kputs(const char *s)
 {
-    while (*s)
-        kputc(*s++);
+    int locked = enter();
+
+    put_string(s);
+    leave(locked);
 }
 
 static void put_num(uint64_t v, unsigned base, int width, char pad, int negative, int upper)
@@ -42,14 +82,14 @@ static void put_num(uint64_t v, unsigned base, int width, char pad, int negative
     if (negative && pad == '0')
         buf[i++] = '-';
     while (i--)
-        kputc(buf[i]);
+        put_char(buf[i]);
 }
 
-void kvprintf(const char *fmt, va_list ap)
+static void format(const char *fmt, va_list ap)
 {
     for (; *fmt; fmt++) {
         if (*fmt != '%') {
-            kputc(*fmt);
+            put_char(*fmt);
             continue;
         }
         fmt++;
@@ -67,11 +107,11 @@ void kvprintf(const char *fmt, va_list ap)
         }
         switch (*fmt) {
         case 'c':
-            kputc((char)va_arg(ap, int));
+            put_char((char)va_arg(ap, int));
             break;
         case 's': {
             const char *s = va_arg(ap, const char *);
-            kputs(s ? s : "(null)");
+            put_string(s ? s : "(null)");
             break;
         }
         case 'd': {
@@ -89,20 +129,28 @@ void kvprintf(const char *fmt, va_list ap)
             put_num(wide ? va_arg(ap, uint64_t) : va_arg(ap, unsigned), 16, width, pad, 0, 1);
             break;
         case 'p':
-            kputs("0x");
+            put_string("0x");
             put_num((uint64_t)(uintptr_t)va_arg(ap, void *), 16, 16, '0', 0, 0);
             break;
         case '%':
-            kputc('%');
+            put_char('%');
             break;
         case 0:
             return;
         default:
-            kputc('%');
-            kputc(*fmt);
+            put_char('%');
+            put_char(*fmt);
             break;
         }
     }
+}
+
+void kvprintf(const char *fmt, va_list ap)
+{
+    int locked = enter();
+
+    format(fmt, ap);
+    leave(locked);
 }
 
 void kprintf(const char *fmt, ...)

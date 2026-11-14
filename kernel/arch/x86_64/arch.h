@@ -36,6 +36,7 @@ struct frame {
 
 /* The vectors the kernel hands out. 0 to 31 are the processor's exceptions,
  * and 32 to 47 are where the 8259s are parked, masked. */
+#define VECTOR_YIELD    0x30 /* no device's: a thread raises it itself, to give the processor up */
 #define VECTOR_TIMER    0xf0
 #define VECTOR_SPURIOUS 0xff /* the local APIC's, when an interrupt vanishes before it is delivered */
 

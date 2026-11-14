@@ -5,7 +5,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define CLARA_VERSION "0.0.6"
+#define CLARA_VERSION "0.0.7"
 
 #define PAGE_SHIFT 12
 #define PAGE_SIZE  (1ULL << PAGE_SHIFT)
@@ -83,6 +83,7 @@ uint64_t pmm_alloc(uint64_t pages);  /* adjacent frames, lowest first; 0 when no
 void     pmm_free(uint64_t addr, uint64_t pages);
 void     pmm_selftest(void);
 void     pmm_reclaim(const struct boot_info *bi); /* boot-services memory, once the processor uses none of it */
+uint64_t pmm_free_frames(void);      /* how many frames are free */
 
 /* vm.c: the kernel's address space, in pages of PAGE_SIZE. RAM, the screen
  * and devices sit at their physical addresses. */
@@ -107,14 +108,44 @@ struct mem_fault {
 };
 int  fault_probing(const struct mem_fault *mf); /* for the handlers: was this exception provoked on purpose? */
 void fault_describe(const struct mem_fault *mf);
-int  fault_in_stack_guard(uint64_t addr);
+int  fault_in_stack_guard(uint64_t addr); /* is it in the page under the running thread's stack? */
 void fault_selftest(void);
+void fault_stack_selftest(void); /* the running thread's stack overflows, and the handler has to say so */
 
 /* timer.c */
 #define TIMER_HZ 100
 void     timer_tick(void);     /* called from the architecture's timer interrupt */
 uint64_t timer_ticks(void);    /* since the timer was started */
 void     timer_selftest(void);
+
+/* thread.c: threads, taking turns on the processor, and locks between them */
+#define THREAD_STACK_SIZE (64 * 1024) /* of every thread but the first, whose stack is kernel_stack */
+struct thread;
+struct frame;                  /* the registers of code that an exception cut short: arch/<arch>/arch.h */
+struct thread_queue {
+    struct thread *first, *last;
+};
+struct lock {
+    struct thread *owner;        /* NULL when it is free */
+    struct thread_queue waiting; /* in order of arrival */
+};
+void thread_init(void);
+/* A thread that runs fn(arg). The name is kept, not copied. NULL when there is no memory for its stack. */
+struct thread *thread_create(const char *name, void (*fn)(void *), void *arg);
+void thread_join(struct thread *t);  /* wait until it has finished, and free it: once for every thread */
+void thread_exit(void) __attribute__((noreturn)); /* what returning from fn does */
+void thread_yield(void);             /* the other threads that are ready go first */
+void thread_sleep(uint64_t ticks);   /* until the timer has ticked that many more times */
+void thread_safe_point(void);        /* the thread waits here while the world is stopped */
+void thread_stop_the_world(void);    /* returns when every other thread is asleep or at a safe point */
+void thread_start_the_world(void);
+void thread_tick(uint64_t now);      /* from timer_tick */
+void thread_switch(struct frame *f); /* from the architecture's exception code, interrupts off */
+uint64_t thread_stack_guard(void);   /* the unmapped page under the running thread's stack */
+const char *thread_name(void);       /* the running thread's */
+void thread_selftest(void);
+void lock_acquire(struct lock *l);   /* waits its turn; never in an interrupt handler */
+void lock_release(struct lock *l);
 
 /* string.c */
 void  *memset(void *dst, int c, size_t n);
@@ -132,14 +163,19 @@ void arch_switch_stack(void *top, void (*fn)(struct boot_info *), struct boot_in
     __attribute__((noreturn));
 void arch_map_devices(void);  /* vm_map the device registers the code above touches */
 
-/* arch/<arch>/exception.c: the processor's exceptions, in the kernel's hands */
+/* arch/<arch>/exception.c: the processor's exceptions, in the kernel's hands,
+ * and with them what a thread switch is made of (thread.c) */
 void arch_exceptions_init(void);
+extern const size_t arch_frame_size; /* sizeof(struct frame) */
+/* Registers that begin start() on an empty stack that ends at stack_top, interrupts on. */
+void arch_frame_init(struct frame *f, void *stack_top, void (*start)(void));
+void arch_yield(void);        /* take an exception on purpose, so that thread_switch gets the caller's registers */
 
 /* arch/<arch>/interrupt.c: the interrupt controller and the timer, as ACPI describes them */
 void arch_interrupts_init(void);
 void arch_interrupts_on(void);
-void arch_interrupts_off(void);
-void arch_wait(void);         /* sleep until an interrupt arrives */
+int  arch_interrupts_off(void); /* says whether they were on */
+void arch_wait(void);         /* sleep until an interrupt arrives: for the idle thread, which waits for nothing else */
 
 /* arch/<arch>/entry.S: probes. Each tries one access and returns 0 when it
  * went through; when it faults, the exception handler makes it return 1. */

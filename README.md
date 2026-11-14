@@ -9,15 +9,16 @@ understood from the first instruction up. It is not a Unix and does not try
 to run Linux software. The kernel is its own UEFI application: the firmware
 loads `BOOTX64.EFI` or `BOOTAA64.EFI`, and from `efi_main` on it is ClaraOS.
 
-Status: milestone 4. Both architectures boot under QEMU with EDK2 firmware
+Status: milestone 5. Both architectures boot under QEMU with EDK2 firmware
 (the same firmware and machine types UTM uses), read their boot files from
 the ESP, and take the machine from the firmware. From then on they use
 nothing of the firmware's: they run on their own stack, page tables and
 exception vectors, and the page-frame allocator has all the free memory
 there is. A fault is reported in words, with every register. The interrupt
 controller is found through ACPI, and a timer ticks a hundred times a
-second. A text console on the serial port and on the screen reports each
-step.
+second. Threads take turns on that tick, sleep, share locks, and can all be
+stopped at once, which is what the Lisp collector will need. A text console
+on the serial port and on the screen reports each step.
 [ROADMAP.md](ROADMAP.md) has what comes next, [DESIGN.md](DESIGN.md) the
 ideas and conventions.
 
