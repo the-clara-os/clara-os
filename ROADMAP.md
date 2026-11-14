@@ -204,6 +204,15 @@ is added here in the same change.
 
 M6b:
 
+- In progress (2026-11-14, version 0.0.9): the evaluator is built and
+  `make test` passes on the three machines, in a draft pull request from
+  `julio/m6b-evaluator`. The session stopped at the day's cost cap. Still
+  owed before M6b is done: its entry above, and this group, which is as it
+  was before the work (the pull request's description says which items are
+  settled, what was decided and what is left open); DESIGN.md, CLAUDE.md
+  and README.md brought up to date; the evaluator broken on purpose to see
+  that the self-test notices; the checks that were run by hand written
+  down; site/boot.png.
 - The reader does not know backquote and comma, which macros are written
   with, and refuses them. It refuses the rest of the `#` syntax as well:
   `#+` and `#-`, which the sources shared with SBCL will want (M7), `#.`,

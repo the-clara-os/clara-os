@@ -15,8 +15,9 @@
  * A table is a vector: item 0 counts the symbols, and the rest are slots,
  * a power of two of them, each a symbol or fixnum zero. A symbol goes in
  * the slot its name hashes to, or the next free one after it, and a table
- * that is half full is replaced by one twice the size. Nothing can be
- * taken out of a table yet. */
+ * that is half full is replaced by one twice the size. A symbol leaves a
+ * table only to go into the other one of its package, when it is
+ * exported. */
 #include "lisp.h"
 
 enum { TABLE_SLOTS = 32 }; /* of a new table */
@@ -85,6 +86,27 @@ static lisp table_add(lisp table, lisp symbol)
     return table;
 }
 
+/* Take out a symbol that the table has. The ones in the slots after it,
+ * up to the next free slot, may be where they are only because its slot
+ * was taken, so each of them is put in again. */
+static void table_remove(lisp table, lisp symbol)
+{
+    struct lisp_vector *v = lisp_as_vector(table);
+    uint64_t mask = lisp_length(v->header) - 2, i = 0;
+
+    while (v->items[1 + i] != symbol)
+        i++;
+    do {
+        lisp moved = v->items[1 + i];
+
+        v->items[1 + i] = 0;
+        v->items[0] -= lisp_fixnum(1);
+        if (moved != symbol)
+            table_put(table, moved);
+        i = (i + 1) & mask;
+    } while (v->items[1 + i]);
+}
+
 /* The names the substrate gives are ASCII, in C strings. */
 static uint64_t widen(const char *name, uint32_t wide[LISP_TOKEN_MAX])
 {
@@ -120,11 +142,19 @@ lisp lisp_make_symbol(const uint32_t *name, uint64_t length)
 
 lisp lisp_make_package(const char *name, const char *nickname, lisp uses)
 {
+    return lisp_new_package(string_of(name), nickname ? lisp_cons(string_of(nickname), LISP_NIL) : LISP_NIL, uses);
+}
+
+/* A package with that name, a string, those nicknames, a list of strings,
+ * that uses those packages. Whoever calls has seen to it that the names
+ * are free. */
+lisp lisp_new_package(lisp name, lisp nicknames, lisp uses)
+{
     struct lisp_package *p = lisp_alloc(LISP_PACKAGE, 0);
     lisp package = (lisp)(uintptr_t)p | LISP_TAG_OBJECT;
 
-    p->name = string_of(name);
-    p->nicknames = nickname ? lisp_cons(string_of(nickname), LISP_NIL) : LISP_NIL;
+    p->name = name;
+    p->nicknames = nicknames;
     p->uses = uses;
     p->internal = lisp_make_vector(1 + TABLE_SLOTS);
     p->external = lisp_make_vector(1 + TABLE_SLOTS);
@@ -173,6 +203,7 @@ static lisp add_symbol(lisp package, const uint32_t *name, uint64_t length, int 
     lisp_as_symbol(symbol)->package = package;
     if (package == lisp_roots.keyword) {
         lisp_as_symbol(symbol)->value = symbol;
+        lisp_symbol_flag(symbol, LISP_CONSTANT);
         external = 1;
     }
     if (external)
@@ -196,13 +227,39 @@ lisp lisp_current_package(void)
     return lisp_as_symbol(lisp_roots.package)->value;
 }
 
-/* A symbol of the language: external in COMMON-LISP. */
-static lisp standard(const char *name)
+/* One of the package's own symbols becomes external: the packages that
+ * use this one find it by name from now on. Says whether it could be
+ * done, which it cannot for a symbol the package does not have or only
+ * inherits. Whether the name is already taken in a package that uses this
+ * one is not looked at. */
+int lisp_export(lisp package, lisp symbol)
+{
+    struct lisp_package *p = lisp_as_package(package);
+    const struct lisp_string *name = lisp_as_string(lisp_as_symbol(symbol)->name);
+    uint64_t length = lisp_length(name->header);
+
+    if (table_find(p->external, name->chars, length) == symbol)
+        return 1;
+    if (table_find(p->internal, name->chars, length) != symbol)
+        return 0;
+    table_remove(p->internal, symbol);
+    p->external = table_add(p->external, symbol);
+    return 1;
+}
+
+/* The symbol that the substrate knows by a name in C, in one of its own
+ * packages: made if need be, and external there if asked. */
+lisp lisp_symbol_in(lisp package, const char *name, int external)
 {
     uint32_t wide[LISP_TOKEN_MAX];
     uint64_t length = widen(name, wide);
+    lisp symbol;
 
-    return add_symbol(lisp_roots.common_lisp, wide, length, 1);
+    if (lisp_find_symbol(package, wide, length, &symbol) == LISP_ABSENT)
+        return add_symbol(package, wide, length, external);
+    if (external)
+        lisp_export(package, symbol);
+    return symbol;
 }
 
 /* NIL first, because its word is a constant that everything below uses:
@@ -227,10 +284,18 @@ void lisp_symbols_init(void)
     nil->package = lisp_roots.common_lisp;
     lisp_as_package(lisp_roots.common_lisp)->external =
         table_add(lisp_as_package(lisp_roots.common_lisp)->external, LISP_NIL);
-    lisp_roots.t = standard("T");
+    lisp_symbol_flag(LISP_NIL, LISP_CONSTANT);
+    lisp_roots.t = lisp_symbol_in(lisp_roots.common_lisp, "T", 1);
     lisp_as_symbol(lisp_roots.t)->value = lisp_roots.t;
-    lisp_roots.quote = standard("QUOTE");
-    lisp_roots.function = standard("FUNCTION");
-    lisp_roots.package = standard("*PACKAGE*");
+    lisp_symbol_flag(lisp_roots.t, LISP_CONSTANT);
+    lisp_roots.quote = lisp_symbol_in(lisp_roots.common_lisp, "QUOTE", 1);
+    lisp_roots.function = lisp_symbol_in(lisp_roots.common_lisp, "FUNCTION", 1);
+    lisp_roots.package = lisp_symbol_in(lisp_roots.common_lisp, "*PACKAGE*", 1);
     lisp_as_symbol(lisp_roots.package)->value = lisp_roots.user;
+    lisp_symbol_flag(lisp_roots.package, LISP_SPECIAL);
+    /* Common Lisp gives no names to what a backquote is read as, so these
+     * are the substrate's own, and stay internal. */
+    lisp_roots.quasiquote = lisp_symbol_in(lisp_roots.common_lisp, "QUASIQUOTE", 0);
+    lisp_roots.unquote = lisp_symbol_in(lisp_roots.common_lisp, "UNQUOTE", 0);
+    lisp_roots.splice = lisp_symbol_in(lisp_roots.common_lisp, "UNQUOTE-SPLICING", 0);
 }

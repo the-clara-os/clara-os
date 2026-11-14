@@ -21,7 +21,7 @@ ASFLAGS := -g -Ikernel -Wa,--fatal-warnings
 
 COMMON_SRCS := $(wildcard kernel/*.c kernel/lisp/*.c)
 HEADERS     := $(wildcard kernel/*.h kernel/lisp/*.h kernel/arch/*/*.h)
-BOOT_FILES  := $(patsubst lisp/%,$(BOOTDIR)/%,$(wildcard lisp/*.lisp))
+BOOT_FILES  := $(BUILD)/boot-files.stamp
 
 .PHONY: all test image font site clean
 all:
@@ -44,10 +44,13 @@ endef
 $(eval $(call ARCH_RULES,x86_64,x86_64-unknown-windows,-mno-red-zone,BOOTX64.EFI,x64))
 $(eval $(call ARCH_RULES,aarch64,aarch64-unknown-windows,,BOOTAA64.EFI,arm64))
 
-# The boot handoff reads every file in the ESP's \clara directory.
-$(BOOTDIR)/%: lisp/%
-	@mkdir -p $(dir $@)
-	cp $< $@
+# The boot handoff reads every file in the ESP's \clara directory: what is
+# in lisp/ now, and nothing that was there before and has gone since.
+$(BOOT_FILES): lisp $(wildcard lisp/*.lisp)
+	rm -rf $(BOOTDIR)
+	mkdir -p $(BOOTDIR)
+	cp lisp/*.lisp $(BOOTDIR)/
+	touch $@
 all: $(BOOT_FILES)
 
 run-%: all

@@ -7,12 +7,14 @@
  *   integers that fit a fixnum, and #x #o #b for other bases
  *   "strings", #\a and #\Space characters, #(vectors)
  *   'form and #'form
+ *   `form, and inside it ,form and ,@form: lists for the evaluator, which
+ *     knows what a backquote stands for (eval.c)
  *   ; to the end of the line, and #| |# around anything, as comments
  *
  * A token that Common Lisp would read as a float or a ratio is refused,
  * not taken for a symbol: the same text must not mean one thing here and
- * another under SBCL. Backquote and the rest of the # syntax are refused
- * for now too.
+ * another under SBCL. The rest of the # syntax is refused for now too,
+ * and so is a vector inside a backquote.
  *
  * The text is all in memory, so the reader never waits. Where the text
  * ends in the middle of a form it says LISP_READ_SHORT, and whoever can
@@ -505,6 +507,8 @@ static lisp read_sharp(struct lisp_reader *r, const uint8_t *start)
 
         if (failed(r))
             return LISP_NIL;
+        if (r->backquotes)
+            return fail(r, start, "a vector inside a backquote, which the reader does not know yet");
         for (form = list; lisp_is_cons(form); form = lisp_as_cons(form)->cdr)
             length++;
         if (form != LISP_NIL)
@@ -565,8 +569,22 @@ static enum item read_item(struct lisp_reader *r, lisp *form)
     case '#':
         *form = read_sharp(r, start);
         return FORM;
-    case '`': case ',':
-        fail(r, start, "backquote and comma, which the reader does not know yet");
+    case '`':
+        r->backquotes++;
+        *form = read_quoted(r, lisp_roots.quasiquote, start);
+        r->backquotes--;
+        return FORM;
+    case ',':
+        /* A comma answers a backquote, the innermost that is still open. */
+        if (!r->backquotes) {
+            fail(r, start, "a comma that is not inside a backquote");
+            return FORM;
+        }
+        c = looking_at(r, '@') || looking_at(r, '.');
+        r->at += c;
+        r->backquotes--;
+        *form = read_quoted(r, c ? lisp_roots.splice : lisp_roots.unquote, start);
+        r->backquotes++;
         return FORM;
     }
     r->at = start;
@@ -588,10 +606,17 @@ void lisp_reader_init(struct lisp_reader *r, const void *text, size_t size)
  * of no more use then. */
 enum lisp_read_status lisp_read(struct lisp_reader *r, lisp *form)
 {
+    const uint8_t *start;
+
     r->status = LISP_READ_OK;
     r->depth = 0;
+    r->backquotes = 0;
+    skip(r);
+    start = r->at;
     switch (read_item(r, form)) {
     case FORM:
+        if (!failed(r))
+            r->where = start; /* for whoever wants to say where the form is */
         break;
     case END:
         if (!failed(r))
@@ -605,6 +630,24 @@ enum lisp_read_status lisp_read(struct lisp_reader *r, lisp *form)
         break;
     }
     return r->status;
+}
+
+/* A string of the characters that the text holds in UTF-8, as far as it is
+ * UTF-8: for text that the substrate wrote itself. */
+lisp lisp_string_from_utf8(const void *text, size_t size)
+{
+    struct lisp_reader r;
+    uint64_t length = 0;
+    lisp string;
+
+    lisp_reader_init(&r, text, size);
+    while (next(&r) >= 0)
+        length++;
+    string = lisp_make_string(NULL, length);
+    lisp_reader_init(&r, text, size);
+    for (uint64_t i = 0; i < length; i++)
+        lisp_as_string(string)->chars[i] = (uint32_t)next(&r);
+    return string;
 }
 
 /* The line and the column of r->where, counted from 1. A column is a
