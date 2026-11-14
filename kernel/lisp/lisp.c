@@ -636,7 +636,7 @@ static const struct {
     { "(defmacro show (form) `(list ',form ,form)) (defun shows () (show (when t 1))) (list (shows) (shows))",
       "(((WHEN T 1) 1) ((WHEN T 1) 1))" },
     { "(eval '(+ 1 2))", "3" },
-    { "(let ((form (list 'when t 1))) (list (eval form) form))", "(1 (WHEN T 1))" },
+    { "(let ((form (list 'progn (list 'when t 1)))) (list (eval form) form))", "(1 (PROGN (WHEN T 1)))" },
     /* the language in boot.lisp: control */
     { "(cond ((= 1 2) 'a) ((= 1 1) 'b) (t 'c))", "B" },
     { "(cond ((= 1 2) 'a) (7))", "7" },

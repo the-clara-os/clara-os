@@ -231,18 +231,91 @@ architectures (kernel/vm.c).
   reader where a thread could be held up with half a list in its hands.
 - The collector will run at safe points only, never inside an allocation.
   The C code of the runtime relies on it: between two safe points it keeps
-  objects in local variables and nothing has to be told. M6c confirms
-  this or changes it.
+  objects in local variables and nothing has to be told. The evaluator,
+  which does come to safe points, keeps what it holds where the collector
+  can find it (below). M6c confirms this or changes it.
 - The printer writes an object so that the reader makes the same object of
   it, wherever there is such a text: a symbol with its package when the
   name alone would not find it, bars around a name that would not read
   back, `'x` for `(QUOTE X)`.
 - Lists nest by recursion in C in both, on a thread's fixed stack, so
   there is a depth past which the reader refuses and the printer cuts
-  short. The evaluator will face the same limit (M6b).
+  short. The evaluator has a limit of the same kind (below).
 - What the substrate itself holds on to in the Lisp world is in one
   struct, `lisp_roots`: where the collector starts, and what an image has
   to bring back.
+
+## The evaluator (decided in M6b, 2026-11-14)
+
+- It is an interpreter that walks the lists the reader made; there is no
+  form in between. A symbol is a variable, a list is a special form, a
+  macro call or a call, and anything else is its own value
+  (kernel/lisp/eval.c). The special forms are a table in C. Whatever can
+  be a symbol's function is one type of object, of four kinds: a function
+  in C, a special operator, a closure, a macro. The two in C hold their
+  place in a table, never an address.
+- An environment lives in the heap: a chain of frames, each a vector,
+  that hold variables, local functions, a block or a tagbody. A closure
+  keeps the chain it was made in. Finding a variable walks the chain,
+  which is slow and plain; a compiler will know where each one is.
+- A special variable has its value in the symbol. Binding it puts the old
+  value on a stack of bindings, and whatever bound it puts the value back
+  on its way out. Until there are Lisp threads (M7) that is one value for
+  the machine.
+- A non-local exit is not a jump. RETURN-FROM, GO, THROW and an error
+  mark where control is going and return; every piece of C on the way
+  sees the mark and returns in turn; the block, the tagbody or the catch
+  it is meant for takes the mark off. There is no setjmp, nothing in
+  assembly to keep in step on two architectures, and since the way out
+  passes through every frame, each undoes what it did: bindings now,
+  UNWIND-PROTECT later. The price is a look at the mark after every form.
+- An error is what went wrong, in words, and it goes to the top level,
+  which prints it and reads on: `error: CAR wants a list, and 5 is not
+  one`. A mistake at the prompt does not stop the machine. Conditions,
+  and handlers that stop an error on its way, are M6c's.
+- A form can give several values or none. C returns the first, and one
+  place holds how many there are and the rest; only the forms that pass
+  the values of a form inside them on keep more than one.
+- The evaluator keeps what it holds on a stack of its own, the value
+  stack: the arguments of a call while they are evaluated, every frame it
+  makes for as long as it evaluates in it, values that wait for a body to
+  finish. A C variable holds an object only from one call of the
+  evaluator to the next. That is what "precise" asks of an interpreter
+  written in C: at a safe point, which the evaluator comes to at every
+  call and every GO, the collector finds everything in the heap, on that
+  stack, on the stack of bindings and in a few words beside them, and
+  never has to guess at what a C frame holds. The alternative, looking
+  through the thread's own stack for words that might be objects, is
+  less code here and gives up knowing.
+- A macro call is expanded once. The expansion takes the call's place in
+  the list that holds the call, so the next time round the evaluator
+  finds the expansion; the call itself is not touched, because somebody
+  else may hold it, quoted, to show it in a message. Without this every
+  turn of a loop would expand its macros again, and until there is a
+  compiler the interpreter runs everything. EVAL copies the form it is
+  given, so that data stays what it was.
+- The Lisp world has a thread of its own, with a megabyte of stack,
+  because the evaluator calls itself in C for every form inside a form.
+  It looks at how far down the stack it is, and well before the guard
+  page it stops with an error, "the stack is full", like any other
+  error: a function that calls itself without end is a mistake in a
+  program, not a fault of the machine.
+- Arithmetic gives the right integer or an error. A sum that leaves 63
+  bits is refused, and so is a division that does not come out even,
+  for the reason the reader refuses a float: the same text must not mean
+  one thing here and another under SBCL.
+- The same goes for the language: what the evaluator does not know it
+  refuses, with an error that says so, where taking it for something
+  else would change what a program means. `(declare (special ...))` is
+  one, `&environment` another.
+- The language is in two parts. In C is what has to be, the special
+  forms and the functions that reach inside an object, and what the rest
+  is built from. The rest is Lisp, lisp/boot.lisp: the macros, the
+  functions on lists, SETF, DEFSTRUCT, DEFPACKAGE. The kernel loads it
+  before anything else and stops if it cannot. What C defines is external
+  in COMMON-LISP, boot.lisp is read in COMMON-LISP and exports what it
+  defines, and a name that begins with % is the implementation's own and
+  stays internal there.
 
 ## Conventions
 
@@ -252,7 +325,9 @@ architectures (kernel/vm.c).
   value in C has the type `lisp`.
 - Lisp: sources live under lisp/, one package per subsystem, named
   `clara.<subsystem>`. Each file loads under SBCL; host-only shims live in
-  lisp/host/ and are never loaded on ClaraOS.
+  lisp/host/ and are never loaded on ClaraOS. The exception is
+  lisp/boot.lisp, the part of Common Lisp itself that is written in Lisp:
+  SBCL has all of it already, and never loads it.
 - Comments say why, or what the hardware requires. The code says what.
 - One C struct per hardware or firmware table, laid out as the specification
   says, with a comment on any padding or reserved slot that matters.

@@ -25,6 +25,9 @@ report the figure. Never say a session stayed within the cap without having
 measured it. The money goes on context, not on tool calls: every message
 sent after five idle minutes re-sends the whole conversation at full price,
 so start each slice in a fresh session instead of continuing a long one.
+A large slice does not fit in what is left of a day that has had another:
+M6b, the evaluator, took about half a day's cap by itself. Measure before
+starting one, say what it will take, and let Julio choose.
 
 Build with `make` (Homebrew's llvm and lld under /opt/homebrew/opt when they
 are there, otherwise clang and lld-link from the PATH; `LLVM=` and `LLD=`
@@ -108,7 +111,17 @@ Rules:
   A register added to the frame is switched with the rest; a register
   left out of it is shared by all threads.
 - lisp/*.lisp is copied to the ESP's \clara directory, and the handoff
-  (kernel/boot.c) reads every file there into a `struct boot_file`.
+  (kernel/boot.c) reads every file there into a `struct boot_file`. The
+  kernel loads boot.lisp itself and panics when that fails, with the file
+  and the line. Any other file is loaded by `(load "name.lisp")`, from
+  boot.lisp or from the prompt.
+- lisp/boot.lisp is the part of the language written in Lisp, on top of
+  the special forms (eval.c) and the functions in C (builtin.c). It is
+  read in COMMON-LISP: a new definition there also goes into the `export`
+  list at the top of the file, or no other package can call it, and a
+  helper that nothing else should use has a name that begins with %. A
+  macro's body runs when the macro is first used, so the order of the
+  file matters only for what runs while it loads, DEFSETF for one.
 - The Lisp runtime is kernel/lisp/, and lisp.h is its interface: the
   comment at its top says what a Lisp value is. In C a value is a `lisp`,
   one tagged word. Look at the tag (`lisp_is_cons`, `lisp_is_symbol`,
@@ -126,12 +139,44 @@ Rules:
   a line between two reads. A value the substrate has to find again
   belongs in `lisp_roots`, not in a static variable. One thread at a time
   uses the runtime, and nothing in it takes a lock.
+- Evaluating is coming to a safe point: `lisp_apply` is one, and so is
+  GO. So across any call of `eval_car`, `progn`, `lisp_eval` or
+  `lisp_apply`, an object that has to survive is on the evaluator's value
+  stack (`*g_sp++ = x`, or `lisp_push` in a loop, which looks for room),
+  not in a C variable: the frame a special form made, the arguments so
+  far, a list being built. Forms need no pushing; they hang from the
+  function being called. Whatever a function pushes or binds it gives
+  back on every way out (`g_sp = base`, `unbind(bound)`):
+  `lisp_evaluate` panics when the stacks are not where they were.
+- After every one of those calls, look at `g_unwind.to` (or
+  `lisp_unwinding()` outside eval.c) and return when it is set: a
+  RETURN-FROM, a GO, a THROW or an error is on its way out, and the value
+  in hand means nothing. An error is `return lisp_fail("... ~S ...", x)`,
+  with ~S and ~A for a `lisp` and ~Z for a C string; say what went wrong
+  in words, the way the fault reports do.
+- A new special form is a function `sf_name(args, env)` in eval.c and a
+  row in `specials`: how many subforms it takes, and whether it passes on
+  the values of a form inside it. A new function in C is a `PRIMITIVE` in
+  builtin.c and a row in `lisp_primitives`: its name, external in
+  COMMON-LISP unless it begins with %, and how many arguments it takes;
+  `lisp_wants("a list", x)` is the error for an argument of the wrong
+  kind. A function that calls a function it was given is written in
+  Lisp, in boot.lisp, so that C never holds a list across the call.
+- A Lisp form that is not what it should be must not take the kernel
+  down. In eval.c `car` and `cdr` give NIL for anything but a cons; use
+  them, or look with `lisp_is_cons` first, wherever a form's shape is not
+  yet known.
 - `lisp_selftest` (kernel/lisp/lisp.c) runs at every boot: new syntax gets
   a line in `forms`, with the text and its print, and whatever has to be
   refused gets one in `refused`. It reads in a package of its own, so
-  that its symbols do not stay in COMMON-LISP-USER. After a change to the
-  runtime, break it on purpose and see that the boot notices; ROADMAP.md
-  lists what was tried, under the slow test mode.
+  that its symbols do not stay in COMMON-LISP-USER. `eval_selftest` runs
+  after boot.lisp is loaded: anything new in the evaluator, in builtin.c
+  or in boot.lisp gets a line in `evaluations`, a text and what
+  evaluating it gives, the values with a space between them or `error: `
+  and the text of the error. Every wrong answer is printed before the
+  panic. After a change to the runtime, break it on purpose and see that
+  the boot notices; ROADMAP.md lists what was tried, under the slow test
+  mode. Doing that for the evaluator found a text that could not fail.
 - tools/session.txt is what `make test` types at each kernel over the
   serial port once the kernel reads from it, and what the kernel has to
   answer, to the byte. The lines that begin with `> `, or with two spaces

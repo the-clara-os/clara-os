@@ -95,9 +95,26 @@ The Lisp runtime, in the substrate:
   each one back, until Ctrl-D. Every boot reads and prints some hundred
   texts, has some seventy refused, and walks the heap; `make test` types a
   session at each machine and compares the answers (tools/session.txt).
-- [ ] **M6b evaluator.** The interpreter: lambda, closures, special forms,
-  special variables, multiple values, macros, `defstruct`, a core of
-  built-in functions; `boot.lisp` loaded from the ESP at startup.
+- [x] **M6b evaluator** (2026-11-14, version 0.0.9). The interpreter, in
+  kernel/lisp/eval.c: it walks the forms as the reader made them. Thirty
+  special forms, Common Lisp's own and the ones that define (`defun`,
+  `defmacro`, `defvar` and their kin); lambda lists with optional, rest,
+  keyword and auxiliary parameters, and in macros with lists that take an
+  argument apart; closures over environments that live in the heap;
+  special variables, bound in the symbol and put back on the way out;
+  multiple values; `block`, `tagbody` and `catch`, with every non-local
+  exit made by returning, never by jumping; macros, expanded once at each
+  place, and backquote, which the reader now reads. An error says what
+  went wrong, in words, and comes back to the prompt. An integer that
+  leaves 63 bits is an error, not a wrong number. Some hundred functions
+  in C (builtin.c), and the rest of the language in Lisp: lisp/boot.lisp,
+  loaded from the ESP at startup, brings `cond`, `dolist`, `setf`,
+  `defstruct`, `defpackage`, the list functions and their like. The Lisp
+  world has a thread of its own with a megabyte of stack, and the
+  evaluator stops a function that calls itself without end a few thousand
+  calls deep. What it holds it keeps on a stack of its own, where M6c's
+  collector will find it. Every boot evaluates two hundred texts and
+  checks the answers, and the serial port evaluates what is typed.
 - [ ] **M6c collector and conditions.** Precise mark-sweep with all threads
   stopped; `unwind-protect`, `handler-case`, `error`; a REPL on the console
   that survives mistakes.
@@ -196,88 +213,79 @@ Infrastructure, for sessions with budget left over:
   case, floats read as symbols, a dotted tail dropped, an integer too
   large let through, UTF-8 longer than it need be let through, no limit
   on nesting in the reader or in the printer, typed characters not
-  echoed.
+  echoed. From M6b: a second file in lisp/, loaded from the prompt, with
+  a form in the middle that fails (the error names the file and the
+  line, what came before it stays defined, `*package*` is what it was,
+  and the name finds the file in either case); the same file deleted
+  again, and gone from the ESP after `make`; a list that leads back into
+  itself, printed into a string: 131073 characters, the last three of
+  them dots; a loop of 100000 turns and `(fib 20)`; the session from the
+  disk image with 4 GiB and four processors, on x86_64 with 128 MiB,
+  `-cpu max` and four processors, and on AArch64 emulated with
+  `-cpu max`. And the self-test with the evaluator broken on purpose, to
+  see that it notices: LET that does not undo its special bindings, or
+  binds in turn like LET*, or puts a special variable in a frame; no
+  count of values set before a function in C; a block not marked as
+  left; GO that does not move; a default computed where the parameters
+  before it cannot be seen; `+` without its look at overflow; no check
+  of the stack's depth, which ends in the guard page; EXPORT that leaves
+  the rest of a table's cluster where it was; a macro call overwritten
+  with its expansion; an unknown keyword argument let through;
+  RETURN-FROM that does not keep its values; CATCH that takes a THROW to
+  any tag; PRINC that writes like PRIN1; variables looked up among the
+  local functions; `&rest` one argument short; closures without their
+  environment; a boot.lisp that ends inside a form, and one with a form
+  that fails. One got through the first version of the self-test: EVAL
+  without the copy of its form, because the text that was to catch it
+  had the macro call at the top of the form, where the evaluator leaves
+  it alone anyway.
 
 Shortcuts and loose ends, under the milestone that settles each one. A
 session reads its own group before it starts, and whatever it leaves open
 is added here in the same change.
-
-M6b:
-
-- In progress (2026-11-14, version 0.0.9): the evaluator is built and
-  `make test` passes on the three machines, in a draft pull request from
-  `julio/m6b-evaluator`. The session stopped at the day's cost cap. Still
-  owed before M6b is done: its entry above, and this group, which is as it
-  was before the work (the pull request's description says which items are
-  settled, what was decided and what is left open); DESIGN.md, CLAUDE.md
-  and README.md brought up to date; the evaluator broken on purpose to see
-  that the self-test notices; the checks that were run by hand written
-  down; site/boot.png.
-- The reader does not know backquote and comma, which macros are written
-  with, and refuses them. It refuses the rest of the `#` syntax as well:
-  `#+` and `#-`, which the sources shared with SBCL will want (M7), `#.`,
-  `#nR`, `#*`, `#C`, `#P`, `#S`, `#n=`.
-- COMMON-LISP holds five symbols: NIL, T, QUOTE, FUNCTION and `*PACKAGE*`.
-  A name such as CAR is made in the package it is read in, until the
-  evaluator has put it in COMMON-LISP first. Nothing can be taken out of a
-  package's table, so there is no `unintern`, and there is no `export` or
-  `import` either: a symbol is external from the moment it is made, as
-  the substrate's own and every keyword are, or never.
-- `*PACKAGE*` has one value for the whole machine, kept in the symbol.
-  Special variables that can be bound are the evaluator's to bring.
-- Integers are fixnums, 63 bits. The reader refuses a larger one with an
-  error, and a float or a ratio; what arithmetic does when a result does
-  not fit is still to be decided.
-- Lists nest by recursion in C in the reader and in the printer, 64 deep
-  at most (`LISP_DEPTH`): reading at that depth takes about 18 KiB of the
-  thread's 64 KiB of stack on x86_64. A deeper list is refused by the
-  reader and cut short with a `#` by the printer. This belongs with the
-  evaluator's stack, the next item.
-- The printer does not notice a list that leads back into itself, and
-  would print it for ever. Nothing can build one yet.
-- A thread's stack is 64 KiB (`THREAD_STACK_SIZE`), the same for all and
-  fixed, which an interpreter that recurses in C will find small. Decide
-  which thread the evaluator runs on, how much stack it gets, and how it
-  notices that it is running out before the guard page does.
-- lisp/boot.lisp is a placeholder that nothing evaluates, and kmain prints
-  the start of each boot file only to show that it arrived.
-- The kernel panics when the ESP has no files in `\clara`, although it has
-  no use for them yet. Decide what a missing boot.lisp means once something
-  reads it, and again when images replace the sources (M10).
-- Boot files arrive in directory order, which is not sorted. A character
-  outside ASCII in a name becomes `?`, so two names can collide.
-  Subdirectories of `\clara` are not read, and names that start with a dot
-  are skipped.
-- Boot files stay in loader-data memory for good. Once their contents are
-  in the Lisp heap, the pages can go to `pmm_free`.
-- A file deleted from lisp/ stays in build/esp/clara, and so on the ESP and
-  in the UTM image, until `make clean`.
 
 M6c:
 
 - The heap only grows. When no page frame is left for it the kernel
   panics: there is no collector to run first, and no condition to signal.
   Every object's header has a byte for the collector to mark in, which
-  nothing uses.
-- The reader, the printer and the packages keep objects in C variables
-  while they work, and make more objects meanwhile. That is safe as long
-  as a collection starts only at a safe point, never inside an allocation,
-  and none of them comes to a safe point; the reader takes its text whole
-  for that reason, and whoever reads from the serial port waits between
-  two reads, not inside one. The collector has to be built that way, or
-  they have to say what they hold.
-- What the self-test makes stays in the heap, about 170 KiB, and so does
-  its package, CLARA.SELF-TEST, which is taken off the list of packages
-  and has nothing else pointing at it.
-- An error in the reader is a status in C, with words and a place, and
-  the loop on the serial port prints it. Once there are conditions it is
-  one. That loop is C as well and knows nothing of evaluation: the REPL
-  takes its place.
-- Nothing calls `thread_safe_point` except the self-test. The interpreter
-  has to, often enough that the world stops promptly (at every call and
-  every turn of a loop, say), and never with a lock held. A thread that
-  does not come to a safe point keeps `thread_stop_the_world` from
-  returning, and nothing says which thread it is.
+  nothing uses. Every call makes a frame in the heap, two for a function
+  with a name, so a computation that goes on long enough ends in that
+  panic: `(fib 20)` takes about 2 MiB.
+- The reader, the printer, the packages and the functions in C keep
+  objects in C variables while they work, and make more objects
+  meanwhile. That is safe as long as a collection starts only at a safe
+  point, never inside an allocation, and none of them comes to a safe
+  point; the reader takes its text whole for that reason, and whoever
+  reads from the serial port waits between two reads, not inside one.
+  The evaluator is the one that does come to safe points, at every call
+  and every GO, and it keeps what it holds on its value stack instead
+  (eval.c says how). Nothing has put that to the test, there being no
+  collector. Collecting at every safe point, as a mode of the boot test,
+  would.
+- Where the collector has to start: `lisp_roots`, and in eval.c the value
+  stack, the stack of bindings, `lisp_values` and `g_unwind`. The symbols
+  eval.c knows by sight are in COMMON-LISP and KEYWORD, which hold them.
+- What the self-tests make stays in the heap, which is at about 800 KiB
+  when the prompt appears, and so do their packages, two CLARA.SELF-TEST
+  and a SCRATCH, which are taken off the list of packages and have
+  nothing else pointing at them.
+- An error is a string, and it goes all the way to the top level, which
+  prints it: `lisp_fail` in C, and in Lisp `error`, which takes a control
+  string and its arguments and nothing else. Once there are conditions it
+  is one, with `handler-case` to stop it on the way and `unwind-protect`
+  to clean up behind it; the evaluator is built for both, since every way
+  out of a form is a return. An error in the reader is still a status in
+  C, with words and a place, and the loop on the serial port, which is C
+  as well, prints it.
+- Nothing interrupts a computation. `(loop)` typed at the prompt, or the
+  LENGTH of a list that leads back into itself, and the machine
+  evaluates for good: no key is looked at meanwhile.
+- The evaluator comes to a safe point at every call and every GO, and
+  nowhere else: a function in C that takes long holds the world up
+  meanwhile. A thread that does not come to a safe point keeps
+  `thread_stop_the_world` from returning, and nothing says which thread
+  it is.
 - A thread that waits for a lock is not at a safe point, and the world
   stops around it only because no thread holds a lock while it sleeps,
   joins or parks. That rule is in comments and nowhere in the code.
@@ -292,9 +300,35 @@ M6c, M8:
 
 M7:
 
-- One thread at a time may use the Lisp runtime: the heap, the packages'
-  tables and `*PACKAGE*` take no lock, and only the boot thread uses them
-  so far.
+- One thread at a time may use the Lisp runtime: the heap and the
+  packages' tables take no lock. The evaluator has one value stack, one
+  stack of bindings, one set of values and one non-local exit under way,
+  all static in eval.c, and it measures its depth on the stack of the one
+  thread that called `lisp_eval_start`. A special variable has one value
+  for the whole machine, kept in the symbol.
+- What the language does not have yet, and refuses where it could be
+  misread: `(declare (special ...))`, `&environment`, the keywords of
+  LOOP, the options of DEFSTRUCT (`:include`, `:conc-name` and the
+  rest). What is simply not there: hash tables, which DESIGN.md counts in
+  the first subset; `(defun (setf f) ...)`, `macro-function`,
+  `symbol-macrolet`, `progv`; `typep`, `typecase`, `check-type`;
+  `subseq`, `elt` and the functions on strings beyond `string=`. FORMAT
+  knows `~A ~S ~D ~%` and `~~`. The functions on sequences take lists
+  only, and of their keyword arguments `:test`, with `:key` for MEMBER
+  and ASSOC and `:initial-value` for REDUCE. SETF knows the places that
+  boot.lisp lists with DEFSETF and the ones DEFSTRUCT adds. `eq` and
+  `eql` are one function, `char=` and `char<` take two characters.
+- The reader refuses `#+` and `#-`, which the sources shared with SBCL
+  will want.
+- Packages can be made, used at their making, and exported from. There is
+  no `import`, `unintern`, `shadow`, `use-package` or `delete-package`;
+  `export` does not look whether the name is taken in a package that uses
+  this one; and nothing stops `(defun car ...)` from replacing CAR.
+- lisp/boot.lisp exports what it defines by a list at its top, kept by
+  hand: a definition that is missing there stays internal to COMMON-LISP,
+  and nothing says so until somebody calls it from another package. It is
+  also the one Lisp file SBCL cannot load, so the host tests need another
+  way to check it than loading it.
 - Letters fold to upper case in the reader, and the printer tells the two
   cases apart, for ASCII only: `é` stays as it is where SBCL makes `É` of
   it. A character has one of the ten names in read.c, or `U+` and its
@@ -311,7 +345,9 @@ M7:
   short. Stopping an application means unwinding its threads (DESIGN.md),
   which has to be asked of each thread and done by it.
 - A thread owns a stack and its registers and nothing more: there is no
-  place yet for the dynamic bindings of a Lisp thread.
+  place yet for the dynamic bindings of a Lisp thread, or for its value
+  stack. The Lisp thread's stack is a megabyte because kmain asks for
+  one; what a second Lisp thread gets is to be decided.
 - Every thread has to be joined by somebody, or its stack is never given
   back. Lisp threads that nobody waits for need another arrangement.
 
@@ -336,13 +372,58 @@ M8:
 - The architecture's handler tells interrupts apart with an `if`. The
   second source needs a table of handlers.
 
+M9:
+
+- LOAD finds the files that the boot handoff read from `\clara` and no
+  others, by name, whatever the case of the letters. They arrive in
+  directory order, which no longer matters, since boot.lisp is loaded
+  first and loads what else it wants. A character outside ASCII in a name
+  becomes `?`, so two names can collide; subdirectories are not read, and
+  names that start with a dot are skipped.
+- The boot files stay in loader-data memory for good, because LOAD can be
+  asked for one at any time. Once there are files on a disk, their pages
+  can go to `pmm_free`.
+
 M10:
 
 - The kernel image runs wherever the firmware loaded it, so the address of
   a C function changes with the machine and the build. A saved heap has to
   name the substrate's functions by index or by name, never by address.
+  It is by index now: a function object holds its place in
+  `lisp_primitives` or in the evaluator's table of special forms, so a
+  row put in the middle of either makes an older image call the wrong
+  function. By name would not.
+- The kernel panics when `\clara` has no boot.lisp or when loading it
+  fails, there being no Lisp world without it. An image takes its place.
+- GENSYM counts in a C variable, which an image would not bring back.
 
 No milestone yet, to be picked up when they start to matter:
+
+- Integers are fixnums, 63 bits. A result that does not fit is an error,
+  and so is a division that does not come out even: there are no larger
+  integers, no ratios and no floats.
+- The evaluator's limits. A function can call itself about 2700 deep on
+  x86_64 and 3460 on AArch64, on the Lisp thread's megabyte of stack,
+  less 48 KiB that the evaluator leaves for the reader, the printer and
+  an interrupt; then, or when the 65536 slots of the value stack are
+  full, it is the error "the stack is full". 8192 special variables
+  bound at once, 20 values, 64 keyword arguments in a call, 255 bytes in
+  the text of an error. Lists still nest 64 deep at most for the reader
+  and the printer (`LISP_DEPTH`).
+- The printer stops after 65536 objects, with three dots, which is what
+  ends a list that leads back into itself. There is no `*print-circle*`,
+  and none of the other printer variables.
+- The reader refuses `#.`, `#nR`, `#*`, `#C`, `#P`, `#S` and `#n=`, and a
+  vector inside a backquote.
+- DEFUN, DEFMACRO, DEFVAR, DEFPARAMETER, DEFCONSTANT, LAMBDA and
+  MULTIPLE-VALUE-BIND are special forms here and macros in Common Lisp,
+  so MACROEXPAND-1 leaves them as they are. MACROEXPAND-1 does not see
+  the macros of a MACROLET.
+- NREVERSE makes a new list, MAPC makes one and drops it, and a function
+  with keyword parameters looks its keywords up by name at every call.
+  How fast the interpreter is has not been measured.
+- What Lisp writes to the console goes there a character at a time, each
+  with the console's lock taken and given back.
 
 - The first megabyte of RAM is never handed out or mapped. Frame 0 would
   look like a failed allocation, a null pointer has to fault, and x86 needs
@@ -423,7 +504,7 @@ No milestone yet, to be picked up when they start to matter:
   machine describes how its devices' interrupt lines are wired.
 - QEMU's hvf has no GIC version 2, which is why `make test` boots AArch64
   a second time, emulated.
-- None of M4, M5 and M6a has been booted in UTM itself. UTM runs AArch64
+- None of M4, M5, M6a and M6b has been booted in UTM itself. UTM runs AArch64
   under hvf with GIC version 3, four processors and 4 GiB, and that was
   checked with Homebrew's QEMU 11 from the disk image; UTM brings QEMU
   10.0 and a display device of its own. A virtual machine there has no
@@ -447,7 +528,7 @@ No milestone yet, to be picked up when they start to matter:
   clang 23 and QEMU 11. Nothing builds or boots on macOS except by hand.
 - `make image` needs macOS (hdiutil), so CI neither builds nor boots the
   disk image that UTM gets.
-- site/boot.png, on the website, is a screenshot of version 0.0.8, to be
+- site/boot.png, on the website, is a screenshot of version 0.0.9, to be
   replaced by hand when the boot report has changed enough to matter:
   build/screen-aarch64.png after `make test` is the same picture of the
   current kernel.
