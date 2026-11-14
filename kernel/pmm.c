@@ -15,6 +15,7 @@ static uint64_t g_first;   /* the lowest frame of RAM */
 static uint64_t g_frames;  /* how many frames the bitmap covers */
 static uint64_t g_free;    /* how many of them are free */
 static uint64_t g_lowest;  /* every frame below this index is in use */
+static struct lock g_lock; /* one thread at a time in pmm_alloc and pmm_free */
 
 static const char *const type_names[EfiMaxMemoryType] = {
     "reserved",           "loader code",  "loader data",  "boot services code",
@@ -113,10 +114,7 @@ void pmm_init(const struct boot_info *bi)
     kprintf("page-frame bitmap: %llu KiB at %p\n", bitmap_pages << 2, (void *)g_bitmap);
 }
 
-/* The lowest run of adjacent free frames that is long enough. Returns its
- * physical address, or 0 when there is no such run. The memory is not
- * cleared. */
-uint64_t pmm_alloc(uint64_t pages)
+static uint64_t alloc(uint64_t pages)
 {
     uint64_t run = 0;
 
@@ -139,12 +137,24 @@ uint64_t pmm_alloc(uint64_t pages)
     return 0;
 }
 
+/* The lowest run of adjacent free frames that is long enough. Returns its
+ * physical address, or 0 when there is no such run. The memory is not
+ * cleared. */
+uint64_t pmm_alloc(uint64_t pages)
+{
+    lock_acquire(&g_lock);
+    uint64_t addr = alloc(pages);
+    lock_release(&g_lock);
+    return addr;
+}
+
 /* Give frames to the allocator: ones that pmm_alloc returned, or memory that
  * was in use since boot and is no longer needed. */
 void pmm_free(uint64_t addr, uint64_t pages)
 {
     uint64_t frame = addr >> PAGE_SHIFT;
 
+    lock_acquire(&g_lock);
     if ((addr & (PAGE_SIZE - 1)) || frame < g_first || frame - g_first >= g_frames ||
         pages > g_frames - (frame - g_first))
         panic("pmm_free: %llu frames at %llx are not page frames of RAM", pages, addr);
@@ -156,6 +166,12 @@ void pmm_free(uint64_t addr, uint64_t pages)
     g_free += pages;
     if (first < g_lowest)
         g_lowest = first;
+    lock_release(&g_lock);
+}
+
+uint64_t pmm_free_frames(void)
+{
+    return g_free;
 }
 
 /* Fill frames with a pattern that is different in every word and for every

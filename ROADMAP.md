@@ -59,8 +59,20 @@ Substrate:
   timer's interrupt. A timer interrupts a hundred times a second on both,
   the local APIC's on x86_64, measured against the 8254, and the generic
   timer on AArch64 (kernel/arch/<arch>/interrupt.c, kernel/timer.c).
-- [ ] **M5 threads.** Context switch, run queue, sleep and wake on the
-  timer, an idle thread, stop-the-world for the collector.
+- [x] **M5 threads** (2026-11-14, version 0.0.7). Threads that take turns
+  on the one processor (kernel/thread.c). A thread that is not running is
+  the registers the exception entry saved for it, and a switch exchanges
+  them for another thread's on the way out of an interrupt, so M4's entry
+  code is all the switching code there is; a thread that has to wait
+  raises an exception of its own to get there. A queue of the threads that
+  are ready, a turn that lasts one tick, and an idle thread for when none
+  can run. Sleep is counted in ticks, and the tick wakes the sleepers.
+  Every thread has 64 KiB of stack over a guard page, and a fault report
+  names the thread it happened in. Locks that queue their waiters: the
+  page-frame allocator, the page tables and the console have one each.
+  Stop-the-world for the collector: safe points, and a call that returns
+  once every other thread is at one. Every boot sends three threads
+  through all of it and stops the world under them.
 
 The Lisp runtime, in the substrate:
 
@@ -135,33 +147,27 @@ Infrastructure, for sessions with budget left over:
   processors; AArch64 started at EL2; 500 ticks timed against the host's
   clock; how much processor time QEMU uses once the kernel has halted.
   (AArch64 without hvf and the accesses that must fault were on this
-  list. `make test` runs both now.)
+  list. `make test` runs both now.) From M5: the thread self-test a
+  hundred times in one boot, on x86_64 (as it comes, with four processors,
+  with `-cpu max` and 4 GiB) and on AArch64 (under hvf, the same with four
+  processors and 4 GiB, emulated with GIC version 3, emulated with version
+  2 and `-cpu max`); threads made until memory ran out, about 1800 in
+  128 MiB, each asleep for a different time, then all joined and every
+  frame back; four threads printing 1500 lines each, none of them mixed,
+  and hundreds mixed once the console's lock was taken out; how often the
+  idle thread wakes in a hundred ticks (a hundred times, two hundred under
+  hvf); in a thread, a stack that really overflows and a null pointer, to
+  read the report; a lock taken twice, a lock released by a thread that
+  does not hold it, the world started by a thread that had not stopped it,
+  an interrupt handler that tries to wait. And the self-test with the
+  scheduler broken on purpose, to see that it notices: no lock around the
+  shared total, no parking after a sleep, no end of turn on the tick, a
+  register left out of a switch, a sleep one tick short, no guard page, a
+  frame not given back by thread_join.
 
 Shortcuts and loose ends, under the milestone that settles each one. A
 session reads its own group before it starts, and whatever it leaves open
 is added here in the same change.
-
-M5:
-
-- Neither the page-frame allocator nor vm_map has a lock. They must not be
-  called from an interrupt handler, and not from two threads at once.
-- The console has none either. A handler that prints while the kernel
-  proper is in the middle of a line mixes the two; the only handler that
-  prints is the one for an interrupt nothing asked for.
-- Time is a count of ticks, a hundred a second, and nothing finer: there
-  is no clock to read between two ticks. On x86_64 the length of a tick is
-  measured once, at boot, over a single tick of the 8254, and comes out a
-  few parts in a thousand apart from one boot to the next.
-- The timer interrupts a hundred times a second whether or not anything
-  is waiting for it.
-- `arch_wait` can sleep through a wake-up that arrived just before it. That
-  is harmless while the next tick is never more than 10 ms away; a thread
-  that sleeps until something happens needs the check and the wait to be
-  one step.
-- A thread switch has to deal with where entry.S saves the registers. On
-  x86_64 the frame is on the stack of the code that was interrupted. On
-  AArch64 it is on the exception stack, of which there is one, and the
-  interrupted stack pointer is a field in the frame.
 
 M6a:
 
@@ -171,6 +177,10 @@ M6a:
 
 M6b:
 
+- A thread's stack is 64 KiB (`THREAD_STACK_SIZE`), the same for all and
+  fixed, which an interpreter that recurses in C will find small. Decide
+  which thread the evaluator runs on, how much stack it gets, and how it
+  notices that it is running out before the guard page does.
 - lisp/boot.lisp is a placeholder that nothing evaluates, and kmain prints
   the start of each boot file only to show that it arrived.
 - The kernel panics when the ESP has no files in `\clara`, although it has
@@ -185,6 +195,19 @@ M6b:
 - A file deleted from lisp/ stays in build/esp/clara, and so on the ESP and
   in the UTM image, until `make clean`.
 
+M6c:
+
+- Nothing calls `thread_safe_point` except the self-test. The interpreter
+  has to, often enough that the world stops promptly (at every call and
+  every turn of a loop, say), and never with a lock held. A thread that
+  does not come to a safe point keeps `thread_stop_the_world` from
+  returning, and nothing says which thread it is.
+- A thread that waits for a lock is not at a safe point, and the world
+  stops around it only because no thread holds a lock while it sleeps,
+  joins or parks. That rule is in comments and nowhere in the code.
+- There is no list of all threads. The collector needs one to find what
+  each thread holds; so far a thread is only in the queue it waits in.
+
 M6c, M8:
 
 - The console is output only: no cursor and no keyboard.
@@ -195,9 +218,24 @@ M7:
   join `make test`, the workflow has to install SBCL.
 - An interrupt has no way to reach Lisp. The handlers are C, and the
   timer's is the only one.
+- A thread can wait for a tick, for a lock and for another thread to
+  finish, and for nothing else. A handler can already wake a thread, which
+  is what the tick does to a sleeper, but there is no event for a thread
+  to wait on that a handler could signal.
+- A thread cannot be stopped from outside, and a sleep cannot be cut
+  short. Stopping an application means unwinding its threads (DESIGN.md),
+  which has to be asked of each thread and done by it.
+- A thread owns a stack and its registers and nothing more: there is no
+  place yet for the dynamic bindings of a Lisp thread.
+- Every thread has to be joined by somebody, or its stack is never given
+  back. Lisp threads that nobody waits for need another arrangement.
 
 M8:
 
+- Whether to keep GIC version 2 at all is best decided here, when device
+  interrupts would have to be written and tested for both versions. UTM
+  never uses version 2; QEMU's virt machine has it unless told otherwise,
+  and it costs `make test` a third boot, emulated.
 - No device interrupt can arrive yet. On x86_64 every I/O APIC pin is
   masked and nothing can unmask one; a device that signals through MSI
   needs only a vector, and nothing hands vectors out. On AArch64
@@ -248,7 +286,29 @@ No milestone yet, to be picked up when they start to matter:
 - Only the processor that boots is set up. The others stay where the
   firmware left them, parked on x86_64 and never started on AArch64. The
   GDT, the TSS, the exception stacks, the interrupt controller's
-  per-processor part and the timer are all set up for one.
+  per-processor part and the timer are all set up for one. The scheduler
+  counts on it: with interrupts off the running thread is alone, and that
+  is all the locking kernel/thread.c has. A second processor needs a real
+  lock under the queues and a running thread of its own.
+- The threads that are ready take turns in the order they became ready,
+  with no priorities: a thread that wakes waits for every thread ahead of
+  it, a tick each at most.
+- Time is a count of ticks, a hundred a second, and nothing finer: there
+  is no clock to read between two ticks, and `thread_sleep` comes out up
+  to one tick short. On x86_64 the length of a tick is measured once, at
+  boot, over a single tick of the 8254, and comes out a few parts in a
+  thousand apart from one boot to the next.
+- The timer interrupts a hundred times a second whether or not anything
+  is waiting for it, because turns and sleeps both hang on the tick. An
+  idle machine wakes that often for nothing.
+- The console's lock covers one call of kprintf, kputs or kputc. A line
+  put together from several calls can be split by another thread's line,
+  and `fbcon_set_color` changes the colour for everybody. A handler, a
+  fault report and a panic cannot wait, so they print without the lock,
+  into the middle of a thread's line or of a scroll if it comes to that.
+- On x86_64 an interrupt is handled on the stack of the thread it
+  interrupts, so a thread's 64 KiB have to hold the handlers too. On
+  AArch64 the handlers have their own stack.
 - The exception stacks, 16 KiB each, have no guard page: the spare stack
   for double faults on x86_64 and the handlers' stack on AArch64.
 - AArch64 at EL2 stops with a message: the kernel does not know how to
@@ -263,17 +323,18 @@ No milestone yet, to be picked up when they start to matter:
   the machine; the pin it arrives on is left as the firmware set it. On
   AArch64 asynchronous aborts (SError) stay masked.
 - The handlers do not save the floating-point and vector registers,
-  because nothing in the kernel uses them (`-mgeneral-regs-only`). Floats
-  in Lisp will change that.
+  because nothing in the kernel uses them (`-mgeneral-regs-only`), and a
+  thread switch moves only what the handlers save. Floats in Lisp will
+  change that.
 - The ACPI tables are read where the firmware put them, and the kernel
   faults if that is not RAM it mapped. Only the XSDT is followed, and
   there is no interpreter for the bytecode in the DSDT, which is where a
   machine describes how its devices' interrupt lines are wired.
 - QEMU's hvf has no GIC version 2, which is why `make test` boots AArch64
   a second time, emulated.
-- M4 has not been booted in UTM itself. UTM runs AArch64 under hvf with
-  GIC version 3, four processors and 4 GiB, and that was checked with
-  Homebrew's QEMU 11 from the disk image; UTM brings QEMU 10.0 and a
+- Neither M4 nor M5 has been booted in UTM itself. UTM runs AArch64 under
+  hvf with GIC version 3, four processors and 4 GiB, and that was checked
+  with Homebrew's QEMU 11 from the disk image; UTM brings QEMU 10.0 and a
   display device of its own.
 - The handoff does not give back a memory-map buffer that turned out too
   small, or the pages of a boot file it failed to read: a few pages, at
@@ -285,7 +346,7 @@ No milestone yet, to be picked up when they start to matter:
   clang 23 and QEMU 11. Nothing builds or boots on macOS except by hand.
 - `make image` needs macOS (hdiutil), so CI neither builds nor boots the
   disk image that UTM gets.
-- site/boot.png, on the website, is a screenshot of version 0.0.6, to be
+- site/boot.png, on the website, is a screenshot of version 0.0.7, to be
   replaced by hand when the boot report has changed enough to matter:
   build/screen-aarch64.png after `make test` is the same picture of the
   current kernel.

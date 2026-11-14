@@ -167,6 +167,7 @@ static void report(const struct frame *f, const struct mem_fault *mf)
     kprintf("  at %p", (void *)(uintptr_t)f->rip);
     if (vm_image_offset(f->rip))
         kprintf(", kernel image +0x%llx", vm_image_offset(f->rip));
+    kprintf(", in thread %s", thread_name());
     kprintf("\n  rax %016llx  rbx %016llx  rcx %016llx  rdx %016llx\n", f->rax, f->rbx, f->rcx, f->rdx);
     kprintf("  rsi %016llx  rdi %016llx  rbp %016llx  rsp %016llx\n", f->rsi, f->rdi, f->rbp, f->rsp);
     kprintf("  r8  %016llx  r9  %016llx  r10 %016llx  r11 %016llx\n", f->r8, f->r9, f->r10, f->r11);
@@ -178,13 +179,25 @@ static void report(const struct frame *f, const struct mem_fault *mf)
 }
 
 /* Called by entry.S for every vector, with the interrupted code's registers
- * in the frame. What is changed there is what the code resumes with. */
+ * in the frame. What is changed there is what the code resumes with, and
+ * thread_switch changes all of it when another thread is to run. */
 void interrupt_dispatch(struct frame *f)
 {
+    static int handling; /* an interrupt handler is running */
     struct mem_fault mf;
 
+    if (f->vector == VECTOR_YIELD) {
+        if (handling)
+            panic("an interrupt handler tried to wait, which only a thread can do");
+        thread_switch(f);
+        return;
+    }
     if (f->vector >= 32) {
+        handling = 1;
         interrupt_handle((unsigned)f->vector);
+        handling = 0;
+        /* It may have woken a thread, or ended the turn of the one it interrupted. */
+        thread_switch(f);
         return;
     }
     int memory = memory_fault(f, &mf);
@@ -197,4 +210,32 @@ void interrupt_dispatch(struct frame *f)
         return;
     }
     report(f, memory ? &mf : NULL);
+}
+
+/* What a thread switch is made of (kernel/thread.c). */
+const size_t arch_frame_size = sizeof(struct frame);
+
+/* A function expects to have been called: its return address at the top
+ * of the stack, 32 bytes of home space above that, and the stack pointer
+ * 8 short of a multiple of 16. The address is zero, since start never
+ * returns, and so is rbp, where the chain of frames ends. */
+void arch_frame_init(struct frame *f, void *stack_top, void (*start)(void))
+{
+    uint64_t *sp = (uint64_t *)stack_top - 5;
+
+    *sp = 0;
+    memset(f, 0, sizeof *f);
+    f->rip = (uint64_t)(uintptr_t)start;
+    f->cs = SEL_CODE;
+    f->rflags = 0x202; /* interrupts on; bit 1 is always set */
+    f->rsp = (uint64_t)(uintptr_t)sp;
+    f->ss = SEL_DATA;
+}
+
+/* A software interrupt arrives like any other, whether or not interrupts
+ * are on, and returns to the next instruction when this thread's turn
+ * comes again, with the flags it left with. */
+void arch_yield(void)
+{
+    __asm__ volatile("int %0" : : "i"(VECTOR_YIELD) : "memory");
 }

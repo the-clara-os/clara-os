@@ -69,10 +69,27 @@ Rules:
   must refuse, at every boot, through the probes in entry.S. A new kind of
   protection gets a case there. To read the report of a fault that is not
   survived, force one with a temporary change and run
-  `MARKER=xception TIMEOUT=10 tools/boottest.sh <arch>`.
+  `MARKER='^exception[^s]\|^panic' TIMEOUT=20 tools/boottest.sh <arch>`.
+  The marker is a grep pattern; a plain `xception` also matches the boot
+  report's own "exceptions:" line and stops the boot before the fault.
 - An interrupt handler runs with interrupts off and must not allocate page
-  frames, map memory or print, apart from reporting what should never
-  happen. Neither the allocator nor the console has a lock.
+  frames, map memory, print, take a lock or wait, apart from reporting
+  what should never happen. The allocator, the page tables and the console
+  each have a lock, and a lock is something only a thread can wait for.
+- Threads (kernel/thread.c). Data that two threads can reach sits behind
+  a `struct lock`. Never hold one across `thread_sleep`, `thread_join` or
+  `thread_safe_point`: stopping the world depends on that. The page
+  tables' lock is taken before the allocator's, never after, and the
+  console takes no other. The scheduler's own state is touched with
+  interrupts off, as in `int on = arch_interrupts_off(); ...; if (on)
+  arch_interrupts_on();`, which is enough only because there is one
+  processor. A new kind of wait that a thread may sit in while the world
+  is stopped ends with `thread_safe_point()`, like `thread_sleep`.
+- `thread_selftest` runs at every boot. After a change to the scheduler,
+  break it on purpose and see that the self-test notices: ROADMAP.md lists
+  the ways that were tried, under the slow test mode. One of them got
+  through the first version of the self-test, which is how it was found
+  that the test never woke a sleeper while the world was stopped.
 - `make test` boots three machines: x86_64, AArch64 with GIC version 3,
   and AArch64 emulated with GIC version 2, whose files in build/ are named
   aarch64-gic2. QEMU's hvf has no version 2, and UTM uses version 3.
@@ -82,6 +99,11 @@ Rules:
   it follows the Microsoft calling convention, like the C around it:
   arguments in rcx and rdx, 32 bytes of home space above the return
   address. What the files of one architecture share is in its arch.h.
+- `struct frame` (arch.h) is what entry.S saves, and it is also what a
+  thread is while it waits. Shared code never looks inside one: it copies
+  `arch_frame_size` bytes, and `arch_frame_init` fills in a new thread's.
+  A register added to the frame is switched with the rest; a register
+  left out of it is shared by all threads.
 - lisp/*.lisp is copied to the ESP's \clara directory, and the handoff
   (kernel/boot.c) reads every file there into a `struct boot_file`.
 - Whatever a session leaves open goes into ROADMAP.md in the same change,

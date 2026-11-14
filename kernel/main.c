@@ -48,6 +48,11 @@ void kmain(struct boot_info *bi)
     arch_interrupts_init();
     timer_selftest();
 
+    /* With a tick to take turns on, this flow of control becomes one
+     * thread among others. */
+    thread_init();
+    thread_selftest();
+
     report_boot_files(bi);
     if (bi->fb.pixels)
         kprintf("framebuffer %ux%u at %p, pitch %u, masks r %06x g %06x b %06x\n", bi->fb.width,

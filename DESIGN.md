@@ -132,15 +132,58 @@ architectures (kernel/vm.c).
   the interrupted code resumes with. That is how a probe is made to resume
   somewhere else, and how threads will be switched.
 - An interrupt handler runs with interrupts off, never allocates memory,
-  never maps any, and returns. Anything longer belongs to a thread. The
-  timer is the only source so far; devices will deliver theirs to Lisp as
-  events.
+  never maps any, never waits, and returns. Anything longer belongs to a
+  thread. The timer is the only source so far; devices will deliver theirs
+  to Lisp as events.
 - The interrupt controller comes from ACPI, not from an assumed address:
   the MADT names the local APIC and the I/O APICs on x86_64, and on
   AArch64 the GIC, whose versions 2 and 3 are both driven because QEMU
   offers the first and UTM asks for the second.
 - Time is a count of ticks, `TIMER_HZ` of them a second, from the local
   APIC's timer on x86_64 and the generic timer on AArch64.
+
+## Threads (decided in M5, 2026-11-14)
+
+- A thread is a stack and, while it is not running, the registers the
+  exception entry saved for it. The processor changes threads in one
+  place only, on the way out of an exception or an interrupt: the frame in
+  hand is put away in the thread that was running, and the next thread's
+  frame takes its place (kernel/thread.c). Being taken off the processor
+  by the timer and giving it up to wait are the same mechanism; a thread
+  that waits raises an exception of its own to get there. There is no
+  second way of saving registers to keep in step with the first. The
+  price is that a wait costs an exception.
+- One processor. With interrupts off the running thread is alone, and the
+  scheduler's own state is only ever touched that way. A thread looks at
+  what it is about to wait for and starts waiting inside one such stretch,
+  so nothing it waits for can slip in between.
+- The threads that are ready take turns in the order they became ready. A
+  turn ends at the next tick when another thread is waiting for one. No
+  priorities. An idle thread runs when no other can, and sleeps until the
+  next interrupt.
+- A thread sleeps for a number of ticks, and the tick wakes it.
+- Shared data sits behind a lock, and locks are for threads: one that
+  finds a lock taken queues up and sleeps, and the lock is handed down the
+  queue in order. An interrupt handler takes no lock, because it cannot
+  wait; it may wake a thread and that is all. A lock is held briefly:
+  never across a sleep, never while the thread waits for another to
+  finish, never at a safe point.
+- Every thread but the first has a stack of fixed size with an unmapped
+  page under it, so an overflow is a fault that names the thread, not
+  damage to whatever lay below. The first thread is the flow of control
+  that kmain started in, on the stack in the kernel image.
+- Stopping the world is by agreement. A safe point is a place where a
+  thread says it can be held up: where the interpreter will know that
+  everything the thread holds can be found. A thread asleep, or waiting
+  for another to finish, is at one as well, and parks if it wakes while
+  the world is stopped. `thread_stop_the_world` returns when every other
+  thread is at a safe point; a thread that was waiting for a lock gets it
+  and runs on to its next one first. This is what the collector's
+  "all threads stopped" means on one processor: not that the others are
+  off the processor, which they always are, but that each is somewhere
+  its state can be read.
+- Whoever makes a thread waits for it to finish (`thread_join`), and that
+  is when its stack is given back.
 
 ## Conventions
 

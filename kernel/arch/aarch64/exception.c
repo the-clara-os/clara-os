@@ -3,6 +3,13 @@
  * exception it cannot survive. The entry code is in entry.S. */
 #include "arch.h"
 
+#define EC_SVC 0x15 /* the exception class of svc, which arch_yield raises */
+
+/* The processor state a thread starts with, as SPSR_EL1 spells it: EL1 on
+ * SP_EL0, IRQs let in, and debug exceptions, SError and FIQ masked, which
+ * is how the kernel has run since arch_early_init. */
+#define PSTATE_THREAD 0x344
+
 __attribute__((aligned(16))) static uint8_t exception_stack[16 * 1024];
 
 void arch_exceptions_init(void)
@@ -30,7 +37,7 @@ static const char *class_name(unsigned ec)
     switch (ec) {
     case 0x00: return "an instruction the processor does not know";
     case 0x0e: return "illegal execution state";
-    case 0x15: return "supervisor call";
+    case EC_SVC: return "supervisor call, which is how a thread waits";
     case 0x18: return "a system register that is out of bounds here";
     case 0x20: /* the same from EL0 */
     case 0x21: return "instruction abort";
@@ -86,6 +93,7 @@ static void report(const struct frame *f, uint64_t esr, uint64_t far, const stru
     kprintf("  at %p", (void *)(uintptr_t)f->pc);
     if (vm_image_offset(f->pc))
         kprintf(", kernel image +0x%llx", vm_image_offset(f->pc));
+    kprintf(", in thread %s", thread_name());
     for (unsigned i = 0; i < 31; i++) /* four to a line, and sp completes the last */
         kprintf("%sx%u%s %016llx", i % 4 ? "  " : "\n  ", i, i < 10 ? " " : "", f->x[i]);
     kprintf("  sp  %016llx\n", sp);
@@ -98,7 +106,8 @@ static void report(const struct frame *f, uint64_t esr, uint64_t far, const stru
 
 /* Called by entry.S for every entry of the vector table, with the
  * interrupted code's registers in the frame. What is changed there is what
- * the code resumes with. */
+ * the code resumes with, and thread_switch changes all of it when another
+ * thread is to run. */
 void exception_dispatch(struct frame *f)
 {
     unsigned from = f->vector >> 2, kind = f->vector & 3;
@@ -106,9 +115,17 @@ void exception_dispatch(struct frame *f)
 
     if (from == 0 && kind == 1) {
         interrupt_handle();
+        /* It may have woken a thread, or ended the turn of the one it interrupted. */
+        thread_switch(f);
         return;
     }
     uint64_t esr = read_sysreg(esr_el1), far = read_sysreg(far_el1);
+    /* A thread that gives the processor up. A handler that tried would
+     * arrive from SP_EL1, and is reported below like any other fault. */
+    if (from == 0 && kind == 0 && (esr >> 26 & 0x3f) == EC_SVC) {
+        thread_switch(f);
+        return;
+    }
     int memory = kind == 0 && memory_fault(esr, far, &mf);
     if (from == 0 && kind == 0 && fault_probing(memory ? &mf : NULL)) {
         /* Make the probe return 1 (entry.S). */
@@ -118,4 +135,25 @@ void exception_dispatch(struct frame *f)
         return;
     }
     report(f, esr, far, memory ? &mf : NULL);
+}
+
+/* What a thread switch is made of (kernel/thread.c). */
+const size_t arch_frame_size = sizeof(struct frame);
+
+/* The frame pointer and the link register are zero: there is no frame
+ * above start and nowhere for it to return to. */
+void arch_frame_init(struct frame *f, void *stack_top, void (*start)(void))
+{
+    memset(f, 0, sizeof *f);
+    f->pc = (uint64_t)(uintptr_t)start;
+    f->sp = (uint64_t)(uintptr_t)stack_top;
+    f->pstate = PSTATE_THREAD;
+}
+
+/* A supervisor call is taken whether or not interrupts are on, and returns
+ * to the next instruction when this thread's turn comes again, with the
+ * processor state it left with. */
+void arch_yield(void)
+{
+    __asm__ volatile("svc #0" ::: "memory");
 }

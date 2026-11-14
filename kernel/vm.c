@@ -30,6 +30,7 @@ static uint64_t g_root;   /* the top-level table */
 static int g_levels;
 static int g_live;        /* the processor is using these tables */
 static uint64_t g_tables; /* how many there are, one page each */
+static struct lock g_lock; /* one thread at a time in the tables; new_table takes the allocator's lock inside it */
 
 static uint64_t new_table(void)
 {
@@ -82,21 +83,27 @@ void vm_map(uint64_t va, uint64_t pa, uint64_t pages, unsigned flags)
 {
     if ((va | pa) & (PAGE_SIZE - 1))
         panic("vm_map: %llx to %llx is not page-aligned", va, pa);
+    lock_acquire(&g_lock);
     for (; pages--; va += PAGE_SIZE, pa += PAGE_SIZE)
         set_entry(va, arch_pte_page(pa, flags));
+    lock_release(&g_lock);
 }
 
 void vm_unmap(uint64_t va, uint64_t pages)
 {
+    lock_acquire(&g_lock);
     for (; pages--; va += PAGE_SIZE)
         set_entry(va & ~(PAGE_SIZE - 1), 0);
+    lock_release(&g_lock);
 }
 
 uint64_t vm_lookup(uint64_t va)
 {
+    lock_acquire(&g_lock);
     uint64_t *e = entry_for(va, 0);
-
-    return e && (*e & PTE_PRESENT) ? *e & PTE_ADDR : 0;
+    uint64_t pa = e && (*e & PTE_PRESENT) ? *e & PTE_ADDR : 0;
+    lock_release(&g_lock);
+    return pa;
 }
 
 /* The section table of the kernel's own image, and how many entries it has. */

@@ -220,9 +220,12 @@ void arch_interrupts_on(void)
     __asm__ volatile("msr daifclr, #2");
 }
 
-void arch_interrupts_off(void)
+int arch_interrupts_off(void)
 {
+    uint64_t daif = read_sysreg(daif);
+
     __asm__ volatile("msr daifset, #2");
+    return !(daif & 0x80); /* the bit that masks IRQs */
 }
 
 void arch_wait(void)
