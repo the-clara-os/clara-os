@@ -23,6 +23,11 @@ void arch_serial_putc(char c)
     outb(COM1, (uint8_t)c);
 }
 
+int arch_serial_getc(void)
+{
+    return inb(COM1 + 5) & 0x01 ? inb(COM1) : -1; /* data ready */
+}
+
 /* The serial port is reached through I/O ports and needs no mapping. */
 void arch_map_devices(void)
 {

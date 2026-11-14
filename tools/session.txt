@@ -1,0 +1,25 @@
+> (print (read))
+(PRINT (READ))
+> 'hello "world" #\! -42 #x7F
+'HELLO
+"world"
+#\!
+-42
+127
+> (defun area (r) "Of a circle." (* pi r r))
+(DEFUN AREA (R) "Of a circle." (* PI R R))
+> (a (b . c) #(1 2 #(3)) . d)
+(A (B . C) #(1 2 #(3)) . D)
+> (one :two cl:nil cl-user::three |Four| #:five)
+(ONE :TWO NIL THREE |Four| #:FIVE)
+> (a list that goes on ; with a comment
+    #| and another |# for three
+    lines)
+(A LIST THAT GOES ON FOR THREE LINES)
+> (1 . 2 3)
+error at line 1, column 8: more than one form after the dot
+> 1.5 nowhere:x
+error at line 1, column 1: a ratio or a floating-point number, which this Lisp does not have yet
+> two) forms
+TWO
+error at line 1, column 4: a closing parenthesis that closes nothing

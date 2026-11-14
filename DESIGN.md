@@ -74,8 +74,10 @@ manager, and the applications are Lisp programs loaded into that world.
 - Tests are boots. `make test` boots both architectures headless; no
   milestone lands without it passing on both. Substrate code that can check
   itself does so during the boot and panics when a check fails, so a boot
-  that reaches its last line has passed. Lisp code is also tested on the
-  host under SBCL.
+  that reaches its last line has passed. The boot test also types at the
+  kernel over the serial port, and what comes back has to be the session
+  in tools/session.txt, to the byte. Lisp code is also tested on the host
+  under SBCL.
 - C11, freestanding, no libc, `-Wall -Wextra -Werror`. The targets are LLP64,
   so `long` is 32 bits: the kernel uses the stdint types and never `long`.
 
@@ -185,11 +187,69 @@ architectures (kernel/vm.c).
 - Whoever makes a thread waits for it to finish (`thread_join`), and that
   is when its stack is given back.
 
+## Lisp objects, the reader and the printer (decided in M6a, 2026-11-14)
+
+- A Lisp value is one 64-bit word, and its lowest bits say what it is
+  (kernel/lisp/lisp.h). A clear lowest bit is a fixnum, the integer in the
+  other 63. The lowest three bits tell a cons, a symbol, any other object
+  in the heap, and an immediate apart; an immediate is a character or a
+  marker, such as the one for a symbol without a value. Type tests for
+  the commonest things read no memory.
+- Every object in the heap begins with a header word: its type, a byte
+  for the collector, and a length. Conses have one too, which makes them
+  three words where two would do. In return the heap can be walked from
+  its first object to its last by anything that knows the header, and
+  that is all the collector's sweep, a saved image and a census need. The
+  alternative, pages that hold conses only and a table that says which,
+  is more machinery for less memory, and can come later.
+- The heap is the region the address space reserves for it. It fills from
+  the bottom and grows a page frame at a time. Objects do not move, so a
+  C pointer to one stays good, and NIL, the first object of all, has an
+  address that is a constant. A frame in the heap keeps its place in the
+  mapping of RAM as well: the rule that RAM is at its own address has no
+  exceptions but the guard pages, and a driver can reach the frames of a
+  heap object the way it reaches any others. A stray write through a
+  physical address can therefore land in an object, as it can anywhere
+  in RAM.
+- NIL is a symbol like the others, and the empty list is the same word.
+- A character is a Unicode code point, and a string holds its characters
+  at 32 bits each, so that the n-th one is found at once, as Common Lisp
+  expects. Text on its way in or out, the serial port and files, is
+  UTF-8. The reader refuses text that is not well-formed UTF-8.
+- Integers are fixnums until there are larger ones. What the reader has no
+  object for, a float, a ratio, an integer too large, it refuses with an
+  error; it does not read it as a symbol, because the same text must not
+  mean one thing here and another under SBCL.
+- Packages work as in Common Lisp: a symbol is internal or external in the
+  package that holds it, and a package that uses another finds the other's
+  external symbols by name. The tables are vectors in the heap, so a saved
+  image holds them. `*PACKAGE*` says where names are read.
+- The reader reads text that is already in memory, all of it, and never
+  waits. When the text ends inside a form it says so, and whoever can get
+  more of the text comes back with the form from its beginning. Reading a
+  line again costs nothing that matters, and it leaves no place in the
+  reader where a thread could be held up with half a list in its hands.
+- The collector will run at safe points only, never inside an allocation.
+  The C code of the runtime relies on it: between two safe points it keeps
+  objects in local variables and nothing has to be told. M6c confirms
+  this or changes it.
+- The printer writes an object so that the reader makes the same object of
+  it, wherever there is such a text: a symbol with its package when the
+  name alone would not find it, bars around a name that would not read
+  back, `'x` for `(QUOTE X)`.
+- Lists nest by recursion in C in both, on a thread's fixed stack, so
+  there is a depth past which the reader refuses and the printer cuts
+  short. The evaluator will face the same limit (M6b).
+- What the substrate itself holds on to in the Lisp world is in one
+  struct, `lisp_roots`: where the collector starts, and what an image has
+  to bring back.
+
 ## Conventions
 
 - C: lower_snake_case for functions and files. Kernel-wide symbols carry
   their subsystem as a prefix: `kprintf`, `fb_fill`, `arch_halt`. The Lisp
-  runtime's C code is prefixed `lisp_`.
+  runtime's C code is prefixed `lisp_` and lives in kernel/lisp/; a Lisp
+  value in C has the type `lisp`.
 - Lisp: sources live under lisp/, one package per subsystem, named
   `clara.<subsystem>`. Each file loads under SBCL; host-only shims live in
   lisp/host/ and are never loaded on ClaraOS.

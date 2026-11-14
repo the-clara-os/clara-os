@@ -29,9 +29,9 @@ so start each slice in a fresh session instead of continuing a long one.
 Build with `make` (Homebrew's llvm and lld under /opt/homebrew/opt when they
 are there, otherwise clang and lld-link from the PATH; `LLVM=` and `LLD=`
 name other directories). `make test` boots both architectures
-headless under QEMU in about twenty seconds and saves what each screen shows
-to build/screen-<arch>.png; look at those images when a change touches the
-display. `make run-aarch64` and `make run-x86_64` open a QEMU window with
+headless under QEMU in about twenty seconds, types a session at each
+kernel, and saves what each screen shows to build/screen-<arch>.png; look
+at those images when a change touches the display. `make run-aarch64` and `make run-x86_64` open a QEMU window with
 serial on the terminal; `make image` produces the UTM disk.
 
 Rules:
@@ -42,7 +42,8 @@ Rules:
 - Hardware and firmware table layouts follow the specification; cite it when
   a number is not obvious.
 - Every observable change prints something on serial; tools/boottest.sh
-  greps the serial log for the kernel's last line.
+  greps the serial log for the kernel's last line. A line of the boot
+  report stays under 100 characters, the width of the screen under QEMU.
 - Small readable code over frameworks. Abstract after the second
   architecture works, not before.
 - `kprintf` and `panic` are checked by the compiler like printf: 64-bit
@@ -92,7 +93,9 @@ Rules:
   that the test never woke a sleeper while the world was stopped.
 - `make test` boots three machines: x86_64, AArch64 with GIC version 3,
   and AArch64 emulated with GIC version 2, whose files in build/ are named
-  aarch64-gic2. QEMU's hvf has no version 2, and UTM uses version 3.
+  aarch64-gic2. The serial port of each is QEMU's standard input and
+  output: the log is what the kernel printed, and a FIFO feeds it what
+  the session types. QEMU's hvf has no version 2, and UTM uses version 3.
   tools/boottest.sh passes any further arguments on to QEMU, which is how
   to try another machine: `tools/boottest.sh aarch64 -smp 4 -cpu max`.
 - Assembly lives in kernel/arch/<arch>/entry.S and nowhere else. On x86_64
@@ -106,6 +109,37 @@ Rules:
   left out of it is shared by all threads.
 - lisp/*.lisp is copied to the ESP's \clara directory, and the handoff
   (kernel/boot.c) reads every file there into a `struct boot_file`.
+- The Lisp runtime is kernel/lisp/, and lisp.h is its interface: the
+  comment at its top says what a Lisp value is. In C a value is a `lisp`,
+  one tagged word. Look at the tag (`lisp_is_cons`, `lisp_is_symbol`,
+  `lisp_is`) before making a pointer of it: `lisp_as_cons` and its like
+  check nothing. Every object comes from `lisp_alloc`, and
+  `lisp_object_words` is the one place that knows how long an object is:
+  a new type gets a name in `enum lisp_type`, a case there, and a count
+  in the census line of lisp.c.
+- The runtime's C code keeps objects in local variables while it makes
+  others, which is safe because nothing collects yet and the collector is
+  to run at safe points only. So nothing in kernel/lisp/ may come to a
+  safe point (`thread_sleep`, `thread_join`, `thread_safe_point`,
+  `kgetline`) while it holds an object that nothing else points to. The
+  reader takes its text whole for that reason, and `lisp_listen` waits for
+  a line between two reads. A value the substrate has to find again
+  belongs in `lisp_roots`, not in a static variable. One thread at a time
+  uses the runtime, and nothing in it takes a lock.
+- `lisp_selftest` (kernel/lisp/lisp.c) runs at every boot: new syntax gets
+  a line in `forms`, with the text and its print, and whatever has to be
+  refused gets one in `refused`. It reads in a package of its own, so
+  that its symbols do not stay in COMMON-LISP-USER. After a change to the
+  runtime, break it on purpose and see that the boot notices; ROADMAP.md
+  lists what was tried, under the slow test mode.
+- tools/session.txt is what `make test` types at each kernel over the
+  serial port once the kernel reads from it, and what the kernel has to
+  answer, to the byte. The lines that begin with `> `, or with two spaces
+  for a form that goes on, are typed; the others have to come back.
+  Change it when what the kernel prints there changes. What a machine
+  answered is in build/session-<name>.txt, and
+  `SESSION=file tools/boottest.sh <arch>` types another session. A boot
+  that panics or faults fails at once, without waiting for the timeout.
 - Whatever a session leaves open goes into ROADMAP.md in the same change,
   under the milestone that settles it: a shortcut, a provisional decision,
   a limit, a check that was only run by hand. Saying it in the summary at

@@ -27,13 +27,16 @@ static void leave(int locked)
 }
 
 /* Every character goes to the serial port and, once fbcon_init has found a
- * display, to the screen as well. */
+ * display, to the screen as well. Text is UTF-8, and the screen has one
+ * cell for a character, whatever it is: the bytes that continue one are
+ * not shown, and the first byte of a character outside ASCII gets the
+ * font's sign for what it does not have. */
 static void put_char(char c)
 {
     if (c == '\n')
         arch_serial_putc('\r');
     arch_serial_putc(c);
-    if (!g_serial_only)
+    if (!g_serial_only && ((uint8_t)c & 0xc0) != 0x80)
         fbcon_putc(c);
 }
 
@@ -63,6 +66,51 @@ void kputs(const char *s)
 
     put_string(s);
     leave(locked);
+}
+
+/* A line from the serial port, which is the only place anything can be
+ * typed so far. Nothing interrupts when a byte arrives, so the port is
+ * looked at once a tick, and the thread sleeps in between. What is typed
+ * is echoed, here and on the screen. Backspace or Delete takes the last
+ * character back, a tab counts as a space, the other control characters
+ * are dropped, and so is what there is no room for. Ctrl-D at the start of
+ * a line means that no more is coming. */
+int64_t kgetline(char *line, size_t size)
+{
+    static int after_return; /* the last line ended with a carriage return: a line feed right after it is its other half */
+    size_t n = 0;
+
+    for (;;) {
+        int c = arch_serial_getc();
+
+        if (c < 0) {
+            thread_sleep(1);
+            continue;
+        }
+        if (c == '\n' && after_return) {
+            after_return = 0;
+            continue;
+        }
+        after_return = c == '\r';
+        if (c == '\r' || c == '\n') {
+            kputc('\n');
+            return (int64_t)n;
+        }
+        if (c == 0x04 && !n)
+            return -1;
+        if ((c == '\b' || c == 0x7f) && n) {
+            while (n > 1 && ((uint8_t)line[n - 1] & 0xc0) == 0x80)
+                n--; /* a character outside ASCII is several bytes */
+            n--;
+            kputs("\b \b");
+        }
+        if (c == '\t')
+            c = ' ';
+        if (c < ' ' || c == 0x7f || n == size)
+            continue;
+        line[n++] = (char)c;
+        kputc((char)c);
+    }
 }
 
 static void put_num(uint64_t v, unsigned base, int width, char pad, int negative, int upper)

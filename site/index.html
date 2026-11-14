@@ -132,8 +132,8 @@ footer p { max-width: 40rem; }
     {{roadmap}}
     <p>The <a href="https://github.com/the-clara-os/clara-os/blob/main/ROADMAP.md">roadmap</a> says what each milestone holds and what was left open along the way.</p>
     <figure>
-      <img src="boot.png" alt="The ClaraOS console after booting: the memory map, the self-tests of the page-frame allocator, of virtual memory and of exceptions passing, the interrupt controller found, the timer ticking, the threads' self-test passing, and the first boot file read." width="800" height="600" loading="lazy">
-      <figcaption>The screen after version 0.0.7 boots on AArch64 under QEMU.</figcaption>
+      <img src="boot.png" alt="The ClaraOS console at the end of a boot: the self-tests of the threads and of the Lisp runtime passing, then a session typed on the serial port, in which the kernel reads Lisp forms and prints each one back, refuses three of them with an error that says where, and halts with nothing more to do." width="800" height="600" loading="lazy">
+      <figcaption>The screen after version 0.0.8 boots on AArch64 under QEMU and the boot test has typed its session.</figcaption>
     </figure>
   </section>
 
@@ -144,7 +144,7 @@ footer p { max-width: 40rem; }
 git clone https://github.com/the-clara-os/clara-os
 cd clara-os
 make test          <span class="note"># boot both architectures without a window</span>
-make run-aarch64   <span class="note"># a QEMU window, the serial port on your terminal</span></code></pre>
+make run-aarch64   <span class="note"># a QEMU window, the serial port on your terminal: type a form</span></code></pre>
     <p>The <a href="https://github.com/the-clara-os/clara-os#running-in-utm">README</a> has the steps for running it in UTM.</p>
   </section>
 </main>

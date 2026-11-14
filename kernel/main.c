@@ -2,6 +2,7 @@
  * firmware; kmain starts on the kernel's own stack and never returns. */
 #include "acpi.h"
 #include "kernel.h"
+#include "lisp/lisp.h"
 
 /* Each file with the start of its first line, to show that the contents
  * arrived and not only the name. */
@@ -53,6 +54,9 @@ void kmain(struct boot_info *bi)
     thread_init();
     thread_selftest();
 
+    lisp_init();
+    lisp_selftest();
+
     report_boot_files(bi);
     if (bi->fb.pixels)
         kprintf("framebuffer %ux%u at %p, pitch %u, masks r %06x g %06x b %06x\n", bi->fb.width,
@@ -60,6 +64,10 @@ void kmain(struct boot_info *bi)
                 bi->fb.green_mask, bi->fb.blue_mask);
     else
         kprintf("framebuffer: none\n");
+
+    /* Until something evaluates what is read, reading it and printing it
+     * back is all there is to do. */
+    lisp_listen();
     kprintf("clara: nothing more to do, halting\n");
     arch_halt();
 }

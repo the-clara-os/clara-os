@@ -20,6 +20,18 @@ void *memcpy(void *dst, const void *src, size_t n)
     return dst;
 }
 
+void *memmove(void *dst, const void *src, size_t n)
+{
+    uint8_t *d = dst;
+    const uint8_t *s = src;
+
+    if (d <= s)
+        return memcpy(dst, src, n); /* which copies from the front, as this case needs */
+    while (n--)
+        d[n] = s[n];
+    return dst;
+}
+
 int memcmp(const void *a, const void *b, size_t n)
 {
     const uint8_t *x = a, *y = b;

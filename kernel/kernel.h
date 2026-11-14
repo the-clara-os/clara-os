@@ -5,7 +5,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define CLARA_VERSION "0.0.7"
+#define CLARA_VERSION "0.0.8"
 
 #define PAGE_SHIFT 12
 #define PAGE_SIZE  (1ULL << PAGE_SHIFT)
@@ -64,6 +64,10 @@ void kprintf(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 void kvprintf(const char *fmt, va_list ap) __attribute__((format(printf, 1, 0)));
 void panic(const char *fmt, ...) __attribute__((noreturn, format(printf, 1, 2)));
 void console_serial_only(void); /* leave the screen alone from now on */
+/* A line typed on the serial port, echoed as it is typed, without its end:
+ * how many bytes of it are in line, at most size, or -1 when Ctrl-D ended
+ * the input. Only for a thread: it sleeps while nothing arrives. */
+int64_t kgetline(char *line, size_t size);
 
 /* fbcon.c: the text console on the framebuffer */
 enum fbcon_color { FBCON_TEXT, FBCON_ACCENT, FBCON_ALERT, FBCON_COLORS };
@@ -150,6 +154,7 @@ void lock_release(struct lock *l);
 /* string.c */
 void  *memset(void *dst, int c, size_t n);
 void  *memcpy(void *dst, const void *src, size_t n);
+void  *memmove(void *dst, const void *src, size_t n); /* the two may overlap */
 int    memcmp(const void *a, const void *b, size_t n);
 size_t strlen(const char *s);
 
@@ -157,6 +162,7 @@ size_t strlen(const char *s);
 extern const char *const arch_name;
 void arch_early_init(void);   /* right after ExitBootServices: interrupts off, serial ready */
 void arch_serial_putc(char c);
+int  arch_serial_getc(void);  /* the next byte that has arrived, or -1 when none is waiting */
 void arch_halt(void) __attribute__((noreturn));
 /* Call fn(arg) with the stack pointer at top, which must be 16-byte aligned. */
 void arch_switch_stack(void *top, void (*fn)(struct boot_info *), struct boot_info *arg)
