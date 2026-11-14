@@ -46,6 +46,7 @@ struct thread {
     void (*fn)(void *);
     void *arg;
     uint8_t *stack;        /* its memory, lowest address first: a guard page, then the stack */
+    uint64_t pages;        /* of the stack, the guard page not counted */
     struct thread *joiner; /* the thread that waits for this one to finish */
     struct frame *frame;   /* its registers, while it is not running */
 };
@@ -293,10 +294,10 @@ static void start(void)
  * page, unmapped, so that a stack which overflows faults instead of
  * writing over whatever lies below. The struct thread and the room for its
  * registers are at the top, and the stack starts right under them. */
-static struct thread *create(const char *name, void (*fn)(void *), void *arg)
+static struct thread *create(const char *name, void (*fn)(void *), void *arg, uint64_t pages)
 {
-    uint64_t memory = pmm_alloc(1 + STACK_PAGES);
-    uint64_t top = memory + (1 + STACK_PAGES) * PAGE_SIZE;
+    uint64_t memory = pmm_alloc(1 + pages);
+    uint64_t top = memory + (1 + pages) * PAGE_SIZE;
     struct thread *t = phys_ptr((top - arch_frame_size - sizeof *t) & ~15ULL);
 
     if (!memory)
@@ -307,16 +308,18 @@ static struct thread *create(const char *name, void (*fn)(void *), void *arg)
     t->fn = fn;
     t->arg = arg;
     t->stack = phys_ptr(memory);
+    t->pages = pages;
     t->frame = (struct frame *)(t + 1);
     arch_frame_init(t->frame, t, start);
     return t;
 }
 
-/* A new thread that runs fn(arg) and finishes when fn returns, or NULL
- * when there is no memory for its stack. Somebody has to thread_join it. */
-struct thread *thread_create(const char *name, void (*fn)(void *), void *arg)
+/* A new thread that runs fn(arg) on a stack of that many bytes and
+ * finishes when fn returns, or NULL when there is no memory for the stack.
+ * Somebody has to thread_join it. */
+struct thread *thread_create(const char *name, void (*fn)(void *), void *arg, size_t stack)
 {
-    struct thread *t = create(name, fn, arg);
+    struct thread *t = create(name, fn, arg, (stack + PAGE_SIZE - 1) / PAGE_SIZE);
 
     if (t) {
         int on = arch_interrupts_off();
@@ -341,7 +344,7 @@ void thread_exit(void)
  * that thread_create returned, and by one thread: nothing else frees it. */
 void thread_join(struct thread *t)
 {
-    uint64_t memory = (uint64_t)(uintptr_t)t->stack;
+    uint64_t memory = (uint64_t)(uintptr_t)t->stack, pages = t->pages;
     int on = arch_interrupts_off();
 
     if (t == g_current || t->joiner)
@@ -352,7 +355,7 @@ void thread_join(struct thread *t)
     if (on)
         arch_interrupts_on();
     vm_map(memory, memory, 1, VM_WRITE); /* the guard page is RAM like any other again */
-    pmm_free(memory, 1 + STACK_PAGES);
+    pmm_free(memory, 1 + pages);
     thread_safe_point();
 }
 
@@ -379,7 +382,7 @@ void thread_init(void)
     if (arch_frame_size > sizeof g_boot_frame)
         panic("the boot thread has room for %u bytes of registers, and the processor has %u",
               (unsigned)sizeof g_boot_frame, (unsigned)arch_frame_size);
-    g_idle = create("idle", idle, NULL);
+    g_idle = create("idle", idle, NULL, STACK_PAGES);
     if (!g_idle)
         panic("no memory for the idle thread");
     kprintf("threads: kmain is the first, an idle thread runs when no other can; %u KiB stacks, turns of %u ms\n",
@@ -470,7 +473,7 @@ void thread_selftest(void)
     test_over = 0;
     for (unsigned i = 0; i < TEST_THREADS; i++) {
         test_count[i] = 0;
-        if (!(threads[i] = thread_create(names[i], test_thread, (void *)(uintptr_t)i)))
+        if (!(threads[i] = thread_create(names[i], test_thread, (void *)(uintptr_t)i, THREAD_STACK_SIZE)))
             panic("thread self-test: no memory for a thread");
     }
 

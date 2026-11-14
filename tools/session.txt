@@ -1,25 +1,63 @@
-> (print (read))
-(PRINT (READ))
-> 'hello "world" #\! -42 #x7F
-'HELLO
+> (+ 1 2)
+3
+> (defun fact (n) (if (< n 2) 1 (* n (fact (- n 1)))))
+FACT
+> (fact 20)
+2432902008176640000
+> (fact 21)
+error: the result is an integer too large for a fixnum, and there are no larger integers yet
+> (mapcar #'fact '(1 2 3 4 5))
+(1 2 6 24 120)
+> (defmacro unless-zero (n &body body) `(if (= ,n 0) nil (progn ,@body)))
+UNLESS-ZERO
+> (macroexpand-1 '(unless-zero x (/ 100 x)))
+(IF (= X 0) NIL (PROGN (/ 100 X)))
+T
+> (let ((counter (let ((n 0)) (lambda () (incf n))))) ; a closure
+    (list (funcall counter) (funcall counter)
+          #| and it keeps count |# (funcall counter)))
+(1 2 3)
+> (defstruct point x (y 0))
+POINT
+> (let ((p (make-point :x 3))) (setf (point-y p) 4) p)
+#S(POINT :X 3 :Y 4)
+> (defvar *depth* 0)
+*DEPTH*
+> (defun depth () *depth*)
+DEPTH
+> (list (let ((*depth* 1)) (depth)) (depth))
+(1 0)
+> (floor 17 5)
+3
+2
+> (dotimes (i 3) (format t "~D squared is ~D~%" i (* i i)))
+0 squared is 0
+1 squared is 1
+2 squared is 4
+NIL
+> (format t "no new line")
+no new line
+NIL
+> (car '(a . b)) 'hello "world" #\! (values) (list 1.5)
+A
+HELLO
 "world"
 #\!
--42
-127
-> (defun area (r) "Of a circle." (* pi r r))
-(DEFUN AREA (R) "Of a circle." (* PI R R))
-> (a (b . c) #(1 2 #(3)) . d)
-(A (B . C) #(1 2 #(3)) . D)
-> (one :two cl:nil cl-user::three |Four| #:five)
-(ONE :TWO NIL THREE |Four| #:FIVE)
-> (a list that goes on ; with a comment
-    #| and another |# for three
-    lines)
-(A LIST THAT GOES ON FOR THREE LINES)
-> (1 . 2 3)
-error at line 1, column 8: more than one form after the dot
-> 1.5 nowhere:x
-error at line 1, column 1: a ratio or a floating-point number, which this Lisp does not have yet
+error at line 1, column 50: a ratio or a floating-point number, which this Lisp does not have yet
+> (cdr 5)
+error: CDR wants a list, and 5 is not one
+> (no-such-function 1 2)
+error: the function NO-SUCH-FUNCTION is not defined
+> (defun forever (n) (+ 1 (forever n)))
+FOREVER
+> (forever 1)
+error: the stack is full: the forms are nested too deep, or a function calls itself without end
 > two) forms
-TWO
+error: the variable TWO has no value
 error at line 1, column 4: a closing parenthesis that closes nothing
+> (defpackage "PLAY" (:use "COMMON-LISP") (:export "BALL"))
+#<PACKAGE "PLAY">
+> (in-package "PLAY")
+#<PACKAGE "PLAY">
+> (list 'ball 'bat (symbol-package 'bat) 'cl-user::fact)
+(BALL BAT #<PACKAGE "PLAY"> COMMON-LISP-USER::FACT)

@@ -18,9 +18,13 @@ there is. A fault is reported in words, with every register. The interrupt
 controller is found through ACPI, and a timer ticks a hundred times a
 second. Threads take turns on that tick, sleep, share locks, and can all be
 stopped at once, which is what the Lisp collector will need. The Lisp
-runtime has its objects, its heap, symbols and packages, a reader and a
-printer: at the end of the boot the kernel reads the forms typed on the
-serial port and prints each one back. There is no evaluator yet. A text
+runtime has its objects, its heap, symbols and packages, a reader, a
+printer and an evaluator: an interpreter for a subset of Common Lisp, with
+closures, special variables, multiple values, macros and structures. Part
+of that language is written in Lisp itself, in lisp/boot.lisp, which the
+kernel loads as it starts. At the end of the boot it reads the forms typed
+on the serial port, evaluates each one and prints what it gives; a mistake
+is answered with what went wrong, and the prompt comes back. A text
 console on the serial port and on the screen reports each step.
 [ROADMAP.md](ROADMAP.md) has what comes next, [DESIGN.md](DESIGN.md) the
 ideas and conventions.
@@ -70,9 +74,10 @@ Layout:
 4. Add a Serial device with mode "Built-in Terminal": the kernel talks there,
    and it is the only place to type until there is a keyboard driver.
 5. Start. The display and the serial window both show the boot report,
-   which ends at a prompt. A form typed in the serial window, `(a b . c)`
-   say, is read and printed back on both. Ctrl-D ends it, and the kernel
-   halts with `clara: nothing more to do`.
+   which ends at a prompt. A form typed in the serial window,
+   `(mapcar #'1+ '(1 2 3))` say, is evaluated, and what it gives is printed
+   on both. Ctrl-D ends it, and the kernel halts with
+   `clara: nothing more to do`.
 
 UTM copies the image into the VM bundle, so after a rebuild either import it
 again or replace the copy inside the `.utm` bundle (Show Package Contents,

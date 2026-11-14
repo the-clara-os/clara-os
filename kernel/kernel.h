@@ -5,7 +5,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define CLARA_VERSION "0.0.8"
+#define CLARA_VERSION "0.0.9"
 
 #define PAGE_SHIFT 12
 #define PAGE_SIZE  (1ULL << PAGE_SHIFT)
@@ -123,7 +123,7 @@ uint64_t timer_ticks(void);    /* since the timer was started */
 void     timer_selftest(void);
 
 /* thread.c: threads, taking turns on the processor, and locks between them */
-#define THREAD_STACK_SIZE (64 * 1024) /* of every thread but the first, whose stack is kernel_stack */
+#define THREAD_STACK_SIZE (64 * 1024) /* of a thread that asks for no more; the first is on kernel_stack */
 struct thread;
 struct frame;                  /* the registers of code that an exception cut short: arch/<arch>/arch.h */
 struct thread_queue {
@@ -134,8 +134,9 @@ struct lock {
     struct thread_queue waiting; /* in order of arrival */
 };
 void thread_init(void);
-/* A thread that runs fn(arg). The name is kept, not copied. NULL when there is no memory for its stack. */
-struct thread *thread_create(const char *name, void (*fn)(void *), void *arg);
+/* A thread that runs fn(arg) on a stack of that many bytes. The name is kept, not copied. NULL when
+ * there is no memory for the stack. */
+struct thread *thread_create(const char *name, void (*fn)(void *), void *arg, size_t stack);
 void thread_join(struct thread *t);  /* wait until it has finished, and free it: once for every thread */
 void thread_exit(void) __attribute__((noreturn)); /* what returning from fn does */
 void thread_yield(void);             /* the other threads that are ready go first */

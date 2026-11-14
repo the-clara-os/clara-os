@@ -1,19 +1,27 @@
-/* The printer: an object as text, written so that the reader makes the
- * same object of it again where that can be done. A symbol gets its
- * package when the name alone would not find it from the package that
+/* The printer: an object as text. lisp_print writes it so that the reader
+ * makes the same object of it again where that can be done. A symbol gets
+ * its package when the name alone would not find it from the package that
  * names are being read in, and bars when its name would not read back as
- * it is; a string gets its quotes; (QUOTE X) comes out as 'X. A package
- * has no text that reads back, and prints as #<PACKAGE "NAME">.
+ * it is; a string gets its quotes; (QUOTE X) comes out as 'X, and what the
+ * reader made of a backquote comes out as the backquote. A package, a
+ * function and a structure have no text that reads back, and print as
+ * #<PACKAGE "NAME">, #<FUNCTION NAME> and #S(NAME :SLOT value). lisp_princ
+ * writes for a person: no quotes, no bars, no package.
  *
  * Lists nest by recursion in C here too: below LISP_DEPTH a list is
- * printed as #. Nothing looks out for a list that leads back into itself;
- * the reader cannot make one. */
+ * printed as #. Nothing looks out for a list that leads back into itself,
+ * which RPLACD can make; the printer stops after LIMIT objects with three
+ * dots, so it ends whatever it is given. */
 #include "lisp.h"
+
+enum { LIMIT = 65536 };
 
 struct printer {
     void (*put)(void *to, char c);
     void *to;
+    int escape;    /* lisp_print: write what reads back */
     unsigned depth;
+    unsigned left; /* objects it may still print */
 };
 
 static void print_object(struct printer *p, lisp x);
@@ -91,7 +99,7 @@ static void print_name(struct printer *p, lisp string)
 {
     const struct lisp_string *s = lisp_as_string(string);
     uint64_t length = lisp_length(s->header);
-    int bars = needs_bars(s->chars, length);
+    int bars = p->escape && needs_bars(s->chars, length);
 
     if (bars)
         put_char(p, '|');
@@ -115,7 +123,9 @@ static void print_symbol(struct printer *p, lisp x)
     uint64_t length = lisp_length(name->header);
     lisp found;
 
-    if (symbol->package == lisp_roots.keyword)
+    if (!p->escape)
+        ;
+    else if (symbol->package == lisp_roots.keyword)
         put_char(p, ':');
     else if (symbol->package == LISP_NIL)
         put_text(p, "#:");
@@ -142,60 +152,121 @@ static void print_character(struct printer *p, uint32_t code)
         put_char(p, code);
 }
 
+/* What the reader's shorthand for (operator form) is, if it has one. */
+static const char *shorthand(lisp operator)
+{
+    return operator == lisp_roots.quote        ? "'"
+           : operator == lisp_roots.function   ? "#'"
+           : operator == lisp_roots.quasiquote ? "`"
+           : operator == lisp_roots.unquote    ? ","
+           : operator == lisp_roots.splice     ? ",@"
+                                               : NULL;
+}
+
 static void print_list(struct printer *p, lisp x)
 {
     const struct lisp_cons *c = lisp_as_cons(x);
 
-    if ((c->car == lisp_roots.quote || c->car == lisp_roots.function) && lisp_is_cons(c->cdr) &&
-        lisp_as_cons(c->cdr)->cdr == LISP_NIL) {
-        put_text(p, c->car == lisp_roots.quote ? "'" : "#'");
+    if (shorthand(c->car) && lisp_is_cons(c->cdr) && lisp_as_cons(c->cdr)->cdr == LISP_NIL) {
+        put_text(p, shorthand(c->car));
         print_nested(p, lisp_as_cons(c->cdr)->car);
         return;
     }
     put_char(p, '(');
     for (;;) {
         print_nested(p, c->car);
-        if (!lisp_is_cons(c->cdr))
+        /* (a . ,b) is the list (a unquote b), and is printed the way it was written. */
+        if (!lisp_is_cons(c->cdr) || !p->left ||
+            (lisp_as_cons(c->cdr)->car == lisp_roots.unquote && lisp_is_cons(lisp_as_cons(c->cdr)->cdr) &&
+             lisp_as_cons(lisp_as_cons(c->cdr)->cdr)->cdr == LISP_NIL))
             break;
         c = lisp_as_cons(c->cdr);
         put_char(p, ' ');
     }
-    if (c->cdr != LISP_NIL) {
+    if (c->cdr != LISP_NIL && p->left) {
         put_text(p, " . ");
         print_object(p, c->cdr);
     }
     put_char(p, ')');
 }
 
+static void print_function(struct printer *p, lisp x)
+{
+    static const char *const kinds[] = { "FUNCTION", "SPECIAL-OPERATOR", "FUNCTION", "MACRO" };
+    const struct lisp_function *f = lisp_as_function(x);
+
+    put_text(p, "#<");
+    put_text(p, kinds[lisp_function_kind(x)]);
+    put_char(p, ' ');
+    if (f->name != LISP_NIL)
+        print_object(p, f->name);
+    else {
+        put_text(p, "(LAMBDA ");
+        print_nested(p, lisp_is_cons(f->code) ? lisp_as_cons(f->code)->car : LISP_NIL);
+        put_char(p, ')');
+    }
+    put_char(p, '>');
+}
+
+/* #S(NAME :SLOT value ...): the names come from the structure's type. */
+static void print_structure(struct printer *p, lisp x)
+{
+    const struct lisp_structure *s = lisp_as_structure(x);
+    lisp names = s->type;
+
+    put_text(p, "#S(");
+    print_object(p, lisp_as_cons(names)->car);
+    for (uint64_t i = 0; i < lisp_length(s->header) && p->left; i++) {
+        names = lisp_is_cons(names) ? lisp_as_cons(names)->cdr : LISP_NIL;
+        put_text(p, " :");
+        if (lisp_is_cons(names) && lisp_is_symbol(lisp_as_cons(names)->car))
+            print_name(p, lisp_as_symbol(lisp_as_cons(names)->car)->name);
+        put_char(p, ' ');
+        print_nested(p, s->slots[i]);
+    }
+    put_char(p, ')');
+}
+
 static void print_object(struct printer *p, lisp x)
 {
+    if (!p->left)
+        return;
+    if (!--p->left) {
+        put_text(p, "...");
+        return;
+    }
     if (lisp_is_fixnum(x)) {
         int64_t n = lisp_fixnum_value(x);
 
         if (n < 0)
             put_char(p, '-');
         put_number(p, n < 0 ? -(uint64_t)n : (uint64_t)n, 10);
-    } else if (lisp_is_character(x))
-        print_character(p, lisp_character_code(x));
-    else if (lisp_is_symbol(x))
+    } else if (lisp_is_character(x)) {
+        if (p->escape)
+            print_character(p, lisp_character_code(x));
+        else
+            put_char(p, lisp_character_code(x));
+    } else if (lisp_is_symbol(x))
         print_symbol(p, x);
     else if (lisp_is_cons(x))
         print_list(p, x);
     else if (lisp_is(x, LISP_STRING)) {
         const struct lisp_string *s = lisp_as_string(x);
 
-        put_char(p, '"');
+        if (p->escape)
+            put_char(p, '"');
         for (uint64_t i = 0; i < lisp_length(s->header); i++) {
-            if (s->chars[i] == '"' || s->chars[i] == '\\')
+            if (p->escape && (s->chars[i] == '"' || s->chars[i] == '\\'))
                 put_char(p, '\\');
             put_char(p, s->chars[i]);
         }
-        put_char(p, '"');
+        if (p->escape)
+            put_char(p, '"');
     } else if (lisp_is(x, LISP_VECTOR)) {
         const struct lisp_vector *v = lisp_as_vector(x);
 
         put_text(p, "#(");
-        for (uint64_t i = 0; i < lisp_length(v->header); i++) {
+        for (uint64_t i = 0; i < lisp_length(v->header) && p->left; i++) {
             if (i)
                 put_char(p, ' ');
             print_nested(p, v->items[i]);
@@ -203,9 +274,15 @@ static void print_object(struct printer *p, lisp x)
         put_char(p, ')');
     } else if (lisp_is(x, LISP_PACKAGE)) {
         put_text(p, "#<PACKAGE ");
+        p->escape++;
         print_object(p, lisp_as_package(x)->name);
+        p->escape--;
         put_char(p, '>');
-    } else if (x == LISP_UNBOUND)
+    } else if (lisp_is(x, LISP_FUNCTION))
+        print_function(p, x);
+    else if (lisp_is(x, LISP_STRUCTURE))
+        print_structure(p, x);
+    else if (x == LISP_UNBOUND)
         put_text(p, "#<unbound>");
     else {
         put_text(p, "#<unknown ");
@@ -216,7 +293,14 @@ static void print_object(struct printer *p, lisp x)
 
 void lisp_print(lisp x, void (*put)(void *to, char c), void *to)
 {
-    struct printer p = { put, to, 0 };
+    struct printer p = { put, to, 1, 0, LIMIT };
+
+    print_nested(&p, x);
+}
+
+void lisp_princ(lisp x, void (*put)(void *to, char c), void *to)
+{
+    struct printer p = { put, to, 0, 0, LIMIT };
 
     print_nested(&p, x);
 }

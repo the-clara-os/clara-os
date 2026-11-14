@@ -37,6 +37,10 @@ uint64_t lisp_object_words(lisp header)
         return 1 + length;
     case LISP_PACKAGE:
         return sizeof(struct lisp_package) / sizeof(lisp);
+    case LISP_FUNCTION:
+        return sizeof(struct lisp_function) / sizeof(lisp);
+    case LISP_STRUCTURE:
+        return 2 + length;
     }
     return 0;
 }
