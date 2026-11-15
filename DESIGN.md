@@ -49,8 +49,9 @@ manager, and the applications are Lisp programs loaded into that world.
   every file in the ESP's `\clara` directory, which the build fills from
   lisp/.
 - **Threads are substrate threads.** A Lisp thread is a kernel thread with a
-  Lisp-visible dynamic-binding stack. The garbage collector stops the world;
-  precise, non-moving mark-sweep first, something better when it hurts.
+  Lisp-visible dynamic-binding stack. The garbage collector runs while no
+  other Lisp thread does; precise, non-moving mark-sweep first, something
+  better when it hurts.
 - **Graphics is a framebuffer.** The UEFI GOP framebuffer, software rendered
   from Lisp with double buffering and damage rectangles. Input arrives as
   virtio-input events on both architectures. Fonts are bitmaps first.
@@ -77,7 +78,8 @@ manager, and the applications are Lisp programs loaded into that world.
   that reaches its last line has passed. The boot test also types at the
   kernel over the serial port, and what comes back has to be the session
   in tools/session.txt, to the byte. Lisp code is also tested on the host
-  under SBCL.
+  under SBCL, where a test can look at what a boot cannot: `make test`
+  runs lisp/host/tests.lisp before it boots anything.
 - C11, freestanding, no libc, `-Wall -Wextra -Werror`. The targets are LLP64,
   so `long` is 32 bits: the kernel uses the stdint types and never `long`.
 
@@ -186,6 +188,10 @@ architectures (kernel/vm.c).
   its state can be read.
 - Whoever makes a thread waits for it to finish (`thread_join`), and that
   is when its stack is given back.
+- Since M7 the collector does not stop the world: one Lisp thread at a
+  time has the runtime, which is all that stopping the others was for.
+  The mechanism is still in kernel/thread.c, with no caller but its own
+  test.
 
 ## Lisp objects, the reader and the printer (decided in M6a, 2026-11-14)
 
@@ -261,8 +267,8 @@ architectures (kernel/vm.c).
   which is slow and plain; a compiler will know where each one is.
 - A special variable has its value in the symbol. Binding it puts the old
   value on a stack of bindings, and whatever bound it puts the value back
-  on its way out. Until there are Lisp threads (M7) that is one value for
-  the machine.
+  on its way out. Every Lisp thread has such a stack, and the symbol holds
+  the value that the running thread sees (M7, below).
 - A non-local exit is not a jump. RETURN-FROM, GO, THROW and an error
   mark where control is going and return; every piece of C on the way
   sees the mark and returns in turn; the block, the tagbody or the catch
@@ -369,20 +375,118 @@ architectures (kernel/vm.c).
   come with it. UNWIND-PROTECT is on the way out like every other form,
   and evaluates its cleanup whichever exit is passing.
 - What a condition says is a string, put together when the condition is
-  made. A report function would have to write to a stream, and there
-  are none yet (M7).
+  made. A report function would write to a stream, which there was none
+  of when this was decided; DEFINE-CONDITION still refuses one.
 - A stack or a heap that is full is not an error in Common Lisp's
   sense, and neither is Ctrl-C: `(handler-case ... (error ...))` and
   IGNORE-ERRORS let them pass, as they do under SBCL, and a clause for
   STORAGE-CONDITION or SERIOUS-CONDITION takes them.
 - Ctrl-C stops a computation where it can be stopped cleanly, at the
   evaluator's next safe point, as a condition that unwinds like any
-  other. The timer's tick takes in what is typed on the serial port, so
-  that it is seen while the evaluator is busy.
+  other, CLARA:KEYBOARD-INTERRUPT. The timer's tick takes in what is
+  typed on the serial port, so that it is seen while the evaluator is
+  busy.
 - A thread that stands at a safe point holds no lock, because the thread
   that stopped the world may want any of them. That was a rule in
   comments; now a thread counts the locks it holds, and sleeping,
   joining or coming to a safe point with one is a panic.
+
+## Lisp in the driver's seat (decided in M7, 2026-11-15)
+
+- A Lisp thread is a thread of the substrate that evaluates
+  (kernel/lisp/thread.c). It has a megabyte of stack for the evaluator's
+  calls of itself, and the evaluator's two stacks to itself: its values,
+  and its bindings of the special variables.
+- One Lisp thread at a time has the runtime: the heap, the packages, the
+  evaluator's own variables. It keeps it from one safe point to the next,
+  and gives it up there when a tick has gone by and another thread wants
+  it, or when it has to wait. So the C of the runtime is what it was with
+  one thread: nothing in it takes a lock, and between two safe points
+  nobody else is in the heap. It also follows that the collector, which
+  runs in the thread that has the runtime, finds every other Lisp thread
+  at a safe point without stopping anybody. The alternative, a lock on
+  the heap and one on every table, with threads that can lose the
+  processor in the middle of the runtime, is the larger half of a
+  runtime for several processors, and this kernel runs on one. The price:
+  a function in C that takes long holds every Lisp thread up, and a
+  second processor would be of no use to Lisp. The substrate goes on
+  taking the processor away at every tick; what it gives it to meanwhile
+  is a thread that does not evaluate.
+- A special variable keeps its value in the symbol, and what the symbol
+  holds is what the running thread sees. When a thread makes way, its
+  bindings are undone, the newest first, and when it comes back they are
+  done again: a binding travels with its thread. A thread that has bound
+  nothing sees the value that was there before anybody did, so a new
+  thread starts with those and not with its maker's bindings, as under
+  SBCL.
+- Waiting is one mechanism in the substrate: a thread sleeps until
+  another thread or an interrupt handler says that there is something
+  for it to look at, or until a time has passed, and then it looks
+  (`thread_wait`, `thread_wake`). A wake that comes before the wait is
+  remembered, so a thread can put itself on record with what it waits for
+  and then wait, with nothing held in between. Locks, events,
+  `join-thread` and `sleep` are built on that in thread.c: a thread that
+  waits gives the runtime up first.
+- An interrupt reaches Lisp as an event. A handler cannot run Lisp and
+  does not have to: it signals the event of its source, and the driver
+  is a thread that waits for it. An event counts what a program signals;
+  an interrupt that arrives while the last one has not been waited for
+  is not counted again, as with an interrupt line.
+- Nobody has to wait for a thread. When its function returns, when a
+  condition comes out of it that nothing handled, or when it has been
+  told to stop, what became of it stays in the object that Lisp holds,
+  and a thread of the substrate's that does nothing else gives its
+  memory back. Stopping a thread is asked of it, and done by it: at its
+  next safe point, or out of the wait it is in, it leaves by way of
+  every UNWIND-PROTECT, and no handler sees it go, because it is no
+  condition.
+- What the substrate offers that Common Lisp has no name for is in two
+  packages. CLARA has the threads, locks and events, under the names
+  that Bordeaux Threads made usual, a way to make a stream, and the
+  condition that Ctrl-C is. CLARA.UNSAFE has what only a driver should
+  touch (unsafe.c): memory by its address, the I/O ports of the machine
+  that has them, page frames to share with a device, the events of the
+  interrupts, and what the firmware said about the screen and the serial
+  port. That is the one place where Lisp can make a pointer of an
+  integer, so who uses it can be found by its name. It catches one
+  mistake, an address where nothing is mapped; any other is a mistake in
+  the kernel.
+- A stream is two functions: one that is given a string to write, and
+  one that gives the next line that was read. The printer, which is C,
+  makes strings, and everything that writes is Lisp that hands one to a
+  stream (lisp/boot.lisp). Generic functions would be the Common Lisp
+  way, and they wait for CLOS.
+- There are two consoles. The substrate's (console.c, fbcon.c) prints the
+  boot report, before there is a Lisp, and the kernel's last words, when
+  there may be none left. The world's is Lisp (lisp/console.lisp), and a
+  driver in the full sense: it sends each byte to the UART itself,
+  through I/O ports on one machine and through memory on the other, and
+  draws each character on the framebuffer from the font, which is Lisp
+  data. The two draw the same cells, neither remembers what the screen
+  shows, and both scroll by moving the pixels up, so all they hand each
+  other is where the next character goes. A fault report takes the
+  screen without asking, and clears it.
+- Input stays half in the substrate. The timer's interrupt takes in the
+  bytes that have arrived on the serial port, because Ctrl-C has to be
+  seen while Lisp is busy, and signals an event; the console in Lisp
+  waits for it, puts the line together and echoes it. While a line is
+  being read, Ctrl-C is a byte like the others, which gives the line up;
+  at any other time it stops what the thread is computing.
+- The listener is Lisp (lisp/listener.lisp): it reads lines from
+  `*standard-input*`, hands them to the reader until they hold a form,
+  evaluates, and prints. The substrate starts it, and starts it again
+  should a condition come all the way out of it.
+- The files in lisp/ are developed and tested under SBCL as well.
+  lisp/host/clara.lisp stands in for the substrate there: CLARA is made
+  of SBCL's threads and Gray streams, and CLARA.UNSAFE is a machine that
+  is a vector, with devices that are functions put at an address. The
+  tests in lisp/host/tests.lisp load the same files and look at every
+  byte the console sends, every pixel it draws and every key it is
+  typed, which a boot cannot do. They also hold the names on both sides
+  against each other: what boot.lisp exports from COMMON-LISP has to be
+  Common Lisp's, and what the substrate has in CLARA and CLARA.UNSAFE has
+  to have its stand-in. What they cannot say is whether the interpreter
+  runs the files: that is what the boots are for.
 
 ## Conventions
 
@@ -394,7 +498,8 @@ architectures (kernel/vm.c).
   `clara.<subsystem>`. Each file loads under SBCL; host-only shims live in
   lisp/host/ and are never loaded on ClaraOS. The exception is
   lisp/boot.lisp, the part of Common Lisp itself that is written in Lisp:
-  SBCL has all of it already, and never loads it.
+  SBCL has all of it already, and never loads it. The substrate's own
+  packages are CLARA and CLARA.UNSAFE.
 - Comments say why, or what the hardware requires. The code says what.
 - One C struct per hardware or firmware table, laid out as the specification
   says, with a comment on any padding or reserved slot that matters.

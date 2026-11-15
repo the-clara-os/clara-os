@@ -31,10 +31,12 @@ starting one, say what it will take, and let Julio choose.
 
 Build with `make` (Homebrew's llvm and lld under /opt/homebrew/opt when they
 are there, otherwise clang and lld-link from the PATH; `LLVM=` and `LLD=`
-name other directories). `make test` boots both architectures
-headless under QEMU in about twenty seconds, types a session at each
-kernel, and saves what each screen shows to build/screen-<arch>.png; look
-at those images when a change touches the display. `make run-aarch64` and `make run-x86_64` open a QEMU window with
+name other directories). `make test` runs the host tests of the Lisp
+files under SBCL (`make host-test`, a second), then boots both
+architectures headless under QEMU in about half a minute, types a session
+at each kernel, and saves what each screen shows to
+build/screen-<arch>.png; look at those images when a change touches the
+display. `make run-aarch64` and `make run-x86_64` open a QEMU window with
 serial on the terminal; `make image` produces the UTM disk.
 
 Rules:
@@ -81,9 +83,12 @@ Rules:
   what should never happen. The allocator, the page tables and the console
   each have a lock, and a lock is something only a thread can wait for.
 - Threads (kernel/thread.c). Data that two threads can reach sits behind
-  a `struct lock`. Never hold one across `thread_sleep`, `thread_join` or
-  `thread_safe_point`: stopping the world depends on that, and it is a
-  panic. The page
+  a `struct lock`. Never hold one across `thread_sleep`, `thread_wait`,
+  `thread_join` or `thread_safe_point`: it is a panic. A thread that has
+  to wait for something else than a tick or a lock puts itself on record
+  with what it waits for and calls `thread_wait`; whoever has it, a
+  thread or an interrupt handler, calls `thread_wake`, which says no more
+  than "look again", so the waiter looks, in a loop. The page
   tables' lock is taken before the allocator's, never after, and the
   console takes no other. The scheduler's own state is touched with
   interrupts off, as in `int on = arch_interrupts_off(); ...; if (on)
@@ -125,7 +130,28 @@ Rules:
   list at the top of the file, or no other package can call it, and a
   helper that nothing else should use has a name that begins with %. A
   macro's body runs when the macro is first used, so the order of the
-  file matters only for what runs while it loads, DEFSETF for one.
+  file matters only for what runs while it loads, DEFSETF for one. Its
+  last two parts are read in CLARA and in CLARA.UNSAFE. The host tests
+  read the file as text and hold its names against SBCL's: keep a
+  definition's `(defun ` and its like at the start of a line.
+- The other files in lisp/ are the world, and each has to load under
+  SBCL as it stands: the subset of Common Lisp that the evaluator has,
+  no name of Common Lisp's given a new meaning (LISTEN is one), and the
+  substrate only through CLARA and CLARA.UNSAFE. The kernel loads them
+  in the order of `world` in lisp.c, and lisp/host/tests.lisp loads the
+  same files: a new one goes into both. Its logic is tested there, on
+  the machine that lisp/host/clara.lisp makes up: a device is a function
+  put at an address or at a port, and a test looks at the bytes and the
+  pixels. A boot only says that the interpreter runs the file. To type
+  at the console by hand, bytes and all, run tools/run.sh with
+  `SERIAL=stdio` from a script and write to its standard input.
+- The console in Lisp (lisp/console.lisp) and the substrate's (fbcon.c)
+  draw the same cells with the same glyphs, kernel/font.c and
+  lisp/font.lisp, both from `make font`. A change to one grid or one
+  colour is a change to both. The screen changes hands by
+  `clara.unsafe:take-screen` and `give-screen`; a fault report takes it
+  back and clears it, which `SESSION=` with a form that writes into the
+  kernel's code shows.
 - The Lisp runtime is kernel/lisp/, and lisp.h is its interface: the
   comment at its top says what a Lisp value is. In C a value is a `lisp`,
   one tagged word. Look at the tag (`lisp_is_cons`, `lisp_is_symbol`,
@@ -140,17 +166,33 @@ Rules:
 - The collector (heap.c) runs at the evaluator's safe points and nowhere
   else: making an object never collects. So the runtime's C code may keep
   objects in local variables while it makes others, and nothing in
-  kernel/lisp/ may come to a safe point (a call of `lisp_apply` or
-  `lisp_eval`, `thread_sleep`, `thread_join`, `kgetline`) while it holds
-  an object that nothing else points to: after the call the object is
-  gone. The reader takes its text whole for that reason, and
-  `lisp_listen` waits for a line between two reads. A value the
-  substrate has to find again belongs in `lisp_roots`, every word of
-  which is a Lisp value, and not in a static variable; what the
+  kernel/lisp/ may come to a safe point (a call of `lisp_apply`,
+  `lisp_eval` or `lisp_call`, or a wait) while it holds an object that
+  nothing else points to: after the call the object is gone, freed by
+  this thread or by another. The reader takes its text whole for that
+  reason, and the functions that wait (thread.c) hold nothing but their
+  arguments. A value the substrate has to find again belongs in
+  `lisp_roots`, every word of which is a Lisp value, and not in a static
+  variable; what the
   evaluator keeps is listed in `lisp_eval_roots`, and a static lisp
   added there has to hold a Lisp value at all times, also when it means
-  nothing. One thread at a time uses the runtime, and nothing in it
-  takes a lock.
+  nothing.
+- Lisp threads (kernel/lisp/thread.c). One of them at a time has the
+  runtime, and nothing in kernel/lisp/ takes a lock: between two safe
+  points a thread is alone in the heap. The evaluator's variables in
+  eval.c are the running thread's; whatever is added there is put away
+  and brought back in `lisp_evaluator_out` and `lisp_evaluator_in`, and
+  reached in `reach` if it holds an object. A function in C that has to
+  wait does it through `wait()` in thread.c, which gives the runtime up:
+  it puts the thread in the queue of what it waits for, waits, takes
+  itself out, and calls `lisp_safe_point()`, returning at once when that
+  says 0: the thread was told to stop, or Ctrl-C was typed. All of it in
+  a loop, because a wake says only "look again". What an interrupt
+  handler touches, an event's count and queue, is changed with
+  interrupts off; everything else needs nothing, the runtime being the
+  thread's. An object that holds an address of the kernel's (a thread, a
+  lock, an event) keeps it in a word that the collector takes for a
+  fixnum: only addresses that are multiples of eight.
 - When the collector, the allocator or a fault report says that freed
   memory was used (`LISP_FREED`, 0x7deaddeadded, is what a freed word
   holds), something kept an object across a safe point. `(cl::%collect)`
@@ -185,7 +227,18 @@ Rules:
   COMMON-LISP unless it begins with %, and how many arguments it takes;
   `lisp_wants("a list", x)` is the error for an argument of the wrong
   kind. A function that calls a function it was given is written in
-  Lisp, in boot.lisp, so that C never holds a list across the call.
+  Lisp, in boot.lisp, so that C never holds a list across the call. A
+  name that begins with `CLARA:` or `CLARA.UNSAFE:` is in that package;
+  the functions of thread.c and unsafe.c are declared in lisp.h with
+  `LISP_PRIMITIVE` and have their rows in the same table. Whatever goes
+  into CLARA or CLARA.UNSAFE needs its stand-in in lisp/host/clara.lisp
+  in the same change, and a name in COMMON-LISP has to be Common Lisp's:
+  the host tests read the tables and fail otherwise.
+- Nothing in C writes to the console for Lisp. The printer makes a
+  string (`PRIN1-TO-STRING`, `%FORMAT`), and the function that writes,
+  which is Lisp, in boot.lisp, hands it to a stream. `kprintf` is for the
+  boot report and for a panic: once the console in Lisp has the screen,
+  what the substrate prints goes to the serial port only.
 - A Lisp form that is not what it should be must not take the kernel
   down. In eval.c `car` and `cdr` give NIL for anything but a cons; use
   them, or look with `lisp_is_cons` first, wherever a form's shape is not
@@ -200,8 +253,18 @@ Rules:
   and the text of the error. Every wrong answer is printed before the
   panic. `collector_selftest` runs before boot.lisp is loaded, and a text
   that has to do with what the evaluator holds calls `(cl::%collect)`
-  in the middle. After a change to the runtime, break it on purpose and
-  see that the boot notices; ROADMAP.md lists what was tried, under the
+  in the middle. A text whose answer depends on the machine, its ports
+  or its screen, goes into `either`, with both answers. The texts are
+  evaluated again with a collection at every safe point, and every call
+  of a function in Lisp is one, so a text that goes round a thousand
+  times costs seconds where the machine is emulated. Threads in a text
+  have to be made to overlap, with `clara:thread-yield` or an event:
+  left alone, each finishes within its first turn. After a change to
+  eval.c, look at how deep a function can call itself, in the boot
+  report: when the compiler stops inlining a function on that path, a
+  third of the depth is gone. After a change to the runtime, break it on
+  purpose and see that the boot notices, and after a change to a file in
+  lisp/ that the host tests do; ROADMAP.md lists what was tried, under the
   slow test mode. Doing that for the evaluator found a text that could
   not fail. When a source is patched for such a check, delete the object
   that was built from it before `make`: make goes by the second, and a
@@ -211,7 +274,7 @@ Rules:
   build puts on the boot volume beside lisp/boot.lisp and the evaluator's
   self-test loads. A text that needs a file to load finds one there.
 - tools/session.txt is what `make test` types at each kernel over the
-  serial port once the kernel reads from it, and what the kernel has to
+  serial port once the listener reads from it, and what the kernel has to
   answer, to the byte. The lines that begin with `> `, or with two spaces
   for a form that goes on, are typed; the others have to come back.
   Change it when what the kernel prints there changes. A line that is
