@@ -1,11 +1,13 @@
-# ClaraOS build. Needs clang, lld and qemu with EDK2 firmware.
-#   macOS:  brew install llvm lld qemu
-#   Ubuntu: apt install clang lld make qemu-system-x86 qemu-system-arm ovmf qemu-efi-aarch64 netcat-openbsd
+# ClaraOS build. Needs clang, lld and qemu with EDK2 firmware, and SBCL
+# for the tests of the Lisp files on the host.
+#   macOS:  brew install llvm lld qemu sbcl
+#   Ubuntu: apt install clang lld make qemu-system-x86 qemu-system-arm ovmf qemu-efi-aarch64 netcat-openbsd sbcl
 # Homebrew keeps llvm and lld out of the PATH, so they are looked for where it
 # puts them; anywhere else clang and lld-link come from the PATH. LLVM= and
 # LLD= name other directories.
 LLVM   ?= $(wildcard /opt/homebrew/opt/llvm/bin)
 LLD    ?= $(wildcard /opt/homebrew/opt/lld/bin)
+SBCL   ?= sbcl
 CC     := $(if $(LLVM),$(LLVM)/)clang
 LD     := $(if $(LLD),$(LLD)/)lld-link
 BUILD  := build
@@ -23,7 +25,7 @@ COMMON_SRCS := $(wildcard kernel/*.c kernel/lisp/*.c)
 HEADERS     := $(wildcard kernel/*.h kernel/lisp/*.h kernel/arch/*/*.h)
 BOOT_FILES  := $(BUILD)/boot-files.stamp
 
-.PHONY: all test image font site clean
+.PHONY: all test host-test image font site clean
 all:
 
 # $(1) arch  $(2) clang target  $(3) extra CFLAGS  $(4) EFI file name  $(5) lld machine
@@ -57,7 +59,13 @@ all: $(BOOT_FILES)
 run-%: all
 	tools/run.sh $*
 
-# AArch64 boots twice, once for each version of its interrupt controller:
+# The Lisp files, loaded under SBCL on top of a machine that lisp/host/
+# makes up, and checked there: what the console sends, draws and reads,
+# and what the listener answers.
+host-test:
+	$(SBCL) --script lisp/host/tests.lisp
+
+# Then the boots. AArch64 boots twice, once for each version of its interrupt controller:
 # version 3 as UTM runs it, accelerated where the host can, and version 2
 # emulated, because QEMU's hvf has no version 2. Then once more for
 # tools/stress.txt, a session in which the collector runs at every safe
@@ -65,7 +73,7 @@ run-%: all
 # evaluator's self-test is repeated: whatever the evaluator fails to hold
 # on to is gone at its next call. That takes half a minute where AArch64 is
 # emulated.
-test: all
+test: all host-test
 	tools/boottest.sh x86_64
 	tools/boottest.sh aarch64 -machine gic-version=3
 	NAME=aarch64-gic2 NO_HVF=1 tools/boottest.sh aarch64 -machine gic-version=2

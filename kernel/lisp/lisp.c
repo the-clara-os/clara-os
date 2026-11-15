@@ -812,6 +812,40 @@ static const struct {
     { "(let ((l nil)) (dotimes (i 600) (push (list i (format nil \"~D\" i)) l)) (cl::%collect)"
       " (list (length l) (car l) (car (last l))))",
       "(600 (599 \"599\") (0 \"0\"))" },
+    /* streams: the printer makes a string, and a stream is where it goes */
+    { "(with-output-to-string (s) (write-string \"a\" s) (prin1 \"b\" s) (princ \"c\" s) (write-char #\\d s) (terpri s)"
+      " (format s \"~D~A\" 1 'e))",
+      "\"a\\\"b\\\"cd\n1E\"" },
+    { "(let ((s (make-string-output-stream))) (list (fresh-line s) (progn (write-string \"x\" s) (fresh-line s))"
+      " (fresh-line s) (get-output-stream-string s) (get-output-stream-string s)))",
+      "(NIL T NIL \"x\n\" \"\")" },
+    { "(with-output-to-string (*standard-output*) (print 'a) (write-line \"b\") (format t \"~S\" \"c\"))",
+      "\"\nA b\n\\\"c\\\"\"" },
+    { "(list (prin1-to-string \"a\") (princ-to-string \"a\") (streamp *standard-output*) (streamp 5))",
+      "(\"\\\"a\\\"\" \"a\" T NIL)" },
+    { "(write-string \"x\" 5)", "error: 5 is not a stream that can be written to" },
+    { "(format nil 5)", "error: FORMAT wants a string to go by, and 5 is not one" },
+    { "(with-output-to-string (*standard-output*) (warn \"~A is low\" 'fuel))", "\"warning: FUEL is low\n\"" },
+    { "(let ((s (make-string-input-stream (format nil \"one~%two~%~%four\"))))"
+      " (list (read-line s) (read-line s) (read-line s) (read-line s) (read-line s nil 'end)))",
+      "(\"one\" \"two\" \"\" \"four\" END)" },
+    { "(read-line (make-string-input-stream \"\"))", "error: #<END-OF-FILE>" },
+    /* the reader, from Lisp */
+    { "(read-from-string \"(a b) c\")", "(A B) 5" },
+    { "(read-from-string \"(a b) c\" t nil :start 5)", "C 7" },
+    { "(read-from-string \" ; nothing\" nil 'none)", "NONE 10" },
+    { "(read-from-string \"\")", "error: #<END-OF-FILE>" },
+    { "(handler-case (read-from-string \"(a b\") (end-of-file (c) (format nil \"~A\" c)))",
+      "\"the text ends inside a list\"" },
+    { "(handler-case (read-from-string \"caf\xc3\xa9 (a . )\" t nil :start 4) (reader-error (c) (format nil \"~A\" c)))",
+      "\"no form between the dot and what follows it, at line 1, column 11\"" },
+    { "(handler-case (read-from-string \"(a b\") (reader-error () 'wrong) (error () 'an-error))", "AN-ERROR" },
+    { "(read-from-string \"#+clara here #-clara there\")", "HERE 12" },
+    { "(list (subseq \"hello\" 1 3) (subseq \"hello\" 2) (subseq '(a b c d) 1 3) (subseq '(a b c) 1))",
+      "(\"el\" \"llo\" (B C) (B C))" },
+    { "(subseq \"abc\" 2 5)", "error: \"abc\" has no part from 2 to 5" },
+    { "(handler-case (error 'clara:keyboard-interrupt) (error () 'an-error) (clara:keyboard-interrupt () 'a-break))",
+      "A-BREAK" },
     /* threads: each has stacks of its own, and its own bindings of the special variables */
     { "(clara:thread-name (clara:current-thread))", "\"listener\"" },
     { "(clara:join-thread (clara:make-thread (lambda () (+ 1 2))))", "3" },
@@ -938,6 +972,8 @@ static const struct {
       "\"this machine has no I/O ports\"" },
     { "(handler-case (setf (clara.unsafe:port-8 #x80) 0) (error (c) (format nil \"~A\" c)))", "0",
       "\"this machine has no I/O ports\"" },
+    /* which of the two this is, for #+ and #- */
+    { "*features*", "(:CLARA :X86-64)", "(:CLARA :ARM64)" },
     /* what the firmware said about the machine */
     { "(list (keywordp (clara.unsafe:serial-device)) (integerp (nth-value 1 (clara.unsafe:serial-device)))"
       " (let ((screen (multiple-value-list (clara.unsafe:framebuffer)))) (or (null (car screen)) (length screen))))",
