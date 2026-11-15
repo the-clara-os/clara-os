@@ -71,6 +71,8 @@ void console_serial_only(void); /* leave the screen alone from now on */
 int64_t kgetline(char *line, size_t size);
 void console_tick(void);          /* from the timer's interrupt: take in what has arrived on the serial port */
 extern volatile int console_break; /* Ctrl-C has arrived there, and nobody has acted on it yet */
+struct thread;
+void console_break_wakes(struct thread *t); /* and this thread is woken when it does */
 int  console_interrupted(void);   /* for a computation that can stop: has it? Asked once, it is acted on */
 
 /* fbcon.c: the text console on the framebuffer */
@@ -145,6 +147,9 @@ void thread_join(struct thread *t);  /* wait until it has finished, and free it:
 void thread_exit(void) __attribute__((noreturn)); /* what returning from fn does */
 void thread_yield(void);             /* the other threads that are ready go first */
 void thread_sleep(uint64_t ticks);   /* until the timer has ticked that many more times */
+#define THREAD_FOREVER (~0ULL)
+int  thread_wait(uint64_t ticks);    /* until thread_wake, or for that many ticks: was it woken? */
+void thread_wake(struct thread *t);  /* its thread_wait returns, this one or the next: also from a handler */
 void thread_safe_point(void);        /* the thread waits here while the world is stopped */
 void thread_stop_the_world(void);    /* returns when every other thread is asleep or at a safe point */
 void thread_start_the_world(void);
@@ -152,6 +157,7 @@ void thread_tick(uint64_t now);      /* from timer_tick */
 void thread_switch(struct frame *f); /* from the architecture's exception code, interrupts off */
 uint64_t thread_stack_guard(void);   /* the unmapped page under the running thread's stack */
 const char *thread_name(void);       /* the running thread's */
+struct thread *thread_self(void);    /* the running thread */
 void thread_selftest(void);
 void lock_acquire(struct lock *l);   /* waits its turn; never in an interrupt handler */
 void lock_release(struct lock *l);

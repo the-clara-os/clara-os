@@ -77,19 +77,31 @@ void kputs(const char *s)
  *
  * Ctrl-C is a byte like the others, and it is also noted when it arrives,
  * because the thread it is meant for is not reading: it is computing, and
- * looks at console_break whenever it could stop. */
+ * looks at console_break whenever it could stop, or it is waiting, and is
+ * woken to look. */
 enum { TYPED = 256 };
 static volatile uint8_t g_typed[TYPED];
 static volatile unsigned g_typed_in, g_typed_out; /* where the next byte goes in, and where the next comes out */
 volatile int console_break;
+static struct thread *g_break_wakes; /* the thread that Ctrl-C is meant for, which may be waiting */
+
+/* Ctrl-C is for this thread from now on: it is woken when one arrives, so
+ * that a wait can be given up like a computation. */
+void console_break_wakes(struct thread *t)
+{
+    g_break_wakes = t;
+}
 
 void console_tick(void)
 {
     int c;
 
     while ((g_typed_in + 1) % TYPED != g_typed_out && (c = arch_serial_getc()) >= 0) {
-        if (c == 0x03)
+        if (c == 0x03) {
             console_break = 1;
+            if (g_break_wakes)
+                thread_wake(g_break_wakes);
+        }
         g_typed[g_typed_in] = (uint8_t)c;
         g_typed_in = (g_typed_in + 1) % TYPED;
     }

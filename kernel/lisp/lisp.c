@@ -1,12 +1,7 @@
-/* The Lisp runtime's beginning, its self-tests, and the thread that the
- * Lisp world runs on: it loads lisp/boot.lisp, and then reads forms from
- * the serial port, evaluates them and prints what they give. */
+/* The Lisp runtime's beginning, its self-tests, and what the first thread
+ * of the Lisp world does: it loads lisp/boot.lisp, and then reads forms
+ * from the serial port, evaluates them and prints what they give. */
 #include "lisp.h"
-
-/* The evaluator calls itself in C for every form inside a form, so its
- * thread has a stack to match: a function that calls itself gets some
- * thousands of calls deep before the evaluator says the stack is full. */
-#define LISP_STACK_SIZE (1024 * 1024)
 
 void lisp_init(const struct boot_file *files)
 {
@@ -803,6 +798,80 @@ static const struct {
     { "(let ((l nil)) (dotimes (i 2000) (push (list i (format nil \"~D\" i)) l)) (cl::%collect)"
       " (list (length l) (car l) (car (last l))))",
       "(2000 (1999 \"1999\") (0 \"0\"))" },
+    /* threads: each has stacks of its own, and its own bindings of the special variables */
+    { "(clara:thread-name (clara:current-thread))", "\"listener\"" },
+    { "(clara:join-thread (clara:make-thread (lambda () (+ 1 2))))", "3" },
+    { "(multiple-value-list (clara:join-thread (clara:make-thread (lambda () (values 1 2)))))", "(1 2)" },
+    { "(defun five () 5) (clara:join-thread (clara:make-thread 'five))", "5" },
+    { "(let ((thread (clara:make-thread (lambda () 1) :name \"one\"))) (clara:join-thread thread)"
+      " (list thread (clara:thread-alive-p thread) (clara:threadp thread) (clara:threadp 1)))",
+      "(#<THREAD \"one\"> NIL T NIL)" },
+    { "(defvar *mine* 'everybodys)"
+      " (let ((*mine* 'bound)) (list (clara:join-thread (clara:make-thread (lambda () *mine*))) *mine*))",
+      "(EVERYBODYS BOUND)" },
+    { "(let ((*mine* 'bound)) (clara:join-thread (clara:make-thread (lambda () (setq *mine* 'set-by-a-thread)))) *mine*)",
+      "BOUND" },
+    { "*mine*", "SET-BY-A-THREAD" },
+    { "(let* ((bound (clara:make-event)) (seen (clara:make-event))"
+      " (thread (clara:make-thread (lambda () (let ((*mine* 'theirs))"
+      " (clara:signal-event bound) (clara:wait-event seen) *mine*)))))"
+      " (clara:wait-event bound) (let ((here *mine*)) (clara:signal-event seen) (list here (clara:join-thread thread))))",
+      "(SET-BY-A-THREAD THEIRS)" },
+    /* a turn ends at a tick: the thread sets the flag while this one goes round and round */
+    { "(let ((flag nil)) (clara:make-thread (lambda () (setq flag 'set))) (do () (flag flag)))", "SET" },
+    /* locks: without one, the threads would read the same total and additions would be lost */
+    { "(let ((lock (clara:make-lock \"total\")) (total 0))"
+      " (mapc #'clara:join-thread (mapcar (lambda (n) (clara:make-thread (lambda () (dotimes (i 50)"
+      " (clara:with-lock-held (lock) (let ((old total)) (clara:thread-yield) (setq total (+ old n))))))))"
+      " '(1 2 3)))"
+      " (list total lock))",
+      "(300 #<LOCK \"total\">)" },
+    { "(let ((lock (clara:make-lock))) (clara:acquire-lock lock)"
+      " (handler-case (clara:acquire-lock lock) (error (c) (format nil \"~A\" c))))",
+      "\"the thread #<THREAD \\\"listener\\\"> holds the lock #<LOCK> already\"" },
+    { "(clara:release-lock (clara:make-lock \"spare\"))",
+      "error: the thread #<THREAD \"listener\"> does not hold the lock #<LOCK \"spare\">" },
+    /* events */
+    { "(let ((e (clara:make-event \"e\"))) (clara:signal-event e 2)"
+      " (list (clara:wait-event e) (clara:wait-event e) (clara:wait-event e 0) e))",
+      "(T T NIL #<EVENT \"e\">)" },
+    { "(clara:wait-event (clara:make-event) 20)", "NIL" },
+    { "(let* ((go (clara:make-event))"
+      " (threads (mapcar (lambda (n) (clara:make-thread (lambda () (clara:wait-event go) n))) '(1 2 3))))"
+      " (clara:signal-event go 3) (mapcar #'clara:join-thread threads))",
+      "(1 2 3)" },
+    /* what a thread holds comes through a collection that another thread makes */
+    { "(let* ((ready (clara:make-event)) (go (clara:make-event))"
+      " (thread (clara:make-thread (lambda () (let ((kept (list 'a (list 'b))))"
+      " (clara:signal-event ready) (clara:wait-event go) kept)))))"
+      " (clara:wait-event ready) (cl::%collect) (dotimes (i 100) (list i)) (cl::%collect)"
+      " (clara:signal-event go) (clara:join-thread thread))",
+      "(A (B))" },
+    { "(let ((thread (clara:make-thread (lambda () (let ((kept (list 1 2 3))) (clara:thread-yield) (cl::%collect) kept)))))"
+      " (cl::%collect) (clara:join-thread thread))",
+      "(1 2 3)" },
+    /* a thread that fails, and threads that are stopped: computing, and waiting */
+    { "(clara:join-thread (clara:make-thread (lambda () (handler-case (car 5) (error (c) (format nil \"~A\" c))))))",
+      "\"CAR wants a list, and 5 is not one\"" },
+    { "(let* ((started (clara:make-event)) (log nil)"
+      " (thread (clara:make-thread (lambda () (unwind-protect (progn (clara:signal-event started) (loop))"
+      " (push 'cleaned log))) :name \"spinner\")))"
+      " (clara:wait-event started) (clara:destroy-thread thread)"
+      " (list (handler-case (clara:join-thread thread) (error (c) (format nil \"~A\" c))) log"
+      " (clara:thread-alive-p thread)))",
+      "(\"the thread #<THREAD \\\"spinner\\\"> was stopped\" (CLEANED) NIL)" },
+    { "(let* ((never (clara:make-event)) (waiting (clara:make-event))"
+      " (thread (clara:make-thread (lambda () (clara:signal-event waiting)"
+      " (handler-case (clara:wait-event never) (serious-condition () 'handled))))))"
+      " (clara:wait-event waiting) (clara:thread-yield) (clara:destroy-thread thread)"
+      " (handler-case (clara:join-thread thread) (error () 'stopped)))",
+      "STOPPED" },
+    { "(clara:destroy-thread (clara:current-thread))",
+      "error: the thread #<THREAD \"listener\"> reads from the console, and cannot be stopped" },
+    { "(clara:join-thread (clara:current-thread))",
+      "error: the thread #<THREAD \"listener\"> cannot wait for itself to finish" },
+    { "(clara:join-thread 5)", "error: CLARA:JOIN-THREAD wants a thread, and 5 is not one" },
+    { "(list (sleep 0) (length (clara:all-threads)))", "(NIL 1)" },
 };
 
 /* The evaluator, and the language that lisp/boot.lisp builds on it. Then a
@@ -864,7 +933,10 @@ static void eval_selftest(void)
     int64_t depth;
     unsigned texts = eval_texts(&depth);
 
-    /* Nobody asks for a collection here: the evaluator has to see for itself that it is time. */
+    /* Nobody asks for the next collection: the evaluator has to see for itself that it is time. When
+     * that is depends on how much was in use after the last one, so there is one first, with
+     * nothing in hand. */
+    lisp_collect();
     lisp_heap_state(&heap);
     collections = heap.collections;
     evaluate_text("(dotimes (i 5000) (list i i i))", &printed);
@@ -879,9 +951,11 @@ static void eval_selftest(void)
     lisp_heap_state(&heap);
     kprintf("lisp: %llu KiB of heap in use after %llu collections: %llu conses, %llu symbols, %llu strings,\n",
             bytes >> 10, heap.collections, count[LISP_CONS], count[LISP_SYMBOL], count[LISP_STRING]);
-    kprintf("lisp:   %llu vectors, %llu packages, %llu functions, %llu structures and %llu conditions\n",
+    kprintf("lisp:   %llu vectors, %llu packages, %llu functions, %llu structures, %llu conditions,\n",
             count[LISP_VECTOR], count[LISP_PACKAGE], count[LISP_FUNCTION], count[LISP_STRUCTURE],
             count[LISP_CONDITION]);
+    kprintf("lisp:   %llu threads, %llu locks and %llu events\n", count[LISP_THREAD], count[LISP_LOCK],
+            count[LISP_EVENT]);
 }
 
 /* The collector. Objects that are held, on the evaluator's stack, with as
@@ -1010,7 +1084,9 @@ static void lisp_listen(void)
         int64_t length;
 
         kputs(used ? "  " : "> ");
+        lisp_runtime_leave(); /* the other threads evaluate while this one waits for a line */
         length = kgetline((char *)text + used, sizeof text - used - 1);
+        lisp_runtime_enter();
         if (length == -2) {
             /* Ctrl-C: the line is given up, and with it the form that it was to go on. */
             used = 0;
@@ -1050,15 +1126,14 @@ static void lisp_listen(void)
     }
 }
 
-/* The thread of the Lisp world. boot.lisp is the part of the language
- * that is written in Lisp, and the machine is of no use without it. */
-static void lisp_thread(void *arg)
+/* What the first thread of the Lisp world does. boot.lisp is the part of
+ * the language that is written in Lisp, and the machine is of no use
+ * without it. */
+static void lisp_main(void)
 {
     uint64_t before[LISP_TYPES], after[LISP_TYPES];
     lisp load;
 
-    (void)arg;
-    lisp_eval_start();
     collector_selftest();
     lisp_heap_census(before);
     /* Made here and handed over at once: nothing holds it but this variable. */
@@ -1079,9 +1154,5 @@ static void lisp_thread(void *arg)
 
 void lisp_run(void)
 {
-    struct thread *t = thread_create("lisp", lisp_thread, NULL, LISP_STACK_SIZE);
-
-    if (!t)
-        panic("lisp: no memory for the stack of the Lisp thread");
-    thread_join(t);
+    thread_join(lisp_first_thread(lisp_main));
 }

@@ -10,12 +10,16 @@
  * runs past what is mapped so far. Objects never move.
  *
  * The collector marks and sweeps. From what the substrate and the evaluator
- * hold (lisp_roots, lisp_eval_roots) it follows every value to the object
+ * hold, for the thread that collects and for every other (lisp_roots,
+ * lisp_eval_roots, lisp_thread_roots), it follows every value to the object
  * it points at, and marks each object it reaches in the byte of the header
  * that is kept for it. Then it walks the heap from one end to the other:
  * what is marked stays, and every run of what is not becomes one free
  * block. It knows exactly which words are values, so it never has to
- * guess, and it never keeps an object by mistake.
+ * guess, and it never keeps an object by mistake. A few objects hold an
+ * address in the kernel's own memory in one of their words (lisp.h, at
+ * struct lisp_thread): such an address is a multiple of eight, which as a
+ * value is a fixnum, and so nothing to follow.
  *
  * It runs at the evaluator's safe points and nowhere else, with every other
  * thread stopped at one of its own. Making an object never collects. So
@@ -34,7 +38,8 @@
  * price is that a stray write through a physical address can land in an
  * object, as it can anywhere else in RAM.
  *
- * One thread at a time: nothing here takes a lock (ROADMAP.md, M7). */
+ * One thread at a time has the runtime (thread.c), so nothing here takes
+ * a lock. */
 #include "lisp.h"
 
 enum {
@@ -102,6 +107,12 @@ uint64_t lisp_object_words(lisp header)
         return 2 + length;
     case LISP_CONDITION:
         return sizeof(struct lisp_condition) / sizeof(lisp);
+    case LISP_THREAD:
+        return sizeof(struct lisp_thread) / sizeof(lisp);
+    case LISP_LOCK:
+        return sizeof(struct lisp_lock) / sizeof(lisp);
+    case LISP_EVENT:
+        return sizeof(struct lisp_event) / sizeof(lisp);
     case LISP_FREE:
         return length;
     }
@@ -273,7 +284,8 @@ static lisp *object_of(lisp x)
     static const uint8_t tag_of[LISP_TYPES] = {
         [LISP_CONS] = LISP_TAG_CONS,        [LISP_SYMBOL] = LISP_TAG_SYMBOL,   [LISP_STRING] = LISP_TAG_OBJECT,
         [LISP_VECTOR] = LISP_TAG_OBJECT,    [LISP_PACKAGE] = LISP_TAG_OBJECT,  [LISP_FUNCTION] = LISP_TAG_OBJECT,
-        [LISP_STRUCTURE] = LISP_TAG_OBJECT, [LISP_CONDITION] = LISP_TAG_OBJECT,
+        [LISP_STRUCTURE] = LISP_TAG_OBJECT, [LISP_CONDITION] = LISP_TAG_OBJECT, [LISP_THREAD] = LISP_TAG_OBJECT,
+        [LISP_LOCK] = LISP_TAG_OBJECT,      [LISP_EVENT] = LISP_TAG_OBJECT,
     };
     lisp *object = lisp_object(x);
     uint64_t type;
@@ -414,6 +426,7 @@ uint64_t lisp_collect(void)
     for (unsigned i = 0; i < sizeof lisp_roots / sizeof(lisp); i++)
         lisp_reach(roots[i]);
     lisp_eval_roots();
+    lisp_thread_roots();
     look_into_the_waiting();
     while (g_overflow) {
         /* More objects waited than g_marks has room for. The ones that were left out are marked as

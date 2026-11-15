@@ -621,3 +621,26 @@
 (defmacro ignore-errors (&body body)
   `(handler-case (progn ,@body)
      (error (condition) (values nil condition))))
+
+;;; The package CLARA
+;;;
+;;; What the substrate offers that Common Lisp has no name for: threads,
+;;; locks and events, under the names that Bordeaux Threads made usual.
+;;; Their functions are in C (kernel/lisp/thread.c), and what is said more
+;;; easily in Lisp is here. Under SBCL, lisp/host/ stands in for all of it.
+
+(in-package "CLARA")
+
+(export '(make-thread with-lock-held))
+
+(defun make-thread (function &key name)
+  (%make-thread function name))
+
+;; The lock is given back whichever way control leaves the body, also when
+;; the thread is stopped in the middle of it.
+(defmacro with-lock-held ((lock) &body body)
+  (let ((held (gensym)))
+    `(let ((,held ,lock))
+       (acquire-lock ,held)
+       (unwind-protect (progn ,@body)
+         (release-lock ,held)))))

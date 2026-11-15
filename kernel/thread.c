@@ -20,6 +20,12 @@
  * starts waiting inside one such stretch, so that what it waits for cannot
  * happen in between and go unnoticed.
  *
+ * A thread can also wait for nothing in particular, until some other
+ * thread or an interrupt handler says that there is something for it to
+ * look at (thread_wait, thread_wake). That is all an interrupt needs to
+ * reach a thread, and what the Lisp world builds its own locks and events
+ * on (lisp/thread.c).
+ *
  * The collector (lisp/heap.c) needs every other thread to stand still,
  * somewhere it can account for what the thread holds. Such a place is a safe point:
  * a call of thread_safe_point, and every wait for a tick or for another
@@ -33,7 +39,7 @@ enum state {
     RUNNING,  /* the one that has the processor */
     READY,    /* in the queue for a turn; the idle thread is in no queue */
     SLEEPING, /* until a tick: in g_sleepers */
-    WAITING,  /* for a lock, for a thread to finish, or for the world to stop */
+    WAITING,  /* for a lock, for a thread to finish, for thread_wake, or for the world to stop */
     PARKED,   /* at a safe point, until the world starts again */
     FINISHED, /* for good: thread_join frees it */
 };
@@ -50,6 +56,8 @@ struct thread {
     struct thread *joiner; /* the thread that waits for this one to finish */
     struct frame *frame;   /* its registers, while it is not running */
     unsigned locks;        /* how many it holds */
+    uint8_t waits;         /* it is in thread_wait, and thread_wake can end that */
+    uint8_t woken;         /* thread_wake was called for it, and it has not looked yet */
 };
 
 /* The first thread is the flow of control that kmain started in, on the
@@ -70,6 +78,8 @@ static struct thread *g_sleepers; /* soonest first */
 static unsigned g_awake = 1;      /* threads that are running or ready, the idle thread aside */
 static int g_turn_over;           /* the running thread has had its turn */
 static uint64_t g_switches;
+
+static struct thread *test_tick_wakes; /* the self-test's: the next tick wakes it */
 
 static struct thread *g_stopper;  /* the thread that has stopped the world, or is stopping it */
 static int g_stopping;            /* it is waiting for the others to stop */
@@ -155,7 +165,13 @@ void thread_tick(uint64_t now)
         struct thread *t = g_sleepers;
 
         g_sleepers = t->next;
+        t->waits = 0;
         ready(t);
+    }
+    if (test_tick_wakes) {
+        /* The self-test's: a thread woken from here, by a handler. */
+        thread_wake(test_tick_wakes);
+        test_tick_wakes = NULL;
     }
     g_turn_over = 1;
 }
@@ -179,24 +195,82 @@ static void holds_no_lock(const char *where)
         panic("thread %s %s with a lock in its hands", g_current->name, where);
 }
 
-/* Until the timer has ticked that many more times, and once at least. The
- * tick in progress counts as one, so the wait is shorter than the ticks
- * asked for by up to the length of one. */
-void thread_sleep(uint64_t ticks)
+/* The running thread sleeps until the timer has ticked that many more
+ * times. Interrupts are off. */
+static void sleep_for(uint64_t ticks)
 {
-    int on = arch_interrupts_off();
     struct thread **at = &g_sleepers;
 
-    holds_no_lock("goes to sleep");
     g_current->wake = timer_ticks() + ticks;
     while (*at && (*at)->wake <= g_current->wake)
         at = &(*at)->next;
     g_current->next = *at;
     *at = g_current;
     block(SLEEPING);
+}
+
+/* Until the timer has ticked that many more times, and once at least. The
+ * tick in progress counts as one, so the wait is shorter than the ticks
+ * asked for by up to the length of one. */
+void thread_sleep(uint64_t ticks)
+{
+    int on = arch_interrupts_off();
+
+    holds_no_lock("goes to sleep");
+    sleep_for(ticks);
     if (on)
         arch_interrupts_on();
     thread_safe_point();
+}
+
+/* Until thread_wake is called for this thread, or the timer has ticked
+ * that many more times, whichever comes first: THREAD_FOREVER for no limit,
+ * and 0 not to wait at all. Says whether it was woken. A wake that came
+ * before the wait is not lost: the thread has not looked since, so this
+ * returns at once. That makes the usual order safe without anything held
+ * in between: put yourself on record with what you wait for, then wait.
+ * Being woken says no more than "look again", and whoever waits for
+ * something looks whether it is there. */
+int thread_wait(uint64_t ticks)
+{
+    int on = arch_interrupts_off(), woken;
+
+    holds_no_lock("waits");
+    if (!g_current->woken && ticks) {
+        g_current->waits = 1;
+        if (ticks == THREAD_FOREVER)
+            block(WAITING);
+        else
+            sleep_for(ticks);
+    }
+    woken = g_current->woken;
+    g_current->woken = 0;
+    if (on)
+        arch_interrupts_on();
+    thread_safe_point();
+    return woken;
+}
+
+/* There is something for t to look at: its thread_wait returns, the one it
+ * is in or the next one. From a thread or from an interrupt handler. */
+void thread_wake(struct thread *t)
+{
+    int on = arch_interrupts_off();
+
+    t->woken = 1;
+    if (t->waits) {
+        t->waits = 0;
+        if (t->state == SLEEPING) {
+            struct thread **at = &g_sleepers;
+
+            while (*at != t)
+                at = &(*at)->next;
+            *at = t->next;
+        }
+        ready(t);
+    }
+    if (on)
+        arch_interrupts_on();
 }
 
 /* Wait at a safe point until the world starts again. Interrupts are off. */
@@ -386,6 +460,11 @@ const char *thread_name(void)
     return g_current->name;
 }
 
+struct thread *thread_self(void)
+{
+    return g_current;
+}
+
 static void idle(void *arg)
 {
     (void)arg;
@@ -417,6 +496,7 @@ static volatile unsigned test_baton;               /* whose move it is */
 static volatile uint64_t test_total;               /* under test_lock */
 static volatile uint64_t test_count[TEST_THREADS]; /* how far each thread has counted */
 static volatile int test_over;
+static volatile int test_waiting[TEST_THREADS];    /* 1: it waits to be woken. 2: it has been */
 
 /* Arithmetic with nothing to it, except that every step needs the one before. */
 static uint64_t test_step(uint64_t x, uint64_t i)
@@ -465,6 +545,26 @@ static void test_thread(void *arg)
     if (timer_ticks() - before < me + 1)
         panic("thread self-test: thread %u slept %llu ticks, not %u", me, timer_ticks() - before, me + 1);
 
+    /* A wait that somebody else ends. The first thread waits for the boot
+     * thread to wake it and the second for a handler to, the timer's, and
+     * neither has a limit. The third waits with one that runs out, because
+     * nobody wakes it; then it is woken before it waits, and that wait is
+     * over as it begins. */
+    if (me < 2) {
+        test_waiting[me] = 1;
+        if (!thread_wait(THREAD_FOREVER))
+            panic("thread self-test: thread %u came back from a wait that nobody ended", me);
+    } else {
+        before = timer_ticks();
+        if (thread_wait(2) || timer_ticks() - before < 2)
+            panic("thread self-test: a wait of 2 ticks was over after %llu, or says it was woken",
+                  timer_ticks() - before);
+        thread_wake(thread_self());
+        if (!thread_wait(THREAD_FOREVER) || thread_wait(0))
+            panic("thread self-test: a wake that came before the wait was lost, or counted twice");
+    }
+    test_waiting[me] = 2;
+
     /* Work that can be stopped: a thread counts, and between two counts it
      * is at a safe point. For the first thread that is a sleep and nothing
      * else, so it is asleep when the world stops, or soon after, and wakes
@@ -489,8 +589,26 @@ void thread_selftest(void)
     test_over = 0;
     for (unsigned i = 0; i < TEST_THREADS; i++) {
         test_count[i] = 0;
+        test_waiting[i] = 0;
         if (!(threads[i] = thread_create(names[i], test_thread, (void *)(uintptr_t)i, THREAD_STACK_SIZE)))
             panic("thread self-test: no memory for a thread");
+    }
+
+    /* The two that wait to be woken: one from here, one from the timer's
+     * interrupt. A sleep first, so that each is in its wait and not merely
+     * on its way there. */
+    for (unsigned i = 0; i < 2; i++) {
+        while (!test_waiting[i])
+            thread_sleep(1);
+        thread_sleep(2);
+        if (test_waiting[i] != 1)
+            panic("thread self-test: thread %u did not wait to be woken", i);
+        if (i)
+            test_tick_wakes = threads[i];
+        else
+            thread_wake(threads[i]);
+        while (test_waiting[i] != 2)
+            thread_sleep(1);
     }
 
     /* Once all of them are counting, stop the world. They have to stay
@@ -518,6 +636,6 @@ void thread_selftest(void)
               (uint64_t)test_total);
     if (pmm_free_frames() != frames)
         panic("thread self-test: %llu page frames free at the end, %llu at the start", pmm_free_frames(), frames);
-    kprintf("threads: self-test passed, %llu switches: by the timer, by choice, on a lock, asleep, world stopped\n",
+    kprintf("threads: self-test passed, %llu switches: by the timer, by choice, on a lock, asleep, woken, stopped\n",
             g_switches - switches);
 }

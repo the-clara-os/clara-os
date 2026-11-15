@@ -255,6 +255,20 @@ static void print_condition(struct printer *p, lisp x)
     put_char(p, '>');
 }
 
+/* A thread, a lock or an event: what it is, and its name if it has one. */
+static void print_named(struct printer *p, const char *type, lisp name)
+{
+    put_text(p, "#<");
+    put_text(p, type);
+    if (name != LISP_NIL) {
+        put_char(p, ' ');
+        p->escape++;
+        print_object(p, name);
+        p->escape--;
+    }
+    put_char(p, '>');
+}
+
 static void print_object(struct printer *p, lisp x)
 {
     if (!p->left)
@@ -312,6 +326,12 @@ static void print_object(struct printer *p, lisp x)
         print_structure(p, x);
     else if (lisp_is(x, LISP_CONDITION))
         print_condition(p, x);
+    else if (lisp_is(x, LISP_THREAD))
+        print_named(p, "THREAD", lisp_as_thread(x)->name);
+    else if (lisp_is(x, LISP_LOCK))
+        print_named(p, "LOCK", lisp_as_lock(x)->name);
+    else if (lisp_is(x, LISP_EVENT))
+        print_named(p, "EVENT", lisp_as_event(x)->name);
     else if (x == LISP_UNBOUND)
         put_text(p, "#<unbound>");
     else {

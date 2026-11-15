@@ -8,7 +8,8 @@
  * the evaluator, where the collector may run (eval.c says why). The few
  * that call back, FUNCALL, APPLY, EVAL, LOAD and ERROR with the name of a
  * type, have nothing to hold; whatever maps a function over a list is
- * written in Lisp for that reason. */
+ * written in Lisp for that reason. The functions that wait are in
+ * thread.c, and hold nothing but their arguments while they do. */
 #include "lisp.h"
 
 #define PRIMITIVE(name) static lisp name(unsigned argc __attribute__((unused)), lisp *argv)
@@ -1326,5 +1327,22 @@ const struct lisp_primitive lisp_primitives[] = {
     { "%COLLECT", p_collect, 0, 0 },
     { "%COLLECT-EVERY", p_collect_every, 1, 1 },
     { "%SELF-TEST", p_self_test, 0, 0 },
+    /* threads, locks and events (thread.c) */
+    { "SLEEP", lisp_p_sleep, 1, 1 },
+    { "CLARA:%MAKE-THREAD", lisp_p_make_thread, 2, 2 },
+    { "CLARA:CURRENT-THREAD", lisp_p_current_thread, 0, 0 },
+    { "CLARA:THREADP", lisp_p_threadp, 1, 1 },
+    { "CLARA:THREAD-NAME", lisp_p_thread_name, 1, 1 },
+    { "CLARA:THREAD-ALIVE-P", lisp_p_thread_alive_p, 1, 1 },
+    { "CLARA:ALL-THREADS", lisp_p_all_threads, 0, 0 },
+    { "CLARA:JOIN-THREAD", lisp_p_join_thread, 1, 1 },
+    { "CLARA:DESTROY-THREAD", lisp_p_destroy_thread, 1, 1 },
+    { "CLARA:THREAD-YIELD", lisp_p_thread_yield, 0, 0 },
+    { "CLARA:MAKE-LOCK", lisp_p_make_lock, 0, 1 },
+    { "CLARA:ACQUIRE-LOCK", lisp_p_acquire_lock, 1, 1 },
+    { "CLARA:RELEASE-LOCK", lisp_p_release_lock, 1, 1 },
+    { "CLARA:MAKE-EVENT", lisp_p_make_event, 0, 1 },
+    { "CLARA:SIGNAL-EVENT", lisp_p_signal_event, 1, 2 },
+    { "CLARA:WAIT-EVENT", lisp_p_wait_event, 1, 2 },
 };
 const unsigned lisp_primitive_count = sizeof lisp_primitives / sizeof lisp_primitives[0];

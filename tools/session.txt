@@ -81,6 +81,32 @@ error: the heap is full: there is no room for an object that large
 error: interrupted from the keyboard
 > (list (fact 5) 'still 'here)
 (120 STILL HERE)
+> (defvar *jobs* 0)
+*JOBS*
+> (let ((lock (clara:make-lock)))
+    (mapc #'clara:join-thread
+          (mapcar (lambda (n) (clara:make-thread (lambda () (clara:with-lock-held (lock) (incf *jobs* n)))))
+                  '(1 2 3)))
+    *jobs*)
+6
+> (let ((*depth* 7)) (list (depth) (clara:join-thread (clara:make-thread #'depth))))
+(7 0)
+> (clara:join-thread (clara:make-thread (lambda () (car 5)) :name "faulty"))
+error in #<THREAD "faulty">: CAR wants a list, and 5 is not one
+error: the thread #<THREAD "faulty"> ended with an error: CAR wants a list, and 5 is not one
+> (defvar *spinner* (clara:make-thread (lambda () (loop)) :name "spinner"))
+*SPINNER*
+> (list (fact 10) (clara:thread-alive-p *spinner*))
+(3628800 T)
+> (clara:destroy-thread *spinner*)
+T
+> (clara:join-thread *spinner*)
+error: the thread #<THREAD "spinner"> was stopped
+> (clara:wait-event (clara:make-event))
+^C
+error: interrupted from the keyboard
+> (list (clara:current-thread) (length (clara:all-threads)))
+(#<THREAD "listener"> 1)
 > (defpackage "PLAY" (:use "COMMON-LISP") (:export "BALL"))
 #<PACKAGE "PLAY">
 > (in-package "PLAY")
