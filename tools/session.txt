@@ -43,7 +43,7 @@ A
 HELLO
 "world"
 #\!
-error at line 1, column 50: a ratio or a floating-point number, which this Lisp does not have yet
+error: a ratio or a floating-point number, which this Lisp does not have yet, at line 1, column 50
 > (cdr 5)
 error: CDR wants a list, and 5 is not one
 > (no-such-function 1 2)
@@ -54,7 +54,7 @@ FOREVER
 error: the stack is full: the forms are nested too deep, or a function calls itself without end
 > two) forms
 error: the variable TWO has no value
-error at line 1, column 4: a closing parenthesis that closes nothing
+error: a closing parenthesis that closes nothing, at line 1, column 4
 > (handler-case (/ 10 0) (division-by-zero () 'no-quotient))
 NO-QUOTIENT
 > (define-condition low-fuel (error) ((left :initarg :left :reader fuel-left)))

@@ -1,6 +1,7 @@
 #include "arch.h"
 
 const char *const arch_name = "x86_64";
+const char *const arch_feature = "X86-64";
 
 #define COM1 0x3f8
 

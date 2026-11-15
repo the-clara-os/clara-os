@@ -302,6 +302,7 @@ struct lisp_roots {
     lisp t, quote, function;
     lisp quasiquote, unquote, splice; /* what the reader makes of ` , and ,@ */
     lisp package;               /* the symbol *PACKAGE*, whose value is the package that names are read in */
+    lisp features;              /* the symbol *FEATURES*, whose value #+ and #- look in: keywords */
     lisp packages;              /* a list of every package there is */
     lisp keyword, common_lisp, user;
     lisp clara;                 /* the package CLARA: what the substrate offers that Common Lisp has no name for */
@@ -370,6 +371,7 @@ struct lisp_reader {
     const uint8_t *where; /* and the place. After a form: where it began */
     unsigned depth;       /* how many lists are open around what is being read */
     unsigned backquotes;  /* and how many backquotes that no comma has answered yet */
+    unsigned suppress;    /* inside a form that #+ or #- leaves out: tokens are passed over, not made sense of */
     uint32_t token[LISP_TOKEN_MAX];
 };
 
@@ -424,8 +426,8 @@ lisp lisp_eval(lisp form, lisp env);        /* env is NIL outside every binding 
 lisp lisp_apply(lisp function, unsigned argc, lisp *argv); /* the arguments have to be on the value stack */
 int  lisp_evaluate(lisp form);              /* at the top level. 1: lisp_values has the values, the only one too. 0: the
                                                condition that nothing handled */
-int  lisp_call(lisp function);              /* the same for a function with no arguments, at the bottom of a thread; -1
-                                               when the thread was told to stop */
+int  lisp_call(lisp function, unsigned argc, const lisp *argv); /* the same for a function and its arguments,
+                                               at the bottom of a thread; -1 when the thread was told to stop */
 int  lisp_safe_point(void);                 /* for C that has waited: the evaluator's safe point. 0: return, an exit is
                                                under way */
 int  lisp_unwinding(void);
@@ -460,8 +462,6 @@ struct thread *lisp_first_thread(void (*main)(void));   /* the thread that the L
 enum lisp_turn lisp_thread_safe_point(void);            /* from the evaluator's safe point: let another thread have its
                                                            turn, and say whether this one is to stop, or was interrupted */
 void lisp_thread_roots(void);                           /* for the collector: what the other threads hold */
-void lisp_runtime_leave(void);                          /* around a wait in C that holds no object: the other threads */
-void lisp_runtime_enter(void);                          /* can have the runtime meanwhile */
 void lisp_interrupt(enum lisp_interrupt source);        /* from its handler: the event of that source is signalled */
 
 /* unsafe.c: the package CLARA.UNSAFE */
@@ -493,6 +493,7 @@ LISP_PRIMITIVE(lisp_p_make_event);
 LISP_PRIMITIVE(lisp_p_signal_event);
 LISP_PRIMITIVE(lisp_p_wait_event);
 LISP_PRIMITIVE(lisp_p_interrupt_event);
+LISP_PRIMITIVE(lisp_p_serial_break);
 LISP_PRIMITIVE(lisp_p_memory_8);
 LISP_PRIMITIVE(lisp_p_memory_16);
 LISP_PRIMITIVE(lisp_p_memory_32);
@@ -515,14 +516,14 @@ LISP_PRIMITIVE(lisp_p_set_port_32);
 LISP_PRIMITIVE(lisp_p_framebuffer);
 LISP_PRIMITIVE(lisp_p_serial_device);
 LISP_PRIMITIVE(lisp_p_serial_byte);
+LISP_PRIMITIVE(lisp_p_take_screen);
+LISP_PRIMITIVE(lisp_p_give_screen);
 extern const struct lisp_primitive lisp_primitives[];
 extern const unsigned lisp_primitive_count;
-extern int lisp_console_fresh;              /* nothing has been written on the console's line yet */
-void lisp_console_put(void *to, char c);    /* for lisp_print: to the serial port and the screen */
-void lisp_fresh_line(void);                 /* a new line, unless the console is at the start of one */
 
 /* lisp.c */
 void lisp_init(const struct boot_info *bi);
 void lisp_selftest(void);
-void lisp_run(void); /* load boot.lisp, check the evaluator, then read and evaluate what is typed until the input ends */
+void lisp_run(void); /* load boot.lisp, check the evaluator, load the console and the listener, and listen until the
+                        input ends */
 unsigned lisp_eval_texts(void); /* the evaluator's part of the self-test, again: how many texts it evaluated */

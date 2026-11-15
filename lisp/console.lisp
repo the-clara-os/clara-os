@@ -1,0 +1,299 @@
+;;;; console.lisp: the console
+;;;;
+;;;; What Lisp writes goes to the serial port and to the screen, and what
+;;;; is typed on the serial port comes back a line at a time. Both ends are
+;;;; drivers written in Lisp, on top of CLARA.UNSAFE: the serial port is a
+;;;; UART whose registers are I/O ports on one machine and memory on the
+;;;; other, and the screen is a framebuffer, memory with 32 bits to the
+;;;; pixel. Typing arrives as an interrupt, which is an event that this
+;;;; file waits for.
+;;;;
+;;;; The substrate has a console of its own (kernel/console.c, fbcon.c),
+;;;; which prints the boot report before there is a Lisp to run this, and
+;;;; the kernel's last words when something goes wrong. START takes the
+;;;; screen over from it, at the place where it left off, and STOP hands it
+;;;; back. The two draw the same characters in the same cells.
+;;;;
+;;;; This file loads under SBCL as well, where lisp/host/ stands in for the
+;;;; machine, and the tests there look at what it puts on a screen that is
+;;;; a vector.
+
+(defpackage "CLARA.CONSOLE"
+  (:use "COMMON-LISP")
+  (:export "START" "STOP" "WRITE-TEXT" "READ-TEXT-LINE" "USE-SERIAL" "USE-SCREEN" "MAKE-CONSOLE-STREAM"))
+(in-package "CLARA.CONSOLE")
+
+;;; The serial port
+;;;
+;;; Two UARTs. The 16550 of a PC has eight registers on I/O ports: data in
+;;; the first, and in the sixth the line status, whose bit 5 says that the
+;;; next byte can be handed over. The PL011 of an ARM machine has its
+;;; registers in memory, four bytes apart: data in the first, and at #x18
+;;; the flags, whose bit 5 says that there is no room for another byte.
+;;; The substrate set both up at boot (kernel/arch/), and takes in what
+;;; arrives there, from the timer's interrupt: only sending is done here.
+
+(defvar *serial-kind* nil)  ; :NS16550 or :PL011; NIL when there is no serial port to write to
+(defvar *serial-base* 0)    ; its first I/O port, or the address of its registers
+
+(defun use-serial (kind base)
+  (setq *serial-kind* kind
+        *serial-base* base))
+
+(defun serial-busy-p ()
+  (case *serial-kind*
+    (:ns16550 (zerop (logand (clara.unsafe:port-8 (+ *serial-base* 5)) #x20)))
+    (:pl011 (/= 0 (logand (clara.unsafe:memory-32 (+ *serial-base* #x18)) #x20)))))
+
+(defun serial-send (byte)
+  (loop
+    (unless (serial-busy-p)
+      (return)))
+  (case *serial-kind*
+    (:ns16550 (setf (clara.unsafe:port-8 *serial-base*) byte))
+    (:pl011 (setf (clara.unsafe:memory-32 *serial-base*) byte))))
+
+;; A character goes out as UTF-8, and a new line as a carriage return and
+;; a line feed, which is what a terminal expects.
+(defun serial-send-character (code)
+  (cond ((= code 10)
+         (serial-send 13)
+         (serial-send 10))
+        ((< code #x80)
+         (serial-send code))
+        ((< code #x800)
+         (serial-send (logior #xc0 (ash code -6)))
+         (serial-send (logior #x80 (logand code #x3f))))
+        ((< code #x10000)
+         (serial-send (logior #xe0 (ash code -12)))
+         (serial-send (logior #x80 (logand (ash code -6) #x3f)))
+         (serial-send (logior #x80 (logand code #x3f))))
+        (t
+         (serial-send (logior #xf0 (ash code -18)))
+         (serial-send (logior #x80 (logand (ash code -12) #x3f)))
+         (serial-send (logior #x80 (logand (ash code -6) #x3f)))
+         (serial-send (logior #x80 (logand code #x3f))))))
+
+;;; The screen
+;;;
+;;; A grid of cells, each as large as a glyph of the font, in the middle of
+;;; the screen. A character is drawn where the cursor is, and the cursor
+;;; moves on; past the last row, every row moves up by one, which is done
+;;; by copying the pixels. Nothing remembers what the screen shows.
+
+(defvar *screen* nil)   ; the address of the screen's first pixel; NIL when there is no screen to draw on
+(defvar *pitch* 0)      ; bytes from one row of pixels to the next
+(defvar *top* 0)        ; the address of the first row of pixels of the grid
+(defvar *left* 0)       ; bytes from the start of a row of pixels to the grid
+(defvar *columns* 0)    ; the size of the grid, in cells
+(defvar *rows* 0)
+(defvar *column* 0)     ; where the next character goes; past the last column, it starts a new row first
+(defvar *row* 0)
+(defvar *ink* 0)        ; the pixel of a glyph,
+(defvar *paper* 0)      ; and the pixel around it
+
+;; An 8-bit colour channel, moved to the bits of a pixel that MASK selects.
+(defun channel (mask value)
+  (if (zerop mask)
+      0
+      (let ((shift 0) (bits 0))
+        (loop
+          (unless (zerop (logand mask (ash 1 shift)))
+            (return))
+          (setq shift (1+ shift)))
+        (loop
+          (when (zerop (logand mask (ash 1 (+ shift bits))))
+            (return))
+          (setq bits (1+ bits)))
+        ;; Its highest bits, when the pixel has fewer than eight for it.
+        (ash (ash value (- bits 8)) shift))))
+
+;; The pixel of a colour, given as #xRRGGBB, on a screen whose pixels keep
+;; red, green and blue in the bits that the three masks select.
+(defun pixel (colour red green blue)
+  (logior (channel red (logand (ash colour -16) #xff))
+          (channel green (logand (ash colour -8) #xff))
+          (channel blue (logand colour #xff))))
+
+;; A screen of WIDTH by HEIGHT pixels of 32 bits at ADDRESS, PITCH bytes
+;; from one row of them to the next, with the cursor at ROW and COLUMN.
+;; The grid and the colours are those of the substrate's console
+;; (kernel/fbcon.c), so that one can go on where the other left off.
+(defun use-screen (address width height pitch red green blue row column)
+  (let* ((columns (min (floor width clara.font:+width+) 256))
+         (rows (min (floor height clara.font:+height+) 128)))
+    (setq *pitch* pitch
+          *columns* columns
+          *rows* rows
+          *top* (+ address (* pitch (floor (- height (* rows clara.font:+height+)) 2)))
+          *left* (* 4 (floor (- width (* columns clara.font:+width+)) 2))
+          *row* (min row (1- rows))
+          *column* (min column columns)
+          *paper* (pixel #x1e1b2e red green blue)
+          *ink* (pixel #xe8e3f4 red green blue)
+          *screen* address)))
+
+;; The glyph of a character, at the cursor. A character that the font has
+;; no glyph for gets the box that comes after the last glyph.
+(defun draw (code)
+  (clara.unsafe:expand-bits-32
+   (+ *top* (* *row* clara.font:+height+ *pitch*) *left* (* *column* clara.font:+width+ 4))
+   *pitch*
+   clara.font:*glyphs*
+   (* clara.font:+height+
+      (- (if (<= clara.font:+first+ code clara.font:+last+) code (1+ clara.font:+last+))
+         clara.font:+first+))
+   clara.font:+height+
+   clara.font:+width+
+   *ink*
+   *paper*))
+
+;; Every row moves up by one, and the last one is blank.
+(defun scroll ()
+  (let* ((row (* clara.font:+height+ *pitch*))
+         (kept (* (1- *rows*) row)))
+    (clara.unsafe:copy-memory *top* (+ *top* row) kept)
+    (clara.unsafe:fill-memory-32 (+ *top* kept) (floor row 4) *paper*)))
+
+(defun new-row ()
+  (setq *column* 0)
+  (if (< (1+ *row*) *rows*)
+      (setq *row* (1+ *row*))
+      (scroll)))
+
+(defun show (code)
+  (cond ((= code 10) (new-row))
+        ((= code 13) (setq *column* 0))
+        ((= code 8)
+         (when (plusp *column*)
+           (setq *column* (1- *column*))))
+        ((= code 9)
+         (loop
+           (show 32)
+           (when (or (zerop (mod *column* 8)) (>= *column* *columns*))
+             (return))))
+        (t
+         (when (= *column* *columns*)
+           (new-row))
+         (draw code)
+         (setq *column* (1+ *column*)))))
+
+;;; Writing
+;;;
+;;; A string goes to both, a character at a time, and no other thread's
+;;; string gets in between.
+
+(defvar *lock* (clara:make-lock "console"))
+
+(defun write-text (string)
+  (clara:with-lock-held (*lock*)
+    (dotimes (i (length string))
+      (let ((code (char-code (char string i))))
+        (serial-send-character code)
+        (when *screen*
+          (show code)))))
+  string)
+
+;;; Reading
+;;;
+;;; The substrate takes in the bytes that arrive on the serial port and
+;;; signals an event when it has (kernel/console.c). A line is put together
+;;; from them here, and echoed as it is typed. Backspace or Delete takes
+;;; the last character back, a tab counts as a space, and the other control
+;;; characters are dropped. Ctrl-D at the start of a line means that no
+;;; more is coming, and Ctrl-C anywhere gives the line up.
+
+(defconstant +line-limit+ 4096) ; characters in a line; what is typed past that is dropped
+
+(defvar *typed* nil)        ; the event that says bytes have arrived
+(defvar *after-return* nil) ; the last line ended with a carriage return: a line feed right after it is its other half
+(defvar *stream* nil)       ; where what is typed is echoed
+(defvar *rubout* (concatenate 'string (string #\Backspace) " " (string #\Backspace)))
+
+(defun next-byte ()
+  (loop
+    (let ((byte (clara.unsafe:serial-byte)))
+      (when byte
+        (return byte)))
+    (clara:wait-event *typed*)))
+
+;; The code of the next character that was typed. What is typed is UTF-8;
+;; a byte that cannot begin a character is passed over.
+(defun next-code ()
+  (loop
+    (let ((byte (next-byte)))
+      (cond ((< byte #x80) (return byte))
+            ((>= byte #xc0)
+             (let ((more (cond ((< byte #xe0) 1) ((< byte #xf0) 2) (t 3)))
+                   (code (logand byte (cond ((< byte #xe0) #x1f) ((< byte #xf0) #x0f) (t #x07)))))
+               (dotimes (i more)
+                 (setq code (logior (ash code 6) (logand (next-byte) #x3f))))
+               (return code)))))))
+
+(defun echo (string)
+  (write-string string *stream*))
+
+(defun read-typed-line ()
+  (let ((line ""))
+    (loop
+      (let ((code (next-code)))
+        (if (and (= code 10) *after-return*)
+            (setq *after-return* nil)
+            (progn
+              (setq *after-return* (= code 13))
+              (cond ((or (= code 13) (= code 10))
+                     (echo (string #\Newline))
+                     (return line))
+                    ((= code 4)
+                     (when (zerop (length line))
+                       (return nil)))
+                    ((= code 3)
+                     (echo "^C")
+                     (echo (string #\Newline))
+                     (error 'clara:keyboard-interrupt))
+                    ((or (= code 8) (= code 127))
+                     (when (plusp (length line))
+                       (setq line (subseq line 0 (1- (length line))))
+                       (echo *rubout*)))
+                    (t
+                     (let ((character (if (= code 9) #\Space (and (>= code 32) (code-char code)))))
+                       (when (and character (< (length line) +line-limit+))
+                         (setq line (concatenate 'string line (string character)))
+                         (echo (string character))))))))))))
+
+;; The next line that was typed, without its end, or NIL when no more is
+;; coming. While a line is being read, Ctrl-C is a byte like the others,
+;; which gives the line up; at any other time it stops what the thread is
+;; computing (CLARA.UNSAFE:SERIAL-BREAK says which).
+(defun read-text-line ()
+  (let ((computing (clara.unsafe:serial-break nil)))
+    (unwind-protect (read-typed-line)
+      (clara.unsafe:serial-break computing))))
+
+;;; The stream that is both
+
+(defun make-console-stream ()
+  (setq *stream* (clara:make-stream :write-string #'write-text :read-line #'read-text-line)))
+
+;; Take the machine's console over from the substrate: from here on,
+;; *STANDARD-OUTPUT* and *STANDARD-INPUT* are this file's.
+(defun start ()
+  (multiple-value-bind (kind base) (clara.unsafe:serial-device)
+    (use-serial kind base))
+  (setq *typed* (clara.unsafe:interrupt-event :serial))
+  (multiple-value-bind (address width height pitch red green blue) (clara.unsafe:framebuffer)
+    (when address
+      (multiple-value-bind (row column) (clara.unsafe:take-screen)
+        (when row
+          (use-screen address width height pitch red green blue row column)))))
+  (make-console-stream)
+  (setq *standard-output* *stream*
+        *standard-input* *stream*)
+  *stream*)
+
+;; Hand the screen back to the substrate, for its last line.
+(defun stop ()
+  (when *screen*
+    (clara.unsafe:give-screen *row* *column*)
+    (setq *screen* nil))
+  nil)

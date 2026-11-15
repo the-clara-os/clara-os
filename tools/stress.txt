@@ -4,7 +4,7 @@
 T
 > (plusp (cl::%self-test))
 T
-> (handler-case (unwind-protect (error "~A" (list 1 2)) (list 3)) (error (c) (format nil "~A" c)))
-"(1 2)"
+> (car 5)
+error: CAR wants a list, and 5 is not one
 > (cl::%collect-every 0)
 1

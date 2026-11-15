@@ -74,9 +74,10 @@ test: all
 image: all
 	tools/mkimage.sh
 
-# Regenerate kernel/font.c after changing the font or tools/bdf2c.py.
+# Regenerate kernel/font.c and lisp/font.lisp, the same glyphs for the two
+# consoles, after changing the font or tools/bdf2c.py.
 font:
-	python3 -I tools/bdf2c.py fonts/spleen-8x16.bdf fonts/LICENSE.spleen kernel/font.c
+	python3 -I tools/bdf2c.py fonts/spleen-8x16.bdf fonts/LICENSE.spleen kernel/font.c lisp/font.lisp
 
 # The website, the way .github/workflows/site.yml builds it for GitHub Pages.
 site:

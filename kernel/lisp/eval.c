@@ -274,14 +274,18 @@ lisp lisp_error(lisp condition)
 
 static lisp fail(const char *type, const char *slot, lisp value, const char *control, va_list ap)
 {
-    lisp cl = lisp_roots.common_lisp, text, slots = LISP_NIL;
+    lisp cl = lisp_roots.common_lisp, home = cl, text, slots = LISP_NIL;
 
     if (g_unwind.to)
         return LISP_NIL; /* the first thing to go wrong is the one that is reported */
+    if (!memcmp(type, "CLARA:", 6)) {
+        home = lisp_roots.clara; /* a type that Common Lisp has no name for */
+        type += 6;
+    }
     text = message(control, ap);
     if (slot)
         slots = lisp_cons(lisp_symbol_in(cl, slot, 0), lisp_cons(value, LISP_NIL));
-    return lisp_error(lisp_make_condition(lisp_symbol_in(cl, type, 1), text, slots));
+    return lisp_error(lisp_make_condition(lisp_symbol_in(home, type, 1), text, slots));
 }
 
 /* An error that says what went wrong and no more than that. */
@@ -296,9 +300,10 @@ lisp lisp_fail(const char *control, ...)
     return value;
 }
 
-/* A condition of the type that has this name in COMMON-LISP, with a value
- * for the slot of that name unless slot is NULL: for what a program may
- * want to tell apart from other errors. */
+/* A condition of the type that has this name in COMMON-LISP, or in CLARA
+ * when the name says CLARA: first, with a value for the slot of that name
+ * unless slot is NULL: for what a program may want to tell apart from
+ * other errors. */
 lisp lisp_fail_as(const char *type, const char *slot, lisp value, const char *control, ...)
 {
     va_list ap;
@@ -474,7 +479,7 @@ static COLD int safe_point(void)
         }
         return 0;
     case LISP_BREAK:
-        lisp_fail_as("SERIOUS-CONDITION", NULL, 0, "interrupted from the keyboard");
+        lisp_fail_as("CLARA:KEYBOARD-INTERRUPT", NULL, 0, "interrupted from the keyboard");
         return 0;
     case LISP_GO_ON:
         break;
@@ -1723,23 +1728,31 @@ lisp lisp_load(lisp name)
  * thread was told to stop and has come all the way out. The evaluator's
  * stacks have to be where they were: every piece of it gives back what it
  * took, on every way out. */
-static int top_level(lisp form, lisp function)
+static int top_level(lisp form, lisp function, unsigned argc, const lisp *argv)
 {
     lisp *base = g_sp, value;
     unsigned bound = g_bound;
-    const struct catch *catches = g_catches;
-    const struct handler *handlers = g_handlers;
+    struct catch *catches = g_catches;
+    struct handler *handlers = g_handlers;
 
+    /* A top level inside another, which is what the self-test's texts are when they are evaluated
+     * again from the prompt, begins with no handler and no catch in sight: what goes wrong in it
+     * ends here, and not in a HANDLER-CASE of whoever is outside. */
+    g_catches = NULL;
+    g_handlers = NULL;
     if (function) {
         *g_sp++ = function;
-        value = lisp_apply(function, 0, g_sp);
-        g_sp--;
+        memcpy(g_sp, argv, argc * sizeof(lisp));
+        g_sp += argc;
+        value = lisp_apply(function, argc, base + 1);
+        g_sp = base;
     } else
         value = lisp_eval(form, LISP_NIL);
-    if (g_sp != base || g_bound != bound || g_catches != catches || g_handlers != handlers)
+    if (g_sp != base || g_bound != bound || g_catches || g_handlers)
         panic("lisp: the evaluator left %lld values on its stack, %d bindings, and the catches and handlers %s",
-              (long long)(g_sp - base), (int)(g_bound - bound),
-              g_catches == catches && g_handlers == handlers ? "as they were" : "changed");
+              (long long)(g_sp - base), (int)(g_bound - bound), !g_catches && !g_handlers ? "as they were" : "changed");
+    g_catches = catches;
+    g_handlers = handlers;
     if (!g_unwind.to) {
         settle(value);
         return 1;
@@ -1760,16 +1773,18 @@ static int top_level(lisp form, lisp function)
 
 int lisp_evaluate(lisp form)
 {
-    int went = top_level(form, 0);
+    int went = top_level(form, 0, 0, NULL);
 
     if (went < 0)
         panic("lisp: the thread that reads from the console was told to stop");
     return went;
 }
 
-int lisp_call(lisp function)
+/* A few arguments at most: they go on the value stack without a look at
+ * how much room it has. */
+int lisp_call(lisp function, unsigned argc, const lisp *argv)
 {
-    return top_level(LISP_NIL, function);
+    return top_level(LISP_NIL, function, argc, argv);
 }
 
 /* The symbols of the special forms and of the functions in C, each with

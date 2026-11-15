@@ -58,6 +58,7 @@ static struct context *g_running;      /* the one that has the runtime, or NULL 
 static struct context *g_wanting;      /* the ones that wait for it, in order of arrival */
 static struct context *g_first;        /* the thread the Lisp world started on, which reads from the console */
 static uint64_t g_turn;                /* the tick at which g_running got the runtime */
+static int g_break = 1;                /* Ctrl-C stops what g_first is computing: not while it reads a line */
 static struct context *volatile g_dead; /* finished, for the reaper */
 static struct thread *g_reaper;
 
@@ -115,20 +116,6 @@ static void wait(uint64_t ticks)
     enter(me);
 }
 
-/* For the listener's wait for a line (lisp.c), which is C and holds no
- * object meanwhile. */
-void lisp_runtime_leave(void)
-{
-    leave();
-}
-
-void lisp_runtime_enter(void)
-{
-    if (thread_self() != g_first->thread)
-        panic("lisp: a thread that never had the runtime asks for it back");
-    enter(g_first);
-}
-
 /* From the evaluator's safe point. When a tick has gone by since this
  * thread got the runtime and another waits for it, the other has its
  * turn, and this one queues up behind the rest. Then: has the thread been
@@ -148,7 +135,7 @@ enum lisp_turn lisp_thread_safe_point(void)
         me->stop = 0;
         return LISP_STOP;
     }
-    if (me == g_first && console_break && console_interrupted())
+    if (me == g_first && g_break && console_break && console_interrupted())
         return LISP_BREAK;
     return LISP_GO_ON;
 }
@@ -221,19 +208,13 @@ static void finish(struct context *c, enum lisp_thread_state state, lisp result)
         }
 }
 
-static void say(const char *text)
-{
-    while (*text)
-        lisp_console_put(NULL, *text++);
-}
-
 /* Where every Lisp thread begins. The first runs the function in C that it
  * was given, and whoever started it waits for it. Any other calls its
  * Lisp function; when that is over, the reaper gives its memory back. */
 static void thread_main(void *arg)
 {
     struct context *c = arg;
-    lisp result = LISP_NIL;
+    lisp result = LISP_NIL, report[2];
     int on;
 
     enter(c);
@@ -244,21 +225,20 @@ static void thread_main(void *arg)
         leave();
         return;
     }
-    switch (lisp_call(lisp_as_thread(c->self)->function)) {
+    switch (lisp_call(lisp_as_thread(c->self)->function, 0, NULL)) {
     case 1:
         for (unsigned i = lisp_values.count; i--;)
             result = lisp_cons(lisp_values.value[i], result);
         finish(c, LISP_FINISHED, result);
         break;
     case 0:
-        /* Nobody may ever ask what became of it, so it is said here and now. */
-        result = lisp_values.value[0];
-        lisp_fresh_line();
-        say("error in ");
-        lisp_print(c->self, lisp_console_put, NULL);
-        say(": ");
-        lisp_princ(result, lisp_console_put, NULL);
-        say("\n");
+        /* Nobody may ever ask what became of it, so it is said here and now, by the function in
+         * lisp/boot.lisp that writes it to the console. The condition is on the value stack while
+         * that runs, and in nobody's hands but this variable's from there to finish(). */
+        report[0] = c->self;
+        report[1] = lisp_values.value[0];
+        lisp_call(lisp_symbol_in(lisp_roots.clara, "%THREAD-FAILED", 0), 2, report);
+        result = report[1];
         finish(c, LISP_FAILED, result);
         break;
     default:
@@ -616,6 +596,19 @@ LISP_PRIMITIVE(lisp_p_signal_event) /* event, and how many times: once */
     if (on)
         arch_interrupts_on();
     return argv[0];
+}
+
+/* (serial-break flag): whether Ctrl-C on the serial port stops what the
+ * thread that reads from the console is computing; what it was before.
+ * The console in Lisp turns it off while it reads a line, where Ctrl-C is
+ * a byte like the others and gives the line up. */
+LISP_PRIMITIVE(lisp_p_serial_break)
+{
+    int before = g_break;
+
+    (void)argc;
+    g_break = argv[0] != NIL;
+    return before ? T : NIL;
 }
 
 /* Interrupts. A handler cannot run Lisp, and does not have to: it signals

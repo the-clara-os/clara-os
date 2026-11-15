@@ -345,3 +345,33 @@ LISP_PRIMITIVE(lisp_p_serial_byte)
     (void)argv;
     return c < 0 ? NIL : lisp_fixnum(c);
 }
+
+/* (take-screen): the console in Lisp draws on the screen from now on, and
+ * the substrate's own leaves it alone; the row and the column where that
+ * one left off, or NIL when there is no screen. (give-screen row column)
+ * hands it back, for the substrate's last line. Should the kernel have to
+ * report a fault meanwhile, it takes the screen without asking. */
+LISP_PRIMITIVE(lisp_p_take_screen)
+{
+    uint32_t row, column;
+
+    (void)argc;
+    (void)argv;
+    if (!fbcon_lend(&row, &column))
+        return NIL;
+    lisp_values.count = 2;
+    lisp_values.value[0] = lisp_fixnum(row);
+    lisp_values.value[1] = lisp_fixnum(column);
+    return lisp_values.value[0];
+}
+
+LISP_PRIMITIVE(lisp_p_give_screen)
+{
+    uint64_t row, column;
+
+    (void)argc;
+    if (!number(argv[0], &row) || !number(argv[1], &column))
+        return NIL;
+    fbcon_return((uint32_t)row, (uint32_t)column);
+    return NIL;
+}

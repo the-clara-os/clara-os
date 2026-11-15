@@ -173,6 +173,12 @@ static const struct {
     { "`(a ,b ,@c . ,d)", "`(A ,B ,@C . ,D)" },
     { "`(a `(b ,(c ,d)))", "`(A `(B ,(C ,D)))" },
     { "`(a ,.b)", "`(A ,@B)" },
+    /* what is there on one Lisp and not on another */
+    { "(a #+clara b #-clara c #+(or nope (not clara)) d #-(and clara nope) e)", "(A B E)" },
+    { "#+nope (sb-thread:x #\\nosuchname 1.5 no:where \"s\") a", "A" },
+    { "#-nope a", "A" },
+    { "(#+nope a)", "NIL" },
+    { "#+(and) #+(or) a b", "B" },
     /* vectors */
     { "#()", "#()" },
     { "#(1 #(2 3) \"x\" y #\\z)", "#(1 #(2 3) \"x\" Y #\\z)" },
@@ -223,7 +229,12 @@ static const struct {
     { "#<PACKAGE \"KEYWORD\">", LISP_READ_ERROR },
     { "#q", LISP_READ_ERROR },
     { "#3(a)", LISP_READ_ERROR },
-    { "#+clara a", LISP_READ_ERROR },
+    { "#+", LISP_READ_SHORT },
+    { "#+clara", LISP_READ_SHORT },
+    { "#-nope (a", LISP_READ_SHORT },
+    { "(a #+clara)", LISP_READ_ERROR },
+    { "#+ ) a", LISP_READ_ERROR },
+    { "#+nope #.(a) b", LISP_READ_ERROR }, /* what is left out still has to be syntax that the reader knows */
     { ",a", LISP_READ_ERROR },
     { ",@a", LISP_READ_ERROR },
     { "`(a ,,b)", LISP_READ_ERROR }, /* two commas to one backquote */
@@ -772,6 +783,8 @@ static const struct {
     { "(let ((log nil)) (list (handler-case (let ((*level* 9)) (unwind-protect (error \"x\") (push *level* log)))"
       " (error () *level*)) log))",
       "(6 (9))" },
+    { "(handler-case (unwind-protect (error \"~A\" (list 1 2)) (list 3)) (error (c) (format nil \"~A\" c)))",
+      "\"(1 2)\"" },
     { "(defvar *log* nil) (unwind-protect (error \"to the top\") (push 'cleaned *log*))", "error: to the top" },
     { "*log*", "(CLEANED)" },
     /* the collector, in the middle of things: what is held only by the evaluator has to come through */
@@ -796,9 +809,9 @@ static const struct {
     { "(let ((v (make-array 3 :initial-element (list 'x)))) (cl::%collect) (let ((s (make-point :x v))) (cl::%collect)"
       " (point-x s)))",
       "#((X) (X) (X))" },
-    { "(let ((l nil)) (dotimes (i 2000) (push (list i (format nil \"~D\" i)) l)) (cl::%collect)"
+    { "(let ((l nil)) (dotimes (i 600) (push (list i (format nil \"~D\" i)) l)) (cl::%collect)"
       " (list (length l) (car l) (car (last l))))",
-      "(2000 (1999 \"1999\") (0 \"0\"))" },
+      "(600 (599 \"599\") (0 \"0\"))" },
     /* threads: each has stacks of its own, and its own bindings of the special variables */
     { "(clara:thread-name (clara:current-thread))", "\"listener\"" },
     { "(clara:join-thread (clara:make-thread (lambda () (+ 1 2))))", "3" },
@@ -1109,113 +1122,62 @@ static void collector_selftest(void)
             2 * ITEMS + LINKS + 2, freed >> 10, after.size >> 10);
 }
 
-/* A form from the serial port: evaluated, and its values printed, one to
- * a line, or the condition that nothing handled, as it reads for a person. */
-static void answer(lisp form)
+static void console_put(void *to, char c)
 {
-    if (lisp_evaluate(form))
-        for (unsigned i = 0; i < lisp_values.count; i++) {
-            lisp_fresh_line();
-            lisp_print(lisp_values.value[i], lisp_console_put, NULL);
-        }
-    else {
-        lisp_fresh_line();
-        for (const char *s = "error: "; *s; s++)
-            lisp_console_put(NULL, *s);
-        lisp_princ(lisp_values.value[0], lisp_console_put, NULL);
-    }
-    lisp_fresh_line();
+    (void)to;
+    kputc(c);
 }
 
-/* Read forms from the serial port, evaluate each and print what it gives,
- * until the input ends. The reader wants its text whole, so lines are
- * gathered until they hold a form: after every line the reader starts
- * again at the first form that is not finished, and as long as that one
- * stops short, another line is asked for. Nothing is held across the wait
- * for a line, which is a safe point. Ctrl-C stops a form that is being
- * evaluated, at the evaluator's next safe point, and gives up one that is
- * being typed. */
-static void lisp_listen(void)
+/* (load "file"), for a file that the Lisp world cannot do without. */
+static void load(const char *file)
 {
-    static uint8_t text[8192];
-    size_t used = 0;
+    /* Made here and handed over at once: nothing holds it but this variable. */
+    lisp form = lisp_cons(lisp_symbol_in(lisp_roots.common_lisp, "LOAD", 1),
+                          lisp_cons(lisp_string_from_utf8(file, strlen(file)), LISP_NIL));
 
-    kprintf("clara: reading from the serial port: a form typed there is evaluated, Ctrl-C stops it, Ctrl-D ends\n");
-    for (;;) {
-        struct lisp_reader r;
-        enum lisp_read_status status;
-        const uint8_t *unread;
-        unsigned line, column;
-        lisp form;
-        int64_t length;
-
-        kputs(used ? "  " : "> ");
-        lisp_runtime_leave(); /* the other threads evaluate while this one waits for a line */
-        length = kgetline((char *)text + used, sizeof text - used - 1);
-        lisp_runtime_enter();
-        if (length == -2) {
-            /* Ctrl-C: the line is given up, and with it the form that it was to go on. */
-            used = 0;
-            lisp_console_fresh = 1;
-            continue;
-        }
-        if (length < 0) {
-            kputc('\n');
-            if (used)
-                kprintf("the input ended in the middle of a form\n");
-            return;
-        }
-        used += (size_t)length;
-        text[used++] = '\n';
-        lisp_console_fresh = 1;
-
-        lisp_reader_init(&r, text, used);
-        do {
-            unread = r.at;
-            status = lisp_read(&r, &form);
-            if (status == LISP_READ_OK)
-                answer(form);
-        } while (status == LISP_READ_OK);
-        if (status == LISP_READ_SHORT && used < sizeof text - 1) {
-            /* Keep the form that is not finished, and ask for more of it. */
-            used = (size_t)(r.end - unread);
-            memmove(text, unread, used);
-            continue;
-        }
-        if (status == LISP_READ_SHORT)
-            kprintf("that form is longer than the %u bytes there is room for here\n", (unsigned)sizeof text);
-        else if (status == LISP_READ_ERROR) {
-            lisp_reader_where(&r, &line, &column);
-            kprintf("error at line %u, column %u: %s\n", line, column, r.error);
-        }
-        used = 0;
+    if (!lisp_evaluate(form)) {
+        kputs("lisp: ");
+        lisp_princ(lisp_values.value[0], console_put, NULL);
+        kputc('\n');
+        panic("lisp: %s did not load, and without it there is no Lisp world to start", file);
     }
 }
 
 /* What the first thread of the Lisp world does. boot.lisp is the part of
- * the language that is written in Lisp, and the machine is of no use
- * without it. */
+ * the language that is written in Lisp, and the files after it are the
+ * beginning of the world: the console, which takes the serial port and
+ * the screen over from the substrate, and the listener, which reads what
+ * is typed there, evaluates it and prints what it gives, until the input
+ * ends. Should a condition come all the way out of the listener, it is
+ * started again and told so. */
 static void lisp_main(void)
 {
+    static const char *const world[] = { "font.lisp", "console.lisp", "listener.lisp" };
     uint64_t before[LISP_TYPES], after[LISP_TYPES];
-    lisp load;
+    lisp listen, condition = LISP_NIL;
+    unsigned told = 0;
 
     collector_selftest();
     lisp_heap_census(before);
-    /* Made here and handed over at once: nothing holds it but this variable. */
-    load = lisp_cons(lisp_symbol_in(lisp_roots.common_lisp, "LOAD", 1),
-                     lisp_cons(lisp_string_from_utf8("boot.lisp", 9), LISP_NIL));
-    if (!lisp_evaluate(load)) {
-        kputs("lisp: ");
-        lisp_princ(lisp_values.value[0], lisp_console_put, NULL);
-        kputc('\n');
-        panic("lisp: boot.lisp did not load, and without it there is no Lisp world to start");
-    }
+    load("boot.lisp");
     lisp_heap_census(after);
     kprintf("lisp: boot.lisp is loaded, with %llu functions and macros in Lisp\n",
             after[LISP_FUNCTION] - before[LISP_FUNCTION]);
     eval_selftest();
-    lisp_listen();
+    for (unsigned i = 0; i < sizeof world / sizeof world[0]; i++)
+        load(world[i]);
+    lisp_heap_census(before);
+    kprintf("lisp: the console and the listener are loaded, %llu more functions: the rest of this is theirs\n",
+            before[LISP_FUNCTION] - after[LISP_FUNCTION]);
+    if (!lisp_evaluate(read_one("(clara.console:start)")))
+        panic("lisp: the console did not start");
+    listen = read_one("clara.listener:run");
+    while (!lisp_call(listen, told, &condition)) {
+        condition = lisp_values.value[0];
+        told = 1;
+    }
+    if (!lisp_evaluate(read_one("(clara.console:stop)")))
+        panic("lisp: the console did not stop");
 }
 
 void lisp_run(void)

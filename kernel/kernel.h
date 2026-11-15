@@ -55,8 +55,9 @@ struct boot_info {
 #define KERNEL_STACK_SIZE (64 * 1024)
 extern uint8_t kernel_stack[PAGE_SIZE + KERNEL_STACK_SIZE];
 
-/* console.c: text goes to the serial port and, after fbcon_init, to the
- * screen. %d %u %x %X %s %c %p and %% are supported, with zero padding and
+/* console.c: the substrate's own console, for the boot report and for its
+ * last words. Text goes to the serial port and, after fbcon_init, to the
+ * screen, unless that is lent to the console in Lisp. %d %u %x %X %s %c %p and %% are supported, with zero padding and
  * width. The compiler checks the arguments: 64-bit ones are %llu, %llx. */
 void kputc(char c);
 void kputs(const char *s);
@@ -64,12 +65,7 @@ void kprintf(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 void kvprintf(const char *fmt, va_list ap) __attribute__((format(printf, 1, 0)));
 void panic(const char *fmt, ...) __attribute__((noreturn, format(printf, 1, 2)));
 void console_serial_only(void); /* leave the screen alone from now on */
-/* A line typed on the serial port, echoed as it is typed, without its end:
- * how many bytes of it are in line, at most size; -1 when Ctrl-D ended
- * the input; -2 when Ctrl-C gave the line up. Only for a thread: it sleeps
- * while nothing arrives. */
-int64_t kgetline(char *line, size_t size);
-int  console_getc(void);          /* the next byte typed there, or -1: for a reader that does its own waiting */
+int  console_getc(void);          /* the next byte typed on the serial port, or -1: the reader does the waiting */
 void console_tick(void);          /* from the timer's interrupt: take in what has arrived on the serial port */
 extern volatile int console_break; /* Ctrl-C has arrived there, and nobody has acted on it yet */
 struct thread;
@@ -81,6 +77,8 @@ enum fbcon_color { FBCON_TEXT, FBCON_ACCENT, FBCON_ALERT, FBCON_COLORS };
 void fbcon_init(const struct framebuffer *fb);
 void fbcon_putc(char c);
 void fbcon_set_color(enum fbcon_color color);
+int  fbcon_lend(uint32_t *row, uint32_t *column);  /* another console draws from now on: where this one left off */
+void fbcon_return(uint32_t row, uint32_t column);  /* and gives the screen back, with its own cursor there */
 
 /* font.c, generated from fonts/spleen-8x16.bdf by tools/bdf2c.py */
 #define FONT_WIDTH  8
@@ -172,6 +170,7 @@ size_t strlen(const char *s);
 
 /* arch/<arch>/arch.c */
 extern const char *const arch_name;
+extern const char *const arch_feature; /* what *FEATURES* calls it, as SBCL does: "X86-64", "ARM64" */
 void arch_early_init(void);   /* right after ExitBootServices: interrupts off, serial ready */
 void arch_serial_putc(char c);
 int  arch_serial_getc(void);  /* the next byte that has arrived, or -1 when none is waiting */

@@ -10,6 +10,8 @@
  *   `form, and inside it ,form and ,@form: lists for the evaluator, which
  *     knows what a backquote stands for (eval.c)
  *   ; to the end of the line, and #| |# around anything, as comments
+ *   #+feature form and #-feature form: the form is there or is not,
+ *     by whether *FEATURES* has the feature
  *
  * A token that Common Lisp would read as a float or a ratio is refused,
  * not taken for a symbol: the same text must not mean one thing here and
@@ -333,7 +335,9 @@ static enum item read_atom(struct lisp_reader *r, lisp *form)
         if (dots == 1)
             return DOT;
         fail(r, start, "a name of nothing but dots");
-    } else if (!t.escaped && !t.colons && lisp_number_syntax(r->token, t.length) != LISP_NOT_A_NUMBER) {
+    } else if (r->suppress)
+        *form = LISP_NIL; /* part of a form that #+ or #- leaves out: it need not make sense here */
+    else if (!t.escaped && !t.colons && lisp_number_syntax(r->token, t.length) != LISP_NOT_A_NUMBER) {
         if (!read_integer(r, start, r->token, t.length - (r->token[t.length - 1] == '.'), 10, form))
             fail(r, start, "a ratio or a floating-point number, which this Lisp does not have yet");
     } else
@@ -485,6 +489,8 @@ static lisp read_character(struct lisp_reader *r, const uint8_t *start)
         if (i == t.length)
             return lisp_character(n->code);
     }
+    if (r->suppress)
+        return lisp_character(' ');
     return fail(r, start, "no character has that name");
 }
 
@@ -541,6 +547,77 @@ static lisp read_sharp(struct lisp_reader *r, const uint8_t *start)
     return fail(r, start, "a # followed by something the reader does not know yet");
 }
 
+/* Does *FEATURES* have what a feature expression asks for? The expression
+ * was read in KEYWORD: a feature, or (:AND ...), (:OR ...), (:NOT x). */
+static int featured(lisp expression, unsigned depth)
+{
+    lisp key = lisp_roots.keyword, operator, rest;
+
+    if (!lisp_is_cons(expression)) {
+        for (lisp f = lisp_as_symbol(lisp_roots.features)->value; lisp_is_cons(f); f = lisp_as_cons(f)->cdr)
+            if (lisp_as_cons(f)->car == expression)
+                return 1;
+        return 0;
+    }
+    operator = lisp_as_cons(expression)->car;
+    rest = lisp_as_cons(expression)->cdr;
+    if (depth == LISP_DEPTH)
+        return 0;
+    if (operator == lisp_symbol_in(key, "NOT", 1))
+        return lisp_is_cons(rest) && !featured(lisp_as_cons(rest)->car, depth + 1);
+    if (operator == lisp_symbol_in(key, "OR", 1)) {
+        for (; lisp_is_cons(rest); rest = lisp_as_cons(rest)->cdr)
+            if (featured(lisp_as_cons(rest)->car, depth + 1))
+                return 1;
+        return 0;
+    }
+    for (; lisp_is_cons(rest); rest = lisp_as_cons(rest)->cdr) /* :AND, and anything else is taken for it */
+        if (!featured(lisp_as_cons(rest)->car, depth + 1))
+            return 0;
+    return 1;
+}
+
+static enum item read_item(struct lisp_reader *r, lisp *form);
+
+/* #+feature form and #-feature form, from the sign on. The feature is
+ * read in KEYWORD. When the form is to be left out it is read all the
+ * same, to get past it, but without asking its symbols and numbers to
+ * make sense: it may be written for another Lisp. What this gives is the
+ * form, or else whatever comes after it. */
+static enum item read_conditional(struct lisp_reader *r, const uint8_t *start, lisp *form)
+{
+    struct lisp_symbol *package = lisp_as_symbol(lisp_roots.package);
+    lisp reading_in = package->value, feature = LISP_NIL, left_out = LISP_NIL;
+    int wanted = *r->at++ == '+', kept = 0;
+    enum item what;
+
+    if (++r->depth > LISP_DEPTH) {
+        fail(r, start, "#+ and #- nested too deep for the reader");
+        return FORM;
+    }
+    package->value = lisp_roots.keyword;
+    what = read_item(r, &feature);
+    package->value = reading_in;
+    if (!failed(r) && what == FORM) {
+        kept = featured(feature, 0) == wanted;
+        r->suppress += !kept;
+        what = read_item(r, kept ? form : &left_out);
+        r->suppress -= !kept;
+    }
+    r->depth--;
+    if (failed(r))
+        return FORM;
+    if (what == END) {
+        short_of(r, "the text ends after a #+ or a #-");
+        return FORM;
+    }
+    if (what != FORM) {
+        fail(r, start, "a #+ or a #- without a feature and a form after it");
+        return FORM;
+    }
+    return kept ? FORM : read_item(r, form);
+}
+
 /* The next thing in the text. A form is stored; a closing parenthesis, a
  * dot on its own and the end of the text are for the caller to make sense
  * of. */
@@ -567,6 +644,8 @@ static enum item read_item(struct lisp_reader *r, lisp *form)
         *form = read_string(r);
         return FORM;
     case '#':
+        if (looking_at(r, '+') || looking_at(r, '-'))
+            return read_conditional(r, start, form);
         *form = read_sharp(r, start);
         return FORM;
     case '`':
@@ -599,6 +678,7 @@ void lisp_reader_init(struct lisp_reader *r, const void *text, size_t size)
     r->error = NULL;
     r->where = r->text;
     r->depth = 0;
+    r->suppress = 0;
 }
 
 /* The next form of the text. After LISP_READ_SHORT or LISP_READ_ERROR,
@@ -611,6 +691,7 @@ enum lisp_read_status lisp_read(struct lisp_reader *r, lisp *form)
     r->status = LISP_READ_OK;
     r->depth = 0;
     r->backquotes = 0;
+    r->suppress = 0;
     skip(r);
     start = r->at;
     switch (read_item(r, form)) {

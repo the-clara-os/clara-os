@@ -297,6 +297,12 @@ void lisp_symbols_init(void)
     lisp_roots.package = lisp_symbol_in(lisp_roots.common_lisp, "*PACKAGE*", 1);
     lisp_as_symbol(lisp_roots.package)->value = lisp_roots.user;
     lisp_symbol_flag(lisp_roots.package, LISP_SPECIAL);
+    /* What this Lisp is, for #+ and #-: ClaraOS, on one of its two architectures. */
+    lisp_roots.features = lisp_symbol_in(lisp_roots.common_lisp, "*FEATURES*", 1);
+    lisp_as_symbol(lisp_roots.features)->value =
+        lisp_cons(lisp_symbol_in(lisp_roots.keyword, "CLARA", 1),
+                  lisp_cons(lisp_symbol_in(lisp_roots.keyword, arch_feature, 1), LISP_NIL));
+    lisp_symbol_flag(lisp_roots.features, LISP_SPECIAL);
     /* Common Lisp gives no names to what a backquote is read as, so these
      * are the substrate's own, and stay internal. */
     lisp_roots.quasiquote = lisp_symbol_in(lisp_roots.common_lisp, "QUASIQUOTE", 0);
