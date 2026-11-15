@@ -136,10 +136,26 @@ The Lisp runtime, in the substrate:
   a panic. Every boot puts the collector through 70000 objects and
   evaluates some 260 texts, and `make test` boots once more with a
   collection at every safe point of the evaluator.
-- [ ] **M7 Lisp in the driver's seat.** Lisp threads over substrate threads;
-  the unsafe package: raw memory, port I/O, interrupts delivered as events;
-  the console rewritten in Lisp; the same sources loading under SBCL with
-  host shims, and a host test run in `make test`.
+- [x] **M7 Lisp in the driver's seat** (2026-11-15, version 0.0.11). Lisp
+  threads over substrate threads (kernel/lisp/thread.c): each has the
+  evaluator's stacks to itself and its own bindings of the special
+  variables, one of them at a time has the runtime, and a turn ends at a
+  safe point once a tick has gone by. Locks, events, `join-thread`,
+  `destroy-thread` and `sleep`, under the names of Bordeaux Threads, in the
+  package CLARA; a thread or an interrupt handler can end another thread's
+  wait (`thread_wait`, `thread_wake`). The package CLARA.UNSAFE
+  (unsafe.c): memory by its address, the I/O ports, page frames for a
+  driver, and an interrupt as an event that a thread waits for, the timer's
+  and the serial port's so far. Streams, in lisp/boot.lisp: the printer
+  makes strings, and a stream is where they go. The console is Lisp
+  (lisp/console.lisp): it sends to the UART through ports on one machine
+  and memory on the other, draws the font on the framebuffer, and puts the
+  lines together that are typed; the listener is Lisp too
+  (lisp/listener.lisp). The substrate's console keeps the boot report and
+  the kernel's last words, and the two hand the screen to each other.
+  `read-from-string`, `#+` and `#-`. The same files load under SBCL, where
+  lisp/host/ stands in for the machine, and `make test` begins with some
+  five hundred checks of them there before it boots.
 
 Devices and storage:
 
@@ -289,102 +305,68 @@ Infrastructure, for sessions with budget left over:
   LOAD that leaves `*package*` changed when a form fails, which is older
   than this milestone and was only ever looked at by hand; the boot
   volume has a file with a mistake in it since, kernel/lisp/self-test.lisp,
-  for a text to load.
+  for a text to load. From M7: raw bytes typed at the console in Lisp
+  through the standard input of tools/run.sh, with Delete and Backspace,
+  tabs, lines that end in a carriage return, a line feed and both,
+  characters outside ASCII typed and taken back, control characters,
+  Ctrl-D in the middle of a line and of a form, Ctrl-C at an empty
+  prompt, after three characters, at the prompt for the rest of a form,
+  during `(loop)` and during `(sleep 100)`; 400 forms pasted at once, 24
+  KB, none lost, on AArch64 and on x86_64; a write from the prompt into
+  the kernel's code, to see the fault report take the screen back from
+  the console in Lisp; the stress session emulated, on both
+  architectures, 39 s and 57 s; the whole of `make test` in an Ubuntu
+  container, with SBCL 2.2.9. And the boot, the stress session and the
+  host tests with the code broken on purpose, to see that they notice.
+  Threads: bindings that do not travel with their thread; a collector
+  that does not look at the other threads; no turn for another thread at
+  a tick; a lock that wakes nobody when it is released, and one that
+  anybody can take; a thread that is told to stop and never looks, and a
+  stop that a handler can take; a wake before the wait that is lost; a
+  sleeper that the tick leaves marked as waiting; an event that wakes
+  nobody. The unsafe package: 16 bits read as 8, 64 written as 32, a copy
+  that always starts at the front, a bitmap with its rows mirrored, any
+  address taken for mapped, a fill one word short, an interrupt that
+  signals nothing, interrupts counted one by one, a negative integer
+  refused. The reader and the streams: a top level inside another that
+  sees the handlers outside it; READ-FROM-STRING one character off; `#+`
+  that makes sense of what it leaves out, and one for which every
+  feature is there; PRIN1-TO-STRING that writes like PRINC; a stream that
+  does not know whether its line is fresh; a string stream with its
+  parts back to front. The console and the listener, which the host
+  tests caught and a boot mostly could not: UTF-8 with a wrong first
+  byte; a new line without its carriage return; a scroll that keeps a
+  row too many; no new row at the last column; Backspace that takes
+  nothing back; a line feed after a carriage return taken for a line;
+  Ctrl-C left a byte after the line is over; a colour in the wrong bits;
+  a grid that begins at the screen's left edge; the values of a form on
+  one line; a form that is not finished forgotten; Ctrl-C at the prompt
+  ending the listener. Two got through the first version of the
+  kernel's texts: a lock that wakes nobody and a lock that anybody can
+  take, because the threads of the text never ran at the same time;
+  `thread-yield` gives the processor up since, not only the runtime.
 
 Shortcuts and loose ends, under the milestone that settles each one. A
 session reads its own group before it starts, and whatever it leaves open
 is added here in the same change.
 
-M7:
-
-- One thread at a time may use the Lisp runtime: the heap and the
-  packages' tables take no lock. The evaluator has one value stack, one
-  stack of bindings, one set of values and one non-local exit under way,
-  all static in eval.c, and it measures its depth on the stack of the one
-  thread that called `lisp_eval_start`. A special variable has one value
-  for the whole machine, kept in the symbol. Those stacks are also what
-  the collector starts from (`lisp_eval_roots`): a second thread that
-  evaluates needs its own, and the collector a list of all threads to go
-  through. There is none: a thread is only in the queue it waits in.
-- A thread that does not come to a safe point keeps
-  `thread_stop_the_world` from returning, and nothing says which thread
-  it is. With one Lisp thread nobody can hold the collector up: the
-  other threads sleep, or wait for it to finish.
-- The evaluator comes to a safe point at every call and every GO, and
-  nowhere else. A function in C that takes long holds the world up
-  meanwhile, and Ctrl-C does not stop it: the LENGTH of a list that
-  leads back into itself still runs for good.
-- There are no streams. FORMAT writes to the console or into a string,
-  WARN and the top level write to the console, and what a condition says
-  is put together when the condition is made: DEFINE-CONDITION refuses
-  `:report`, and a condition of a type that has nothing to say prints as
-  its type and its slots.
-- HANDLER-CASE is the one way to handle a condition. There is no
-  HANDLER-BIND, no restart and no debugger, and a clause names a type by
-  its name and not as `(or ...)`. An error that nothing handles ends the
-  evaluation and is printed. WARN does not look whether what it is given
-  is a WARNING.
-- The substrate's errors have a type of their own where a program is
-  likely to care: TYPE-ERROR, with its datum and without an expected
-  type, which the substrate says in words; UNBOUND-VARIABLE and
-  UNDEFINED-FUNCTION, with the name; PROGRAM-ERROR for arguments that do
-  not fit; CONTROL-ERROR for an exit with nowhere to go;
-  DIVISION-BY-ZERO, and ARITHMETIC-ERROR for an integer too large;
-  STORAGE-CONDITION for a stack or a heap that is full. Every other is a
-  plain ERROR. Ctrl-C is a SERIOUS-CONDITION with no type of its own.
-- An error in the reader, at the prompt, is still a status in C, with
-  words and a place, and the loop on the serial port, which is C as
-  well, prints it. No HANDLER-CASE sees it.
-- What the language does not have yet, and refuses where it could be
-  misread: `(declare (special ...))`, `&environment`, the keywords of
-  LOOP, the options of DEFSTRUCT (`:include`, `:conc-name` and the
-  rest). What is simply not there: hash tables, which DESIGN.md counts in
-  the first subset; `(defun (setf f) ...)`, `macro-function`,
-  `symbol-macrolet`, `progv`; `typep`, `typecase`, `check-type`;
-  `subseq`, `elt` and the functions on strings beyond `string=`. FORMAT
-  knows `~A ~S ~D ~%` and `~~`. The functions on sequences take lists
-  only, and of their keyword arguments `:test`, with `:key` for MEMBER
-  and ASSOC and `:initial-value` for REDUCE. SETF knows the places that
-  boot.lisp lists with DEFSETF and the ones DEFSTRUCT adds. `eq` and
-  `eql` are one function, `char=` and `char<` take two characters.
-- The reader refuses `#+` and `#-`, which the sources shared with SBCL
-  will want.
-- Packages can be made, used at their making, and exported from. There is
-  no `import`, `unintern`, `shadow`, `use-package` or `delete-package`;
-  `export` does not look whether the name is taken in a package that uses
-  this one; and nothing stops `(defun car ...)` from replacing CAR.
-- lisp/boot.lisp exports what it defines by a list at its top, kept by
-  hand: a definition that is missing there stays internal to COMMON-LISP,
-  and nothing says so until somebody calls it from another package. It is
-  also the one Lisp file SBCL cannot load, so the host tests need another
-  way to check it than loading it.
-- Letters fold to upper case in the reader, and the printer tells the two
-  cases apart, for ASCII only: `é` stays as it is where SBCL makes `É` of
-  it. A character has one of the ten names in read.c, or `U+` and its
-  code point.
-- CI runs no Lisp tests, because there are none. When the SBCL host tests
-  join `make test`, the workflow has to install SBCL.
-- An interrupt has no way to reach Lisp. The handlers are C, and the
-  timer's is the only one.
-- A thread can wait for a tick, for a lock and for another thread to
-  finish, and for nothing else. A handler can already wake a thread, which
-  is what the tick does to a sleeper, but there is no event for a thread
-  to wait on that a handler could signal.
-- A thread cannot be stopped from outside, and a sleep cannot be cut
-  short. Stopping an application means unwinding its threads (DESIGN.md),
-  which has to be asked of each thread and done by it.
-- A thread owns a stack and its registers and nothing more: there is no
-  place yet for the dynamic bindings of a Lisp thread, or for its value
-  stack. The Lisp thread's stack is a megabyte because kmain asks for
-  one; what a second Lisp thread gets is to be decided.
-- Every thread has to be joined by somebody, or its stack is never given
-  back. Lisp threads that nobody waits for need another arrangement.
-
 M8:
 
 - The console has no cursor and no keyboard. A line can be typed on the
-  serial port (`kgetline`), with backspace for all its editing, and what
-  is typed is echoed on the screen.
+  serial port, with backspace for all its editing (lisp/console.lisp),
+  and what is typed is echoed on the screen.
+- A Lisp thread can wait for two interrupts, the timer's and the one that
+  says bytes have arrived on the serial port, and their names are a list
+  in kernel/lisp/thread.c. A device's interrupt needs a number to ask for
+  it by, and the table of handlers below.
+- CLARA.UNSAFE reaches what the substrate has mapped and nothing else:
+  RAM, the screen, the UART. There is no function yet that maps a
+  device's registers, which the first driver for a PCI device will want.
+- A write through CLARA.UNSAFE to memory that is mapped read-only is a
+  fault that stops the machine; only an address where nothing is mapped
+  is caught and made an error. `memory-64` gives an error for a value
+  that does not fit in a fixnum, 62 bits and a sign: a driver reads such
+  a register as two halves.
 - No interrupt arrives for a character on the serial port. The timer's
   tick takes in what the port holds, so a character waits up to 10 ms,
   and what arrives meanwhile has to fit in the UART's FIFO: 16
@@ -420,6 +402,11 @@ M9:
 
 M10:
 
+- A thread, a lock and an event each hold an address in the kernel's own
+  memory in one of their words, and `lisp_roots` holds the events of the
+  interrupts: a saved heap has to come back without the first and with
+  the second put right. Which thread reads from the console, and whether
+  Ctrl-C stops it, are C variables.
 - The kernel image runs wherever the firmware loaded it, so the address of
   a C function changes with the machine and the build. A saved heap has to
   name the substrate's functions by index or by name, never by address.
@@ -427,8 +414,9 @@ M10:
   `lisp_primitives` or in the evaluator's table of special forms, so a
   row put in the middle of either makes an older image call the wrong
   function. By name would not.
-- The kernel panics when `\clara` has no boot.lisp or when loading it
-  fails, there being no Lisp world without it. An image takes its place.
+- The kernel panics when `\clara` has no boot.lisp, font.lisp,
+  console.lisp or listener.lisp, or when loading one of them fails, there
+  being no Lisp world without them. An image takes their place.
 - GENSYM counts in a C variable, which an image would not bring back.
 - A heap that is saved has free blocks in it, in lists that are C
   pointers and C variables (heap.c). After loading, a sweep puts the
@@ -436,6 +424,104 @@ M10:
   variables as well.
 
 No milestone yet, to be picked up when they start to matter:
+
+- One Lisp thread at a time has the runtime, and gives it up only at a
+  safe point or to wait. The evaluator comes to a safe point at every
+  call and every GO, and nowhere else: a function in C that takes long
+  holds every Lisp thread up meanwhile, the collector with them, and
+  neither Ctrl-C nor `destroy-thread` stops it: the LENGTH of a list that
+  leads back into itself still runs for good. A second processor would
+  be of no use to Lisp as it is.
+- The Lisp threads take turns of one tick in the order they asked, with
+  no priorities, like the substrate's. A Lisp thread costs a megabyte of
+  stack and 644 KiB for the evaluator whatever it does, and
+  `make-thread` is an error when the machine has no such memory left.
+- A lock that a thread holds when it ends stays held. A lock cannot be
+  taken twice by its holder, there is no wait for one with a limit, and
+  there are no condition variables: an event does for what they would.
+  `join-thread` on a thread that failed or was stopped signals a plain
+  ERROR. The thread that reads from the console cannot be destroyed.
+- The collector no longer stops the world, the runtime being one
+  thread's at a time. `thread_stop_the_world` and the safe points of
+  kernel/thread.c are still there and run in the thread self-test at
+  every boot; nothing else calls them. They can go, or stay for what
+  does not evaluate.
+- A stream takes strings and gives lines. There is no `read-char`, no
+  `read` from a stream, no `with-input-from-string`, no
+  `*error-output*` or `*terminal-io*`, and `write-string` takes no
+  `:start` and `:end`. Everything that prints makes a string first, and
+  a string stream keeps every string it was given until it is asked for
+  them. DEFINE-CONDITION still refuses `:report`, though there would be
+  a stream for it to write to now, and a condition of a type that has
+  nothing to say prints as its type and its slots.
+- HANDLER-CASE is the one way to handle a condition. There is no
+  HANDLER-BIND, no restart and no debugger, and a clause names a type by
+  its name and not as `(or ...)`. An error that nothing handles ends the
+  evaluation and is printed. WARN does not look whether what it is given
+  is a WARNING. Of the substrate's own errors, the ones a program is
+  likely to tell apart have Common Lisp's types; Ctrl-C is
+  CLARA:KEYBOARD-INTERRUPT; every other is a plain ERROR.
+- What the language does not have yet, and refuses where it could be
+  misread: `(declare (special ...))`, `&environment`, the keywords of
+  LOOP, the options of DEFSTRUCT (`:include`, `:conc-name` and the
+  rest). What is simply not there: hash tables, which DESIGN.md counts in
+  the first subset; `(defun (setf f) ...)`, `macro-function`,
+  `symbol-macrolet`, `progv`; `typep`, `typecase`, `check-type`; `elt`,
+  `coerce`, and the functions on strings beyond `string=` and `subseq`.
+  FORMAT knows `~A ~S ~D ~%` and `~~`. The functions on sequences take
+  lists only, SUBSEQ strings as well, and of their keyword arguments
+  `:test`, with `:key` for MEMBER and ASSOC and `:initial-value` for
+  REDUCE. SETF knows the places that boot.lisp lists with DEFSETF and the
+  ones DEFSTRUCT adds. `eq` and `eql` are one function, `char=` and
+  `char<` take two characters. A file in lisp/ that needs one of these
+  loads under SBCL and not here: only a boot tells.
+- What `#+` and `#-` leave out still has to be syntax that the reader
+  knows, apart from its symbols, numbers and characters, which are
+  passed over.
+- Packages can be made, used at their making, and exported from. There is
+  no `import`, `unintern`, `shadow`, `use-package` or `delete-package`;
+  `export` does not look whether the name is taken in a package that uses
+  this one; and nothing stops `(defun car ...)` from replacing CAR.
+- Letters fold to upper case in the reader, and the printer tells the two
+  cases apart, for ASCII only: `é` stays as it is where SBCL makes `É` of
+  it. A character has one of the ten names in read.c, or `U+` and its
+  code point.
+- The console in Lisp writes a character at a time, some forty calls of
+  the evaluator for each, and its lock is taken once for every string.
+  It has one colour. It scrolls by copying every row of pixels up, and
+  so does the substrate's console since M7: that reads the framebuffer,
+  which a real display is slow at. When the kernel reports a fault while
+  the screen is the Lisp console's, it clears the screen first, not
+  knowing where that console left off; and whatever else the substrate
+  prints meanwhile goes to the serial port alone.
+- Ctrl-C that is typed right behind the end of a line can reach the
+  evaluator before the console has read it: the line is given up as it
+  should be, without the `^C` that shows it. A condition that comes all
+  the way out of the listener starts the listener again, and what was
+  typed of a form so far is lost.
+- READ-FROM-STRING writes its whole string out as UTF-8 for the reader,
+  into page frames, every time it is called, and the listener calls it
+  once for every form and once more for every line of a form that is
+  not finished: a form of very many lines is read in time that grows
+  with the square of them.
+- lisp/host/ is a stand-in, not the machine. Under SBCL a thread is
+  preempted anywhere, memory is 4 MiB at one address, nothing is mapped
+  read-only, and the Lisp is all of Common Lisp. The host tests say that
+  the console and the listener do what they should with the bytes and
+  the pixels; whether the interpreter runs them is for the boot to say.
+  The names in boot.lisp are checked there by reading the file as text:
+  a definition counts when its line begins with `(defun ` or its like.
+  The kernel's own texts are evaluated before the console is loaded, so
+  the console and the listener have no self-test at boot but the
+  session.
+- CI has SBCL 2.6.0, the Mac 2.6.10, and the Ubuntu 24.04 container that
+  stands in for CI on the Mac 2.2.9. The stress boot, a collection at
+  every safe point, takes 8 s on the Mac and a minute on CI, where
+  AArch64 is emulated; a text in the kernel's self-test that goes
+  round a thousand times costs seconds there, since every call of a
+  function in Lisp is a safe point, FORMAT's among them.
+- lisp/font.lisp and kernel/font.c hold the same glyphs, one for each
+  console, from the one generator.
 
 - Integers are fixnums, 63 bits. A result that does not fit is an error,
   and so is a division that does not come out even: there are no larger
@@ -457,8 +543,9 @@ No milestone yet, to be picked up when they start to matter:
   MULTIPLE-VALUE-BIND and HANDLER-CASE are special forms here and macros
   in Common Lisp, so MACROEXPAND-1 leaves them as they are.
   MACROEXPAND-1 does not see the macros of a MACROLET.
-- The collector stops everything and goes through the whole heap every
-  time, so its time grows with what is in use; nothing has measured it.
+- The collector goes through the whole heap every time, and no Lisp
+  thread runs meanwhile, so its time grows with what is in use; nothing
+  has measured it.
   Nothing moves, so free memory is in pieces: a short free block serves
   only an object that fits it, and the heap gives page frames back to
   the kernel only from its end, where one object that stays keeps the
@@ -487,8 +574,6 @@ No milestone yet, to be picked up when they start to matter:
 - NREVERSE makes a new list, MAPC makes one and drops it, and a function
   with keyword parameters looks its keywords up by name at every call.
   How fast the interpreter is has not been measured.
-- What Lisp writes to the console goes there a character at a time, each
-  with the console's lock taken and given back.
 
 - The first megabyte of RAM is never handed out or mapped. Frame 0 would
   look like a failed allocation, a null pointer has to fault, and x86 needs
@@ -569,7 +654,7 @@ No milestone yet, to be picked up when they start to matter:
   machine describes how its devices' interrupt lines are wired.
 - QEMU's hvf has no GIC version 2, which is why `make test` boots AArch64
   a second time, emulated.
-- None of M4, M5, M6a, M6b and M6c has been booted in UTM itself. UTM runs AArch64
+- None of M4, M5, M6a, M6b, M6c and M7 has been booted in UTM itself. UTM runs AArch64
   under hvf with GIC version 3, four processors and 4 GiB, and that was
   checked with Homebrew's QEMU 11 from the disk image; UTM brings QEMU
   10.0 and a display device of its own. A virtual machine there has no
@@ -595,7 +680,7 @@ No milestone yet, to be picked up when they start to matter:
   is the longest of the four.
 - `make image` needs macOS (hdiutil), so CI neither builds nor boots the
   disk image that UTM gets.
-- site/boot.png, on the website, is a screenshot of version 0.0.10, to be
+- site/boot.png, on the website, is a screenshot of version 0.0.11, to be
   replaced by hand when the boot report has changed enough to matter:
   build/screen-aarch64.png after `make test` is the same picture of the
   current kernel.

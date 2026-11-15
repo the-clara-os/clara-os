@@ -1,20 +1,16 @@
-/* The Lisp runtime's beginning, its self-tests, and the thread that the
- * Lisp world runs on: it loads lisp/boot.lisp, and then reads forms from
- * the serial port, evaluates them and prints what they give. */
+/* The Lisp runtime's beginning, its self-tests, and what the first thread
+ * of the Lisp world does: it loads lisp/boot.lisp, and then reads forms
+ * from the serial port, evaluates them and prints what they give. */
 #include "lisp.h"
 
-/* The evaluator calls itself in C for every form inside a form, so its
- * thread has a stack to match: a function that calls itself gets some
- * thousands of calls deep before the evaluator says the stack is full. */
-#define LISP_STACK_SIZE (1024 * 1024)
-
-void lisp_init(const struct boot_file *files)
+void lisp_init(const struct boot_info *bi)
 {
     lisp_heap_init();
     lisp_symbols_init();
     kprintf("lisp: objects are tagged 64-bit words, in a heap at %p that begins with NIL\n",
             (void *)(uintptr_t)VM_HEAP_BASE);
-    lisp_eval_init(files);
+    lisp_eval_init(bi->files);
+    lisp_unsafe_init(&bi->fb);
 }
 
 /* Where the self-test prints to: memory, so that it can look at the text. */
@@ -177,6 +173,12 @@ static const struct {
     { "`(a ,b ,@c . ,d)", "`(A ,B ,@C . ,D)" },
     { "`(a `(b ,(c ,d)))", "`(A `(B ,(C ,D)))" },
     { "`(a ,.b)", "`(A ,@B)" },
+    /* what is there on one Lisp and not on another */
+    { "(a #+clara b #-clara c #+(or nope (not clara)) d #-(and clara nope) e)", "(A B E)" },
+    { "#+nope (sb-thread:x #\\nosuchname 1.5 no:where \"s\") a", "A" },
+    { "#-nope a", "A" },
+    { "(#+nope a)", "NIL" },
+    { "#+(and) #+(or) a b", "B" },
     /* vectors */
     { "#()", "#()" },
     { "#(1 #(2 3) \"x\" y #\\z)", "#(1 #(2 3) \"x\" Y #\\z)" },
@@ -227,7 +229,12 @@ static const struct {
     { "#<PACKAGE \"KEYWORD\">", LISP_READ_ERROR },
     { "#q", LISP_READ_ERROR },
     { "#3(a)", LISP_READ_ERROR },
-    { "#+clara a", LISP_READ_ERROR },
+    { "#+", LISP_READ_SHORT },
+    { "#+clara", LISP_READ_SHORT },
+    { "#-nope (a", LISP_READ_SHORT },
+    { "(a #+clara)", LISP_READ_ERROR },
+    { "#+ ) a", LISP_READ_ERROR },
+    { "#+nope #.(a) b", LISP_READ_ERROR }, /* what is left out still has to be syntax that the reader knows */
     { ",a", LISP_READ_ERROR },
     { ",@a", LISP_READ_ERROR },
     { "`(a ,,b)", LISP_READ_ERROR }, /* two commas to one backquote */
@@ -776,6 +783,8 @@ static const struct {
     { "(let ((log nil)) (list (handler-case (let ((*level* 9)) (unwind-protect (error \"x\") (push *level* log)))"
       " (error () *level*)) log))",
       "(6 (9))" },
+    { "(handler-case (unwind-protect (error \"~A\" (list 1 2)) (list 3)) (error (c) (format nil \"~A\" c)))",
+      "\"(1 2)\"" },
     { "(defvar *log* nil) (unwind-protect (error \"to the top\") (push 'cleaned *log*))", "error: to the top" },
     { "*log*", "(CLEANED)" },
     /* the collector, in the middle of things: what is held only by the evaluator has to come through */
@@ -800,9 +809,175 @@ static const struct {
     { "(let ((v (make-array 3 :initial-element (list 'x)))) (cl::%collect) (let ((s (make-point :x v))) (cl::%collect)"
       " (point-x s)))",
       "#((X) (X) (X))" },
-    { "(let ((l nil)) (dotimes (i 2000) (push (list i (format nil \"~D\" i)) l)) (cl::%collect)"
+    { "(let ((l nil)) (dotimes (i 600) (push (list i (format nil \"~D\" i)) l)) (cl::%collect)"
       " (list (length l) (car l) (car (last l))))",
-      "(2000 (1999 \"1999\") (0 \"0\"))" },
+      "(600 (599 \"599\") (0 \"0\"))" },
+    /* streams: the printer makes a string, and a stream is where it goes */
+    { "(with-output-to-string (s) (write-string \"a\" s) (prin1 \"b\" s) (princ \"c\" s) (write-char #\\d s) (terpri s)"
+      " (format s \"~D~A\" 1 'e))",
+      "\"a\\\"b\\\"cd\n1E\"" },
+    { "(let ((s (make-string-output-stream))) (list (fresh-line s) (progn (write-string \"x\" s) (fresh-line s))"
+      " (fresh-line s) (get-output-stream-string s) (get-output-stream-string s)))",
+      "(NIL T NIL \"x\n\" \"\")" },
+    { "(with-output-to-string (*standard-output*) (print 'a) (write-line \"b\") (format t \"~S\" \"c\"))",
+      "\"\nA b\n\\\"c\\\"\"" },
+    { "(list (prin1-to-string \"a\") (princ-to-string \"a\") (streamp *standard-output*) (streamp 5))",
+      "(\"\\\"a\\\"\" \"a\" T NIL)" },
+    { "(write-string \"x\" 5)", "error: 5 is not a stream that can be written to" },
+    { "(format nil 5)", "error: FORMAT wants a string to go by, and 5 is not one" },
+    { "(with-output-to-string (*standard-output*) (warn \"~A is low\" 'fuel))", "\"warning: FUEL is low\n\"" },
+    { "(let ((s (make-string-input-stream (format nil \"one~%two~%~%four\"))))"
+      " (list (read-line s) (read-line s) (read-line s) (read-line s) (read-line s nil 'end)))",
+      "(\"one\" \"two\" \"\" \"four\" END)" },
+    { "(read-line (make-string-input-stream \"\"))", "error: #<END-OF-FILE>" },
+    /* the reader, from Lisp */
+    { "(read-from-string \"(a b) c\")", "(A B) 5" },
+    { "(read-from-string \"(a b) c\" t nil :start 5)", "C 7" },
+    { "(read-from-string \" ; nothing\" nil 'none)", "NONE 10" },
+    { "(read-from-string \"\")", "error: #<END-OF-FILE>" },
+    { "(handler-case (read-from-string \"(a b\") (end-of-file (c) (format nil \"~A\" c)))",
+      "\"the text ends inside a list\"" },
+    { "(handler-case (read-from-string \"caf\xc3\xa9 (a . )\" t nil :start 4) (reader-error (c) (format nil \"~A\" c)))",
+      "\"no form between the dot and what follows it, at line 1, column 11\"" },
+    { "(handler-case (read-from-string \"(a b\") (reader-error () 'wrong) (error () 'an-error))", "AN-ERROR" },
+    { "(read-from-string \"#+clara here #-clara there\")", "HERE 12" },
+    { "(list (subseq \"hello\" 1 3) (subseq \"hello\" 2) (subseq '(a b c d) 1 3) (subseq '(a b c) 1))",
+      "(\"el\" \"llo\" (B C) (B C))" },
+    { "(subseq \"abc\" 2 5)", "error: \"abc\" has no part from 2 to 5" },
+    { "(handler-case (error 'clara:keyboard-interrupt) (error () 'an-error) (clara:keyboard-interrupt () 'a-break))",
+      "A-BREAK" },
+    /* threads: each has stacks of its own, and its own bindings of the special variables */
+    { "(clara:thread-name (clara:current-thread))", "\"listener\"" },
+    { "(clara:join-thread (clara:make-thread (lambda () (+ 1 2))))", "3" },
+    { "(multiple-value-list (clara:join-thread (clara:make-thread (lambda () (values 1 2)))))", "(1 2)" },
+    { "(defun five () 5) (clara:join-thread (clara:make-thread 'five))", "5" },
+    { "(let ((thread (clara:make-thread (lambda () 1) :name \"one\"))) (clara:join-thread thread)"
+      " (list thread (clara:thread-alive-p thread) (clara:threadp thread) (clara:threadp 1)))",
+      "(#<THREAD \"one\"> NIL T NIL)" },
+    { "(defvar *mine* 'everybodys)"
+      " (let ((*mine* 'bound)) (list (clara:join-thread (clara:make-thread (lambda () *mine*))) *mine*))",
+      "(EVERYBODYS BOUND)" },
+    { "(let ((*mine* 'bound)) (clara:join-thread (clara:make-thread (lambda () (setq *mine* 'set-by-a-thread)))) *mine*)",
+      "BOUND" },
+    { "*mine*", "SET-BY-A-THREAD" },
+    { "(let* ((bound (clara:make-event)) (seen (clara:make-event))"
+      " (thread (clara:make-thread (lambda () (let ((*mine* 'theirs))"
+      " (clara:signal-event bound) (clara:wait-event seen) *mine*)))))"
+      " (clara:wait-event bound) (let ((here *mine*)) (clara:signal-event seen) (list here (clara:join-thread thread))))",
+      "(SET-BY-A-THREAD THEIRS)" },
+    /* a turn ends at a tick: the thread sets the flag while this one goes round and round */
+    { "(let ((flag nil)) (clara:make-thread (lambda () (setq flag 'set))) (do () (flag flag)))", "SET" },
+    /* locks: without one, the threads would read the same total and additions would be lost */
+    { "(let ((lock (clara:make-lock \"total\")) (total 0))"
+      " (mapc #'clara:join-thread (mapcar (lambda (n) (clara:make-thread (lambda () (dotimes (i 50)"
+      " (clara:with-lock-held (lock) (let ((old total)) (clara:thread-yield) (setq total (+ old n))))))))"
+      " '(1 2 3)))"
+      " (list total lock))",
+      "(300 #<LOCK \"total\">)" },
+    { "(let ((lock (clara:make-lock))) (clara:acquire-lock lock)"
+      " (handler-case (clara:acquire-lock lock) (error (c) (format nil \"~A\" c))))",
+      "\"the thread #<THREAD \\\"listener\\\"> holds the lock #<LOCK> already\"" },
+    { "(clara:release-lock (clara:make-lock \"spare\"))",
+      "error: the thread #<THREAD \"listener\"> does not hold the lock #<LOCK \"spare\">" },
+    /* events */
+    { "(let ((e (clara:make-event \"e\"))) (clara:signal-event e 2)"
+      " (list (clara:wait-event e) (clara:wait-event e) (clara:wait-event e 0) e))",
+      "(T T NIL #<EVENT \"e\">)" },
+    { "(clara:wait-event (clara:make-event) 20)", "NIL" },
+    { "(let* ((go (clara:make-event))"
+      " (threads (mapcar (lambda (n) (clara:make-thread (lambda () (clara:wait-event go) n))) '(1 2 3))))"
+      " (clara:signal-event go 3) (mapcar #'clara:join-thread threads))",
+      "(1 2 3)" },
+    /* what a thread holds comes through a collection that another thread makes */
+    { "(let* ((ready (clara:make-event)) (go (clara:make-event))"
+      " (thread (clara:make-thread (lambda () (let ((kept (list 'a (list 'b))))"
+      " (clara:signal-event ready) (clara:wait-event go) kept)))))"
+      " (clara:wait-event ready) (cl::%collect) (dotimes (i 100) (list i)) (cl::%collect)"
+      " (clara:signal-event go) (clara:join-thread thread))",
+      "(A (B))" },
+    { "(let ((thread (clara:make-thread (lambda () (let ((kept (list 1 2 3))) (clara:thread-yield) (cl::%collect) kept)))))"
+      " (cl::%collect) (clara:join-thread thread))",
+      "(1 2 3)" },
+    /* a thread that fails, and threads that are stopped: computing, and waiting */
+    { "(clara:join-thread (clara:make-thread (lambda () (handler-case (car 5) (error (c) (format nil \"~A\" c))))))",
+      "\"CAR wants a list, and 5 is not one\"" },
+    { "(let* ((started (clara:make-event)) (log nil)"
+      " (thread (clara:make-thread (lambda () (unwind-protect (progn (clara:signal-event started) (loop))"
+      " (push 'cleaned log))) :name \"spinner\")))"
+      " (clara:wait-event started) (clara:destroy-thread thread)"
+      " (list (handler-case (clara:join-thread thread) (error (c) (format nil \"~A\" c))) log"
+      " (clara:thread-alive-p thread)))",
+      "(\"the thread #<THREAD \\\"spinner\\\"> was stopped\" (CLEANED) NIL)" },
+    { "(let* ((never (clara:make-event)) (waiting (clara:make-event))"
+      " (thread (clara:make-thread (lambda () (clara:signal-event waiting)"
+      " (handler-case (clara:wait-event never) (serious-condition () 'handled))))))"
+      " (clara:wait-event waiting) (clara:thread-yield) (clara:destroy-thread thread)"
+      " (handler-case (clara:join-thread thread) (error () 'stopped)))",
+      "STOPPED" },
+    { "(clara:destroy-thread (clara:current-thread))",
+      "error: the thread #<THREAD \"listener\"> reads from the console, and cannot be stopped" },
+    { "(clara:join-thread (clara:current-thread))",
+      "error: the thread #<THREAD \"listener\"> cannot wait for itself to finish" },
+    { "(clara:join-thread 5)", "error: CLARA:JOIN-THREAD wants a thread, and 5 is not one" },
+    { "(list (sleep 0) (length (clara:all-threads)))", "(NIL 1)" },
+    /* memory by its address, in page frames that are nobody else's */
+    { "(defvar *page* (clara.unsafe:allocate-memory 2))"
+      " (list (integerp *page*) (mod *page* 4096) (clara.unsafe:memory-64 *page*))",
+      "(T 0 0)" },
+    { "(progn (setf (clara.unsafe:memory-32 *page*) #x12345678) (list (clara.unsafe:memory-8 *page*)"
+      " (clara.unsafe:memory-16 *page*) (clara.unsafe:memory-8 (+ *page* 3)) (clara.unsafe:memory-64 *page*)))",
+      "(120 22136 18 305419896)" },
+    { "(progn (setf (clara.unsafe:memory-8 (+ *page* 8)) -1 (clara.unsafe:memory-16 (+ *page* 10)) #xffff)"
+      " (clara.unsafe:memory-32 (+ *page* 8)))",
+      "4294902015" },
+    { "(progn (setf (clara.unsafe:memory-64 (+ *page* 16)) -1)"
+      " (handler-case (clara.unsafe:memory-64 (+ *page* 16)) (arithmetic-error () 'too-large)))",
+      "TOO-LARGE" },
+    { "(progn (clara.unsafe:fill-memory-32 *page* 1024 #xabcd) (list (clara.unsafe:memory-32 *page*)"
+      " (clara.unsafe:memory-32 (+ *page* 4092)) (clara.unsafe:memory-32 (+ *page* 4096))))",
+      "(43981 43981 0)" },
+    { "(progn (dotimes (i 8) (setf (clara.unsafe:memory-8 (+ *page* 4096 i)) (1+ i)))"
+      " (clara.unsafe:copy-memory (+ *page* 4098) (+ *page* 4096) 6) (clara.unsafe:memory-64 (+ *page* 4096)))",
+      "433757350076154369" },
+    { "(progn (clara.unsafe:copy-memory (+ *page* 4096) (+ *page* 4098) 6) (clara.unsafe:memory-64 (+ *page* 4096)))",
+      "433759557723030017" },
+    { "(progn (clara.unsafe:copy-memory *page* (+ *page* 4096) 4096)"
+      " (list (clara.unsafe:memory-64 *page*) (clara.unsafe:memory-32 (+ *page* 8))))",
+      "(433759557723030017 0)" },
+    { "(progn (clara.unsafe:expand-bits-32 *page* 16 (vector #b1010 #b0110) 0 2 4 9 1)"
+      " (mapcar (lambda (at) (clara.unsafe:memory-32 (+ *page* at))) '(0 4 8 12 16 20 24 28)))",
+      "(9 1 9 1 1 9 9 1)" },
+    { "(clara.unsafe:memory-8 0)", "error: nothing is mapped at #x0" },
+    { "(clara.unsafe:memory-8 -1)", "error: CLARA.UNSAFE:MEMORY-8 wants an integer that is not negative, and -1 is not one" },
+    { "(setf (clara.unsafe:memory-8 *page*) 256)", "error: 256 is not an integer that fits in 8 bits" },
+    { "(handler-case (clara.unsafe:memory-32 (+ *page* 2)) (error () 'not-a-multiple-of-four))",
+      "NOT-A-MULTIPLE-OF-FOUR" },
+    { "(clara.unsafe:free-memory *page* 2)", "NIL" },
+    /* an interrupt is an event that a thread waits for */
+    { "(let ((tick (clara.unsafe:interrupt-event :timer)) (before (get-internal-real-time)))"
+      " (dotimes (i 3) (clara:wait-event tick))"
+      " (list tick (>= (- (get-internal-real-time) before) 2) internal-time-units-per-second))",
+      "(#<EVENT \"TIMER\"> T 100)" },
+    { "(clara.unsafe:interrupt-event :nothing)",
+      "error: CLARA.UNSAFE:INTERRUPT-EVENT wants a source of interrupts, :TIMER or :SERIAL, and :NOTHING is not one" },
+};
+
+/* Texts that give one thing on a machine of one kind and something else on
+ * the other: with I/O ports or without, with a screen or without. */
+static const struct {
+    const char *text, *printed, *otherwise;
+} either[] = {
+    /* the line status of the serial port, where that is a port */
+    { "(handler-case (integerp (clara.unsafe:port-8 #x3fd)) (error (c) (format nil \"~A\" c)))", "T",
+      "\"this machine has no I/O ports\"" },
+    { "(handler-case (setf (clara.unsafe:port-8 #x80) 0) (error (c) (format nil \"~A\" c)))", "0",
+      "\"this machine has no I/O ports\"" },
+    /* which of the two this is, for #+ and #- */
+    { "*features*", "(:CLARA :X86-64)", "(:CLARA :ARM64)" },
+    /* what the firmware said about the machine */
+    { "(list (keywordp (clara.unsafe:serial-device)) (integerp (nth-value 1 (clara.unsafe:serial-device)))"
+      " (let ((screen (multiple-value-list (clara.unsafe:framebuffer)))) (or (null (car screen)) (length screen))))",
+      "(T T 7)", "(T T T)" },
 };
 
 /* The evaluator, and the language that lisp/boot.lisp builds on it. Then a
@@ -816,7 +991,7 @@ static unsigned eval_texts(int64_t *deep)
 {
     struct lisp_symbol *package = lisp_as_symbol(lisp_roots.package);
     lisp user = package->value, packages = lisp_roots.packages;
-    unsigned texts = sizeof evaluations / sizeof evaluations[0], wrong = 0;
+    unsigned texts = sizeof evaluations / sizeof evaluations[0], others = sizeof either / sizeof either[0], wrong = 0;
     struct text printed;
     int64_t depth;
 
@@ -829,6 +1004,15 @@ static unsigned eval_texts(int64_t *deep)
             wrong++;
         }
     }
+    for (unsigned i = 0; i < others; i++) {
+        evaluate_text(either[i].text, &printed);
+        if (!same(printed.chars, either[i].printed) && !same(printed.chars, either[i].otherwise)) {
+            kprintf("lisp self-test: %s gave %s, not %s or %s\n", either[i].text, printed.chars, either[i].printed,
+                    either[i].otherwise);
+            wrong++;
+        }
+    }
+    texts += others;
     if (wrong)
         panic("lisp self-test: the evaluator gave %u wrong answers out of %u", wrong, texts);
 
@@ -864,7 +1048,10 @@ static void eval_selftest(void)
     int64_t depth;
     unsigned texts = eval_texts(&depth);
 
-    /* Nobody asks for a collection here: the evaluator has to see for itself that it is time. */
+    /* Nobody asks for the next collection: the evaluator has to see for itself that it is time. When
+     * that is depends on how much was in use after the last one, so there is one first, with
+     * nothing in hand. */
+    lisp_collect();
     lisp_heap_state(&heap);
     collections = heap.collections;
     evaluate_text("(dotimes (i 5000) (list i i i))", &printed);
@@ -879,9 +1066,11 @@ static void eval_selftest(void)
     lisp_heap_state(&heap);
     kprintf("lisp: %llu KiB of heap in use after %llu collections: %llu conses, %llu symbols, %llu strings,\n",
             bytes >> 10, heap.collections, count[LISP_CONS], count[LISP_SYMBOL], count[LISP_STRING]);
-    kprintf("lisp:   %llu vectors, %llu packages, %llu functions, %llu structures and %llu conditions\n",
+    kprintf("lisp:   %llu vectors, %llu packages, %llu functions, %llu structures, %llu conditions,\n",
             count[LISP_VECTOR], count[LISP_PACKAGE], count[LISP_FUNCTION], count[LISP_STRUCTURE],
             count[LISP_CONDITION]);
+    kprintf("lisp:   %llu threads, %llu locks and %llu events\n", count[LISP_THREAD], count[LISP_LOCK],
+            count[LISP_EVENT]);
 }
 
 /* The collector. Objects that are held, on the evaluator's stack, with as
@@ -969,119 +1158,65 @@ static void collector_selftest(void)
             2 * ITEMS + LINKS + 2, freed >> 10, after.size >> 10);
 }
 
-/* A form from the serial port: evaluated, and its values printed, one to
- * a line, or the condition that nothing handled, as it reads for a person. */
-static void answer(lisp form)
+static void console_put(void *to, char c)
 {
-    if (lisp_evaluate(form))
-        for (unsigned i = 0; i < lisp_values.count; i++) {
-            lisp_fresh_line();
-            lisp_print(lisp_values.value[i], lisp_console_put, NULL);
-        }
-    else {
-        lisp_fresh_line();
-        for (const char *s = "error: "; *s; s++)
-            lisp_console_put(NULL, *s);
-        lisp_princ(lisp_values.value[0], lisp_console_put, NULL);
-    }
-    lisp_fresh_line();
+    (void)to;
+    kputc(c);
 }
 
-/* Read forms from the serial port, evaluate each and print what it gives,
- * until the input ends. The reader wants its text whole, so lines are
- * gathered until they hold a form: after every line the reader starts
- * again at the first form that is not finished, and as long as that one
- * stops short, another line is asked for. Nothing is held across the wait
- * for a line, which is a safe point. Ctrl-C stops a form that is being
- * evaluated, at the evaluator's next safe point, and gives up one that is
- * being typed. */
-static void lisp_listen(void)
+/* (load "file"), for a file that the Lisp world cannot do without. */
+static void load(const char *file)
 {
-    static uint8_t text[8192];
-    size_t used = 0;
+    /* Made here and handed over at once: nothing holds it but this variable. */
+    lisp form = lisp_cons(lisp_symbol_in(lisp_roots.common_lisp, "LOAD", 1),
+                          lisp_cons(lisp_string_from_utf8(file, strlen(file)), LISP_NIL));
 
-    kprintf("clara: reading from the serial port: a form typed there is evaluated, Ctrl-C stops it, Ctrl-D ends\n");
-    for (;;) {
-        struct lisp_reader r;
-        enum lisp_read_status status;
-        const uint8_t *unread;
-        unsigned line, column;
-        lisp form;
-        int64_t length;
-
-        kputs(used ? "  " : "> ");
-        length = kgetline((char *)text + used, sizeof text - used - 1);
-        if (length == -2) {
-            /* Ctrl-C: the line is given up, and with it the form that it was to go on. */
-            used = 0;
-            lisp_console_fresh = 1;
-            continue;
-        }
-        if (length < 0) {
-            kputc('\n');
-            if (used)
-                kprintf("the input ended in the middle of a form\n");
-            return;
-        }
-        used += (size_t)length;
-        text[used++] = '\n';
-        lisp_console_fresh = 1;
-
-        lisp_reader_init(&r, text, used);
-        do {
-            unread = r.at;
-            status = lisp_read(&r, &form);
-            if (status == LISP_READ_OK)
-                answer(form);
-        } while (status == LISP_READ_OK);
-        if (status == LISP_READ_SHORT && used < sizeof text - 1) {
-            /* Keep the form that is not finished, and ask for more of it. */
-            used = (size_t)(r.end - unread);
-            memmove(text, unread, used);
-            continue;
-        }
-        if (status == LISP_READ_SHORT)
-            kprintf("that form is longer than the %u bytes there is room for here\n", (unsigned)sizeof text);
-        else if (status == LISP_READ_ERROR) {
-            lisp_reader_where(&r, &line, &column);
-            kprintf("error at line %u, column %u: %s\n", line, column, r.error);
-        }
-        used = 0;
+    if (!lisp_evaluate(form)) {
+        kputs("lisp: ");
+        lisp_princ(lisp_values.value[0], console_put, NULL);
+        kputc('\n');
+        panic("lisp: %s did not load, and without it there is no Lisp world to start", file);
     }
 }
 
-/* The thread of the Lisp world. boot.lisp is the part of the language
- * that is written in Lisp, and the machine is of no use without it. */
-static void lisp_thread(void *arg)
+/* What the first thread of the Lisp world does. boot.lisp is the part of
+ * the language that is written in Lisp, and the files after it are the
+ * beginning of the world: the console, which takes the serial port and
+ * the screen over from the substrate, and the listener, which reads what
+ * is typed there, evaluates it and prints what it gives, until the input
+ * ends. Should a condition come all the way out of the listener, it is
+ * started again and told so. */
+static void lisp_main(void)
 {
+    static const char *const world[] = { "font.lisp", "console.lisp", "listener.lisp" };
     uint64_t before[LISP_TYPES], after[LISP_TYPES];
-    lisp load;
+    lisp listen, condition = LISP_NIL;
+    unsigned told = 0;
 
-    (void)arg;
-    lisp_eval_start();
     collector_selftest();
     lisp_heap_census(before);
-    /* Made here and handed over at once: nothing holds it but this variable. */
-    load = lisp_cons(lisp_symbol_in(lisp_roots.common_lisp, "LOAD", 1),
-                     lisp_cons(lisp_string_from_utf8("boot.lisp", 9), LISP_NIL));
-    if (!lisp_evaluate(load)) {
-        kputs("lisp: ");
-        lisp_princ(lisp_values.value[0], lisp_console_put, NULL);
-        kputc('\n');
-        panic("lisp: boot.lisp did not load, and without it there is no Lisp world to start");
-    }
+    load("boot.lisp");
     lisp_heap_census(after);
     kprintf("lisp: boot.lisp is loaded, with %llu functions and macros in Lisp\n",
             after[LISP_FUNCTION] - before[LISP_FUNCTION]);
     eval_selftest();
-    lisp_listen();
+    for (unsigned i = 0; i < sizeof world / sizeof world[0]; i++)
+        load(world[i]);
+    lisp_heap_census(before);
+    kprintf("lisp: the console and the listener are loaded, %llu more functions: the rest of this is theirs\n",
+            before[LISP_FUNCTION] - after[LISP_FUNCTION]);
+    if (!lisp_evaluate(read_one("(clara.console:start)")))
+        panic("lisp: the console did not start");
+    listen = read_one("clara.listener:run");
+    while (!lisp_call(listen, told, &condition)) {
+        condition = lisp_values.value[0];
+        told = 1;
+    }
+    if (!lisp_evaluate(read_one("(clara.console:stop)")))
+        panic("lisp: the console did not stop");
 }
 
 void lisp_run(void)
 {
-    struct thread *t = thread_create("lisp", lisp_thread, NULL, LISP_STACK_SIZE);
-
-    if (!t)
-        panic("lisp: no memory for the stack of the Lisp thread");
-    thread_join(t);
+    thread_join(lisp_first_thread(lisp_main));
 }

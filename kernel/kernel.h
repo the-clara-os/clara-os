@@ -5,7 +5,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define CLARA_VERSION "0.0.10"
+#define CLARA_VERSION "0.0.11"
 
 #define PAGE_SHIFT 12
 #define PAGE_SIZE  (1ULL << PAGE_SHIFT)
@@ -55,8 +55,9 @@ struct boot_info {
 #define KERNEL_STACK_SIZE (64 * 1024)
 extern uint8_t kernel_stack[PAGE_SIZE + KERNEL_STACK_SIZE];
 
-/* console.c: text goes to the serial port and, after fbcon_init, to the
- * screen. %d %u %x %X %s %c %p and %% are supported, with zero padding and
+/* console.c: the substrate's own console, for the boot report and for its
+ * last words. Text goes to the serial port and, after fbcon_init, to the
+ * screen, unless that is lent to the console in Lisp. %d %u %x %X %s %c %p and %% are supported, with zero padding and
  * width. The compiler checks the arguments: 64-bit ones are %llu, %llx. */
 void kputc(char c);
 void kputs(const char *s);
@@ -64,13 +65,11 @@ void kprintf(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 void kvprintf(const char *fmt, va_list ap) __attribute__((format(printf, 1, 0)));
 void panic(const char *fmt, ...) __attribute__((noreturn, format(printf, 1, 2)));
 void console_serial_only(void); /* leave the screen alone from now on */
-/* A line typed on the serial port, echoed as it is typed, without its end:
- * how many bytes of it are in line, at most size; -1 when Ctrl-D ended
- * the input; -2 when Ctrl-C gave the line up. Only for a thread: it sleeps
- * while nothing arrives. */
-int64_t kgetline(char *line, size_t size);
+int  console_getc(void);          /* the next byte typed on the serial port, or -1: the reader does the waiting */
 void console_tick(void);          /* from the timer's interrupt: take in what has arrived on the serial port */
 extern volatile int console_break; /* Ctrl-C has arrived there, and nobody has acted on it yet */
+struct thread;
+void console_break_wakes(struct thread *t); /* and this thread is woken when it does */
 int  console_interrupted(void);   /* for a computation that can stop: has it? Asked once, it is acted on */
 
 /* fbcon.c: the text console on the framebuffer */
@@ -78,6 +77,8 @@ enum fbcon_color { FBCON_TEXT, FBCON_ACCENT, FBCON_ALERT, FBCON_COLORS };
 void fbcon_init(const struct framebuffer *fb);
 void fbcon_putc(char c);
 void fbcon_set_color(enum fbcon_color color);
+int  fbcon_lend(uint32_t *row, uint32_t *column);  /* another console draws from now on: where this one left off */
+void fbcon_return(uint32_t row, uint32_t column);  /* and gives the screen back, with its own cursor there */
 
 /* font.c, generated from fonts/spleen-8x16.bdf by tools/bdf2c.py */
 #define FONT_WIDTH  8
@@ -145,6 +146,9 @@ void thread_join(struct thread *t);  /* wait until it has finished, and free it:
 void thread_exit(void) __attribute__((noreturn)); /* what returning from fn does */
 void thread_yield(void);             /* the other threads that are ready go first */
 void thread_sleep(uint64_t ticks);   /* until the timer has ticked that many more times */
+#define THREAD_FOREVER (~0ULL)
+int  thread_wait(uint64_t ticks);    /* until thread_wake, or for that many ticks: was it woken? */
+void thread_wake(struct thread *t);  /* its thread_wait returns, this one or the next: also from a handler */
 void thread_safe_point(void);        /* the thread waits here while the world is stopped */
 void thread_stop_the_world(void);    /* returns when every other thread is asleep or at a safe point */
 void thread_start_the_world(void);
@@ -152,6 +156,7 @@ void thread_tick(uint64_t now);      /* from timer_tick */
 void thread_switch(struct frame *f); /* from the architecture's exception code, interrupts off */
 uint64_t thread_stack_guard(void);   /* the unmapped page under the running thread's stack */
 const char *thread_name(void);       /* the running thread's */
+struct thread *thread_self(void);    /* the running thread */
 void thread_selftest(void);
 void lock_acquire(struct lock *l);   /* waits its turn; never in an interrupt handler */
 void lock_release(struct lock *l);
@@ -165,6 +170,7 @@ size_t strlen(const char *s);
 
 /* arch/<arch>/arch.c */
 extern const char *const arch_name;
+extern const char *const arch_feature; /* what *FEATURES* calls it, as SBCL does: "X86-64", "ARM64" */
 void arch_early_init(void);   /* right after ExitBootServices: interrupts off, serial ready */
 void arch_serial_putc(char c);
 int  arch_serial_getc(void);  /* the next byte that has arrived, or -1 when none is waiting */
@@ -173,6 +179,13 @@ void arch_halt(void) __attribute__((noreturn));
 void arch_switch_stack(void *top, void (*fn)(struct boot_info *), struct boot_info *arg)
     __attribute__((noreturn));
 void arch_map_devices(void);  /* vm_map the device registers the code above touches */
+/* I/O ports, on the machines that have them: 0 when this one has none. size is 1, 2 or 4 bytes. */
+int  arch_port_read(uint16_t port, unsigned size, uint32_t *value);
+int  arch_port_write(uint16_t port, unsigned size, uint32_t value);
+/* The serial port, for a driver other than the one above: what it is, and
+ * its first I/O port or the address of its registers. */
+extern const char *const arch_serial_kind;
+extern const uint64_t arch_serial_base;
 
 /* arch/<arch>/exception.c: the processor's exceptions, in the kernel's hands,
  * and with them what a thread switch is made of (thread.c) */

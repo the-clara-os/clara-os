@@ -12,6 +12,16 @@
  * a frame: its value is in the symbol, binding it puts the old value on a
  * stack of bindings, and whatever bound it puts the old value back.
  *
+ * Every Lisp thread has a value stack and a stack of bindings of its own
+ * (thread.c). One thread at a time evaluates, and what is in the variables
+ * below is that thread's. When it makes way for another, its state goes
+ * into its struct lisp_evaluator and the other's comes out of the other's;
+ * and since a special variable has its value in the symbol, the bindings
+ * go along: every binding of the thread that leaves is undone, and every
+ * one of the thread that arrives is done again. A symbol holds the value
+ * that the running thread sees, and a thread that has bound nothing sees
+ * the value that was there before anybody did.
+ *
  * A non-local exit is not a jump. RETURN-FROM, GO, THROW and an error set
  * g_unwind and return, and every piece of C on the way out sees that it is
  * set, undoes what it did, and returns in turn, until the BLOCK, the
@@ -58,14 +68,16 @@ enum { VARIABLES, FUNCTIONS, BLOCK, TAGS };
 #define THROWING 0x17ULL
 #define FAILING  0x1fULL /* a condition that no HANDLER-CASE takes, on its way to the top level */
 #define HANDLING 0x27ULL /* a condition on its way to the HANDLER-CASE that takes it */
+#define STOPPING 0x2fULL /* the thread was told to stop: all the way out, past every handler */
 
 struct lisp_values lisp_values;
 
-static lisp g_stack[STACK_SLOTS + STACK_SPARE];
-static lisp *g_sp = g_stack;
-static struct {
+struct binding {
     lisp symbol, value; /* a special variable, and the value it had before it was bound */
-} g_bindings[BINDINGS];
+};
+static lisp *g_stack; /* STACK_SLOTS + STACK_SPARE words: the running thread's */
+static lisp *g_sp;
+static struct binding *g_bindings; /* BINDINGS of them */
 static unsigned g_bound;
 struct handler {
     struct handler *outer;
@@ -75,7 +87,7 @@ static struct handler *g_handlers;
 /* The collector looks at every lisp here whether or not an exit is under
  * way, so each of them is a Lisp value at all times. */
 static struct unwind {
-    lisp to;     /* 0, or where control is on its way to: a BLOCK or TAGS frame, THROWING, HANDLING, FAILING */
+    lisp to;     /* 0, or where control is on its way to: a BLOCK or TAGS frame, THROWING, HANDLING, FAILING, STOPPING */
     lisp tag;    /* GO: the place in the body. THROW: the tag. HANDLING and FAILING: the condition */
     lisp clause; /* HANDLING: the clause that takes the condition, */
     struct handler *handler; /* and the HANDLER-CASE it belongs to */
@@ -87,6 +99,20 @@ struct catch {
 static struct catch *g_catches;
 static uintptr_t g_c_limit; /* the lowest address the thread's own stack may reach while it evaluates */
 static const struct lisp_primitive *g_primitive; /* the one that was called last */
+
+/* All of the above for a thread that is not running, and the memory of its
+ * two stacks right after. */
+struct lisp_evaluator {
+    lisp *stack, *sp;
+    struct binding *bindings;
+    unsigned bound;
+    struct handler *handlers;
+    struct unwind unwind;
+    struct catch *catches;
+    uintptr_t c_limit;
+    const struct lisp_primitive *primitive;
+    struct lisp_values values;
+};
 static const struct boot_file *g_files;
 static struct {
     lisp lambda, declare, special, optional, rest, body, key, allow_other_keys, aux, whole, environment;
@@ -125,8 +151,9 @@ int lisp_unwinding(void)
 }
 
 /* Errors. What went wrong is said in a string, made the way FORMAT would:
- * ~S prints a Lisp object, ~A prints one for a person, ~Z is a C string.
- * It is at most 255 bytes long. */
+ * ~S prints a Lisp object, ~A prints one for a person, ~X an integer in
+ * hexadecimal, as addresses are written, and ~Z is a C string. It is at
+ * most 255 bytes long. */
 struct buffer {
     char text[256];
     size_t length;
@@ -157,6 +184,18 @@ static lisp message(const char *control, va_list ap)
         case 'A':
             lisp_princ(va_arg(ap, lisp), buffer_put, &b);
             break;
+        case 'X': {
+            uint64_t n = (uint64_t)lisp_fixnum_value(va_arg(ap, lisp));
+            int shift = 60;
+
+            buffer_put(&b, '#');
+            buffer_put(&b, 'x');
+            while (shift && !(n >> shift))
+                shift -= 4;
+            for (; shift >= 0; shift -= 4)
+                buffer_put(&b, "0123456789abcdef"[n >> shift & 15]);
+            break;
+        }
         case 'Z':
             for (const char *s = va_arg(ap, const char *); *s; s++)
                 buffer_put(&b, *s);
@@ -235,14 +274,18 @@ lisp lisp_error(lisp condition)
 
 static lisp fail(const char *type, const char *slot, lisp value, const char *control, va_list ap)
 {
-    lisp cl = lisp_roots.common_lisp, text, slots = LISP_NIL;
+    lisp cl = lisp_roots.common_lisp, home = cl, text, slots = LISP_NIL;
 
     if (g_unwind.to)
         return LISP_NIL; /* the first thing to go wrong is the one that is reported */
+    if (!memcmp(type, "CLARA:", 6)) {
+        home = lisp_roots.clara; /* a type that Common Lisp has no name for */
+        type += 6;
+    }
     text = message(control, ap);
     if (slot)
         slots = lisp_cons(lisp_symbol_in(cl, slot, 0), lisp_cons(value, LISP_NIL));
-    return lisp_error(lisp_make_condition(lisp_symbol_in(cl, type, 1), text, slots));
+    return lisp_error(lisp_make_condition(lisp_symbol_in(home, type, 1), text, slots));
 }
 
 /* An error that says what went wrong and no more than that. */
@@ -257,9 +300,10 @@ lisp lisp_fail(const char *control, ...)
     return value;
 }
 
-/* A condition of the type that has this name in COMMON-LISP, with a value
- * for the slot of that name unless slot is NULL: for what a program may
- * want to tell apart from other errors. */
+/* A condition of the type that has this name in COMMON-LISP, or in CLARA
+ * when the name says CLARA: first, with a value for the slot of that name
+ * unless slot is NULL: for what a program may want to tell apart from
+ * other errors. */
 lisp lisp_fail_as(const char *type, const char *slot, lisp value, const char *control, ...)
 {
     va_list ap;
@@ -321,39 +365,136 @@ static COLD lisp stack_is_full(void)
                         "the stack is full: the forms are nested too deep, or a function calls itself without end");
 }
 
-/* For the collector: everything the evaluator holds. The value stack as
- * far as it is in use, the special variables that are bound with the
- * values they had before, and the words that stay: the values of the last
- * form, and the exit that is under way or was. */
-void lisp_eval_roots(void)
+/* The memory one thread's evaluator takes: the struct, the value stack
+ * and the stack of bindings, one after the other. */
+uint64_t lisp_evaluator_bytes(void)
 {
-    for (const lisp *p = g_stack; p < g_sp; p++)
+    return sizeof(struct lisp_evaluator) + (STACK_SLOTS + STACK_SPARE) * sizeof(lisp) +
+           BINDINGS * sizeof(struct binding);
+}
+
+/* e is the start of that much memory. The struct begins as zeroes: fixnum
+ * zeroes to the collector, which takes its words for Lisp values. */
+void lisp_evaluator_new(struct lisp_evaluator *e)
+{
+    memset(e, 0, sizeof *e);
+    e->stack = e->sp = (lisp *)(e + 1);
+    e->bindings = (struct binding *)(e->stack + STACK_SLOTS + STACK_SPARE);
+    e->values.count = 1;
+}
+
+/* A special variable and what one of its bindings put away change places:
+ * that undoes the binding, and done again it puts the binding back. */
+static void exchange(struct binding *b)
+{
+    lisp value = lisp_as_symbol(b->symbol)->value;
+
+    lisp_as_symbol(b->symbol)->value = b->value;
+    b->value = value;
+}
+
+/* The running thread makes way: what the evaluator holds for it goes into
+ * e, and its bindings are undone, the newest first, so that the symbols
+ * hold what they held before this thread bound them. The thread is at a
+ * safe point. */
+void lisp_evaluator_out(struct lisp_evaluator *e)
+{
+    for (unsigned i = g_bound; i--;)
+        exchange(&g_bindings[i]);
+    e->sp = g_sp;
+    e->bound = g_bound;
+    e->handlers = g_handlers;
+    e->unwind = g_unwind;
+    e->catches = g_catches;
+    e->c_limit = g_c_limit;
+    e->primitive = g_primitive;
+    e->values = lisp_values;
+}
+
+/* And a thread takes its place: its bindings are done again, the oldest
+ * first. */
+void lisp_evaluator_in(const struct lisp_evaluator *e)
+{
+    g_stack = e->stack;
+    g_sp = e->sp;
+    g_bindings = e->bindings;
+    g_bound = e->bound;
+    g_handlers = e->handlers;
+    g_unwind = e->unwind;
+    g_catches = e->catches;
+    g_c_limit = e->c_limit;
+    g_primitive = e->primitive;
+    lisp_values = e->values;
+    for (unsigned i = 0; i < g_bound; i++)
+        exchange(&g_bindings[i]);
+}
+
+/* What a thread holds: the value stack as far as it is in use, the special
+ * variables that are bound, each with the value that its binding keeps,
+ * and the words that stay: the values of the last form, and the exit that
+ * is under way or was. */
+static void reach(const lisp *stack, const lisp *sp, const struct binding *bindings, unsigned bound,
+                  const struct lisp_values *values, const struct unwind *unwind)
+{
+    for (const lisp *p = stack; p < sp; p++)
         lisp_reach(*p);
-    for (unsigned i = 0; i < g_bound; i++) {
-        lisp_reach(g_bindings[i].symbol);
-        lisp_reach(g_bindings[i].value);
+    for (unsigned i = 0; i < bound; i++) {
+        lisp_reach(bindings[i].symbol);
+        lisp_reach(bindings[i].value);
     }
     for (unsigned i = 0; i < LISP_VALUES_MAX; i++)
-        lisp_reach(lisp_values.value[i]);
-    lisp_reach(g_unwind.to);
-    lisp_reach(g_unwind.tag);
-    lisp_reach(g_unwind.clause);
+        lisp_reach(values->value[i]);
+    lisp_reach(unwind->to);
+    lisp_reach(unwind->tag);
+    lisp_reach(unwind->clause);
+}
+
+/* For the collector: everything the evaluator holds for the thread that is
+ * running, which is the one that collects, */
+void lisp_eval_roots(void)
+{
+    reach(g_stack, g_sp, g_bindings, g_bound, &lisp_values, &g_unwind);
+}
+
+/* and for a thread that is not: it stands at a safe point. */
+void lisp_evaluator_reach(const struct lisp_evaluator *e)
+{
+    reach(e->stack, e->sp, e->bindings, e->bound, &e->values, &e->unwind);
 }
 
 /* A safe point of the evaluator's: every object it holds is where
- * lisp_eval_roots finds it. So this is where the collector runs, when it
- * is time, and where a computation can be stopped: by a heap that is full
- * even after collecting, and by Ctrl-C on the serial port. Says 0 when the
- * evaluation is not to go on. */
+ * lisp_eval_roots finds it. So this is where another thread gets its turn,
+ * where the collector runs, when it is time, and where a computation can
+ * be stopped: by DESTROY-THREAD, by Ctrl-C on the serial port, and by a
+ * heap that is full even after collecting. Says 0 when the evaluation is
+ * not to go on. */
 static COLD int safe_point(void)
 {
     thread_safe_point();
+    switch (lisp_thread_safe_point()) {
+    case LISP_STOP:
+        if (!g_unwind.to) {
+            g_unwind.to = STOPPING;
+            g_unwind.tag = LISP_NIL;
+        }
+        return 0;
+    case LISP_BREAK:
+        lisp_fail_as("CLARA:KEYBOARD-INTERRUPT", NULL, 0, "interrupted from the keyboard");
+        return 0;
+    case LISP_GO_ON:
+        break;
+    }
     if (!lisp_heap_safe_point())
         lisp_fail_as("STORAGE-CONDITION", NULL, 0,
                      "the heap is full: what the collector could free is not enough to go on");
-    else if (console_break && console_interrupted())
-        lisp_fail_as("SERIOUS-CONDITION", NULL, 0, "interrupted from the keyboard");
     return !g_unwind.to;
+}
+
+/* For a function in C that has waited (thread.c): other threads have had
+ * the runtime meanwhile, and this one may have been told to stop. */
+int lisp_safe_point(void)
+{
+    return safe_point();
 }
 
 /* The value stack. lisp_push looks whether there is room; the evaluator's
@@ -1403,8 +1544,10 @@ static const struct special {
 };
 
 /* A call: the function, then each argument as it is evaluated, on the
- * value stack, and from there to the function. */
-static lisp call(lisp f, lisp args, lisp env)
+ * value stack, and from there to the function. It is part of eval_car and
+ * not a function of its own, because every level of a call that Lisp
+ * makes would pay for its frame. */
+static inline __attribute__((always_inline)) lisp call(lisp f, lisp args, lisp env)
 {
     lisp *base = g_sp, value = LISP_NIL;
 
@@ -1579,26 +1722,44 @@ lisp lisp_load(lisp name)
     return lisp_roots.t;
 }
 
-/* A form evaluated at the top level, where a condition that nothing
- * handles ends up. Returns 1 with the values in lisp_values, all of them,
- * or 0 with the condition as the one value. The evaluator's stacks have
- * to be where they were: every piece of it gives back what it took, on
- * every way out. */
-int lisp_evaluate(lisp form)
+/* A form or a function at the top level of a thread, where a condition
+ * that nothing handles ends up. Returns 1 with the values in lisp_values,
+ * all of them, 0 with the condition as the one value, and -1 when the
+ * thread was told to stop and has come all the way out. The evaluator's
+ * stacks have to be where they were: every piece of it gives back what it
+ * took, on every way out. */
+static int top_level(lisp form, lisp function, unsigned argc, const lisp *argv)
 {
     lisp *base = g_sp, value;
     unsigned bound = g_bound;
-    const struct catch *catches = g_catches;
-    const struct handler *handlers = g_handlers;
+    struct catch *catches = g_catches;
+    struct handler *handlers = g_handlers;
 
-    value = lisp_eval(form, LISP_NIL);
-    if (g_sp != base || g_bound != bound || g_catches != catches || g_handlers != handlers)
+    /* A top level inside another, which is what the self-test's texts are when they are evaluated
+     * again from the prompt, begins with no handler and no catch in sight: what goes wrong in it
+     * ends here, and not in a HANDLER-CASE of whoever is outside. */
+    g_catches = NULL;
+    g_handlers = NULL;
+    if (function) {
+        *g_sp++ = function;
+        memcpy(g_sp, argv, argc * sizeof(lisp));
+        g_sp += argc;
+        value = lisp_apply(function, argc, base + 1);
+        g_sp = base;
+    } else
+        value = lisp_eval(form, LISP_NIL);
+    if (g_sp != base || g_bound != bound || g_catches || g_handlers)
         panic("lisp: the evaluator left %lld values on its stack, %d bindings, and the catches and handlers %s",
-              (long long)(g_sp - base), (int)(g_bound - bound),
-              g_catches == catches && g_handlers == handlers ? "as they were" : "changed");
+              (long long)(g_sp - base), (int)(g_bound - bound), !g_catches && !g_handlers ? "as they were" : "changed");
+    g_catches = catches;
+    g_handlers = handlers;
     if (!g_unwind.to) {
         settle(value);
         return 1;
+    }
+    if (g_unwind.to == STOPPING) {
+        g_unwind.to = 0;
+        return -1;
     }
     if (g_unwind.to != FAILING)
         panic("lisp: a non-local exit came out at the top level");
@@ -1608,6 +1769,22 @@ int lisp_evaluate(lisp form)
     g_unwind.tag = LISP_NIL;
     lisp_collect_if_full(); /* what was being evaluated holds nothing any more */
     return 0;
+}
+
+int lisp_evaluate(lisp form)
+{
+    int went = top_level(form, 0, 0, NULL);
+
+    if (went < 0)
+        panic("lisp: the thread that reads from the console was told to stop");
+    return went;
+}
+
+/* A few arguments at most: they go on the value stack without a look at
+ * how much room it has. */
+int lisp_call(lisp function, unsigned argc, const lisp *argv)
+{
+    return top_level(LISP_NIL, function, argc, argv);
 }
 
 /* The symbols of the special forms and of the functions in C, each with
@@ -1638,17 +1815,32 @@ void lisp_eval_init(const struct boot_file *files)
         lisp_as_symbol(symbol)->function = make_function(LISP_SPECIAL_OPERATOR, symbol, lisp_fixnum(i), LISP_NIL);
     }
     for (unsigned i = 0; i < lisp_primitive_count; i++) {
-        symbol = lisp_symbol_in(cl, lisp_primitives[i].name, lisp_primitives[i].name[0] != '%');
+        /* A name is in COMMON-LISP unless it names another package first. */
+        const char *name = lisp_primitives[i].name;
+        lisp package = cl;
+
+        if (!memcmp(name, "CLARA:", 6)) {
+            package = lisp_roots.clara;
+            name += 6;
+        } else if (!memcmp(name, "CLARA.UNSAFE:", 13)) {
+            package = lisp_roots.unsafe;
+            name += 13;
+        }
+        symbol = lisp_symbol_in(package, name, name[0] != '%');
         lisp_as_symbol(symbol)->function = make_function(LISP_PRIMITIVE, symbol, lisp_fixnum(i), LISP_NIL);
     }
     S.lambda = lisp_symbol_in(cl, "LAMBDA", 1);
     S.eval = lisp_symbol_in(cl, "EVAL", 1);
+    /* What GET-INTERNAL-REAL-TIME counts in: the timer's ticks. */
+    symbol = lisp_symbol_in(cl, "INTERNAL-TIME-UNITS-PER-SECOND", 1);
+    lisp_as_symbol(symbol)->value = lisp_fixnum(TIMER_HZ);
+    lisp_symbol_flag(symbol, LISP_SPECIAL | LISP_CONSTANT);
     kprintf("lisp: an evaluator with %u special forms and %u functions in C\n",
             (unsigned)(sizeof specials / sizeof specials[0]), lisp_primitive_count);
 }
 
-/* The thread that calls this is the one that evaluates from now on: the
- * depth it can go to is measured on its stack. */
+/* For a thread that has the runtime for the first time: the depth it can
+ * go to is measured on its own stack. */
 void lisp_eval_start(void)
 {
     g_c_limit = (uintptr_t)thread_stack_guard() + PAGE_SIZE + MARGIN;

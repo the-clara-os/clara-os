@@ -8,7 +8,8 @@
  * the evaluator, where the collector may run (eval.c says why). The few
  * that call back, FUNCALL, APPLY, EVAL, LOAD and ERROR with the name of a
  * type, have nothing to hold; whatever maps a function over a list is
- * written in Lisp for that reason. */
+ * written in Lisp for that reason. The functions that wait are in
+ * thread.c, and hold nothing but their arguments while they do. */
 #include "lisp.h"
 
 #define PRIMITIVE(name) static lisp name(unsigned argc __attribute__((unused)), lisp *argv)
@@ -34,22 +35,6 @@ static lisp boolean(int x)
 static lisp no_room(void)
 {
     return lisp_fail_as("STORAGE-CONDITION", NULL, 0, "the heap is full: there is no room for an object that large");
-}
-
-/* The console, as Lisp writes to it: the serial port and the screen. */
-int lisp_console_fresh = 1;
-
-void lisp_console_put(void *to, char c)
-{
-    (void)to;
-    kputc(c);
-    lisp_console_fresh = c == '\n';
-}
-
-void lisp_fresh_line(void)
-{
-    if (!lisp_console_fresh)
-        lisp_console_put(NULL, '\n');
 }
 
 /* Conses and lists. */
@@ -966,38 +951,14 @@ PRIMITIVE(p_load)
     return lisp_load(argv[0]);
 }
 
-/* Writing. PRINT, PRIN1, PRINC and TERPRI write to the console. FORMAT
- * writes there for T and into a new string for NIL, and knows five
- * directives: ~A and ~S for an argument as PRINC and PRIN1 write it, ~D
- * for an integer, ~% for a new line, and ~~. */
-PRIMITIVE(p_prin1)
-{
-    lisp_print(argv[0], lisp_console_put, NULL);
-    return argv[0];
-}
+/* Writing. What is written goes to a stream, and streams are Lisp
+ * (lisp/boot.lisp): a stream is given a string. So the printer's part
+ * here is to make the string: PRIN1-TO-STRING and PRINC-TO-STRING for an
+ * object, %FORMAT for a control string and its arguments, which knows
+ * five directives: ~A and ~S for an argument as PRINC and PRIN1 write it,
+ * ~D for an integer, ~% for a new line, and ~~. */
 
-PRIMITIVE(p_princ)
-{
-    lisp_princ(argv[0], lisp_console_put, NULL);
-    return argv[0];
-}
-
-PRIMITIVE(p_print)
-{
-    lisp_console_put(NULL, '\n');
-    lisp_print(argv[0], lisp_console_put, NULL);
-    lisp_console_put(NULL, ' ');
-    return argv[0];
-}
-
-PRIMITIVE(p_terpri)
-{
-    (void)argv;
-    lisp_console_put(NULL, '\n');
-    return NIL;
-}
-
-/* Where FORMAT writes when it makes a string: the printer's bytes become
+/* Where the printer writes when it makes a string: its bytes become
  * characters again, counted the first time through and stored the second. */
 struct sink {
     uint32_t *chars;
@@ -1083,20 +1044,145 @@ static lisp format_string(lisp control, unsigned argc, const lisp *argv)
     return string;
 }
 
-PRIMITIVE(p_format) /* T or NIL, a control string, arguments */
+PRIMITIVE(p_format) /* a control string and its arguments */
 {
     lisp string;
 
-    if (!lisp_is(argv[1], LISP_STRING))
-        return lisp_wants("a string to go by", argv[1]);
-    if (argv[0] == T) {
-        format(lisp_console_put, NULL, argv[1], argc - 2, argv + 2);
-        return NIL;
-    }
-    if (argv[0] != NIL)
-        return lisp_fail("FORMAT writes to the console, for T, or into a string, for NIL, and not to ~S", argv[0]);
-    string = format_string(argv[1], argc - 2, argv + 2);
+    if (!lisp_is(argv[0], LISP_STRING))
+        return lisp_fail("FORMAT wants a string to go by, and ~S is not one", argv[0]);
+    string = format_string(argv[0], argc - 1, argv + 1);
     return string ? string : NIL;
+}
+
+/* What the printer makes of an object, in a new string; 0 after failing. */
+static lisp print_string(lisp x, void (*print)(lisp x, void (*put)(void *to, char c), void *to))
+{
+    struct sink sink = { NULL, 0, 0, 0 };
+    lisp string;
+
+    print(x, sink_put, &sink);
+    if (!lisp_heap_room(1 + (sink.length + 1) / 2)) {
+        no_room();
+        return 0;
+    }
+    string = lisp_make_string(NULL, sink.length);
+    sink.chars = lisp_as_string(string)->chars;
+    sink.length = 0;
+    print(x, sink_put, &sink);
+    return string;
+}
+
+PRIMITIVE(p_prin1_to_string)
+{
+    lisp string = print_string(argv[0], lisp_print);
+
+    return string ? string : NIL;
+}
+
+PRIMITIVE(p_princ_to_string)
+{
+    lisp string = print_string(argv[0], lisp_princ);
+
+    return string ? string : NIL;
+}
+
+/* (%console-write string): to the substrate's own console, the serial
+ * port and the screen as the boot report has them. That is where Lisp
+ * writes until the console in Lisp has started. */
+static void console_put(void *to, char c)
+{
+    (void)to;
+    kputc(c);
+}
+
+PRIMITIVE(p_console_write)
+{
+    if (!lisp_is(argv[0], LISP_STRING))
+        return lisp_wants("a string", argv[0]);
+    lisp_princ(argv[0], console_put, NULL);
+    return argv[0];
+}
+
+/* (%substring string start end) */
+PRIMITIVE(p_substring)
+{
+    const struct lisp_string *s = lisp_as_string(argv[0]);
+    uint64_t start = (uint64_t)lisp_fixnum_value(argv[1]), end = (uint64_t)lisp_fixnum_value(argv[2]);
+
+    if (!lisp_is(argv[0], LISP_STRING))
+        return lisp_wants("a string", argv[0]);
+    if (!lisp_is_fixnum(argv[1]) || !lisp_is_fixnum(argv[2]) || start > end || end > lisp_length(s->header))
+        return lisp_fail("~S has no part from ~S to ~S", argv[0], argv[1], argv[2]);
+    return lisp_make_string(s->chars + start, end - start);
+}
+
+/* Reading. (%read-from-string string start): the first form of the text
+ * from there on, and where in the string it ends; NIL and NIL when
+ * nothing is left but blanks and comments. A text that stops in the
+ * middle of a form is the condition END-OF-FILE, and one that the reader
+ * refuses is READER-ERROR, which says where: the line and the column in
+ * the string. The reader wants its text in UTF-8, so the string is
+ * written out in page frames that are given back at the end. */
+struct bytes {
+    uint8_t *at; /* NULL: only count */
+    uint64_t length;
+};
+
+static void bytes_put(void *to, char c)
+{
+    struct bytes *b = to;
+
+    if (b->at)
+        b->at[b->length] = (uint8_t)c;
+    b->length++;
+}
+
+PRIMITIVE(p_read_from_string)
+{
+    const struct lisp_string *s = lisp_as_string(argv[0]);
+    struct bytes text = { NULL, 0 };
+    struct lisp_reader r;
+    uint64_t start = (uint64_t)lisp_fixnum_value(argv[1]), memory, pages, position = 0;
+    unsigned line, column;
+    lisp form = NIL;
+
+    if (!lisp_is(argv[0], LISP_STRING))
+        return lisp_wants("a string", argv[0]);
+    if (!lisp_is_fixnum(argv[1]) || start > lisp_length(s->header))
+        return lisp_wants("a place in the string to start reading at", argv[1]);
+    lisp_princ(argv[0], bytes_put, &text);
+    pages = text.length / PAGE_SIZE + 1;
+    if (!(memory = pmm_alloc(pages)))
+        return no_room();
+    text.at = phys_ptr(memory);
+    text.length = 0;
+    lisp_princ(argv[0], bytes_put, &text);
+    lisp_reader_init(&r, text.at, text.length);
+    for (; start; start--) /* past that many characters: a character is a byte and the bytes that continue it */
+        for (r.at++; r.at < r.end && (*r.at & 0xc0) == 0x80; r.at++)
+            ;
+    switch (lisp_read(&r, &form)) {
+    case LISP_READ_OK:
+        for (const uint8_t *p = r.text; p < r.at; p++)
+            position += (*p & 0xc0) != 0x80;
+        lisp_values.count = 2;
+        lisp_values.value[0] = form;
+        lisp_values.value[1] = lisp_fixnum((int64_t)position);
+        break;
+    case LISP_READ_END:
+        lisp_values.count = 2;
+        lisp_values.value[0] = lisp_values.value[1] = NIL;
+        break;
+    case LISP_READ_SHORT:
+        lisp_fail_as("END-OF-FILE", NULL, 0, "~Z", r.error);
+        break;
+    default:
+        lisp_reader_where(&r, &line, &column);
+        lisp_fail_as("READER-ERROR", NULL, 0, "~Z, at line ~A, column ~A", r.error, lisp_fixnum(line),
+                     lisp_fixnum(column));
+    }
+    pmm_free(memory, pages);
+    return form;
 }
 
 /* Conditions. One is a type, a symbol that DEFINE-CONDITION gave parents
@@ -1126,7 +1212,7 @@ PRIMITIVE(p_condition_slots)
  * what the condition says. The name of a type goes to MAKE-CONDITION
  * (lisp/boot.lisp) with the arguments, which name slots and give their
  * values. */
-static lisp condition_of(unsigned argc, lisp *argv, const char *simple)
+static lisp condition_of(unsigned argc, lisp *argv, lisp simple)
 {
     lisp cl = lisp_roots.common_lisp, datum = argv[0], said, arguments = NIL;
 
@@ -1138,7 +1224,7 @@ static lisp condition_of(unsigned argc, lisp *argv, const char *simple)
         while (--argc)
             arguments = lisp_cons(argv[argc], arguments);
         arguments = lisp_cons(lisp_symbol_in(cl, "FORMAT-ARGUMENTS", 0), lisp_cons(arguments, NIL));
-        return lisp_make_condition(lisp_symbol_in(cl, simple, 1), said,
+        return lisp_make_condition(simple, said,
                                    lisp_cons(lisp_symbol_in(cl, "FORMAT-CONTROL", 0), lisp_cons(datum, arguments)));
     }
     if (lisp_is_symbol(datum) && datum != NIL) {
@@ -1153,7 +1239,7 @@ static lisp condition_of(unsigned argc, lisp *argv, const char *simple)
  * no HANDLER-CASE for it, it goes to the top level. */
 PRIMITIVE(p_error)
 {
-    lisp condition = condition_of(argc, argv, "SIMPLE-ERROR");
+    lisp condition = condition_of(argc, argv, lisp_symbol_in(lisp_roots.common_lisp, "SIMPLE-ERROR", 1));
 
     return condition ? lisp_error(condition) : NIL;
 }
@@ -1162,42 +1248,40 @@ PRIMITIVE(p_error)
  * HANDLER-CASE for it, nothing happens. */
 PRIMITIVE(p_signal)
 {
-    lisp condition = condition_of(argc, argv, "SIMPLE-CONDITION");
+    lisp condition = condition_of(argc, argv, lisp_symbol_in(lisp_roots.common_lisp, "SIMPLE-CONDITION", 1));
 
     if (condition)
         lisp_signal(condition);
     return NIL;
 }
 
-/* (warn datum argument...): the same, except that with no HANDLER-CASE
- * for it the console says what the warning is. */
-PRIMITIVE(p_warn)
+/* (%condition simple-type datum argument...): the condition itself, for
+ * WARN (lisp/boot.lisp), which signals it and then writes it down. */
+PRIMITIVE(p_condition)
 {
-    lisp condition = condition_of(argc, argv, "SIMPLE-WARNING");
+    lisp condition;
 
-    if (condition && !lisp_signal(condition)) {
-        lisp_fresh_line();
-        for (const char *s = "warning: "; *s; s++)
-            lisp_console_put(NULL, *s);
-        lisp_princ(condition, lisp_console_put, NULL);
-        lisp_console_put(NULL, '\n');
-    }
-    return NIL;
+    SYMBOL(argv[0]);
+    condition = condition_of(argc - 1, argv + 1, argv[0]);
+    return condition ? condition : NIL;
 }
 
-/* The heap. ROOM says how full it is. The three after it are for testing
- * the collector, and internal: one collection now, a collection at every
- * nth safe point, and the texts of the boot's self-test evaluated again. */
+/* The heap. %ROOM says how full it is, for ROOM (lisp/boot.lisp): how long
+ * it is and how much of that is free, in KiB, and how many collections
+ * there have been. The three after it are for testing the collector: one
+ * collection now, a collection at every nth safe point, and the texts of
+ * the boot's self-test evaluated again. */
 PRIMITIVE(p_room)
 {
     struct lisp_heap heap;
 
     (void)argv;
     lisp_heap_state(&heap);
-    lisp_fresh_line();
-    kprintf("the heap is %llu KiB long, with %llu KiB of it free, after %llu collections\n", heap.size >> 10,
-            heap.free >> 10, heap.collections);
-    return NIL;
+    lisp_values.count = 3;
+    lisp_values.value[0] = lisp_fixnum((int64_t)(heap.size >> 10));
+    lisp_values.value[1] = lisp_fixnum((int64_t)(heap.free >> 10));
+    lisp_values.value[2] = lisp_fixnum((int64_t)heap.collections);
+    return lisp_values.value[0];
 }
 
 PRIMITIVE(p_collect)
@@ -1218,6 +1302,13 @@ PRIMITIVE(p_self_test)
 {
     (void)argv;
     return lisp_fixnum(lisp_eval_texts());
+}
+
+/* Time, as far as there is any: the ticks since the timer was started. */
+PRIMITIVE(p_get_internal_real_time)
+{
+    (void)argv;
+    return lisp_fixnum((int64_t)timer_ticks());
 }
 
 const struct lisp_primitive lisp_primitives[] = {
@@ -1311,20 +1402,66 @@ const struct lisp_primitive lisp_primitives[] = {
     { "EVAL", p_eval, 1, 1 },
     { "MACROEXPAND-1", p_macroexpand_1, 1, 1 },
     { "LOAD", p_load, 1, 1 },
-    { "PRIN1", p_prin1, 1, 1 },
-    { "PRINC", p_princ, 1, 1 },
-    { "PRINT", p_print, 1, 1 },
-    { "TERPRI", p_terpri, 0, 0 },
-    { "FORMAT", p_format, 2, LISP_MANY },
+    { "PRIN1-TO-STRING", p_prin1_to_string, 1, 1 },
+    { "PRINC-TO-STRING", p_princ_to_string, 1, 1 },
+    { "%FORMAT", p_format, 1, LISP_MANY },
+    { "%CONSOLE-WRITE", p_console_write, 1, 1 },
+    { "%SUBSTRING", p_substring, 3, 3 },
+    { "%READ-FROM-STRING", p_read_from_string, 2, 2 },
     { "ERROR", p_error, 1, LISP_MANY },
     { "SIGNAL", p_signal, 1, LISP_MANY },
-    { "WARN", p_warn, 1, LISP_MANY },
+    { "%CONDITION", p_condition, 2, LISP_MANY },
     { "%MAKE-CONDITION", p_make_condition, 3, 3 },
     { "%CONDITION-TYPE", p_condition_type, 1, 1 },
     { "%CONDITION-SLOTS", p_condition_slots, 1, 1 },
-    { "ROOM", p_room, 0, 1 },
+    { "%ROOM", p_room, 0, 0 },
     { "%COLLECT", p_collect, 0, 0 },
     { "%COLLECT-EVERY", p_collect_every, 1, 1 },
     { "%SELF-TEST", p_self_test, 0, 0 },
+    /* threads, locks and events (thread.c) */
+    { "SLEEP", lisp_p_sleep, 1, 1 },
+    { "CLARA:%MAKE-THREAD", lisp_p_make_thread, 2, 2 },
+    { "CLARA:CURRENT-THREAD", lisp_p_current_thread, 0, 0 },
+    { "CLARA:THREADP", lisp_p_threadp, 1, 1 },
+    { "CLARA:THREAD-NAME", lisp_p_thread_name, 1, 1 },
+    { "CLARA:THREAD-ALIVE-P", lisp_p_thread_alive_p, 1, 1 },
+    { "CLARA:ALL-THREADS", lisp_p_all_threads, 0, 0 },
+    { "CLARA:JOIN-THREAD", lisp_p_join_thread, 1, 1 },
+    { "CLARA:DESTROY-THREAD", lisp_p_destroy_thread, 1, 1 },
+    { "CLARA:THREAD-YIELD", lisp_p_thread_yield, 0, 0 },
+    { "CLARA:MAKE-LOCK", lisp_p_make_lock, 0, 1 },
+    { "CLARA:ACQUIRE-LOCK", lisp_p_acquire_lock, 1, 1 },
+    { "CLARA:RELEASE-LOCK", lisp_p_release_lock, 1, 1 },
+    { "CLARA:MAKE-EVENT", lisp_p_make_event, 0, 1 },
+    { "CLARA:SIGNAL-EVENT", lisp_p_signal_event, 1, 2 },
+    { "CLARA:WAIT-EVENT", lisp_p_wait_event, 1, 2 },
+    { "GET-INTERNAL-REAL-TIME", p_get_internal_real_time, 0, 0 },
+    /* what only a driver should touch (unsafe.c) */
+    { "CLARA.UNSAFE:MEMORY-8", lisp_p_memory_8, 1, 1 },
+    { "CLARA.UNSAFE:MEMORY-16", lisp_p_memory_16, 1, 1 },
+    { "CLARA.UNSAFE:MEMORY-32", lisp_p_memory_32, 1, 1 },
+    { "CLARA.UNSAFE:MEMORY-64", lisp_p_memory_64, 1, 1 },
+    { "CLARA.UNSAFE:%SET-MEMORY-8", lisp_p_set_memory_8, 2, 2 },
+    { "CLARA.UNSAFE:%SET-MEMORY-16", lisp_p_set_memory_16, 2, 2 },
+    { "CLARA.UNSAFE:%SET-MEMORY-32", lisp_p_set_memory_32, 2, 2 },
+    { "CLARA.UNSAFE:%SET-MEMORY-64", lisp_p_set_memory_64, 2, 2 },
+    { "CLARA.UNSAFE:FILL-MEMORY-32", lisp_p_fill_memory_32, 3, 3 },
+    { "CLARA.UNSAFE:COPY-MEMORY", lisp_p_copy_memory, 3, 3 },
+    { "CLARA.UNSAFE:EXPAND-BITS-32", lisp_p_expand_bits_32, 8, 8 },
+    { "CLARA.UNSAFE:ALLOCATE-MEMORY", lisp_p_allocate_memory, 1, 1 },
+    { "CLARA.UNSAFE:FREE-MEMORY", lisp_p_free_memory, 2, 2 },
+    { "CLARA.UNSAFE:PORT-8", lisp_p_port_8, 1, 1 },
+    { "CLARA.UNSAFE:PORT-16", lisp_p_port_16, 1, 1 },
+    { "CLARA.UNSAFE:PORT-32", lisp_p_port_32, 1, 1 },
+    { "CLARA.UNSAFE:%SET-PORT-8", lisp_p_set_port_8, 2, 2 },
+    { "CLARA.UNSAFE:%SET-PORT-16", lisp_p_set_port_16, 2, 2 },
+    { "CLARA.UNSAFE:%SET-PORT-32", lisp_p_set_port_32, 2, 2 },
+    { "CLARA.UNSAFE:INTERRUPT-EVENT", lisp_p_interrupt_event, 1, 1 },
+    { "CLARA.UNSAFE:FRAMEBUFFER", lisp_p_framebuffer, 0, 0 },
+    { "CLARA.UNSAFE:SERIAL-DEVICE", lisp_p_serial_device, 0, 0 },
+    { "CLARA.UNSAFE:SERIAL-BYTE", lisp_p_serial_byte, 0, 0 },
+    { "CLARA.UNSAFE:SERIAL-BREAK", lisp_p_serial_break, 1, 1 },
+    { "CLARA.UNSAFE:TAKE-SCREEN", lisp_p_take_screen, 0, 0 },
+    { "CLARA.UNSAFE:GIVE-SCREEN", lisp_p_give_screen, 2, 2 },
 };
 const unsigned lisp_primitive_count = sizeof lisp_primitives / sizeof lisp_primitives[0];

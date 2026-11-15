@@ -1,4 +1,5 @@
 #include "kernel.h"
+#include "lisp/lisp.h"
 
 static int g_serial_only;
 static struct lock g_lock;
@@ -77,22 +78,37 @@ void kputs(const char *s)
  *
  * Ctrl-C is a byte like the others, and it is also noted when it arrives,
  * because the thread it is meant for is not reading: it is computing, and
- * looks at console_break whenever it could stop. */
+ * looks at console_break whenever it could stop, or it is waiting, and is
+ * woken to look. */
 enum { TYPED = 256 };
 static volatile uint8_t g_typed[TYPED];
 static volatile unsigned g_typed_in, g_typed_out; /* where the next byte goes in, and where the next comes out */
 volatile int console_break;
+static struct thread *g_break_wakes; /* the thread that Ctrl-C is meant for, which may be waiting */
+
+/* Ctrl-C is for this thread from now on: it is woken when one arrives, so
+ * that a wait can be given up like a computation. */
+void console_break_wakes(struct thread *t)
+{
+    g_break_wakes = t;
+}
 
 void console_tick(void)
 {
-    int c;
+    int c, some = 0;
 
     while ((g_typed_in + 1) % TYPED != g_typed_out && (c = arch_serial_getc()) >= 0) {
-        if (c == 0x03)
+        some = 1;
+        if (c == 0x03) {
             console_break = 1;
+            if (g_break_wakes)
+                thread_wake(g_break_wakes);
+        }
         g_typed[g_typed_in] = (uint8_t)c;
         g_typed_in = (g_typed_in + 1) % TYPED;
     }
+    if (some)
+        lisp_interrupt(LISP_INTERRUPT_SERIAL); /* for a reader in Lisp, which waits for this */
 }
 
 /* The next byte that was typed, or -1 when there is none. */
@@ -104,6 +120,18 @@ static int typed(void)
         return -1;
     c = g_typed[g_typed_out];
     g_typed_out = (g_typed_out + 1) % TYPED;
+    return c;
+}
+
+/* For the console in Lisp, which reads the lines: the next byte that was
+ * typed, or -1. It waits for the event that console_tick signals. A Ctrl-C
+ * that is read has done what it was typed for. */
+int console_getc(void)
+{
+    int c = typed();
+
+    if (c == 0x03)
+        console_break = 0;
     return c;
 }
 
@@ -119,56 +147,6 @@ int console_interrupted(void)
     if (g_typed_out != g_typed_in && g_typed[g_typed_out] == 0x03)
         g_typed_out = (g_typed_out + 1) % TYPED;
     return 1;
-}
-
-/* A line from the serial port, which is the only place anything can be
- * typed so far. The thread sleeps a tick whenever nothing has arrived.
- * What is typed is echoed, here and on the screen. Backspace or Delete
- * takes the last character back, a tab counts as a space, the other
- * control characters are dropped, and so is what there is no room for.
- * Ctrl-D at the start of a line means that no more is coming, and Ctrl-C
- * anywhere gives the line up. */
-int64_t kgetline(char *line, size_t size)
-{
-    static int after_return; /* the last line ended with a carriage return: a line feed right after it is its other half */
-    size_t n = 0;
-
-    for (;;) {
-        int c = typed();
-
-        if (c < 0) {
-            thread_sleep(1);
-            continue;
-        }
-        if (c == '\n' && after_return) {
-            after_return = 0;
-            continue;
-        }
-        after_return = c == '\r';
-        if (c == '\r' || c == '\n') {
-            kputc('\n');
-            return (int64_t)n;
-        }
-        if (c == 0x04 && !n)
-            return -1;
-        if (c == 0x03) {
-            console_break = 0;
-            kputs("^C\n");
-            return -2;
-        }
-        if ((c == '\b' || c == 0x7f) && n) {
-            while (n > 1 && ((uint8_t)line[n - 1] & 0xc0) == 0x80)
-                n--; /* a character outside ASCII is several bytes */
-            n--;
-            kputs("\b \b");
-        }
-        if (c == '\t')
-            c = ' ';
-        if (c < ' ' || c == 0x7f || n == size)
-            continue;
-        line[n++] = (char)c;
-        kputc((char)c);
-    }
 }
 
 static void put_num(uint64_t v, unsigned base, int width, char pad, int negative, int upper)

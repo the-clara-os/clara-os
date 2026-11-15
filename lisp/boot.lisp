@@ -33,7 +33,14 @@
           type-error program-error control-error cell-error
           unbound-variable undefined-function arithmetic-error division-by-zero
           simple-condition-format-control simple-condition-format-arguments
-          type-error-datum type-error-expected-type cell-error-name))
+          type-error-datum type-error-expected-type cell-error-name
+          stream-error end-of-file parse-error reader-error
+          subseq warn room
+          *standard-output* *standard-input* streamp
+          write-string write-char write-line terpri fresh-line
+          prin1 princ print format finish-output force-output
+          make-string-output-stream get-output-stream-string with-output-to-string
+          make-string-input-stream read-line read-from-string))
 
 ;;; Control
 
@@ -354,6 +361,18 @@
 (defun make-array (length &key (initial-element 0))
   (%make-vector length initial-element))
 
+;; A part of a string or of a list: from start up to end, or to the end.
+(defun subseq (sequence start &optional end)
+  (cond ((stringp sequence)
+         (%substring sequence start (or end (length sequence))))
+        ((listp sequence)
+         (let ((kept nil) (rest (nthcdr start sequence)) (index start))
+           (do () ((or (null rest) (and end (>= index end))) (reverse kept))
+             (setq kept (cons (car rest) kept)
+                   rest (cdr rest)
+                   index (1+ index)))))
+        (t (error "SUBSEQ takes a string or a list, and not ~S yet" sequence))))
+
 ;;; Places
 ;;;
 ;;; SETF knows a place by the function that reads it: DEFSETF names the
@@ -522,9 +541,8 @@
 ;;;
 ;;; What a condition says is made when the condition is: for the types
 ;;; below SIMPLE-CONDITION, what FORMAT makes of the control string and its
-;;; arguments. There are no streams yet for a :REPORT function to write to,
-;;; so DEFINE-CONDITION refuses one, and a condition of a type that has
-;;; nothing to say shows its type and its slots.
+;;; arguments. DEFINE-CONDITION refuses a :REPORT function, and a condition
+;;; of a type that has nothing to say shows its type and its slots.
 
 (defun %slots (type)
   (let ((known (get type '%condition)))
@@ -618,6 +636,216 @@
 (define-condition arithmetic-error (error) ())
 (define-condition division-by-zero (arithmetic-error) ())
 
+(define-condition stream-error (error) ())
+(define-condition end-of-file (stream-error) ())
+(define-condition parse-error (error) ())
+(define-condition reader-error (parse-error stream-error) ())
+
 (defmacro ignore-errors (&body body)
   `(handler-case (progn ,@body)
      (error (condition) (values nil condition))))
+
+;;; Streams
+;;;
+;;; A stream is where characters go to, or come from. It is made of two
+;;; functions: one that is given a string to write, and one that gives the
+;;; next line that was read, or NIL when no more will come. The printer
+;;; makes strings (kernel/lisp/builtin.c), and whatever writes hands one to
+;;; a stream. *STANDARD-OUTPUT* begins as the substrate's own console; the
+;;; console that is written in Lisp (lisp/console.lisp) puts its stream
+;;; there when it starts.
+
+(defstruct %stream
+  write       ; a function of a string, or NIL for a stream that cannot be written to
+  read        ; a function of no arguments, or NIL
+  (fresh t)   ; nothing has been written since the last new line
+  parts)      ; of a string stream: what was written, the last first
+
+(defvar *standard-output* (make-%stream :write #'%console-write))
+(defvar *standard-input* (make-%stream))
+
+(defun streamp (object)
+  (%stream-p object))
+
+(defun %output (stream)
+  (cond ((or (null stream) (eq stream t)) *standard-output*)
+        ((and (%stream-p stream) (%stream-write stream)) stream)
+        (t (error "~S is not a stream that can be written to" stream))))
+
+(defun write-string (string &optional stream)
+  (let ((stream (%output stream)) (length (length string)))
+    (when (plusp length)
+      (funcall (%stream-write stream) string)
+      (setf (%stream-fresh stream) (char= (char string (1- length)) #\Newline)))
+    string))
+
+(defun write-char (character &optional stream)
+  (write-string (string character) stream)
+  character)
+
+(defun terpri (&optional stream)
+  (write-string (string #\Newline) stream)
+  nil)
+
+(defun fresh-line (&optional stream)
+  (unless (%stream-fresh (%output stream))
+    (terpri stream)
+    t))
+
+(defun write-line (string &optional stream)
+  (write-string string stream)
+  (terpri stream)
+  string)
+
+(defun prin1 (object &optional stream)
+  (write-string (prin1-to-string object) stream)
+  object)
+
+(defun princ (object &optional stream)
+  (write-string (princ-to-string object) stream)
+  object)
+
+(defun print (object &optional stream)
+  (terpri stream)
+  (prin1 object stream)
+  (write-string " " stream)
+  object)
+
+;; T is *STANDARD-OUTPUT*, and NIL is no stream at all: the string itself.
+(defun format (destination control &rest arguments)
+  (let ((text (apply #'%format control arguments)))
+    (if destination
+        (progn (write-string text destination) nil)
+        text)))
+
+;; What is written reaches its stream at once, so there is nothing to finish.
+(defun finish-output (&optional stream)
+  (declare (ignore stream))
+  nil)
+
+(defun force-output (&optional stream)
+  (declare (ignore stream))
+  nil)
+
+(defun make-string-output-stream ()
+  (let ((stream (make-%stream)))
+    (setf (%stream-write stream)
+          (lambda (string)
+            (setf (%stream-parts stream) (cons string (%stream-parts stream)))))
+    stream))
+
+(defun get-output-stream-string (stream)
+  (let ((parts (reverse (%stream-parts stream))))
+    (setf (%stream-parts stream) nil)
+    (apply #'%string-append parts)))
+
+(defmacro with-output-to-string ((variable) &body body)
+  `(let ((,variable (make-string-output-stream)))
+     ,@body
+     (get-output-stream-string ,variable)))
+
+;; The lines of a string, one at a time.
+(defun make-string-input-stream (string)
+  (let ((start 0) (length (length string)))
+    (make-%stream
+     :read (lambda ()
+             (when (< start length)
+               (let ((end start))
+                 (loop
+                   (when (or (= end length) (char= (char string end) #\Newline))
+                     (return))
+                   (setq end (1+ end)))
+                 (prog1 (subseq string start end)
+                   (setq start (min (1+ end) length)))))))))
+
+(defun read-line (&optional stream (eof-error-p t) eof-value)
+  (let* ((stream (if (or (null stream) (eq stream t)) *standard-input* stream))
+         (read (and (%stream-p stream) (%stream-read stream)))
+         (line (if read (funcall read))))
+    (cond (line (values line nil))
+          (eof-error-p (error 'end-of-file))
+          (t (values eof-value t)))))
+
+;; The first form of a string, and where in the string it ends. When
+;; nothing is left to read: EOF-VALUE, or the condition END-OF-FILE. A
+;; string that stops in the middle of a form is END-OF-FILE whatever
+;; EOF-ERROR-P says, as under any Common Lisp.
+(defun read-from-string (string &optional (eof-error-p t) eof-value &key (start 0))
+  (multiple-value-bind (form position) (%read-from-string string start)
+    (cond (position (values form position))
+          (eof-error-p (error 'end-of-file))
+          (t (values eof-value (length string))))))
+
+;; With no HANDLER-CASE for it, a warning is written down and the program
+;; goes on.
+(defun warn (datum &rest arguments)
+  (let ((condition (apply #'%condition 'simple-warning datum arguments)))
+    (signal condition)
+    (fresh-line)
+    (write-string "warning: ")
+    (princ condition)
+    (terpri)
+    nil))
+
+(defun room (&optional detail)
+  (declare (ignore detail))
+  (multiple-value-bind (size free collections) (%room)
+    (fresh-line)
+    (format t "the heap is ~D KiB long, with ~D KiB of it free, after ~D collections~%"
+            size free collections)))
+
+;;; The package CLARA
+;;;
+;;; What the substrate offers that Common Lisp has no name for: threads,
+;;; locks and events, under the names that Bordeaux Threads made usual, a
+;;; way to make a stream of two functions, and the condition that Ctrl-C
+;;; is. Their functions are in C (kernel/lisp/thread.c), and what is said
+;;; more easily in Lisp is here. Under SBCL, lisp/host/ stands in for all
+;;; of it.
+
+(in-package "CLARA")
+
+(export '(make-thread with-lock-held make-stream keyboard-interrupt))
+
+;; What Ctrl-C on the console is, to the computation it stops and to
+;; whoever was reading a line.
+(define-condition keyboard-interrupt (serious-condition) ())
+
+;; A stream that writes by calling WRITE-STRING with a string, and reads
+;; by calling READ-LINE, which gives a line or NIL when no more will come.
+(defun make-stream (&key write-string read-line)
+  (cl::make-%stream :write write-string :read read-line))
+
+;; The substrate calls this when a thread ends with a condition that
+;; nothing handled: nobody may ever ask what became of the thread.
+(defun %thread-failed (thread condition)
+  (fresh-line)
+  (format t "error in ~S: ~A~%" thread condition))
+
+(defun make-thread (function &key name)
+  (%make-thread function name))
+
+;; The lock is given back whichever way control leaves the body, also when
+;; the thread is stopped in the middle of it.
+(defmacro with-lock-held ((lock) &body body)
+  (let ((held (gensym)))
+    `(let ((,held ,lock))
+       (acquire-lock ,held)
+       (unwind-protect (progn ,@body)
+         (release-lock ,held)))))
+
+;;; The package CLARA.UNSAFE
+;;;
+;;; Memory by its address and the I/O ports, for drivers and for nobody
+;;; else (kernel/lisp/unsafe.c). What can be read there can be written with
+;;; SETF.
+
+(in-package "CLARA.UNSAFE")
+
+(defsetf memory-8 %set-memory-8)
+(defsetf memory-16 %set-memory-16)
+(defsetf memory-32 %set-memory-32)
+(defsetf memory-64 %set-memory-64)
+(defsetf port-8 %set-port-8)
+(defsetf port-16 %set-port-16)
+(defsetf port-32 %set-port-32)

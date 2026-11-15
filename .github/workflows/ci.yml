@@ -1,5 +1,6 @@
 # ClaraOS continuous integration: the same `make` and `make test` as on the
-# Mac, on Ubuntu. Both kernels are built with -Werror, then each one boots
+# Mac, on Ubuntu. Both kernels are built with -Werror; the Lisp files are
+# loaded and tested under SBCL (lisp/host/tests.lisp); then each kernel boots
 # headless under QEMU with EDK2 firmware, is typed the session of
 # tools/session.txt over its serial port and has to answer as written, and
 # runs on until its last line arrives (tools/boottest.sh), AArch64 twice,
@@ -33,19 +34,21 @@ jobs:
         uses: actions/checkout@v7
 
       # The list is the one at the top of the Makefile. netcat is how
-      # tools/boottest.sh asks the QEMU monitor for a screenshot.
+      # tools/boottest.sh asks the QEMU monitor for a screenshot, and SBCL
+      # runs the tests of the Lisp files (lisp/host/tests.lisp).
       - name: Install the Toolchain, QEMU and the Firmware
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends clang lld make \
-            qemu-system-x86 qemu-system-arm ovmf qemu-efi-aarch64 netcat-openbsd
+            qemu-system-x86 qemu-system-arm ovmf qemu-efi-aarch64 netcat-openbsd sbcl
           clang --version
           qemu-system-x86_64 --version
+          sbcl --version
 
       - name: Build
         run: make
 
-      - name: Boot Both Architectures
+      - name: Test the Lisp Files and Boot Both Architectures
         run: make test
 
       # What each kernel said on its serial port, without the escape
