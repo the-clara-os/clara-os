@@ -3,13 +3,14 @@
  * from the serial port, evaluates them and prints what they give. */
 #include "lisp.h"
 
-void lisp_init(const struct boot_file *files)
+void lisp_init(const struct boot_info *bi)
 {
     lisp_heap_init();
     lisp_symbols_init();
     kprintf("lisp: objects are tagged 64-bit words, in a heap at %p that begins with NIL\n",
             (void *)(uintptr_t)VM_HEAP_BASE);
-    lisp_eval_init(files);
+    lisp_eval_init(bi->files);
+    lisp_unsafe_init(&bi->fb);
 }
 
 /* Where the self-test prints to: memory, so that it can look at the text. */
@@ -872,6 +873,62 @@ static const struct {
       "error: the thread #<THREAD \"listener\"> cannot wait for itself to finish" },
     { "(clara:join-thread 5)", "error: CLARA:JOIN-THREAD wants a thread, and 5 is not one" },
     { "(list (sleep 0) (length (clara:all-threads)))", "(NIL 1)" },
+    /* memory by its address, in page frames that are nobody else's */
+    { "(defvar *page* (clara.unsafe:allocate-memory 2))"
+      " (list (integerp *page*) (mod *page* 4096) (clara.unsafe:memory-64 *page*))",
+      "(T 0 0)" },
+    { "(progn (setf (clara.unsafe:memory-32 *page*) #x12345678) (list (clara.unsafe:memory-8 *page*)"
+      " (clara.unsafe:memory-16 *page*) (clara.unsafe:memory-8 (+ *page* 3)) (clara.unsafe:memory-64 *page*)))",
+      "(120 22136 18 305419896)" },
+    { "(progn (setf (clara.unsafe:memory-8 (+ *page* 8)) -1 (clara.unsafe:memory-16 (+ *page* 10)) #xffff)"
+      " (clara.unsafe:memory-32 (+ *page* 8)))",
+      "4294902015" },
+    { "(progn (setf (clara.unsafe:memory-64 (+ *page* 16)) -1)"
+      " (handler-case (clara.unsafe:memory-64 (+ *page* 16)) (arithmetic-error () 'too-large)))",
+      "TOO-LARGE" },
+    { "(progn (clara.unsafe:fill-memory-32 *page* 1024 #xabcd) (list (clara.unsafe:memory-32 *page*)"
+      " (clara.unsafe:memory-32 (+ *page* 4092)) (clara.unsafe:memory-32 (+ *page* 4096))))",
+      "(43981 43981 0)" },
+    { "(progn (dotimes (i 8) (setf (clara.unsafe:memory-8 (+ *page* 4096 i)) (1+ i)))"
+      " (clara.unsafe:copy-memory (+ *page* 4098) (+ *page* 4096) 6) (clara.unsafe:memory-64 (+ *page* 4096)))",
+      "433757350076154369" },
+    { "(progn (clara.unsafe:copy-memory (+ *page* 4096) (+ *page* 4098) 6) (clara.unsafe:memory-64 (+ *page* 4096)))",
+      "433759557723030017" },
+    { "(progn (clara.unsafe:copy-memory *page* (+ *page* 4096) 4096)"
+      " (list (clara.unsafe:memory-64 *page*) (clara.unsafe:memory-32 (+ *page* 8))))",
+      "(433759557723030017 0)" },
+    { "(progn (clara.unsafe:expand-bits-32 *page* 16 (vector #b1010 #b0110) 0 2 4 9 1)"
+      " (mapcar (lambda (at) (clara.unsafe:memory-32 (+ *page* at))) '(0 4 8 12 16 20 24 28)))",
+      "(9 1 9 1 1 9 9 1)" },
+    { "(clara.unsafe:memory-8 0)", "error: nothing is mapped at #x0" },
+    { "(clara.unsafe:memory-8 -1)", "error: CLARA.UNSAFE:MEMORY-8 wants an integer that is not negative, and -1 is not one" },
+    { "(setf (clara.unsafe:memory-8 *page*) 256)", "error: 256 is not an integer that fits in 8 bits" },
+    { "(handler-case (clara.unsafe:memory-32 (+ *page* 2)) (error () 'not-a-multiple-of-four))",
+      "NOT-A-MULTIPLE-OF-FOUR" },
+    { "(clara.unsafe:free-memory *page* 2)", "NIL" },
+    /* an interrupt is an event that a thread waits for */
+    { "(let ((tick (clara.unsafe:interrupt-event :timer)) (before (get-internal-real-time)))"
+      " (dotimes (i 3) (clara:wait-event tick))"
+      " (list tick (>= (- (get-internal-real-time) before) 2) internal-time-units-per-second))",
+      "(#<EVENT \"TIMER\"> T 100)" },
+    { "(clara.unsafe:interrupt-event :nothing)",
+      "error: CLARA.UNSAFE:INTERRUPT-EVENT wants a source of interrupts, :TIMER or :SERIAL, and :NOTHING is not one" },
+};
+
+/* Texts that give one thing on a machine of one kind and something else on
+ * the other: with I/O ports or without, with a screen or without. */
+static const struct {
+    const char *text, *printed, *otherwise;
+} either[] = {
+    /* the line status of the serial port, where that is a port */
+    { "(handler-case (integerp (clara.unsafe:port-8 #x3fd)) (error (c) (format nil \"~A\" c)))", "T",
+      "\"this machine has no I/O ports\"" },
+    { "(handler-case (setf (clara.unsafe:port-8 #x80) 0) (error (c) (format nil \"~A\" c)))", "0",
+      "\"this machine has no I/O ports\"" },
+    /* what the firmware said about the machine */
+    { "(list (keywordp (clara.unsafe:serial-device)) (integerp (nth-value 1 (clara.unsafe:serial-device)))"
+      " (let ((screen (multiple-value-list (clara.unsafe:framebuffer)))) (or (null (car screen)) (length screen))))",
+      "(T T 7)", "(T T T)" },
 };
 
 /* The evaluator, and the language that lisp/boot.lisp builds on it. Then a
@@ -885,7 +942,7 @@ static unsigned eval_texts(int64_t *deep)
 {
     struct lisp_symbol *package = lisp_as_symbol(lisp_roots.package);
     lisp user = package->value, packages = lisp_roots.packages;
-    unsigned texts = sizeof evaluations / sizeof evaluations[0], wrong = 0;
+    unsigned texts = sizeof evaluations / sizeof evaluations[0], others = sizeof either / sizeof either[0], wrong = 0;
     struct text printed;
     int64_t depth;
 
@@ -898,6 +955,15 @@ static unsigned eval_texts(int64_t *deep)
             wrong++;
         }
     }
+    for (unsigned i = 0; i < others; i++) {
+        evaluate_text(either[i].text, &printed);
+        if (!same(printed.chars, either[i].printed) && !same(printed.chars, either[i].otherwise)) {
+            kprintf("lisp self-test: %s gave %s, not %s or %s\n", either[i].text, printed.chars, either[i].printed,
+                    either[i].otherwise);
+            wrong++;
+        }
+    }
+    texts += others;
     if (wrong)
         panic("lisp self-test: the evaluator gave %u wrong answers out of %u", wrong, texts);
 

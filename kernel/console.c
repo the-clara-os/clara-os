@@ -1,4 +1,5 @@
 #include "kernel.h"
+#include "lisp/lisp.h"
 
 static int g_serial_only;
 static struct lock g_lock;
@@ -94,9 +95,10 @@ void console_break_wakes(struct thread *t)
 
 void console_tick(void)
 {
-    int c;
+    int c, some = 0;
 
     while ((g_typed_in + 1) % TYPED != g_typed_out && (c = arch_serial_getc()) >= 0) {
+        some = 1;
         if (c == 0x03) {
             console_break = 1;
             if (g_break_wakes)
@@ -105,6 +107,8 @@ void console_tick(void)
         g_typed[g_typed_in] = (uint8_t)c;
         g_typed_in = (g_typed_in + 1) % TYPED;
     }
+    if (some)
+        lisp_interrupt(LISP_INTERRUPT_SERIAL); /* for a reader in Lisp, which waits for this */
 }
 
 /* The next byte that was typed, or -1 when there is none. */
@@ -116,6 +120,18 @@ static int typed(void)
         return -1;
     c = g_typed[g_typed_out];
     g_typed_out = (g_typed_out + 1) % TYPED;
+    return c;
+}
+
+/* For a reader other than kgetline, the console in Lisp: the next byte
+ * that was typed, or -1. A Ctrl-C that is read has done what it was typed
+ * for. */
+int console_getc(void)
+{
+    int c = typed();
+
+    if (c == 0x03)
+        console_break = 0;
     return c;
 }
 

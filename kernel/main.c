@@ -40,7 +40,7 @@ void kmain(struct boot_info *bi)
     thread_init();
     thread_selftest();
 
-    lisp_init(bi->files);
+    lisp_init(bi);
     lisp_selftest();
 
     if (bi->fb.pixels)

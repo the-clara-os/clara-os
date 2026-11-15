@@ -21,8 +21,12 @@
  * struct lisp_thread): such an address is a multiple of eight, which as a
  * value is a fixnum, and so nothing to follow.
  *
- * It runs at the evaluator's safe points and nowhere else, with every other
- * thread stopped at one of its own. Making an object never collects. So
+ * It runs at the evaluator's safe points and nowhere else, in the thread
+ * that has the runtime: every other Lisp thread is waiting, for the
+ * runtime or for something else, and stands at a safe point of its own
+ * meanwhile (thread.c). So nobody has to be stopped, and the threads that
+ * do not evaluate go on as they were: they never touch the heap. Making an
+ * object never collects. So
  * the C code of the runtime may hold an object in a variable for as long
  * as it comes to no safe point, and whatever it holds across one has to be
  * where the collector looks (eval.c). An object that was freed all the same
@@ -412,16 +416,15 @@ static uint64_t sweep(void)
     return in_use;
 }
 
-/* Free every object that nothing can reach, with every other thread
- * stopped at a safe point. Returns how many bytes that gave back. The
- * caller is at a safe point of its own: all it holds is where
- * lisp_eval_roots finds it. */
+/* Free every object that nothing can reach. Returns how many bytes that
+ * gave back. The caller has the runtime and is at a safe point: all it
+ * holds is where lisp_eval_roots finds it, and what the other threads
+ * hold is where lisp_thread_roots does. */
 uint64_t lisp_collect(void)
 {
     const lisp *roots = (const lisp *)&lisp_roots;
     uint64_t before = g_next - VM_HEAP_BASE - g_free_words * sizeof(lisp), in_use;
 
-    thread_stop_the_world();
     lisp_reach(LISP_NIL);
     for (unsigned i = 0; i < sizeof lisp_roots / sizeof(lisp); i++)
         lisp_reach(roots[i]);
@@ -446,7 +449,6 @@ uint64_t lisp_collect(void)
         }
     }
     in_use = sweep();
-    thread_start_the_world();
 
     /* The next one comes when as much again has been made as is in use now, and sooner when there is
      * not the room for that much. When the heap is full, a computation is about to be stopped, and a

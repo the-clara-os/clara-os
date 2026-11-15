@@ -6,12 +6,13 @@
  * there, one of its own or an external one of a package it uses, and
  * makes a new internal one when there is none.
  *
- * Four packages exist from the start. KEYWORD, where every symbol is
+ * Five packages exist from the start. KEYWORD, where every symbol is
  * external and is its own value. COMMON-LISP, for the symbols of the
  * language, which the substrate adds as it learns them. COMMON-LISP-USER,
  * which uses COMMON-LISP and is where names are read until something says
  * otherwise. CLARA, for what the substrate offers that Common Lisp has no
- * name for: threads, locks and events.
+ * name for: threads, locks and events. CLARA.UNSAFE, for what only a
+ * driver should touch (unsafe.c).
  *
  * A table is a vector: item 0 counts the symbols, and the rest are slots,
  * a power of two of them, each a symbol or fixnum zero. A symbol goes in
@@ -282,6 +283,7 @@ void lisp_symbols_init(void)
     lisp_roots.common_lisp = lisp_make_package("COMMON-LISP", "CL", LISP_NIL);
     lisp_roots.user = lisp_make_package("COMMON-LISP-USER", "CL-USER", lisp_cons(lisp_roots.common_lisp, LISP_NIL));
     lisp_roots.clara = lisp_make_package("CLARA", NULL, lisp_cons(lisp_roots.common_lisp, LISP_NIL));
+    lisp_roots.unsafe = lisp_make_package("CLARA.UNSAFE", NULL, lisp_cons(lisp_roots.common_lisp, LISP_NIL));
 
     nil->package = lisp_roots.common_lisp;
     lisp_as_package(lisp_roots.common_lisp)->external =

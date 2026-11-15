@@ -291,6 +291,9 @@ static inline enum lisp_function_kind lisp_function_kind(lisp function)
     return (enum lisp_function_kind)lisp_length(lisp_as_function(function)->header);
 }
 
+/* Where interrupts come from that a Lisp thread can wait for (thread.c). */
+enum lisp_interrupt { LISP_INTERRUPT_TIMER, LISP_INTERRUPT_SERIAL, LISP_INTERRUPTS };
+
 /* What the substrate itself holds on to in the Lisp world. The collector
  * starts from here, and from what the evaluator keeps (eval.c): every
  * word of this is a Lisp value. A saved image has to bring these back
@@ -302,6 +305,8 @@ struct lisp_roots {
     lisp packages;              /* a list of every package there is */
     lisp keyword, common_lisp, user;
     lisp clara;                 /* the package CLARA: what the substrate offers that Common Lisp has no name for */
+    lisp unsafe;                /* the package CLARA.UNSAFE: memory by its address, I/O ports, interrupts */
+    lisp interrupts[LISP_INTERRUPTS]; /* the event each source of interrupts signals, once Lisp has asked for it */
 };
 extern struct lisp_roots lisp_roots;
 
@@ -424,7 +429,8 @@ int  lisp_call(lisp function);              /* the same for a function with no a
 int  lisp_safe_point(void);                 /* for C that has waited: the evaluator's safe point. 0: return, an exit is
                                                under way */
 int  lisp_unwinding(void);
-lisp lisp_fail(const char *control, ...);   /* an error: ~S and ~A take a lisp, ~Z a C string. Returns NIL, to be returned */
+lisp lisp_fail(const char *control, ...);   /* an error: ~S and ~A take a lisp, ~X an integer for hexadecimal, ~Z a C
+                                               string. Returns NIL, to be returned */
 lisp lisp_fail_as(const char *type, const char *slot, lisp value, const char *control, ...);
 lisp lisp_wants(const char *what, lisp x);  /* the error of a primitive that was given x where it wants something else */
 int  lisp_signal(lisp condition);           /* 1: a HANDLER-CASE takes it, and control is on its way there. 0: none does */
@@ -456,11 +462,16 @@ enum lisp_turn lisp_thread_safe_point(void);            /* from the evaluator's 
 void lisp_thread_roots(void);                           /* for the collector: what the other threads hold */
 void lisp_runtime_leave(void);                          /* around a wait in C that holds no object: the other threads */
 void lisp_runtime_enter(void);                          /* can have the runtime meanwhile */
+void lisp_interrupt(enum lisp_interrupt source);        /* from its handler: the event of that source is signalled */
+
+/* unsafe.c: the package CLARA.UNSAFE */
+void lisp_unsafe_init(const struct framebuffer *fb);    /* the screen, for a driver in Lisp to draw on */
 
 /* builtin.c: the functions written in C */
 #define LISP_MANY 255 /* for max: any number of arguments */
 struct lisp_primitive {
-    const char *name; /* in COMMON-LISP, or after CLARA: in that package: external, or internal when it begins with % */
+    const char *name; /* in COMMON-LISP, or in the package named before a colon: external, or internal when it
+                         begins with % */
     lisp (*fn)(unsigned argc, lisp *argv);
     uint8_t min, max; /* how many arguments it takes */
 };
@@ -481,6 +492,29 @@ LISP_PRIMITIVE(lisp_p_release_lock);
 LISP_PRIMITIVE(lisp_p_make_event);
 LISP_PRIMITIVE(lisp_p_signal_event);
 LISP_PRIMITIVE(lisp_p_wait_event);
+LISP_PRIMITIVE(lisp_p_interrupt_event);
+LISP_PRIMITIVE(lisp_p_memory_8);
+LISP_PRIMITIVE(lisp_p_memory_16);
+LISP_PRIMITIVE(lisp_p_memory_32);
+LISP_PRIMITIVE(lisp_p_memory_64);
+LISP_PRIMITIVE(lisp_p_set_memory_8);
+LISP_PRIMITIVE(lisp_p_set_memory_16);
+LISP_PRIMITIVE(lisp_p_set_memory_32);
+LISP_PRIMITIVE(lisp_p_set_memory_64);
+LISP_PRIMITIVE(lisp_p_fill_memory_32);
+LISP_PRIMITIVE(lisp_p_copy_memory);
+LISP_PRIMITIVE(lisp_p_expand_bits_32);
+LISP_PRIMITIVE(lisp_p_allocate_memory);
+LISP_PRIMITIVE(lisp_p_free_memory);
+LISP_PRIMITIVE(lisp_p_port_8);
+LISP_PRIMITIVE(lisp_p_port_16);
+LISP_PRIMITIVE(lisp_p_port_32);
+LISP_PRIMITIVE(lisp_p_set_port_8);
+LISP_PRIMITIVE(lisp_p_set_port_16);
+LISP_PRIMITIVE(lisp_p_set_port_32);
+LISP_PRIMITIVE(lisp_p_framebuffer);
+LISP_PRIMITIVE(lisp_p_serial_device);
+LISP_PRIMITIVE(lisp_p_serial_byte);
 extern const struct lisp_primitive lisp_primitives[];
 extern const unsigned lisp_primitive_count;
 extern int lisp_console_fresh;              /* nothing has been written on the console's line yet */
@@ -488,7 +522,7 @@ void lisp_console_put(void *to, char c);    /* for lisp_print: to the serial por
 void lisp_fresh_line(void);                 /* a new line, unless the console is at the start of one */
 
 /* lisp.c */
-void lisp_init(const struct boot_file *files);
+void lisp_init(const struct boot_info *bi);
 void lisp_selftest(void);
 void lisp_run(void); /* load boot.lisp, check the evaluator, then read and evaluate what is typed until the input ends */
 unsigned lisp_eval_texts(void); /* the evaluator's part of the self-test, again: how many texts it evaluated */

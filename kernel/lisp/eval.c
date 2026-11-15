@@ -151,8 +151,9 @@ int lisp_unwinding(void)
 }
 
 /* Errors. What went wrong is said in a string, made the way FORMAT would:
- * ~S prints a Lisp object, ~A prints one for a person, ~Z is a C string.
- * It is at most 255 bytes long. */
+ * ~S prints a Lisp object, ~A prints one for a person, ~X an integer in
+ * hexadecimal, as addresses are written, and ~Z is a C string. It is at
+ * most 255 bytes long. */
 struct buffer {
     char text[256];
     size_t length;
@@ -183,6 +184,18 @@ static lisp message(const char *control, va_list ap)
         case 'A':
             lisp_princ(va_arg(ap, lisp), buffer_put, &b);
             break;
+        case 'X': {
+            uint64_t n = (uint64_t)lisp_fixnum_value(va_arg(ap, lisp));
+            int shift = 60;
+
+            buffer_put(&b, '#');
+            buffer_put(&b, 'x');
+            while (shift && !(n >> shift))
+                shift -= 4;
+            for (; shift >= 0; shift -= 4)
+                buffer_put(&b, "0123456789abcdef"[n >> shift & 15]);
+            break;
+        }
         case 'Z':
             for (const char *s = va_arg(ap, const char *); *s; s++)
                 buffer_put(&b, *s);
@@ -1787,19 +1800,26 @@ void lisp_eval_init(const struct boot_file *files)
         lisp_as_symbol(symbol)->function = make_function(LISP_SPECIAL_OPERATOR, symbol, lisp_fixnum(i), LISP_NIL);
     }
     for (unsigned i = 0; i < lisp_primitive_count; i++) {
-        /* A name is in COMMON-LISP unless it says CLARA: first. */
+        /* A name is in COMMON-LISP unless it names another package first. */
         const char *name = lisp_primitives[i].name;
         lisp package = cl;
 
         if (!memcmp(name, "CLARA:", 6)) {
             package = lisp_roots.clara;
             name += 6;
+        } else if (!memcmp(name, "CLARA.UNSAFE:", 13)) {
+            package = lisp_roots.unsafe;
+            name += 13;
         }
         symbol = lisp_symbol_in(package, name, name[0] != '%');
         lisp_as_symbol(symbol)->function = make_function(LISP_PRIMITIVE, symbol, lisp_fixnum(i), LISP_NIL);
     }
     S.lambda = lisp_symbol_in(cl, "LAMBDA", 1);
     S.eval = lisp_symbol_in(cl, "EVAL", 1);
+    /* What GET-INTERNAL-REAL-TIME counts in: the timer's ticks. */
+    symbol = lisp_symbol_in(cl, "INTERNAL-TIME-UNITS-PER-SECOND", 1);
+    lisp_as_symbol(symbol)->value = lisp_fixnum(TIMER_HZ);
+    lisp_symbol_flag(symbol, LISP_SPECIAL | LISP_CONSTANT);
     kprintf("lisp: an evaluator with %u special forms and %u functions in C\n",
             (unsigned)(sizeof specials / sizeof specials[0]), lisp_primitive_count);
 }

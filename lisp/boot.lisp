@@ -644,3 +644,19 @@
        (acquire-lock ,held)
        (unwind-protect (progn ,@body)
          (release-lock ,held)))))
+
+;;; The package CLARA.UNSAFE
+;;;
+;;; Memory by its address and the I/O ports, for drivers and for nobody
+;;; else (kernel/lisp/unsafe.c). What can be read there can be written with
+;;; SETF.
+
+(in-package "CLARA.UNSAFE")
+
+(defsetf memory-8 %set-memory-8)
+(defsetf memory-16 %set-memory-16)
+(defsetf memory-32 %set-memory-32)
+(defsetf memory-64 %set-memory-64)
+(defsetf port-8 %set-port-8)
+(defsetf port-16 %set-port-16)
+(defsetf port-32 %set-port-32)

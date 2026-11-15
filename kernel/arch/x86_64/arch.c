@@ -28,6 +28,42 @@ int arch_serial_getc(void)
     return inb(COM1 + 5) & 0x01 ? inb(COM1) : -1; /* data ready */
 }
 
+const char *const arch_serial_kind = "NS16550";
+const uint64_t arch_serial_base = COM1;
+
+int arch_port_read(uint16_t port, unsigned size, uint32_t *value)
+{
+    uint16_t word;
+
+    switch (size) {
+    case 1:
+        *value = inb(port);
+        break;
+    case 2:
+        __asm__ volatile("inw %1, %0" : "=a"(word) : "Nd"(port));
+        *value = word;
+        break;
+    default:
+        __asm__ volatile("inl %1, %0" : "=a"(*value) : "Nd"(port));
+    }
+    return 1;
+}
+
+int arch_port_write(uint16_t port, unsigned size, uint32_t value)
+{
+    switch (size) {
+    case 1:
+        outb(port, (uint8_t)value);
+        break;
+    case 2:
+        __asm__ volatile("outw %0, %1" : : "a"((uint16_t)value), "Nd"(port));
+        break;
+    default:
+        __asm__ volatile("outl %0, %1" : : "a"(value), "Nd"(port));
+    }
+    return 1;
+}
+
 /* The serial port is reached through I/O ports and needs no mapping. */
 void arch_map_devices(void)
 {

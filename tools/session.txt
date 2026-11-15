@@ -107,6 +107,17 @@ error: the thread #<THREAD "spinner"> was stopped
 error: interrupted from the keyboard
 > (list (clara:current-thread) (length (clara:all-threads)))
 (#<THREAD "listener"> 1)
+> (let ((page (clara.unsafe:allocate-memory 1)))
+    (setf (clara.unsafe:memory-32 page) #xC1A4A)
+    (prog1 (list (clara.unsafe:memory-8 page) (clara.unsafe:memory-16 page))
+      (clara.unsafe:free-memory page 1)))
+(74 6730)
+> (clara.unsafe:memory-8 0)
+error: nothing is mapped at #x0
+> (let ((tick (clara.unsafe:interrupt-event :timer)) (before (get-internal-real-time)))
+    (dotimes (i 5) (clara:wait-event tick))
+    (>= (- (get-internal-real-time) before) 4))
+T
 > (defpackage "PLAY" (:use "COMMON-LISP") (:export "BALL"))
 #<PACKAGE "PLAY">
 > (in-package "PLAY")

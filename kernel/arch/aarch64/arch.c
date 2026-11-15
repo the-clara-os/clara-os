@@ -47,6 +47,26 @@ int arch_serial_getc(void)
     return UARTFR & UARTFR_RXFE ? -1 : (int)(UARTDR & 0xff); /* the bits above are error flags */
 }
 
+const char *const arch_serial_kind = "PL011";
+const uint64_t arch_serial_base = UART_BASE;
+
+/* There are no I/O ports on this architecture: every device is in memory. */
+int arch_port_read(uint16_t port, unsigned size, uint32_t *value)
+{
+    (void)port;
+    (void)size;
+    (void)value;
+    return 0;
+}
+
+int arch_port_write(uint16_t port, unsigned size, uint32_t value)
+{
+    (void)port;
+    (void)size;
+    (void)value;
+    return 0;
+}
+
 void arch_map_devices(void)
 {
     vm_map(UART_BASE, UART_BASE, 1, VM_WRITE | VM_DEVICE);

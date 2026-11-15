@@ -69,6 +69,7 @@ void console_serial_only(void); /* leave the screen alone from now on */
  * the input; -2 when Ctrl-C gave the line up. Only for a thread: it sleeps
  * while nothing arrives. */
 int64_t kgetline(char *line, size_t size);
+int  console_getc(void);          /* the next byte typed there, or -1: for a reader that does its own waiting */
 void console_tick(void);          /* from the timer's interrupt: take in what has arrived on the serial port */
 extern volatile int console_break; /* Ctrl-C has arrived there, and nobody has acted on it yet */
 struct thread;
@@ -179,6 +180,13 @@ void arch_halt(void) __attribute__((noreturn));
 void arch_switch_stack(void *top, void (*fn)(struct boot_info *), struct boot_info *arg)
     __attribute__((noreturn));
 void arch_map_devices(void);  /* vm_map the device registers the code above touches */
+/* I/O ports, on the machines that have them: 0 when this one has none. size is 1, 2 or 4 bytes. */
+int  arch_port_read(uint16_t port, unsigned size, uint32_t *value);
+int  arch_port_write(uint16_t port, unsigned size, uint32_t value);
+/* The serial port, for a driver other than the one above: what it is, and
+ * its first I/O port or the address of its registers. */
+extern const char *const arch_serial_kind;
+extern const uint64_t arch_serial_base;
 
 /* arch/<arch>/exception.c: the processor's exceptions, in the kernel's hands,
  * and with them what a thread switch is made of (thread.c) */

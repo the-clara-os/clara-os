@@ -618,6 +618,43 @@ LISP_PRIMITIVE(lisp_p_signal_event) /* event, and how many times: once */
     return argv[0];
 }
 
+/* Interrupts. A handler cannot run Lisp, and does not have to: it signals
+ * an event, and the driver is a thread that waits for it. The event of a
+ * source is made when Lisp first asks for it, and is the same from then
+ * on. An interrupt that arrives while the last one has not been waited for
+ * is not counted again: the event says that the source wants attention,
+ * as an interrupt line does. */
+static const char *const sources[LISP_INTERRUPTS] = { "TIMER", "SERIAL" };
+
+void lisp_interrupt(enum lisp_interrupt source)
+{
+    lisp event = lisp_roots.interrupts[source];
+
+    if (lisp_is(event, LISP_EVENT)) {
+        struct lisp_event *e = lisp_as_event(event);
+
+        if (!e->count)
+            e->count = lisp_fixnum(1);
+        wake_first(e);
+    }
+}
+
+LISP_PRIMITIVE(lisp_p_interrupt_event) /* :TIMER, a hundred times a second, or :SERIAL, when bytes have arrived */
+{
+    (void)argc;
+    for (unsigned i = 0; i < LISP_INTERRUPTS; i++)
+        if (argv[0] == lisp_symbol_in(lisp_roots.keyword, sources[i], 1)) {
+            if (!lisp_is(lisp_roots.interrupts[i], LISP_EVENT)) {
+                struct lisp_event *e = lisp_alloc(LISP_EVENT, 0);
+
+                e->name = lisp_as_symbol(argv[0])->name;
+                lisp_roots.interrupts[i] = (lisp)(uintptr_t)e | LISP_TAG_OBJECT;
+            }
+            return lisp_roots.interrupts[i];
+        }
+    return lisp_wants("a source of interrupts, :TIMER or :SERIAL", argv[0]);
+}
+
 /* (wait-event event [milliseconds]): T once the event has been signalled,
  * NIL when the time ran out first. */
 LISP_PRIMITIVE(lisp_p_wait_event)

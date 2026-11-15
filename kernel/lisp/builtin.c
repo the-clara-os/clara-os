@@ -1221,6 +1221,13 @@ PRIMITIVE(p_self_test)
     return lisp_fixnum(lisp_eval_texts());
 }
 
+/* Time, as far as there is any: the ticks since the timer was started. */
+PRIMITIVE(p_get_internal_real_time)
+{
+    (void)argv;
+    return lisp_fixnum((int64_t)timer_ticks());
+}
+
 const struct lisp_primitive lisp_primitives[] = {
     { "CONS", p_cons, 2, 2 },
     { "CAR", p_car, 1, 1 },
@@ -1344,5 +1351,30 @@ const struct lisp_primitive lisp_primitives[] = {
     { "CLARA:MAKE-EVENT", lisp_p_make_event, 0, 1 },
     { "CLARA:SIGNAL-EVENT", lisp_p_signal_event, 1, 2 },
     { "CLARA:WAIT-EVENT", lisp_p_wait_event, 1, 2 },
+    { "GET-INTERNAL-REAL-TIME", p_get_internal_real_time, 0, 0 },
+    /* what only a driver should touch (unsafe.c) */
+    { "CLARA.UNSAFE:MEMORY-8", lisp_p_memory_8, 1, 1 },
+    { "CLARA.UNSAFE:MEMORY-16", lisp_p_memory_16, 1, 1 },
+    { "CLARA.UNSAFE:MEMORY-32", lisp_p_memory_32, 1, 1 },
+    { "CLARA.UNSAFE:MEMORY-64", lisp_p_memory_64, 1, 1 },
+    { "CLARA.UNSAFE:%SET-MEMORY-8", lisp_p_set_memory_8, 2, 2 },
+    { "CLARA.UNSAFE:%SET-MEMORY-16", lisp_p_set_memory_16, 2, 2 },
+    { "CLARA.UNSAFE:%SET-MEMORY-32", lisp_p_set_memory_32, 2, 2 },
+    { "CLARA.UNSAFE:%SET-MEMORY-64", lisp_p_set_memory_64, 2, 2 },
+    { "CLARA.UNSAFE:FILL-MEMORY-32", lisp_p_fill_memory_32, 3, 3 },
+    { "CLARA.UNSAFE:COPY-MEMORY", lisp_p_copy_memory, 3, 3 },
+    { "CLARA.UNSAFE:EXPAND-BITS-32", lisp_p_expand_bits_32, 8, 8 },
+    { "CLARA.UNSAFE:ALLOCATE-MEMORY", lisp_p_allocate_memory, 1, 1 },
+    { "CLARA.UNSAFE:FREE-MEMORY", lisp_p_free_memory, 2, 2 },
+    { "CLARA.UNSAFE:PORT-8", lisp_p_port_8, 1, 1 },
+    { "CLARA.UNSAFE:PORT-16", lisp_p_port_16, 1, 1 },
+    { "CLARA.UNSAFE:PORT-32", lisp_p_port_32, 1, 1 },
+    { "CLARA.UNSAFE:%SET-PORT-8", lisp_p_set_port_8, 2, 2 },
+    { "CLARA.UNSAFE:%SET-PORT-16", lisp_p_set_port_16, 2, 2 },
+    { "CLARA.UNSAFE:%SET-PORT-32", lisp_p_set_port_32, 2, 2 },
+    { "CLARA.UNSAFE:INTERRUPT-EVENT", lisp_p_interrupt_event, 1, 1 },
+    { "CLARA.UNSAFE:FRAMEBUFFER", lisp_p_framebuffer, 0, 0 },
+    { "CLARA.UNSAFE:SERIAL-DEVICE", lisp_p_serial_device, 0, 0 },
+    { "CLARA.UNSAFE:SERIAL-BYTE", lisp_p_serial_byte, 0, 0 },
 };
 const unsigned lisp_primitive_count = sizeof lisp_primitives / sizeof lisp_primitives[0];
