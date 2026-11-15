@@ -9,7 +9,7 @@ understood from the first instruction up. It is not a Unix and does not try
 to run Linux software. The kernel is its own UEFI application: the firmware
 loads `BOOTX64.EFI` or `BOOTAA64.EFI`, and from `efi_main` on it is ClaraOS.
 
-Status: milestone 6a. Both architectures boot under QEMU with EDK2 firmware
+Status: milestone 6c. Both architectures boot under QEMU with EDK2 firmware
 (the same firmware and machine types UTM uses), read their boot files from
 the ESP, and take the machine from the firmware. From then on they use
 nothing of the firmware's: they run on their own stack, page tables and
@@ -17,15 +17,17 @@ exception vectors, and the page-frame allocator has all the free memory
 there is. A fault is reported in words, with every register. The interrupt
 controller is found through ACPI, and a timer ticks a hundred times a
 second. Threads take turns on that tick, sleep, share locks, and can all be
-stopped at once, which is what the Lisp collector will need. The Lisp
+stopped at once, which is what the Lisp collector needs. The Lisp
 runtime has its objects, its heap, symbols and packages, a reader, a
 printer and an evaluator: an interpreter for a subset of Common Lisp, with
-closures, special variables, multiple values, macros and structures. Part
-of that language is written in Lisp itself, in lisp/boot.lisp, which the
+closures, special variables, multiple values, macros, structures and
+conditions. A collector frees what nothing can reach any more. Part of
+the language is written in Lisp itself, in lisp/boot.lisp, which the
 kernel loads as it starts. At the end of the boot it reads the forms typed
 on the serial port, evaluates each one and prints what it gives; a mistake
-is answered with what went wrong, and the prompt comes back. A text
-console on the serial port and on the screen reports each step.
+is answered with what went wrong, a computation that does not end is
+stopped with Ctrl-C, and the prompt comes back. A text console on the
+serial port and on the screen reports each step.
 [ROADMAP.md](ROADMAP.md) has what comes next, [DESIGN.md](DESIGN.md) the
 ideas and conventions.
 
@@ -46,8 +48,10 @@ Then, on either:
     make              # build/esp: EFI/BOOT/BOOTX64.EFI and BOOTAA64.EFI, and the boot files in clara/
     make test         # boot both headless, type tools/session.txt at each kernel and compare its answers,
                       # wait for the kernel's last line, save build/screen-<arch>.png;
-                      # AArch64 boots twice, once for each version of its interrupt controller
-    make run-aarch64  # QEMU window, serial on the terminal: type a form there, Ctrl-D ends;
+                      # AArch64 boots twice, once for each version of its interrupt controller,
+                      # and once more with the Lisp collector running at every chance it has
+    make run-aarch64  # QEMU window, serial on the terminal: type a form there; Ctrl-C stops a form that
+                      # does not end, Ctrl-D ends the session, Ctrl-A X leaves QEMU;
                       # hvf-accelerated on Apple silicon
     make run-x86_64   # same, emulated (TCG), so the firmware takes a few seconds
     make image        # build/claraos.img, a GPT + FAT32 raw disk for UTM; needs macOS
@@ -76,7 +80,8 @@ Layout:
 5. Start. The display and the serial window both show the boot report,
    which ends at a prompt. A form typed in the serial window,
    `(mapcar #'1+ '(1 2 3))` say, is evaluated, and what it gives is printed
-   on both. Ctrl-D ends it, and the kernel halts with
+   on both. Ctrl-C stops a form that does not end, `(loop)` for one, and
+   the prompt comes back. Ctrl-D ends it, and the kernel halts with
    `clara: nothing more to do`.
 
 UTM copies the image into the VM bundle, so after a rebuild either import it

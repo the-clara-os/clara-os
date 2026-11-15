@@ -1,0 +1,10 @@
+> (cl::%collect-every 1)
+0
+> (load "boot.lisp")
+T
+> (plusp (cl::%self-test))
+T
+> (handler-case (unwind-protect (error "~A" (list 1 2)) (list 3)) (error (c) (format nil "~A" c)))
+"(1 2)"
+> (cl::%collect-every 0)
+1

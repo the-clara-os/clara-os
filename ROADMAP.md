@@ -115,9 +115,27 @@ The Lisp runtime, in the substrate:
   calls deep. What it holds it keeps on a stack of its own, where M6c's
   collector will find it. Every boot evaluates two hundred texts and
   checks the answers, and the serial port evaluates what is typed.
-- [ ] **M6c collector and conditions.** Precise mark-sweep with all threads
-  stopped; `unwind-protect`, `handler-case`, `error`; a REPL on the console
-  that survives mistakes.
+- [x] **M6c collector and conditions** (2026-11-15, version 0.0.10). The
+  collector, in kernel/lisp/heap.c: it marks every object that can be
+  reached from what the substrate and the evaluator hold, exactly those,
+  and sweeps the heap from end to end, with every other thread stopped.
+  What it frees becomes free blocks, which the next objects go into; the
+  heap ends where its last object does, and the page frames past that go
+  back to the kernel. It runs at the evaluator's safe points, when enough
+  has been made since the last time, and never inside an allocation. Freed
+  memory is filled with a value that faults when it is followed, and what
+  was used after it was freed is refused by the collector and by the
+  allocator. An error is a condition now, an object with a type:
+  `handler-case` takes the conditions that a clause names the type of,
+  `unwind-protect` cleans up on every way out, `error`, `signal` and `warn`
+  signal them, `define-condition` makes new types, and the substrate's own
+  errors have Common Lisp's types where a program would tell them apart. A
+  computation that fills the heap is stopped with an error, and Ctrl-C on
+  the serial port stops one that does not end; the prompt comes back after
+  either. A thread that comes to a safe point with a lock in its hands is
+  a panic. Every boot puts the collector through 70000 objects and
+  evaluates some 260 texts, and `make test` boots once more with a
+  collection at every safe point of the evaluator.
 - [ ] **M7 Lisp in the driver's seat.** Lisp threads over substrate threads;
   the unsafe package: raw memory, port I/O, interrupts delivered as events;
   the console rewritten in Lisp; the same sources loading under SBCL with
@@ -238,65 +256,44 @@ Infrastructure, for sessions with budget left over:
   that fails. One got through the first version of the self-test: EVAL
   without the copy of its form, because the text that was to catch it
   had the macro call at the top of the form, where the evaluator leaves
-  it alone anyway.
+  it alone anyway. From M6c: the heap filled on a machine of 128 MiB, by
+  a list of vectors of 10000 items and by a list of ones, at the prompt,
+  inside an UNWIND-PROTECT whose cleanup form calls a function, inside a
+  HANDLER-CASE for STORAGE-CONDITION and inside one for ERROR, which
+  must not take it (the prompt comes back each time, and ROOM shows a
+  heap of 464 KiB again); Ctrl-C at an empty prompt, after three
+  characters of a line, and at the prompt for the rest of a form; a
+  Ctrl-C typed ahead of the form it was meant for, which stops the form
+  before it; the session from the disk image with 4 GiB and four
+  processors, on x86_64 with 128 MiB, `-cpu max` and four processors,
+  and on AArch64 emulated with `-cpu max`; tools/stress.txt on x86_64,
+  half a minute; the whole of `make test` in an Ubuntu container. And
+  the boot and the stress session with the runtime broken on purpose,
+  to see that they notice. The collector: without the value stack among
+  what it starts from, without the bindings, without the values of the
+  last form, without `lisp_roots`; that does not follow the last word of
+  an object, or the first; that forgets an object which had no room to
+  wait; a sweep that leaves the marks on, that fills nothing, that makes
+  a free block a word short, that frees nothing; a block that stays in
+  its list when it is taken; a heap that does not end where its last
+  free run begins; a write into freed memory. The evaluator: a function
+  being called that is not held, nor a list being taken apart, nor the
+  exit under way during a cleanup; UNWIND-PROTECT that does not put the
+  values back, or cleans up only when the form ends by itself; a type of
+  condition that is not one of its parents; HANDLER-CASE that does not
+  bind its variable, that stays in force after its form, that asks the
+  outermost first; an evaluator that never collects, and one that never
+  looks for Ctrl-C; PRINC that writes a condition like PRIN1; a
+  condition made in C without its slot; MAKE-CONDITION without the
+  defaults. And a thread that sleeps with a lock held. One got through:
+  LOAD that leaves `*package*` changed when a form fails, which is older
+  than this milestone and was only ever looked at by hand; the boot
+  volume has a file with a mistake in it since, kernel/lisp/self-test.lisp,
+  for a text to load.
 
 Shortcuts and loose ends, under the milestone that settles each one. A
 session reads its own group before it starts, and whatever it leaves open
 is added here in the same change.
-
-M6c:
-
-- The heap only grows. When no page frame is left for it the kernel
-  panics: there is no collector to run first, and no condition to signal.
-  Every object's header has a byte for the collector to mark in, which
-  nothing uses. Every call makes a frame in the heap, two for a function
-  with a name, so a computation that goes on long enough ends in that
-  panic: `(fib 20)` takes about 2 MiB.
-- The reader, the printer, the packages and the functions in C keep
-  objects in C variables while they work, and make more objects
-  meanwhile. That is safe as long as a collection starts only at a safe
-  point, never inside an allocation, and none of them comes to a safe
-  point; the reader takes its text whole for that reason, and whoever
-  reads from the serial port waits between two reads, not inside one.
-  The evaluator is the one that does come to safe points, at every call
-  and every GO, and it keeps what it holds on its value stack instead
-  (eval.c says how). Nothing has put that to the test, there being no
-  collector. Collecting at every safe point, as a mode of the boot test,
-  would.
-- Where the collector has to start: `lisp_roots`, and in eval.c the value
-  stack, the stack of bindings, `lisp_values` and `g_unwind`. The symbols
-  eval.c knows by sight are in COMMON-LISP and KEYWORD, which hold them.
-- What the self-tests make stays in the heap, which is at about 800 KiB
-  when the prompt appears, and so do their packages, two CLARA.SELF-TEST
-  and a SCRATCH, which are taken off the list of packages and have
-  nothing else pointing at them.
-- An error is a string, and it goes all the way to the top level, which
-  prints it: `lisp_fail` in C, and in Lisp `error`, which takes a control
-  string and its arguments and nothing else. Once there are conditions it
-  is one, with `handler-case` to stop it on the way and `unwind-protect`
-  to clean up behind it; the evaluator is built for both, since every way
-  out of a form is a return. An error in the reader is still a status in
-  C, with words and a place, and the loop on the serial port, which is C
-  as well, prints it.
-- Nothing interrupts a computation. `(loop)` typed at the prompt, or the
-  LENGTH of a list that leads back into itself, and the machine
-  evaluates for good: no key is looked at meanwhile.
-- The evaluator comes to a safe point at every call and every GO, and
-  nowhere else: a function in C that takes long holds the world up
-  meanwhile. A thread that does not come to a safe point keeps
-  `thread_stop_the_world` from returning, and nothing says which thread
-  it is.
-- A thread that waits for a lock is not at a safe point, and the world
-  stops around it only because no thread holds a lock while it sleeps,
-  joins or parks. That rule is in comments and nowhere in the code.
-- There is no list of all threads. The collector needs one to find what
-  each thread holds; so far a thread is only in the queue it waits in.
-
-M6c, M8:
-
-- The console has no cursor and no keyboard. A line can be typed on the
-  serial port (`kgetline`), with backspace for all its editing, and what
-  is typed is echoed on the screen.
 
 M7:
 
@@ -305,7 +302,39 @@ M7:
   stack of bindings, one set of values and one non-local exit under way,
   all static in eval.c, and it measures its depth on the stack of the one
   thread that called `lisp_eval_start`. A special variable has one value
-  for the whole machine, kept in the symbol.
+  for the whole machine, kept in the symbol. Those stacks are also what
+  the collector starts from (`lisp_eval_roots`): a second thread that
+  evaluates needs its own, and the collector a list of all threads to go
+  through. There is none: a thread is only in the queue it waits in.
+- A thread that does not come to a safe point keeps
+  `thread_stop_the_world` from returning, and nothing says which thread
+  it is. With one Lisp thread nobody can hold the collector up: the
+  other threads sleep, or wait for it to finish.
+- The evaluator comes to a safe point at every call and every GO, and
+  nowhere else. A function in C that takes long holds the world up
+  meanwhile, and Ctrl-C does not stop it: the LENGTH of a list that
+  leads back into itself still runs for good.
+- There are no streams. FORMAT writes to the console or into a string,
+  WARN and the top level write to the console, and what a condition says
+  is put together when the condition is made: DEFINE-CONDITION refuses
+  `:report`, and a condition of a type that has nothing to say prints as
+  its type and its slots.
+- HANDLER-CASE is the one way to handle a condition. There is no
+  HANDLER-BIND, no restart and no debugger, and a clause names a type by
+  its name and not as `(or ...)`. An error that nothing handles ends the
+  evaluation and is printed. WARN does not look whether what it is given
+  is a WARNING.
+- The substrate's errors have a type of their own where a program is
+  likely to care: TYPE-ERROR, with its datum and without an expected
+  type, which the substrate says in words; UNBOUND-VARIABLE and
+  UNDEFINED-FUNCTION, with the name; PROGRAM-ERROR for arguments that do
+  not fit; CONTROL-ERROR for an exit with nowhere to go;
+  DIVISION-BY-ZERO, and ARITHMETIC-ERROR for an integer too large;
+  STORAGE-CONDITION for a stack or a heap that is full. Every other is a
+  plain ERROR. Ctrl-C is a SERIOUS-CONDITION with no type of its own.
+- An error in the reader, at the prompt, is still a status in C, with
+  words and a place, and the loop on the serial port, which is C as
+  well, prints it. No HANDLER-CASE sees it.
 - What the language does not have yet, and refuses where it could be
   misread: `(declare (special ...))`, `&environment`, the keywords of
   LOOP, the options of DEFSTRUCT (`:include`, `:conc-name` and the
@@ -353,12 +382,17 @@ M7:
 
 M8:
 
-- No interrupt arrives for a character on the serial port. `kgetline`
-  looks at the port once a tick and sleeps in between, so a character
-  waits up to 10 ms, and what arrives meanwhile has to fit in the UART's
-  FIFO: 16 characters on the PL011, or 32, by its revision, and 14 on
-  the 16550 as it is set up. QEMU holds the rest back; a real serial line
-  would lose it.
+- The console has no cursor and no keyboard. A line can be typed on the
+  serial port (`kgetline`), with backspace for all its editing, and what
+  is typed is echoed on the screen.
+- No interrupt arrives for a character on the serial port. The timer's
+  tick takes in what the port holds, so a character waits up to 10 ms,
+  and what arrives meanwhile has to fit in the UART's FIFO: 16
+  characters on the PL011, or 32, by its revision, and 14 on the 16550
+  as it is set up. QEMU holds the rest back; a real serial line would
+  lose it. What has been taken in and not read waits in 256 bytes, and a
+  Ctrl-C behind more typing than that is not seen until some of it has
+  been read.
 - Whether to keep GIC version 2 at all is best decided here, when device
   interrupts would have to be written and tested for both versions. UTM
   never uses version 2; QEMU's virt machine has it unless told otherwise,
@@ -396,6 +430,10 @@ M10:
 - The kernel panics when `\clara` has no boot.lisp or when loading it
   fails, there being no Lisp world without it. An image takes its place.
 - GENSYM counts in a C variable, which an image would not bring back.
+- A heap that is saved has free blocks in it, in lists that are C
+  pointers and C variables (heap.c). After loading, a sweep puts the
+  lists together again; when the next collection is due is in C
+  variables as well.
 
 No milestone yet, to be picked up when they start to matter:
 
@@ -415,10 +453,37 @@ No milestone yet, to be picked up when they start to matter:
   and none of the other printer variables.
 - The reader refuses `#.`, `#nR`, `#*`, `#C`, `#P`, `#S` and `#n=`, and a
   vector inside a backquote.
-- DEFUN, DEFMACRO, DEFVAR, DEFPARAMETER, DEFCONSTANT, LAMBDA and
-  MULTIPLE-VALUE-BIND are special forms here and macros in Common Lisp,
-  so MACROEXPAND-1 leaves them as they are. MACROEXPAND-1 does not see
-  the macros of a MACROLET.
+- DEFUN, DEFMACRO, DEFVAR, DEFPARAMETER, DEFCONSTANT, LAMBDA,
+  MULTIPLE-VALUE-BIND and HANDLER-CASE are special forms here and macros
+  in Common Lisp, so MACROEXPAND-1 leaves them as they are.
+  MACROEXPAND-1 does not see the macros of a MACROLET.
+- The collector stops everything and goes through the whole heap every
+  time, so its time grows with what is in use; nothing has measured it.
+  Nothing moves, so free memory is in pieces: a short free block serves
+  only an object that fits it, and the heap gives page frames back to
+  the kernel only from its end, where one object that stays keeps the
+  heap as long as it is.
+- Making an object never collects, so memory can still run out for good
+  inside a function in C, between two safe points, and then the kernel
+  panics. The evaluator stops a computation when a collection leaves
+  less than a sixteenth of the machine's memory, and MAKE-ARRAY, FORMAT
+  into a string and string concatenation look before they make
+  something large. What remains is a function in C that makes very many
+  small objects at one go: APPEND with lists of millions, for one.
+- The collector has room for 4096 objects that wait to be looked into.
+  When more wait, a vector of that many things for one, it walks the
+  heap to find the rest, once more for every time the room runs out.
+- A macro whose function changes the form it was given can leave the
+  evaluator with a list in its hands that the collector has freed: a
+  form is held through the function it belongs to, not by itself.
+  Common Lisp leaves that undefined; here it can end in a fault.
+- The values of the last form and the last exit stay where the
+  collector finds them until others take their place: some twenty
+  objects that can live longer than they have to.
+- Every word of an object that goes into a free block is read first, to
+  see that nothing has written there since the collector freed it.
+- kernel/lisp/self-test.lisp, a file with a mistake in it, is on every
+  boot volume, because the evaluator's self-test loads it at every boot.
 - NREVERSE makes a new list, MAPC makes one and drops it, and a function
   with keyword parameters looks its keywords up by name at every call.
   How fast the interpreter is has not been measured.
@@ -504,7 +569,7 @@ No milestone yet, to be picked up when they start to matter:
   machine describes how its devices' interrupt lines are wired.
 - QEMU's hvf has no GIC version 2, which is why `make test` boots AArch64
   a second time, emulated.
-- None of M4, M5, M6a and M6b has been booted in UTM itself. UTM runs AArch64
+- None of M4, M5, M6a, M6b and M6c has been booted in UTM itself. UTM runs AArch64
   under hvf with GIC version 3, four processors and 4 GiB, and that was
   checked with Homebrew's QEMU 11 from the disk image; UTM brings QEMU
   10.0 and a display device of its own. A virtual machine there has no
@@ -526,9 +591,11 @@ No milestone yet, to be picked up when they start to matter:
   by then.
 - CI covers Ubuntu only, with clang 18 and QEMU 8.2 where the Mac has
   clang 23 and QEMU 11. Nothing builds or boots on macOS except by hand.
+  The boot with a collection at every safe point is emulated there, and
+  is the longest of the four.
 - `make image` needs macOS (hdiutil), so CI neither builds nor boots the
   disk image that UTM gets.
-- site/boot.png, on the website, is a screenshot of version 0.0.9, to be
+- site/boot.png, on the website, is a screenshot of version 0.0.10, to be
   replaced by hand when the boot report has changed enough to matter:
   build/screen-aarch64.png after `make test` is the same picture of the
   current kernel.

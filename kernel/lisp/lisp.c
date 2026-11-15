@@ -10,6 +10,7 @@
 
 void lisp_init(const struct boot_file *files)
 {
+    lisp_heap_init();
     lisp_symbols_init();
     kprintf("lisp: objects are tagged 64-bit words, in a heap at %p that begins with NIL\n",
             (void *)(uintptr_t)VM_HEAP_BASE);
@@ -706,17 +707,116 @@ static const struct {
       "(SCRATCH:THING \"SCRATCH\")" },
     { "(error \"~A went wrong\" 'this)", "error: THIS went wrong" },
     { "(load \"nothing.lisp\")", "error: LOAD: the boot volume has no file \"nothing.lisp\" in its \\clara directory" },
+    /* a file with a form that fails (kernel/lisp/self-test.lisp) */
+    { "(load \"self-test.lisp\")",
+      "error: CAR wants a list, and NOT-A-LIST is not one, in the form at line 15 of self-test.lisp" },
+    { "(list (package-name *package*) clara.loaded::*reached*)",
+      "(\"CLARA.SELF-TEST\" CLARA.LOADED::THE-FORM-BEFORE)" },
+    /* conditions */
+    { "(handler-case (error \"~A went wrong\" 'this) (error (c) (list 'caught (format nil \"~A\" c))))",
+      "(CAUGHT \"THIS went wrong\")" },
+    { "(handler-case (+ 1 2) (error () 'never))", "3" },
+    { "(handler-case (values 1 2) (error () 'never))", "1 2" },
+    { "(handler-case (floor 7 2) (error () 'never) (:no-error (q r) (list r q)))", "(1 3)" },
+    { "(handler-case (car 5) (type-error (c) (type-error-datum c)))", "5" },
+    { "(handler-case no-such-variable (unbound-variable (c) (cell-error-name c)))", "NO-SUCH-VARIABLE" },
+    { "(handler-case (no-such-function) (undefined-function (c) (cell-error-name c)))", "NO-SUCH-FUNCTION" },
+    { "(handler-case (/ 1 0) (division-by-zero () 'zero) (error () 'other))", "ZERO" },
+    { "(handler-case (/ 1 0) (arithmetic-error () 'arithmetic))", "ARITHMETIC" },
+    { "(handler-case (/ 1 0) (type-error () 'no) (error () 'yes) (t () 'too-late))", "YES" },
+    { "(handler-case (handler-case (/ 1 0) (type-error () 'inner)) (error () 'outer))", "OUTER" },
+    { "(handler-case (handler-case (/ 1 0) (error () (car 5))) (type-error () 'from-the-clause))", "FROM-THE-CLAUSE" },
+    { "(handler-case (car) (program-error () 'program))", "PROGRAM" },
+    { "(handler-case (go nowhere) (control-error () 'control))", "CONTROL" },
+    { "(defun deeper (n) (+ 1 (deeper n))) (handler-case (deeper 1) (error () 'an-error) (storage-condition () 'full))",
+      "FULL" },
+    { "(handler-case (make-array 4000000000) (storage-condition (c) (format nil \"~A\" c)))",
+      "\"the heap is full: there is no room for an object that large\"" },
+    { "(handler-case 1 (no-such-type () 2))",
+      "error: HANDLER-CASE has a clause for NO-SUCH-TYPE, which is not the name of a type of condition" },
+    { "(error 'no-such-type)", "error: NO-SUCH-TYPE is not the name of a type of condition" },
+    { "(error 5)", "error: 5 is not a condition, nor the name of a type of one, nor a string to make one of" },
+    { "(define-condition low-fuel (error) ((left :initarg :left :reader fuel-left)"
+      " (unit :initform 'litres :reader fuel-unit)))",
+      "LOW-FUEL" },
+    { "(handler-case (error 'low-fuel :left 3) (low-fuel (c) (list (fuel-left c) (fuel-unit c))))", "(3 LITRES)" },
+    { "(error 'low-fuel :left 3)", "error: #<LOW-FUEL :LEFT 3 :UNIT LITRES>" },
+    { "(error 'low-fuel :right 3)",
+      "error: a condition of the type LOW-FUEL has no slot that :RIGHT is the argument for" },
+    { "(fuel-left (make-condition 'low-fuel))", "error: the slot LEFT of #<LOW-FUEL :UNIT LITRES> has no value" },
+    { "(handler-case (error (make-condition 'low-fuel :left 2)) (t (c) (fuel-left c)))", "2" },
+    { "(handler-case (signal 'low-fuel :left 1) (condition (c) (fuel-left c)))", "1" },
+    { "(signal 'low-fuel :left 1)", "NIL" },
+    { "(handler-case (warn \"~A is low\" 'fuel) (warning (c) (format nil \"~A\" c)))", "\"FUEL is low\"" },
+    { "(let ((c (make-condition 'simple-error :format-control \"~A and ~A\" :format-arguments '(1 2))))"
+      " (list (format nil \"~A\" c) (simple-condition-format-control c) (simple-condition-format-arguments c)))",
+      "(\"1 and 2\" \"~A and ~A\" (1 2))" },
+    { "(handler-case (error \"~A\" 1) (simple-error (c) (simple-condition-format-arguments c)))", "(1)" },
+    { "(multiple-value-list (ignore-errors (car 5)))",
+      "(NIL #<TYPE-ERROR \"CAR wants a list, and 5 is not one\">)" },
+    { "(ignore-errors (values 1 2))", "1 2" },
+    { "(define-condition odd () () (:report \"odd\"))", "error: DEFINE-CONDITION with :REPORT, which is not here yet" },
+    { "(handler-case (load \"self-test.lisp\") (type-error (c) (list (type-error-datum c) (package-name *package*))))",
+      "(CLARA.LOADED::NOT-A-LIST \"CLARA.SELF-TEST\")" },
+    { "(type-error-expected-type (make-condition 'type-error :datum 1))",
+      "error: the slot EXPECTED-TYPE of #<TYPE-ERROR :DATUM 1> has no value" },
+    /* unwind-protect */
+    { "(let ((log nil)) (list (unwind-protect 1 (push 'cleaned log)) log))", "(1 (CLEANED))" },
+    { "(multiple-value-list (unwind-protect (values 1 2) (values 3 4)))", "(1 2)" },
+    { "(let ((log nil)) (list (block b (unwind-protect (return-from b 1) (push 'cleaned log))) log))",
+      "(1 (CLEANED))" },
+    { "(multiple-value-list (catch 'c (unwind-protect (throw 'c (values 1 2)) (values 3 4))))", "(1 2)" },
+    { "(let ((n 0)) (tagbody (unwind-protect (go out) (setq n (+ n 1))) out) n)", "1" },
+    { "(block b (unwind-protect (return-from b 1) (return-from b 2)))", "2" },
+    { "(let ((log nil)) (list (handler-case (unwind-protect (error \"oops\") (push 'cleaned log)) (error () 'handled))"
+      " log))",
+      "(HANDLED (CLEANED))" },
+    { "(let ((log nil)) (handler-case (unwind-protect (/ 1 0) (push 1 log) (car 5)) (type-error () (list 'second log))))",
+      "(SECOND (1))" },
+    { "(let ((log nil)) (list (handler-case (let ((*level* 9)) (unwind-protect (error \"x\") (push *level* log)))"
+      " (error () *level*)) log))",
+      "(6 (9))" },
+    { "(defvar *log* nil) (unwind-protect (error \"to the top\") (push 'cleaned *log*))", "error: to the top" },
+    { "*log*", "(CLEANED)" },
+    /* the collector, in the middle of things: what is held only by the evaluator has to come through */
+    { "(let ((keep (list 1 2 3))) (cl::%collect) keep)", "(1 2 3)" },
+    { "(let ((f (let ((n 10)) (lambda () (setq n (+ n 1)))))) (cl::%collect) (funcall f) (cl::%collect) (funcall f))",
+      "12" },
+    { "(list (list 1 2) (progn (cl::%collect) (list 3)) (list 4))", "((1 2) (3) (4))" },
+    { "(progn (setq *level* (list 'old)) (let ((*level* 1)) (cl::%collect)) (prog1 *level* (setq *level* 6)))",
+      "(OLD)" },
+    { "(multiple-value-list (multiple-value-prog1 (values (list 1) (list 2)) (cl::%collect)))", "((1) (2))" },
+    { "(multiple-value-list (catch 'c (unwind-protect (throw 'c (values (list 1) (list 2))) (cl::%collect))))",
+      "((1) (2))" },
+    { "(handler-case (unwind-protect (error 'low-fuel :left (list 1 2)) (cl::%collect)) (low-fuel (c) (fuel-left c)))",
+      "(1 2)" },
+    { "(handler-case (unwind-protect (error 'low-fuel :left (list 1 2)) (ignore-errors (car 5)) (cl::%collect))"
+      " (low-fuel (c) (fuel-left c)))",
+      "(1 2)" },
+    { "(defun redefined () (defun redefined () 'new) (cl::%collect) 'old) (list (funcall 'redefined) (redefined))",
+      "(OLD NEW)" },
+    { "(defmacro split (&optional ((c &optional (e (progn (cl::%collect) 'e)) &rest d) (list 1))) `'(,c ,e ,d)) (split)",
+      "(1 E NIL)" },
+    { "(let ((v (make-array 3 :initial-element (list 'x)))) (cl::%collect) (let ((s (make-point :x v))) (cl::%collect)"
+      " (point-x s)))",
+      "#((X) (X) (X))" },
+    { "(let ((l nil)) (dotimes (i 2000) (push (list i (format nil \"~D\" i)) l)) (cl::%collect)"
+      " (list (length l) (car l) (car (last l))))",
+      "(2000 (1999 \"1999\") (0 \"0\"))" },
 };
 
 /* The evaluator, and the language that lisp/boot.lisp builds on it. Then a
  * function that calls itself without end: the evaluator has to say that
- * the stack is full, well before the guard page says it. */
-static void eval_selftest(void)
+ * the stack is full, well before the guard page says it. Returns how many
+ * texts there were, and leaves how deep the function got in *deep.
+ *
+ * %SELF-TEST runs this again from the prompt, which is how the boot test
+ * puts all of it through a collection at every safe point. */
+static unsigned eval_texts(int64_t *deep)
 {
     struct lisp_symbol *package = lisp_as_symbol(lisp_roots.package);
     lisp user = package->value, packages = lisp_roots.packages;
     unsigned texts = sizeof evaluations / sizeof evaluations[0], wrong = 0;
-    uint64_t count[LISP_TYPES], bytes;
     struct text printed;
     int64_t depth;
 
@@ -743,18 +843,134 @@ static void eval_selftest(void)
     /* The packages the texts made go with the self-test's own. */
     package->value = user;
     lisp_roots.packages = packages;
+    *deep = depth;
+    return texts;
+}
 
-    bytes = lisp_heap_census(count);
+unsigned lisp_eval_texts(void)
+{
+    int64_t depth;
+
+    return eval_texts(&depth);
+}
+
+/* The evaluator's self-test, and then what the heap holds once the
+ * self-tests' own objects have been collected. */
+static void eval_selftest(void)
+{
+    uint64_t count[LISP_TYPES], bytes, collections;
+    struct lisp_heap heap;
+    struct text printed;
+    int64_t depth;
+    unsigned texts = eval_texts(&depth);
+
+    /* Nobody asks for a collection here: the evaluator has to see for itself that it is time. */
+    lisp_heap_state(&heap);
+    collections = heap.collections;
+    evaluate_text("(dotimes (i 5000) (list i i i))", &printed);
+    lisp_heap_state(&heap);
+    if (heap.collections == collections)
+        panic("lisp self-test: the evaluator made 5000 lists and did not once stop to collect");
+
     kprintf("lisp: the evaluator passed: %u texts evaluated, and a function called itself %lld deep\n", texts,
             (long long)depth);
-    kprintf("lisp: %llu KiB of heap in use: %llu conses, %llu symbols, %llu strings, %llu vectors, %llu packages,\n",
-            bytes >> 10, count[LISP_CONS], count[LISP_SYMBOL], count[LISP_STRING], count[LISP_VECTOR],
-            count[LISP_PACKAGE]);
-    kprintf("lisp:   %llu functions and %llu structures\n", count[LISP_FUNCTION], count[LISP_STRUCTURE]);
+    lisp_collect();
+    bytes = lisp_heap_census(count);
+    lisp_heap_state(&heap);
+    kprintf("lisp: %llu KiB of heap in use after %llu collections: %llu conses, %llu symbols, %llu strings,\n",
+            bytes >> 10, heap.collections, count[LISP_CONS], count[LISP_SYMBOL], count[LISP_STRING]);
+    kprintf("lisp:   %llu vectors, %llu packages, %llu functions, %llu structures and %llu conditions\n",
+            count[LISP_VECTOR], count[LISP_PACKAGE], count[LISP_FUNCTION], count[LISP_STRUCTURE],
+            count[LISP_CONDITION]);
+}
+
+/* The collector. Objects that are held, on the evaluator's stack, with as
+ * many again that nothing holds made in between them: after a collection
+ * the first are what they were and the second are gone, and what is made
+ * next goes where those were. The objects that are held make the
+ * collector work: more of them wait to be looked into at one time than it
+ * has room for, a list is longer than any C stack is deep, and a cons
+ * leads back to itself. Once nothing is held any more, the heap is what
+ * it was before. */
+static void collector_selftest(void)
+{
+    enum { ITEMS = 10000, LINKS = 50000 };
+    lisp *base = lisp_stack(), wide, list = LISP_NIL, ring;
+    const lisp *lost = NULL;
+    struct lisp_heap before, held, again, after;
+    uint64_t frames, made = 0, freed, n = 0;
+    uint32_t c;
+
+    lisp_collect(); /* what the reader's self-test left behind */
+    lisp_heap_state(&before);
+    frames = pmm_free_frames();
+
+    wide = lisp_make_vector(ITEMS);
+    lisp_push(wide);
+    for (uint64_t i = 0; i < ITEMS; i++) {
+        const lisp *nobodys = lisp_as_vector(lisp_make_vector(1 + i % 7))->items;
+
+        made += 2 + i % 7;
+        if (i == 6)
+            lost = &nobodys[6]; /* the last word of one that nobody holds, past where a free block has its link */
+        c = (uint32_t)('a' + i % 26);
+        lisp_as_vector(wide)->items[i] = lisp_cons(lisp_fixnum((int64_t)i), lisp_make_string(&c, 1));
+    }
+    lisp_push(LISP_NIL);
+    for (uint64_t i = 0; i < LINKS; i++) {
+        made += 2 + i % 5;
+        lisp_make_vector(1 + i % 5);
+        base[1] = list = lisp_cons(lisp_fixnum((int64_t)i), list);
+    }
+    ring = lisp_cons(wide, LISP_NIL);
+    lisp_as_cons(ring)->cdr = ring;
+    lisp_push(ring);
+
+    freed = lisp_collect();
+    lisp_heap_state(&held);
+    if (freed != made * sizeof(lisp))
+        panic("lisp self-test: the collector freed %llu bytes where %llu were in nobody's hands", freed,
+              made * sizeof(lisp));
+    if (*lost != LISP_FREED)
+        panic("lisp self-test: an object that the collector freed still holds %llx", *lost);
+    for (uint64_t i = 0; i < ITEMS; i++) {
+        lisp item = lisp_as_vector(wide)->items[i];
+
+        if (!lisp_is_cons(item) || lisp_as_cons(item)->car != lisp_fixnum((int64_t)i) ||
+            !lisp_is(lisp_as_cons(item)->cdr, LISP_STRING) ||
+            lisp_as_string(lisp_as_cons(item)->cdr)->chars[0] != 'a' + i % 26)
+            panic("lisp self-test: item %llu of a vector did not come through a collection", i);
+    }
+    for (lisp l = list; lisp_is_cons(l); l = lisp_as_cons(l)->cdr, n++)
+        if (lisp_as_cons(l)->car != lisp_fixnum((int64_t)(LINKS - 1 - n)))
+            panic("lisp self-test: item %llu of a list did not come through a collection", n);
+    if (n != LINKS || lisp_as_cons(ring)->cdr != ring || lisp_as_cons(ring)->car != wide)
+        panic("lisp self-test: a list of %u items has %llu after a collection, or a ring is no longer one", LINKS, n);
+
+    /* As much again in nobody's hands: it all fits where the first lot was. */
+    for (uint64_t i = 0; i < ITEMS; i++)
+        lisp_make_vector(1 + i % 7);
+    for (uint64_t i = 0; i < LINKS; i++)
+        lisp_make_vector(1 + i % 5);
+    lisp_heap_state(&again);
+    if (again.size != held.size || held.free - again.free != made * sizeof(lisp))
+        panic("lisp self-test: the heap grew from %llu to %llu bytes with %llu of it free", held.size, again.size,
+              held.free);
+
+    lisp_stack_drop(base);
+    lisp_collect();
+    lisp_heap_state(&after);
+    if (after.size != before.size || after.free != before.free)
+        panic("lisp self-test: the heap is %llu bytes with %llu free, and was %llu with %llu before the collector's test",
+              after.size, after.free, before.size, before.free);
+    if (frames - pmm_free_frames() > 16) /* a few stay behind as page tables */
+        panic("lisp self-test: %llu page frames did not come back from the heap", frames - pmm_free_frames());
+    kprintf("lisp: the collector passed: %u objects kept, %llu KiB freed and used again, a heap of %llu KiB\n",
+            2 * ITEMS + LINKS + 2, freed >> 10, after.size >> 10);
 }
 
 /* A form from the serial port: evaluated, and its values printed, one to
- * a line, or what went wrong. */
+ * a line, or the condition that nothing handled, as it reads for a person. */
 static void answer(lisp form)
 {
     if (lisp_evaluate(form))
@@ -776,13 +992,15 @@ static void answer(lisp form)
  * gathered until they hold a form: after every line the reader starts
  * again at the first form that is not finished, and as long as that one
  * stops short, another line is asked for. Nothing is held across the wait
- * for a line, which is a safe point. */
+ * for a line, which is a safe point. Ctrl-C stops a form that is being
+ * evaluated, at the evaluator's next safe point, and gives up one that is
+ * being typed. */
 static void lisp_listen(void)
 {
     static uint8_t text[8192];
     size_t used = 0;
 
-    kprintf("clara: reading from the serial port: a form typed there is evaluated, and Ctrl-D ends it\n");
+    kprintf("clara: reading from the serial port: a form typed there is evaluated, Ctrl-C stops it, Ctrl-D ends\n");
     for (;;) {
         struct lisp_reader r;
         enum lisp_read_status status;
@@ -793,6 +1011,12 @@ static void lisp_listen(void)
 
         kputs(used ? "  " : "> ");
         length = kgetline((char *)text + used, sizeof text - used - 1);
+        if (length == -2) {
+            /* Ctrl-C: the line is given up, and with it the form that it was to go on. */
+            used = 0;
+            lisp_console_fresh = 1;
+            continue;
+        }
         if (length < 0) {
             kputc('\n');
             if (used)
@@ -831,12 +1055,15 @@ static void lisp_listen(void)
 static void lisp_thread(void *arg)
 {
     uint64_t before[LISP_TYPES], after[LISP_TYPES];
-    lisp load = lisp_cons(lisp_symbol_in(lisp_roots.common_lisp, "LOAD", 1),
-                          lisp_cons(lisp_string_from_utf8("boot.lisp", 9), LISP_NIL));
+    lisp load;
 
     (void)arg;
     lisp_eval_start();
+    collector_selftest();
     lisp_heap_census(before);
+    /* Made here and handed over at once: nothing holds it but this variable. */
+    load = lisp_cons(lisp_symbol_in(lisp_roots.common_lisp, "LOAD", 1),
+                     lisp_cons(lisp_string_from_utf8("boot.lisp", 9), LISP_NIL));
     if (!lisp_evaluate(load)) {
         kputs("lisp: ");
         lisp_princ(lisp_values.value[0], lisp_console_put, NULL);

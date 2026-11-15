@@ -5,9 +5,10 @@
  * there are against the table at the end of this file.
  *
  * None of them holds an object in a C variable across a call back into
- * the evaluator (eval.c says why). The few that call back, FUNCALL, APPLY,
- * EVAL and LOAD, have nothing to hold; whatever maps a function over a
- * list is written in Lisp for that reason. */
+ * the evaluator, where the collector may run (eval.c says why). The few
+ * that call back, FUNCALL, APPLY, EVAL, LOAD and ERROR with the name of a
+ * type, have nothing to hold; whatever maps a function over a list is
+ * written in Lisp for that reason. */
 #include "lisp.h"
 
 #define PRIMITIVE(name) static lisp name(unsigned argc __attribute__((unused)), lisp *argv)
@@ -27,6 +28,12 @@
 static lisp boolean(int x)
 {
     return x ? T : NIL;
+}
+
+/* An object as large as a program asked for, and the heap cannot hold it. */
+static lisp no_room(void)
+{
+    return lisp_fail_as("STORAGE-CONDITION", NULL, 0, "the heap is full: there is no room for an object that large");
 }
 
 /* The console, as Lisp writes to it: the serial port and the screen. */
@@ -198,7 +205,8 @@ PREDICATE(p_packagep, lisp_is(x, LISP_PACKAGE))
  * and the sum leaves 64 bits exactly when the integers leave 63. */
 static lisp too_large(void)
 {
-    return lisp_fail("the result is an integer too large for a fixnum, and there are no larger integers yet");
+    return lisp_fail_as("ARITHMETIC-ERROR", NULL, 0,
+                        "the result is an integer too large for a fixnum, and there are no larger integers yet");
 }
 
 PRIMITIVE(p_add)
@@ -249,7 +257,7 @@ static int divide(lisp n, lisp d, int down, int64_t *quotient, int64_t *remainde
         return 0;
     }
     if (!b) {
-        lisp_fail("division by zero");
+        lisp_fail_as("DIVISION-BY-ZERO", NULL, 0, "division by zero");
         return 0;
     }
     *quotient = a / b;
@@ -501,6 +509,8 @@ PRIMITIVE(p_string_append)
             return lisp_wants("a string", argv[i]);
         length += lisp_length(lisp_as_string(argv[i])->header);
     }
+    if (!lisp_heap_room(1 + (length + 1) / 2))
+        return no_room();
     string = lisp_make_string(NULL, length);
     for (unsigned i = 0; i < argc; i++) {
         const struct lisp_string *s = lisp_as_string(argv[i]);
@@ -588,6 +598,8 @@ PRIMITIVE(p_make_vector) /* length, and what every item is to be */
 
     if (!index_in(argv[0], 1ULL << 32, &length))
         return NIL;
+    if (!lisp_heap_room(1 + length))
+        return no_room();
     vector = lisp_make_vector(length);
     for (uint64_t i = 0; i < length; i++)
         lisp_as_vector(vector)->items[i] = argv[1];
@@ -611,7 +623,7 @@ PRIMITIVE(p_symbol_value)
 {
     SYMBOL(argv[0]);
     if (lisp_as_symbol(argv[0])->value == LISP_UNBOUND)
-        return lisp_fail("the variable ~S has no value", argv[0]);
+        return lisp_fail_as("UNBOUND-VARIABLE", "NAME", argv[0], "the variable ~S has no value", argv[0]);
     return lisp_as_symbol(argv[0])->value;
 }
 
@@ -619,7 +631,7 @@ PRIMITIVE(p_symbol_function)
 {
     SYMBOL(argv[0]);
     if (lisp_as_symbol(argv[0])->function == LISP_UNBOUND)
-        return lisp_fail("the function ~S is not defined", argv[0]);
+        return lisp_fail_as("UNDEFINED-FUNCTION", "NAME", argv[0], "the function ~S is not defined", argv[0]);
     return lisp_as_symbol(argv[0])->function;
 }
 
@@ -1060,6 +1072,10 @@ static lisp format_string(lisp control, unsigned argc, const lisp *argv)
 
     if (!format(sink_put, &sink, control, argc, argv))
         return 0;
+    if (!lisp_heap_room(1 + (sink.length + 1) / 2)) {
+        no_room();
+        return 0;
+    }
     string = lisp_make_string(NULL, sink.length);
     sink.chars = lisp_as_string(string)->chars;
     sink.length = 0;
@@ -1083,16 +1099,125 @@ PRIMITIVE(p_format) /* T or NIL, a control string, arguments */
     return string ? string : NIL;
 }
 
-/* (error control argument...): what went wrong, written as FORMAT would,
- * and from there to the top level. There are no conditions yet (M6c). */
+/* Conditions. One is a type, a symbol that DEFINE-CONDITION gave parents
+ * and slots (lisp/boot.lisp), what it says to a person, and the values of
+ * its slots. */
+PRIMITIVE(p_make_condition) /* type, a string or NIL, the names of slots and their values in turn */
+{
+    SYMBOL(argv[0]);
+    if (argv[1] != NIL && !lisp_is(argv[1], LISP_STRING))
+        return lisp_wants("a string, or NIL, for what a condition says", argv[1]);
+    return lisp_make_condition(argv[0], argv[1], argv[2]);
+}
+
+PRIMITIVE(p_condition_type)
+{
+    return lisp_is(argv[0], LISP_CONDITION) ? lisp_as_condition(argv[0])->type : lisp_wants("a condition", argv[0]);
+}
+
+PRIMITIVE(p_condition_slots)
+{
+    return lisp_is(argv[0], LISP_CONDITION) ? lisp_as_condition(argv[0])->slots : lisp_wants("a condition", argv[0]);
+}
+
+/* What ERROR, SIGNAL and WARN make of their arguments, or 0 after failing.
+ * A condition is itself. A string is the control string of a condition of
+ * the simple type, and what FORMAT makes of it and of the arguments is
+ * what the condition says. The name of a type goes to MAKE-CONDITION
+ * (lisp/boot.lisp) with the arguments, which name slots and give their
+ * values. */
+static lisp condition_of(unsigned argc, lisp *argv, const char *simple)
+{
+    lisp cl = lisp_roots.common_lisp, datum = argv[0], said, arguments = NIL;
+
+    if (lisp_is(datum, LISP_CONDITION) && argc == 1)
+        return datum;
+    if (lisp_is(datum, LISP_STRING)) {
+        if (!(said = format_string(datum, argc - 1, argv + 1)))
+            return 0;
+        while (--argc)
+            arguments = lisp_cons(argv[argc], arguments);
+        arguments = lisp_cons(lisp_symbol_in(cl, "FORMAT-ARGUMENTS", 0), lisp_cons(arguments, NIL));
+        return lisp_make_condition(lisp_symbol_in(cl, simple, 1), said,
+                                   lisp_cons(lisp_symbol_in(cl, "FORMAT-CONTROL", 0), lisp_cons(datum, arguments)));
+    }
+    if (lisp_is_symbol(datum) && datum != NIL) {
+        datum = lisp_apply(lisp_symbol_in(cl, "MAKE-CONDITION", 1), argc, argv);
+        return lisp_unwinding() ? 0 : datum;
+    }
+    lisp_fail("~S is not a condition, nor the name of a type of one, nor a string to make one of", datum);
+    return 0;
+}
+
+/* (error datum argument...): a condition that somebody has to handle. With
+ * no HANDLER-CASE for it, it goes to the top level. */
 PRIMITIVE(p_error)
 {
-    lisp string = argv[0];
+    lisp condition = condition_of(argc, argv, "SIMPLE-ERROR");
 
-    if (!lisp_is(string, LISP_STRING))
-        return lisp_fail("~S", string);
-    string = format_string(string, argc - 1, argv + 1);
-    return string ? lisp_fail("~A", string) : NIL;
+    return condition ? lisp_error(condition) : NIL;
+}
+
+/* (signal datum argument...): a condition for whoever wants it. With no
+ * HANDLER-CASE for it, nothing happens. */
+PRIMITIVE(p_signal)
+{
+    lisp condition = condition_of(argc, argv, "SIMPLE-CONDITION");
+
+    if (condition)
+        lisp_signal(condition);
+    return NIL;
+}
+
+/* (warn datum argument...): the same, except that with no HANDLER-CASE
+ * for it the console says what the warning is. */
+PRIMITIVE(p_warn)
+{
+    lisp condition = condition_of(argc, argv, "SIMPLE-WARNING");
+
+    if (condition && !lisp_signal(condition)) {
+        lisp_fresh_line();
+        for (const char *s = "warning: "; *s; s++)
+            lisp_console_put(NULL, *s);
+        lisp_princ(condition, lisp_console_put, NULL);
+        lisp_console_put(NULL, '\n');
+    }
+    return NIL;
+}
+
+/* The heap. ROOM says how full it is. The three after it are for testing
+ * the collector, and internal: one collection now, a collection at every
+ * nth safe point, and the texts of the boot's self-test evaluated again. */
+PRIMITIVE(p_room)
+{
+    struct lisp_heap heap;
+
+    (void)argv;
+    lisp_heap_state(&heap);
+    lisp_fresh_line();
+    kprintf("the heap is %llu KiB long, with %llu KiB of it free, after %llu collections\n", heap.size >> 10,
+            heap.free >> 10, heap.collections);
+    return NIL;
+}
+
+PRIMITIVE(p_collect)
+{
+    (void)argv;
+    return lisp_fixnum((int64_t)lisp_collect());
+}
+
+PRIMITIVE(p_collect_every)
+{
+    INTEGER(argv[0]);
+    if (lisp_fixnum_value(argv[0]) < 0)
+        return lisp_wants("an integer that is not negative", argv[0]);
+    return lisp_fixnum((int64_t)lisp_collect_every((uint64_t)lisp_fixnum_value(argv[0])));
+}
+
+PRIMITIVE(p_self_test)
+{
+    (void)argv;
+    return lisp_fixnum(lisp_eval_texts());
 }
 
 const struct lisp_primitive lisp_primitives[] = {
@@ -1192,5 +1317,14 @@ const struct lisp_primitive lisp_primitives[] = {
     { "TERPRI", p_terpri, 0, 0 },
     { "FORMAT", p_format, 2, LISP_MANY },
     { "ERROR", p_error, 1, LISP_MANY },
+    { "SIGNAL", p_signal, 1, LISP_MANY },
+    { "WARN", p_warn, 1, LISP_MANY },
+    { "%MAKE-CONDITION", p_make_condition, 3, 3 },
+    { "%CONDITION-TYPE", p_condition_type, 1, 1 },
+    { "%CONDITION-SLOTS", p_condition_slots, 1, 1 },
+    { "ROOM", p_room, 0, 1 },
+    { "%COLLECT", p_collect, 0, 0 },
+    { "%COLLECT-EVERY", p_collect_every, 1, 1 },
+    { "%SELF-TEST", p_self_test, 0, 0 },
 };
 const unsigned lisp_primitive_count = sizeof lisp_primitives / sizeof lisp_primitives[0];

@@ -26,7 +26,14 @@
           member assoc remove-if remove-if-not remove find-if find position
           every some reduce getf get
           zerop plusp minusp evenp oddp abs max min expt
-          char= char< concatenate make-array macroexpand))
+          char= char< concatenate make-array macroexpand
+          define-condition make-condition ignore-errors
+          condition warning serious-condition storage-condition
+          simple-condition simple-error simple-warning
+          type-error program-error control-error cell-error
+          unbound-variable undefined-function arithmetic-error division-by-zero
+          simple-condition-format-control simple-condition-format-arguments
+          type-error-datum type-error-expected-type cell-error-name))
 
 ;;; Control
 
@@ -501,3 +508,116 @@
                        (defsetf ,reader ,writer))))
                  names)
        ',name)))
+
+;;; Conditions
+;;;
+;;; A type of condition is a name. DEFINE-CONDITION leaves what there is to
+;;; know about it on the property list of the name, under %CONDITION: the
+;;; parents of the type, and then its own slots, each as (name initarg
+;;; default), where the default is a function of no arguments, or NIL. The
+;;; substrate looks at the parents to see whether a clause of a
+;;; HANDLER-CASE takes a condition (kernel/lisp/eval.c). A condition is its
+;;; type, what it says to a person, and the names of its slots with their
+;;; values in turn.
+;;;
+;;; What a condition says is made when the condition is: for the types
+;;; below SIMPLE-CONDITION, what FORMAT makes of the control string and its
+;;; arguments. There are no streams yet for a :REPORT function to write to,
+;;; so DEFINE-CONDITION refuses one, and a condition of a type that has
+;;; nothing to say shows its type and its slots.
+
+(defun %slots (type)
+  (let ((known (get type '%condition)))
+    (unless known
+      (error "~S is not the name of a type of condition" type))
+    (append (cdr known) (mapcan #'%slots (car known)))))
+
+;; The rest of a property list from the indicator on, when it is there.
+(defun %supplied (plist indicator)
+  (do ((rest plist (cddr rest))) ((null rest) nil)
+    (if (eq (car rest) indicator) (return rest))))
+
+(defun make-condition (type &rest arguments)
+  (let ((slots (%slots type)) (values nil))
+    (do ((rest arguments (cddr rest))) ((null rest))
+      (unless (some (lambda (slot) (eq (cadr slot) (car rest))) slots)
+        (error "a condition of the type ~S has no slot that ~S is the argument for"
+               type (car rest))))
+    (dolist (slot slots)
+      (unless (%supplied values (car slot))
+        (let ((given (if (cadr slot) (%supplied arguments (cadr slot)))))
+          (cond (given
+                 (setq values (append values (list (car slot) (cadr given)))))
+                ((caddr slot)
+                 (setq values (append values (list (car slot) (funcall (caddr slot))))))))))
+    (%make-condition type
+                     (let ((control (getf values 'format-control)))
+                       (if (stringp control)
+                           (apply #'format nil control (getf values 'format-arguments))))
+                     values)))
+
+(defun %slot (condition name)
+  (let ((found (%supplied (%condition-slots condition) name)))
+    (if found
+        (cadr found)
+        (error "the slot ~A of ~S has no value" name condition))))
+
+;; A slot as DEFINE-CONDITION writes it, a name or (name option value...):
+;; the form that makes what is kept of it, and the functions that read it.
+(defun %slot-form (slot)
+  (let ((name (if (consp slot) (car slot) slot)) (initarg nil) (default nil))
+    (do ((options (if (consp slot) (cdr slot)) (cddr options))) ((null options))
+      (case (car options)
+        (:initarg (setq initarg (cadr options)))
+        (:initform (setq default `(lambda () ,(cadr options))))
+        ((:reader :accessor :type :documentation))
+        (t (error "DEFINE-CONDITION with the slot option ~S, which is not here yet"
+                  (car options)))))
+    `(list ',name ',initarg ,default)))
+
+(defun %slot-readers (slot)
+  (let ((readers nil))
+    (do ((options (if (consp slot) (cdr slot)) (cddr options))) ((null options) readers)
+      (if (member (car options) '(:reader :accessor))
+          (setq readers (cons `(defun ,(cadr options) (condition)
+                                 (%slot condition ',(car slot)))
+                              readers))))))
+
+(defmacro define-condition (name parents slots &rest options)
+  (dolist (option options)
+    (unless (eq (car option) :documentation)
+      (error "DEFINE-CONDITION with ~S, which is not here yet" (car option))))
+  `(progn
+     (%put ',name '%condition
+           (list ',(or parents '(condition)) ,@(mapcar #'%slot-form slots)))
+     ,@(mapcan #'%slot-readers slots)
+     ',name))
+
+;; The types that Common Lisp begins with, as far as the substrate signals
+;; them. CONDITION is the one without a parent.
+(%put 'condition '%condition (list nil))
+(define-condition warning (condition) ())
+(define-condition serious-condition (condition) ())
+(define-condition error (serious-condition) ())
+(define-condition storage-condition (serious-condition) ())
+(define-condition simple-condition (condition)
+  ((format-control :initarg :format-control :reader simple-condition-format-control)
+   (format-arguments :initarg :format-arguments :initform nil
+                     :reader simple-condition-format-arguments)))
+(define-condition simple-error (simple-condition error) ())
+(define-condition simple-warning (simple-condition warning) ())
+(define-condition type-error (error)
+  ((datum :initarg :datum :reader type-error-datum)
+   (expected-type :initarg :expected-type :reader type-error-expected-type)))
+(define-condition program-error (error) ())
+(define-condition control-error (error) ())
+(define-condition cell-error (error)
+  ((name :initarg :name :reader cell-error-name)))
+(define-condition unbound-variable (cell-error) ())
+(define-condition undefined-function (cell-error) ())
+(define-condition arithmetic-error (error) ())
+(define-condition division-by-zero (arithmetic-error) ())
+
+(defmacro ignore-errors (&body body)
+  `(handler-case (progn ,@body)
+     (error (condition) (values nil condition))))

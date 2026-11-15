@@ -45,11 +45,12 @@ $(eval $(call ARCH_RULES,x86_64,x86_64-unknown-windows,-mno-red-zone,BOOTX64.EFI
 $(eval $(call ARCH_RULES,aarch64,aarch64-unknown-windows,,BOOTAA64.EFI,arm64))
 
 # The boot handoff reads every file in the ESP's \clara directory: what is
-# in lisp/ now, and nothing that was there before and has gone since.
-$(BOOT_FILES): lisp $(wildcard lisp/*.lisp)
+# in lisp/ now, and nothing that was there before and has gone since. The
+# file that the evaluator's self-test loads goes with them.
+$(BOOT_FILES): lisp $(wildcard lisp/*.lisp) kernel/lisp/self-test.lisp
 	rm -rf $(BOOTDIR)
 	mkdir -p $(BOOTDIR)
-	cp lisp/*.lisp $(BOOTDIR)/
+	cp lisp/*.lisp kernel/lisp/self-test.lisp $(BOOTDIR)/
 	touch $@
 all: $(BOOT_FILES)
 
@@ -58,11 +59,17 @@ run-%: all
 
 # AArch64 boots twice, once for each version of its interrupt controller:
 # version 3 as UTM runs it, accelerated where the host can, and version 2
-# emulated, because QEMU's hvf has no version 2.
+# emulated, because QEMU's hvf has no version 2. Then once more for
+# tools/stress.txt, a session in which the collector runs at every safe
+# point of the evaluator while boot.lisp is loaded again and the
+# evaluator's self-test is repeated: whatever the evaluator fails to hold
+# on to is gone at its next call. That takes half a minute where AArch64 is
+# emulated.
 test: all
 	tools/boottest.sh x86_64
 	tools/boottest.sh aarch64 -machine gic-version=3
 	NAME=aarch64-gic2 NO_HVF=1 tools/boottest.sh aarch64 -machine gic-version=2
+	NAME=aarch64-stress SESSION=tools/stress.txt TIMEOUT=300 tools/boottest.sh aarch64 -machine gic-version=3
 
 image: all
 	tools/mkimage.sh

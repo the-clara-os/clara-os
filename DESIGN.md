@@ -229,11 +229,12 @@ architectures (kernel/vm.c).
   more of the text comes back with the form from its beginning. Reading a
   line again costs nothing that matters, and it leaves no place in the
   reader where a thread could be held up with half a list in its hands.
-- The collector will run at safe points only, never inside an allocation.
-  The C code of the runtime relies on it: between two safe points it keeps
+- The collector runs at safe points only, never inside an allocation. The
+  C code of the runtime relies on it: between two safe points it keeps
   objects in local variables and nothing has to be told. The evaluator,
   which does come to safe points, keeps what it holds where the collector
-  can find it (below). M6c confirms this or changes it.
+  can find it (below). M6c built the collector on this and found it to
+  hold.
 - The printer writes an object so that the reader makes the same object of
   it, wherever there is such a text: a symbol with its package when the
   name alone would not find it, bars around a name that would not read
@@ -269,10 +270,10 @@ architectures (kernel/vm.c).
   assembly to keep in step on two architectures, and since the way out
   passes through every frame, each undoes what it did: bindings now,
   UNWIND-PROTECT later. The price is a look at the mark after every form.
-- An error is what went wrong, in words, and it goes to the top level,
-  which prints it and reads on: `error: CAR wants a list, and 5 is not
-  one`. A mistake at the prompt does not stop the machine. Conditions,
-  and handlers that stop an error on its way, are M6c's.
+- An error is what went wrong, in words, and unless something handles it
+  (below) it goes to the top level, which prints it and reads on: `error:
+  CAR wants a list, and 5 is not one`. A mistake at the prompt does not
+  stop the machine.
 - A form can give several values or none. C returns the first, and one
   place holds how many there are and the rest; only the forms that pass
   the values of a form inside them on keep more than one.
@@ -316,6 +317,72 @@ architectures (kernel/vm.c).
   in COMMON-LISP, boot.lisp is read in COMMON-LISP and exports what it
   defines, and a name that begins with % is the implementation's own and
   stays internal there.
+
+## The collector and conditions (decided in M6c, 2026-11-15)
+
+- The collector marks and sweeps (kernel/lisp/heap.c). It starts from
+  what the substrate holds, `lisp_roots`, and from what the evaluator
+  holds: its value stack, the special variables that are bound, the
+  values of the last form, the exit under way. It follows every value to
+  the object it points at, and what it has not reached by the end is
+  free. It is precise. Every word after the header of an object is a
+  value, except in a string, which has none, so the collector never
+  guesses and never keeps an object by mistake. Objects do not move.
+- It runs when the evaluator, at a safe point, finds that as much has
+  been made since the last collection as was in use after it. Making an
+  object never collects. That is the bet M6a made, and it held: the
+  reader, the printer, the packages and the functions in C went under
+  the collector as they were, and the evaluator needed three changes, to
+  hold a function while it is called, a list while it is taken apart,
+  and the words that outlive an exit.
+- The price is that memory can run out between two safe points while the
+  heap is full of what nobody needs. So the evaluator stops a computation
+  early: when a collection leaves less than a sixteenth of the machine's
+  memory, the safe point ends in an error, STORAGE-CONDITION, and what is
+  left is for the C code that cannot stop halfway. Whatever makes an
+  object as large as a program asks for looks first and refuses in the
+  same way. Running out for good is still a panic.
+- Free memory stays in the heap as free blocks, each with a header like
+  an object's, so the heap can still be walked from end to end. A new
+  object goes into a block of its length, or into part of a longer one,
+  and past the end of the heap only when no block will do. The heap ends
+  where its last object does, and gives the page frames beyond that
+  back.
+- An object that was freed while something still held it must not go
+  unnoticed. Freed memory is filled with a value that is the address of
+  nothing: following it is a fault, the collector refuses to follow it,
+  and the allocator refuses a free block that somebody has written to.
+  And there is a way to ask for a collection at every safe point, under
+  which nothing that the evaluator fails to hold survives its next call;
+  `make test` boots once like that.
+- An error is a condition: an object with a type, what it says to a
+  person, and slots. A type is a name with parents, which
+  DEFINE-CONDITION records in Lisp; all the substrate asks is whether
+  one type is another's descendant. The substrate's own errors have
+  Common Lisp's types where a program would tell them apart, and are
+  plain ERRORs otherwise.
+- HANDLER-CASE handles conditions, and nothing else does yet. Signalling
+  a condition looks for the innermost clause that names its type and
+  leaves for it, the way a THROW leaves for its CATCH; no handler runs
+  in the middle of the form that signalled. So there is no HANDLER-BIND
+  and there are no restarts: both want a debugger to be of use, and can
+  come with it. UNWIND-PROTECT is on the way out like every other form,
+  and evaluates its cleanup whichever exit is passing.
+- What a condition says is a string, put together when the condition is
+  made. A report function would have to write to a stream, and there
+  are none yet (M7).
+- A stack or a heap that is full is not an error in Common Lisp's
+  sense, and neither is Ctrl-C: `(handler-case ... (error ...))` and
+  IGNORE-ERRORS let them pass, as they do under SBCL, and a clause for
+  STORAGE-CONDITION or SERIOUS-CONDITION takes them.
+- Ctrl-C stops a computation where it can be stopped cleanly, at the
+  evaluator's next safe point, as a condition that unwinds like any
+  other. The timer's tick takes in what is typed on the serial port, so
+  that it is seen while the evaluator is busy.
+- A thread that stands at a safe point holds no lock, because the thread
+  that stopped the world may want any of them. That was a rule in
+  comments; now a thread counts the locks it holds, and sleeping,
+  joining or coming to a safe point with one is a panic.
 
 ## Conventions
 

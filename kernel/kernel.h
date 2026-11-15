@@ -5,7 +5,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define CLARA_VERSION "0.0.9"
+#define CLARA_VERSION "0.0.10"
 
 #define PAGE_SHIFT 12
 #define PAGE_SIZE  (1ULL << PAGE_SHIFT)
@@ -65,9 +65,13 @@ void kvprintf(const char *fmt, va_list ap) __attribute__((format(printf, 1, 0)))
 void panic(const char *fmt, ...) __attribute__((noreturn, format(printf, 1, 2)));
 void console_serial_only(void); /* leave the screen alone from now on */
 /* A line typed on the serial port, echoed as it is typed, without its end:
- * how many bytes of it are in line, at most size, or -1 when Ctrl-D ended
- * the input. Only for a thread: it sleeps while nothing arrives. */
+ * how many bytes of it are in line, at most size; -1 when Ctrl-D ended
+ * the input; -2 when Ctrl-C gave the line up. Only for a thread: it sleeps
+ * while nothing arrives. */
 int64_t kgetline(char *line, size_t size);
+void console_tick(void);          /* from the timer's interrupt: take in what has arrived on the serial port */
+extern volatile int console_break; /* Ctrl-C has arrived there, and nobody has acted on it yet */
+int  console_interrupted(void);   /* for a computation that can stop: has it? Asked once, it is acted on */
 
 /* fbcon.c: the text console on the framebuffer */
 enum fbcon_color { FBCON_TEXT, FBCON_ACCENT, FBCON_ALERT, FBCON_COLORS };

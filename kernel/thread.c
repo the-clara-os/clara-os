@@ -20,8 +20,8 @@
  * starts waiting inside one such stretch, so that what it waits for cannot
  * happen in between and go unnoticed.
  *
- * The collector (M6c) needs every other thread to stand still, somewhere
- * it can account for what the thread holds. Such a place is a safe point:
+ * The collector (lisp/heap.c) needs every other thread to stand still,
+ * somewhere it can account for what the thread holds. Such a place is a safe point:
  * a call of thread_safe_point, and every wait for a tick or for another
  * thread to finish. thread_stop_the_world returns once every other thread
  * is at one, and they stay until thread_start_the_world. */
@@ -49,6 +49,7 @@ struct thread {
     uint64_t pages;        /* of the stack, the guard page not counted */
     struct thread *joiner; /* the thread that waits for this one to finish */
     struct frame *frame;   /* its registers, while it is not running */
+    unsigned locks;        /* how many it holds */
 };
 
 /* The first thread is the flow of control that kmain started in, on the
@@ -169,6 +170,15 @@ void thread_yield(void)
         arch_interrupts_on();
 }
 
+/* A thread that stands still while the world is stopped must not be in
+ * the way of the thread that stopped it, which may want any lock there is.
+ * So wherever a thread can be held up, it holds none. */
+static void holds_no_lock(const char *where)
+{
+    if (g_current->locks)
+        panic("thread %s %s with a lock in its hands", g_current->name, where);
+}
+
 /* Until the timer has ticked that many more times, and once at least. The
  * tick in progress counts as one, so the wait is shorter than the ticks
  * asked for by up to the length of one. */
@@ -177,6 +187,7 @@ void thread_sleep(uint64_t ticks)
     int on = arch_interrupts_off();
     struct thread **at = &g_sleepers;
 
+    holds_no_lock("goes to sleep");
     g_current->wake = timer_ticks() + ticks;
     while (*at && (*at)->wake <= g_current->wake)
         at = &(*at)->next;
@@ -197,10 +208,11 @@ static void park(void)
 
 /* A place where the running thread can be held up for as long as the world
  * is stopped: it holds no lock here, and nothing that the thread which
- * stopped the world cannot account for. One comparison when the world is
+ * stopped the world cannot account for. Two comparisons when the world is
  * not being stopped, so it can be called often. */
 void thread_safe_point(void)
 {
+    holds_no_lock("comes to a safe point");
     if (!g_stopper || g_stopper == g_current)
         return;
     int on = arch_interrupts_off();
@@ -225,6 +237,7 @@ void thread_stop_the_world(void)
 {
     int on = arch_interrupts_off();
 
+    holds_no_lock("stops the world");
     while (g_stopper) /* another thread is at it: this is a safe point like any other */
         park();
     g_stopper = g_current;
@@ -253,7 +266,7 @@ void thread_start_the_world(void)
 /* A lock is held by one thread at a time. A thread that finds it taken
  * queues up and sleeps, and the lock is handed to the queue in order of
  * arrival. Never from an interrupt handler, which cannot wait. Hold one
- * briefly: not across a sleep, and not at a safe point. */
+ * briefly: not across a sleep, and not at a safe point, which is a panic. */
 void lock_acquire(struct lock *l)
 {
     int on = arch_interrupts_off();
@@ -265,6 +278,7 @@ void lock_acquire(struct lock *l)
         block(WAITING); /* and it is the owner when it runs again */
     } else
         l->owner = g_current;
+    g_current->locks++;
     if (on)
         arch_interrupts_on();
 }
@@ -275,6 +289,7 @@ void lock_release(struct lock *l)
 
     if (l->owner != g_current)
         panic("thread %s releases a lock that it does not hold", g_current->name);
+    g_current->locks--;
     l->owner = pop(&l->waiting);
     if (l->owner)
         ready(l->owner);
@@ -349,6 +364,7 @@ void thread_join(struct thread *t)
 
     if (t == g_current || t->joiner)
         panic("thread %s is joined by itself, or twice", t->name);
+    holds_no_lock("waits for another to finish");
     t->joiner = g_current;
     if (t->state != FINISHED)
         block(WAITING);
