@@ -514,9 +514,10 @@ No milestone yet, to be picked up when they start to matter:
   The kernel's own texts are evaluated before the console is loaded, so
   the console and the listener have no self-test at boot but the
   session.
-- CI has SBCL 2.2.9, the Mac 2.6.10. The stress boot, a collection at
-  every safe point, takes 8 s on the Mac and three quarters of a minute
-  where AArch64 is emulated; a text in the kernel's self-test that goes
+- CI has SBCL 2.6.0, the Mac 2.6.10, and the Ubuntu 24.04 container that
+  stands in for CI on the Mac 2.2.9. The stress boot, a collection at
+  every safe point, takes 8 s on the Mac and a minute on CI, where
+  AArch64 is emulated; a text in the kernel's self-test that goes
   round a thousand times costs seconds there, since every call of a
   function in Lisp is a safe point, FORMAT's among them.
 - lisp/font.lisp and kernel/font.c hold the same glyphs, one for each

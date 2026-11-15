@@ -26,11 +26,14 @@
  * reach a thread, and what the Lisp world builds its own locks and events
  * on (lisp/thread.c).
  *
- * The collector (lisp/heap.c) needs every other thread to stand still,
- * somewhere it can account for what the thread holds. Such a place is a safe point:
- * a call of thread_safe_point, and every wait for a tick or for another
- * thread to finish. thread_stop_the_world returns once every other thread
- * is at one, and they stay until thread_start_the_world. */
+ * A thread can ask every other thread to stand still, somewhere it can
+ * account for what the thread holds. Such a place is a safe point: a call
+ * of thread_safe_point, and every wait for a tick, for a wake or for
+ * another thread to finish. thread_stop_the_world returns once every other
+ * thread is at one, and they stay until thread_start_the_world. This was
+ * made for the Lisp collector, which has not needed it since the Lisp
+ * threads began to take turns at the runtime (lisp/thread.c): the
+ * self-test below is its one caller. */
 #include "kernel.h"
 
 #define STACK_PAGES (THREAD_STACK_SIZE / PAGE_SIZE)

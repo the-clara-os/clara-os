@@ -71,8 +71,8 @@ host-test:
 # tools/stress.txt, a session in which the collector runs at every safe
 # point of the evaluator while boot.lisp is loaded again and the
 # evaluator's self-test is repeated: whatever the evaluator fails to hold
-# on to is gone at its next call. That takes half a minute where AArch64 is
-# emulated.
+# on to is gone at its next call. That takes the best part of a minute
+# where AArch64 is emulated.
 test: all host-test
 	tools/boottest.sh x86_64
 	tools/boottest.sh aarch64 -machine gic-version=3
