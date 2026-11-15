@@ -68,20 +68,73 @@ void kputs(const char *s)
     leave(locked);
 }
 
+/* What has been typed on the serial port and not read yet. No interrupt
+ * arrives for a byte there (ROADMAP.md, M8), so the timer's tick takes in
+ * what the port holds, as far as there is room here; what there is no room
+ * for stays in the port. A thread takes bytes out at the other end, and
+ * each of the two changes only its own end, so they need no lock between
+ * them.
+ *
+ * Ctrl-C is a byte like the others, and it is also noted when it arrives,
+ * because the thread it is meant for is not reading: it is computing, and
+ * looks at console_break whenever it could stop. */
+enum { TYPED = 256 };
+static volatile uint8_t g_typed[TYPED];
+static volatile unsigned g_typed_in, g_typed_out; /* where the next byte goes in, and where the next comes out */
+volatile int console_break;
+
+void console_tick(void)
+{
+    int c;
+
+    while ((g_typed_in + 1) % TYPED != g_typed_out && (c = arch_serial_getc()) >= 0) {
+        if (c == 0x03)
+            console_break = 1;
+        g_typed[g_typed_in] = (uint8_t)c;
+        g_typed_in = (g_typed_in + 1) % TYPED;
+    }
+}
+
+/* The next byte that was typed, or -1 when there is none. */
+static int typed(void)
+{
+    int c;
+
+    if (g_typed_out == g_typed_in)
+        return -1;
+    c = g_typed[g_typed_out];
+    g_typed_out = (g_typed_out + 1) % TYPED;
+    return c;
+}
+
+/* For a computation, at a place where it can stop: was Ctrl-C typed? Then
+ * the computation acts on it, and it is not asked for again. A Ctrl-C that
+ * is the next byte to be read has done all it was typed for and goes; one
+ * with other bytes before it stays, to give up the line that they begin. */
+int console_interrupted(void)
+{
+    if (!console_break)
+        return 0;
+    console_break = 0;
+    if (g_typed_out != g_typed_in && g_typed[g_typed_out] == 0x03)
+        g_typed_out = (g_typed_out + 1) % TYPED;
+    return 1;
+}
+
 /* A line from the serial port, which is the only place anything can be
- * typed so far. Nothing interrupts when a byte arrives, so the port is
- * looked at once a tick, and the thread sleeps in between. What is typed
- * is echoed, here and on the screen. Backspace or Delete takes the last
- * character back, a tab counts as a space, the other control characters
- * are dropped, and so is what there is no room for. Ctrl-D at the start of
- * a line means that no more is coming. */
+ * typed so far. The thread sleeps a tick whenever nothing has arrived.
+ * What is typed is echoed, here and on the screen. Backspace or Delete
+ * takes the last character back, a tab counts as a space, the other
+ * control characters are dropped, and so is what there is no room for.
+ * Ctrl-D at the start of a line means that no more is coming, and Ctrl-C
+ * anywhere gives the line up. */
 int64_t kgetline(char *line, size_t size)
 {
     static int after_return; /* the last line ended with a carriage return: a line feed right after it is its other half */
     size_t n = 0;
 
     for (;;) {
-        int c = arch_serial_getc();
+        int c = typed();
 
         if (c < 0) {
             thread_sleep(1);
@@ -98,6 +151,11 @@ int64_t kgetline(char *line, size_t size)
         }
         if (c == 0x04 && !n)
             return -1;
+        if (c == 0x03) {
+            console_break = 0;
+            kputs("^C\n");
+            return -2;
+        }
         if ((c == '\b' || c == 0x7f) && n) {
             while (n > 1 && ((uint8_t)line[n - 1] & 0xc0) == 0x80)
                 n--; /* a character outside ASCII is several bytes */

@@ -82,7 +82,8 @@ Rules:
   each have a lock, and a lock is something only a thread can wait for.
 - Threads (kernel/thread.c). Data that two threads can reach sits behind
   a `struct lock`. Never hold one across `thread_sleep`, `thread_join` or
-  `thread_safe_point`: stopping the world depends on that. The page
+  `thread_safe_point`: stopping the world depends on that, and it is a
+  panic. The page
   tables' lock is taken before the allocator's, never after, and the
   console takes no other. The scheduler's own state is touched with
   interrupts off, as in `int on = arch_interrupts_off(); ...; if (on)
@@ -94,9 +95,12 @@ Rules:
   the ways that were tried, under the slow test mode. One of them got
   through the first version of the self-test, which is how it was found
   that the test never woke a sleeper while the world was stopped.
-- `make test` boots three machines: x86_64, AArch64 with GIC version 3,
-  and AArch64 emulated with GIC version 2, whose files in build/ are named
-  aarch64-gic2. The serial port of each is QEMU's standard input and
+- `make test` boots four times: x86_64, AArch64 with GIC version 3,
+  AArch64 emulated with GIC version 2, whose files in build/ are named
+  aarch64-gic2, and AArch64 once more for tools/stress.txt (aarch64-stress),
+  a session that has the collector run at every safe point of the
+  evaluator while boot.lisp loads again and the evaluator's self-test is
+  repeated. The serial port of each is QEMU's standard input and
   output: the log is what the kernel printed, and a FIFO feeds it what
   the session types. QEMU's hvf has no version 2, and UTM uses version 3.
   tools/boottest.sh passes any further arguments on to QEMU, which is how
@@ -128,17 +132,32 @@ Rules:
   `lisp_is`) before making a pointer of it: `lisp_as_cons` and its like
   check nothing. Every object comes from `lisp_alloc`, and
   `lisp_object_words` is the one place that knows how long an object is:
-  a new type gets a name in `enum lisp_type`, a case there, and a count
-  in the census line of lisp.c.
-- The runtime's C code keeps objects in local variables while it makes
-  others, which is safe because nothing collects yet and the collector is
-  to run at safe points only. So nothing in kernel/lisp/ may come to a
-  safe point (`thread_sleep`, `thread_join`, `thread_safe_point`,
-  `kgetline`) while it holds an object that nothing else points to. The
-  reader takes its text whole for that reason, and `lisp_listen` waits for
-  a line between two reads. A value the substrate has to find again
-  belongs in `lisp_roots`, not in a static variable. One thread at a time
-  uses the runtime, and nothing in it takes a lock.
+  a new type gets a name in `enum lisp_type` before LISP_FREE, a case
+  there, its tag in `object_of` (heap.c), and a count in the census line
+  of lisp.c. Every word after its header has to be a Lisp value, as it
+  is for every type but strings, or the collector has to be told
+  otherwise where it looks into an object.
+- The collector (heap.c) runs at the evaluator's safe points and nowhere
+  else: making an object never collects. So the runtime's C code may keep
+  objects in local variables while it makes others, and nothing in
+  kernel/lisp/ may come to a safe point (a call of `lisp_apply` or
+  `lisp_eval`, `thread_sleep`, `thread_join`, `kgetline`) while it holds
+  an object that nothing else points to: after the call the object is
+  gone. The reader takes its text whole for that reason, and
+  `lisp_listen` waits for a line between two reads. A value the
+  substrate has to find again belongs in `lisp_roots`, every word of
+  which is a Lisp value, and not in a static variable; what the
+  evaluator keeps is listed in `lisp_eval_roots`, and a static lisp
+  added there has to hold a Lisp value at all times, also when it means
+  nothing. One thread at a time uses the runtime, and nothing in it
+  takes a lock.
+- When the collector, the allocator or a fault report says that freed
+  memory was used (`LISP_FREED`, 0x7deaddeadded, is what a freed word
+  holds), something kept an object across a safe point. `(cl::%collect)`
+  in a text of the self-test puts a collection where it is wanted, and
+  `(cl::%collect-every 1)` has every safe point collect, which is what
+  tools/stress.txt types: run it with
+  `SESSION=tools/stress.txt NAME=stress tools/boottest.sh aarch64`.
 - Evaluating is coming to a safe point: `lisp_apply` is one, and so is
   GO. So across any call of `eval_car`, `progn`, `lisp_eval` or
   `lisp_apply`, an object that has to survive is on the evaluator's value
@@ -150,10 +169,15 @@ Rules:
   `lisp_evaluate` panics when the stacks are not where they were.
 - After every one of those calls, look at `g_unwind.to` (or
   `lisp_unwinding()` outside eval.c) and return when it is set: a
-  RETURN-FROM, a GO, a THROW or an error is on its way out, and the value
-  in hand means nothing. An error is `return lisp_fail("... ~S ...", x)`,
-  with ~S and ~A for a `lisp` and ~Z for a C string; say what went wrong
-  in words, the way the fault reports do.
+  RETURN-FROM, a GO, a THROW or a condition is on its way out, and the
+  value in hand means nothing. An error is `return lisp_fail("... ~S
+  ...", x)`, with ~S and ~A for a `lisp` and ~Z for a C string; say what
+  went wrong in words, the way the fault reports do. It makes a
+  condition of the type ERROR. Where a program would want to tell the
+  error apart, `lisp_fail_as("TYPE-ERROR", "DATUM", x, "...")` makes one
+  of a type that lisp/boot.lisp defines, with a slot or with NULL for
+  none. A full stack or heap is a STORAGE-CONDITION, which no handler
+  for errors takes.
 - A new special form is a function `sf_name(args, env)` in eval.c and a
   row in `specials`: how many subforms it takes, and whether it passes on
   the values of a form inside it. A new function in C is a `PRIMITIVE` in
@@ -174,17 +198,30 @@ Rules:
   or in boot.lisp gets a line in `evaluations`, a text and what
   evaluating it gives, the values with a space between them or `error: `
   and the text of the error. Every wrong answer is printed before the
-  panic. After a change to the runtime, break it on purpose and see that
-  the boot notices; ROADMAP.md lists what was tried, under the slow test
-  mode. Doing that for the evaluator found a text that could not fail.
+  panic. `collector_selftest` runs before boot.lisp is loaded, and a text
+  that has to do with what the evaluator holds calls `(cl::%collect)`
+  in the middle. After a change to the runtime, break it on purpose and
+  see that the boot notices; ROADMAP.md lists what was tried, under the
+  slow test mode. Doing that for the evaluator found a text that could
+  not fail. When a source is patched for such a check, delete the object
+  that was built from it before `make`: make goes by the second, and a
+  patch written in the second of the last build is not built, so the
+  check passes on the kernel that was there before.
+- kernel/lisp/self-test.lisp is a file with a mistake in it, which the
+  build puts on the boot volume beside lisp/boot.lisp and the evaluator's
+  self-test loads. A text that needs a file to load finds one there.
 - tools/session.txt is what `make test` types at each kernel over the
   serial port once the kernel reads from it, and what the kernel has to
   answer, to the byte. The lines that begin with `> `, or with two spaces
   for a form that goes on, are typed; the others have to come back.
-  Change it when what the kernel prints there changes. What a machine
-  answered is in build/session-<name>.txt, and
-  `SESSION=file tools/boottest.sh <arch>` types another session. A boot
-  that panics or faults fails at once, without waiting for the timeout.
+  Change it when what the kernel prints there changes. A line that is
+  `^C` and nothing else is Ctrl-C, for the form in the line before it,
+  which has to be one that never ends and that the session types once:
+  the boot test waits for the kernel to echo that line before it types
+  the Ctrl-C and the rest. What a machine answered is in
+  build/session-<name>.txt, and `SESSION=file tools/boottest.sh <arch>`
+  types another session. A boot that panics or faults fails at once,
+  without waiting for the timeout.
 - Whatever a session leaves open goes into ROADMAP.md in the same change,
   under the milestone that settles it: a shortcut, a provisional decision,
   a limit, a check that was only run by hand. Saying it in the summary at

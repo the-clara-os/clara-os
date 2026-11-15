@@ -4,9 +4,10 @@
  * names are being read in, and bars when its name would not read back as
  * it is; a string gets its quotes; (QUOTE X) comes out as 'X, and what the
  * reader made of a backquote comes out as the backquote. A package, a
- * function and a structure have no text that reads back, and print as
- * #<PACKAGE "NAME">, #<FUNCTION NAME> and #S(NAME :SLOT value). lisp_princ
- * writes for a person: no quotes, no bars, no package.
+ * function, a structure and a condition have no text that reads back, and
+ * print as #<PACKAGE "NAME">, #<FUNCTION NAME>, #S(NAME :SLOT value) and
+ * #<TYPE "what it says">. lisp_princ writes for a person: no quotes, no
+ * bars, no package, and of a condition what it says and no more.
  *
  * Lists nest by recursion in C here too: below LISP_DEPTH a list is
  * printed as #. Nothing looks out for a list that leads back into itself,
@@ -227,6 +228,33 @@ static void print_structure(struct printer *p, lisp x)
     put_char(p, ')');
 }
 
+/* For a person a condition is what it says. Otherwise it is its type and
+ * what it says, and one that says nothing shows its slots. */
+static void print_condition(struct printer *p, lisp x)
+{
+    const struct lisp_condition *c = lisp_as_condition(x);
+
+    if (!p->escape && c->message != LISP_NIL) {
+        print_object(p, c->message);
+        return;
+    }
+    put_text(p, "#<");
+    print_object(p, c->type);
+    if (c->message != LISP_NIL) {
+        put_char(p, ' ');
+        print_object(p, c->message);
+    } else
+        for (lisp s = c->slots; lisp_is_cons(s) && lisp_is_cons(lisp_as_cons(s)->cdr) && p->left;
+             s = lisp_as_cons(lisp_as_cons(s)->cdr)->cdr) {
+            put_text(p, " :");
+            if (lisp_is_symbol(lisp_as_cons(s)->car))
+                print_name(p, lisp_as_symbol(lisp_as_cons(s)->car)->name);
+            put_char(p, ' ');
+            print_nested(p, lisp_as_cons(lisp_as_cons(s)->cdr)->car);
+        }
+    put_char(p, '>');
+}
+
 static void print_object(struct printer *p, lisp x)
 {
     if (!p->left)
@@ -282,6 +310,8 @@ static void print_object(struct printer *p, lisp x)
         print_function(p, x);
     else if (lisp_is(x, LISP_STRUCTURE))
         print_structure(p, x);
+    else if (lisp_is(x, LISP_CONDITION))
+        print_condition(p, x);
     else if (x == LISP_UNBOUND)
         put_text(p, "#<unbound>");
     else {

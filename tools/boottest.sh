@@ -21,9 +21,10 @@ log=build/boot-$name.log
 shot=build/screen-$name.png
 sock=build/monitor-$name.sock
 keys=build/serial-$name.in
+typing=build/typing-$name
 heard=build/session-$name.txt
 mkdir -p build
-rm -f "$shot" "$sock" "$keys" "$heard"
+rm -f "$shot" "$sock" "$keys" "$heard" "$typing".*
 : > "$log"
 
 # The serial port is QEMU's standard input and output. What the kernel
@@ -39,22 +40,42 @@ pid=$!
 
 # A session is a transcript. The lines that begin with a prompt, "> " or
 # the two spaces of a form that goes on, are what gets typed, without the
-# prompt. Ctrl-D after the last one ends the kernel's reading.
-type_session() {
-    {
-        [ -z "$session" ] || LC_ALL=C sed -n 's/^[> ] //p' "$session"
-        printf '\004'
-    } >&3
+# prompt, and Ctrl-D after the last one ends the kernel's reading. A line
+# that is ^C and nothing else is Ctrl-C, for the form in the line before
+# it, which never ends by itself. Typed along with the rest it would stop
+# whatever the kernel was evaluating when it arrived, so the session is
+# typed in parts: a Ctrl-C and what follows it wait until the kernel has
+# echoed the line before, which it is evaluating by then. That line must
+# not come earlier in the session as well.
+#   $typing.N        part N, with the Ctrl-C it begins with
+#   $typing.N.after  the line that the kernel has to have echoed first
+LC_ALL=C awk -v out="$typing" '
+    BEGIN       { part = 0; printf "" > (out "." part) }
+    /^\^C$/     { part++; print last > (out "." part ".after"); printf "\003" > (out "." part); next }
+    /^[> ] /    { print substr($0, 3) > (out "." part); last = $0 }
+    END         { printf "\004" > (out "." part) }' "${session:-/dev/null}"
+part=0 # the next one to type
+
+type_part() {
+    cat "$typing.$part" >&3
+    part=$((part + 1))
+}
+
+# Has the kernel echoed the line that the next part waits for?
+echoed() {
+    [ -f "$typing.$part.after" ] &&
+        LC_ALL=C tr -d '\r' < "$log" | grep -qxF -- "$(cat "$typing.$part.after")"
 }
 
 # The kernel echoes what is typed after its prompt, so what it printed
 # between its invitation and its last line has to be the transcript, and
-# after it the prompt at which Ctrl-D arrived.
+# after it the prompt at which Ctrl-D arrived. A Ctrl-C that stops a form
+# is not echoed.
 check_session() {
     [ -n "$session" ] || return 0
     LC_ALL=C tr -d '\r' < "$log" | LC_ALL=C sed -n '/^clara: reading/,/^clara: nothing/p' \
         | sed '1d;$d' > "$heard"
-    { cat "$session"; echo '> '; } | diff -u - "$heard"
+    { grep -v '^^C$' "$session"; echo '> '; } | diff -u - "$heard"
 }
 
 # Give the last line time to reach the screen, then ask the QEMU monitor for
@@ -74,13 +95,12 @@ stop_qemu() {
     wait "$pid" 2>/dev/null || true
 }
 
-typed=
 i=0
 while [ "$i" -lt $((timeout * 4)) ]; do
     if grep -q "$marker" "$log"; then
         screenshot_and_quit
         stop_qemu
-        if [ -n "$typed" ] && ! check_session; then
+        if [ "$part" -gt 0 ] && ! check_session; then
             echo "boottest $name: FAILED, the kernel did not answer $session as written (above: -expected, +heard)"
             exit 1
         fi
@@ -88,9 +108,10 @@ while [ "$i" -lt $((timeout * 4)) ]; do
         echo "boottest $name: ok after $((i / 4))s, $screen"
         exit 0
     fi
-    if [ -z "$typed" ] && grep -q '^clara: reading' "$log"; then
-        type_session
-        typed=1
+    if [ "$part" -eq 0 ]; then
+        ! grep -q '^clara: reading' "$log" || type_part
+    elif echoed; then
+        type_part
     fi
     # A kernel that has stopped with a report is not going to say more.
     if grep -q '^panic: \|^exception: ' "$log"; then

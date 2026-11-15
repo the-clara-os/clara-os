@@ -55,6 +55,32 @@ error: the stack is full: the forms are nested too deep, or a function calls its
 > two) forms
 error: the variable TWO has no value
 error at line 1, column 4: a closing parenthesis that closes nothing
+> (handler-case (/ 10 0) (division-by-zero () 'no-quotient))
+NO-QUOTIENT
+> (define-condition low-fuel (error) ((left :initarg :left :reader fuel-left)))
+LOW-FUEL
+> (handler-case (error 'low-fuel :left 3) (low-fuel (c) (fuel-left c)))
+3
+> (error 'low-fuel :left 3)
+error: #<LOW-FUEL :LEFT 3>
+> (unwind-protect (car 5) (format t "cleaning up~%"))
+cleaning up
+error: CAR wants a list, and 5 is not one
+> (ignore-errors (car 5))
+NIL
+#<TYPE-ERROR "CAR wants a list, and 5 is not one">
+> (warn "~D bottles left" 2)
+warning: 2 bottles left
+NIL
+> (make-array 4000000000)
+error: the heap is full: there is no room for an object that large
+> (let ((n 0)) (dotimes (i 20000) (setq n (+ n (length (list i i))))) n)
+40000
+> (loop)
+^C
+error: interrupted from the keyboard
+> (list (fact 5) 'still 'here)
+(120 STILL HERE)
 > (defpackage "PLAY" (:use "COMMON-LISP") (:export "BALL"))
 #<PACKAGE "PLAY">
 > (in-package "PLAY")

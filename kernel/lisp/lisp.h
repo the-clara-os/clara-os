@@ -12,11 +12,11 @@
  * The three in the middle are addresses in the heap (heap.c), which are
  * multiples of 8, with the tag added. Every object in the heap begins with
  * a header word, conses included: its type in the lowest byte, a byte that
- * the collector will mark in (M6c), and a length in the other 48 bits, the
- * characters of a string or the items of a vector. With a header on
- * everything the heap can be walked from one end to the other, which is
- * what the collector's sweep and the saved image (M10) will do; the price
- * is a third word in every cons.
+ * the collector marks in, and a length in the other 48 bits, the characters
+ * of a string or the items of a vector. With a header on everything the
+ * heap can be walked from one end to the other, which is what the
+ * collector's sweep does and the saved image (M10) will do; the price is a
+ * third word in every cons.
  *
  * NIL is the symbol at the very start of the heap, so its word is a
  * constant, and the empty list is that same word. */
@@ -33,6 +33,8 @@ typedef uint64_t lisp;
 
 #define LISP_CHARACTER 0x07ULL /* the lowest byte of a character; its code point is in the bits above */
 #define LISP_UNBOUND   0x0fULL /* in a symbol's value or function: there is none */
+#define LISP_FREED     0x00007deaddeaddedULL /* what the collector fills freed memory with: as a value, the
+                                                address of an object where nothing is mapped */
 #define LISP_NIL       (VM_HEAP_BASE | LISP_TAG_SYMBOL)
 
 #define LISP_FIXNUM_MAX (((int64_t)1 << 62) - 1) /* and the least is -LISP_FIXNUM_MAX - 1 */
@@ -48,6 +50,8 @@ enum lisp_type {
     LISP_PACKAGE,
     LISP_FUNCTION,
     LISP_STRUCTURE,
+    LISP_CONDITION,
+    LISP_FREE, /* no object: memory that the collector found unused, as long as its length says */
     LISP_TYPES
 };
 
@@ -107,6 +111,14 @@ struct lisp_structure {
     lisp header; /* the length is the number of slots */
     lisp type;   /* (name slot...), as DEFSTRUCT wrote it down: shared by every structure of the type */
     lisp slots[];
+};
+
+/* What ERROR and SIGNAL pass to a HANDLER-CASE. */
+struct lisp_condition {
+    lisp header;
+    lisp type;    /* a symbol: DEFINE-CONDITION gave it its parents and its slots (lisp/boot.lisp) */
+    lisp message; /* what it says to a person, a string, or NIL when it has nothing to say but its slots */
+    lisp slots;   /* the names of its slots and their values, in turn */
 };
 
 static inline lisp lisp_header(enum lisp_type type, uint64_t length)
@@ -207,6 +219,11 @@ static inline struct lisp_structure *lisp_as_structure(lisp x)
     return lisp_object(x);
 }
 
+static inline struct lisp_condition *lisp_as_condition(lisp x)
+{
+    return lisp_object(x);
+}
+
 static inline unsigned lisp_symbol_flags(lisp symbol)
 {
     return (unsigned)lisp_length(lisp_as_symbol(symbol)->header);
@@ -223,8 +240,9 @@ static inline enum lisp_function_kind lisp_function_kind(lisp function)
 }
 
 /* What the substrate itself holds on to in the Lisp world. The collector
- * will start from here (M6c), and from what the evaluator keeps (eval.c).
- * A saved image has to bring these back (M10). */
+ * starts from here, and from what the evaluator keeps (eval.c): every
+ * word of this is a Lisp value. A saved image has to bring these back
+ * (M10). */
 struct lisp_roots {
     lisp t, quote, function;
     lisp quasiquote, unquote, splice; /* what the reader makes of ` , and ,@ */
@@ -234,13 +252,31 @@ struct lisp_roots {
 };
 extern struct lisp_roots lisp_roots;
 
-/* heap.c: where objects live, and the making of the plain ones */
+/* heap.c: where objects live, the making of the plain ones, and the
+ * collector, which frees the ones that nothing can reach any more. Making
+ * an object never collects: that happens at the evaluator's safe points
+ * only, so C may keep an object in a variable from one of those to the
+ * next. */
+struct lisp_heap {
+    uint64_t size;        /* bytes, from the first object to the end of the last */
+    uint64_t free;        /* of those, the bytes in free blocks */
+    uint64_t collections; /* so far */
+};
+void     lisp_heap_init(void);
 void    *lisp_alloc(enum lisp_type type, uint64_t length); /* a new object, all zeroes after its header */
 uint64_t lisp_object_words(lisp header);                   /* how long the object under that header is */
+int      lisp_heap_room(uint64_t words);                   /* can an object that long be made, and memory be left over? */
 uint64_t lisp_heap_census(uint64_t count[LISP_TYPES]);     /* walk the heap, count by type; bytes in use */
+void     lisp_heap_state(struct lisp_heap *state);
+uint64_t lisp_collect(void);                               /* free what is not in use; how many bytes that was */
+void     lisp_reach(lisp x);                               /* from the collector's helpers: x is in use */
+int      lisp_heap_safe_point(void);                       /* collect if it is time; 0 when the heap is full even so */
+void     lisp_collect_if_full(void);                       /* collect, if the last time left the heap full */
+uint64_t lisp_collect_every(uint64_t n);                   /* at every nth safe point; 0: when it is time. What it was */
 lisp     lisp_cons(lisp car, lisp cdr);
 lisp     lisp_make_string(const uint32_t *chars, uint64_t length); /* chars may be NULL, to fill it in later */
 lisp     lisp_make_vector(uint64_t length);                /* of fixnum zeroes */
+lisp     lisp_make_condition(lisp type, lisp message, lisp slots);
 
 /* symbol.c: symbols, and the packages that find them by name. A name here
  * is characters and how many, as the reader has them. */
@@ -311,7 +347,12 @@ void lisp_princ(lisp x, void (*put)(void *to, char c), void *to);
  * says how many there are and, unless there is exactly one, holds them.
  * Either can come back in the middle of a non-local exit, an error among
  * them: lisp_unwinding says so, the value means nothing then, and the
- * caller's part is to return in turn. */
+ * caller's part is to return in turn.
+ *
+ * An error is a condition. lisp_fail makes one of the type ERROR out of
+ * words, and lisp_fail_as one of the type named, in COMMON-LISP, with a
+ * slot if slot is not NULL; the innermost HANDLER-CASE that asks for such
+ * a type takes it, and with none it goes to the top level. */
 #define LISP_VALUES_MAX 20
 struct lisp_values {
     unsigned count;
@@ -323,10 +364,15 @@ void lisp_eval_init(const struct boot_file *files); /* the files that LOAD can f
 void lisp_eval_start(void);                 /* the thread that calls this is the one that evaluates */
 lisp lisp_eval(lisp form, lisp env);        /* env is NIL outside every binding */
 lisp lisp_apply(lisp function, unsigned argc, lisp *argv); /* the arguments have to be on the value stack */
-int  lisp_evaluate(lisp form);              /* at the top level. 1: lisp_values has the values, the only one too. 0: an error, and its text */
+int  lisp_evaluate(lisp form);              /* at the top level. 1: lisp_values has the values, the only one too. 0: the
+                                               condition that nothing handled */
 int  lisp_unwinding(void);
 lisp lisp_fail(const char *control, ...);   /* an error: ~S and ~A take a lisp, ~Z a C string. Returns NIL, to be returned */
+lisp lisp_fail_as(const char *type, const char *slot, lisp value, const char *control, ...);
 lisp lisp_wants(const char *what, lisp x);  /* the error of a primitive that was given x where it wants something else */
+int  lisp_signal(lisp condition);           /* 1: a HANDLER-CASE takes it, and control is on its way there. 0: none does */
+lisp lisp_error(lisp condition);            /* the same, and with no handler to the top level. Returns NIL */
+void lisp_eval_roots(void);                 /* for the collector: lisp_reach for everything the evaluator holds */
 lisp lisp_macroexpand_1(lisp form, int *expanded);
 lisp lisp_load(lisp name);                  /* evaluate the forms of the boot file of that name */
 int  lisp_out_of_stack(void);               /* for C that calls itself: fails, and says 1, when it must go no deeper */
@@ -351,3 +397,4 @@ void lisp_fresh_line(void);                 /* a new line, unless the console is
 void lisp_init(const struct boot_file *files);
 void lisp_selftest(void);
 void lisp_run(void); /* load boot.lisp, check the evaluator, then read and evaluate what is typed until the input ends */
+unsigned lisp_eval_texts(void); /* the evaluator's part of the self-test, again: how many texts it evaluated */

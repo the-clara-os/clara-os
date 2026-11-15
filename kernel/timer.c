@@ -1,7 +1,8 @@
 /* Time, so far, is a count of ticks. The architecture programs a timer to
  * interrupt TIMER_HZ times a second (kernel/arch/<arch>/interrupt.c), and
  * each interrupt calls timer_tick. The tick is also what wakes the threads
- * that sleep and moves the processor from one thread to the next. */
+ * that sleep, moves the processor from one thread to the next, and looks
+ * at the serial port for what has been typed. */
 #include "kernel.h"
 
 static volatile uint64_t g_ticks;
@@ -9,6 +10,7 @@ static volatile uint64_t g_ticks;
 void timer_tick(void)
 {
     g_ticks++;
+    console_tick();
     thread_tick(g_ticks);
 }
 

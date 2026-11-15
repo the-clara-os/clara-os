@@ -1,14 +1,16 @@
 #!/bin/sh
 # Boot the built ESP directory under QEMU with EDK2 firmware.
 # usage: tools/run.sh <x86_64|aarch64> [extra qemu args...]
-# env:   SERIAL=stdio|file:path   MEM=512M   NO_HVF=1 (force TCG on aarch64)
+# env:   SERIAL=mon:stdio|stdio|file:path   MEM=512M   NO_HVF=1 (force TCG on aarch64)
+#        (mon:stdio, the default, hands Ctrl-C to the kernel, which stops a
+#        computation with it; Ctrl-A X leaves QEMU. With stdio, Ctrl-C ends QEMU.)
 #        DISK=build/claraos.img (boot the raw image instead of the ESP directory)
 set -eu
 arch=${1:?usage: tools/run.sh <x86_64|aarch64> [qemu args]}
 shift
 esp=${ESP:-build/esp}
 share=${QEMU_SHARE:-/opt/homebrew/share/qemu}
-serial=${SERIAL:-stdio}
+serial=${SERIAL:-mon:stdio}
 mem=${MEM:-512M}
 mkdir -p build
 

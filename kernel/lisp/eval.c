@@ -15,21 +15,27 @@
  * A non-local exit is not a jump. RETURN-FROM, GO, THROW and an error set
  * g_unwind and return, and every piece of C on the way out sees that it is
  * set, undoes what it did, and returns in turn, until the BLOCK, the
- * TAGBODY or the CATCH that it is meant for clears it. An error goes all
- * the way to the top level, which prints it: there are no conditions yet
- * (M6c). So there is no setjmp here, nothing to keep in step with the
- * exception entry of two architectures, and UNWIND-PROTECT will be a few
- * lines.
+ * TAGBODY, the CATCH or the HANDLER-CASE that it is meant for clears it.
+ * So there is no setjmp here, nothing to keep in step with the exception
+ * entry of two architectures, and UNWIND-PROTECT is a few lines: it is on
+ * the way out like everything else.
  *
- * The collector (M6c) will run at safe points only, and the evaluator
- * comes to one at every call and every GO. Whatever it holds then has to
- * be findable, so it keeps its objects on a stack of its own, the value
+ * An error is a condition, an object that says what went wrong. Signalling
+ * one looks for the innermost HANDLER-CASE with a clause for its type, and
+ * leaves for it the way a THROW leaves for its CATCH. With no such clause
+ * an error goes all the way to the top level, which prints it.
+ *
+ * The collector (heap.c) runs at safe points only, and the evaluator comes
+ * to one at every call and every GO. Whatever it holds then has to be
+ * findable, so it keeps its objects on a stack of its own, the value
  * stack, not in C variables: the arguments of a call while they are
- * evaluated, every frame it makes, for as long as it evaluates in it, and
- * the values that wait for a body to finish. A C variable may hold an
- * object only from one call of the evaluator to the next. Forms are not
- * pushed: a form is part of the body of a function that is being called,
- * which is on the stack, or of the cell that lisp_eval pushes.
+ * evaluated, every function it calls and every frame it makes, for as long
+ * as it evaluates in it, and the values that wait for a body to finish. A
+ * C variable may hold an object only from one call of the evaluator to
+ * the next. Forms are not pushed: a form is part of the body of a function
+ * that is being called, which is on the stack, or of the cell that
+ * lisp_eval pushes. lisp_eval_roots is the list of all that the collector
+ * starts from here.
  *
  * A macro call is expanded once: the expansion takes the call's place in
  * the list that holds it, so the next time round the evaluator finds the
@@ -50,7 +56,8 @@ enum { VARIABLES, FUNCTIONS, BLOCK, TAGS };
 
 /* What g_unwind.to is when it is not a frame: immediates, like LISP_UNBOUND. */
 #define THROWING 0x17ULL
-#define FAILING  0x1fULL
+#define FAILING  0x1fULL /* a condition that no HANDLER-CASE takes, on its way to the top level */
+#define HANDLING 0x27ULL /* a condition on its way to the HANDLER-CASE that takes it */
 
 struct lisp_values lisp_values;
 
@@ -60,9 +67,18 @@ static struct {
     lisp symbol, value; /* a special variable, and the value it had before it was bound */
 } g_bindings[BINDINGS];
 static unsigned g_bound;
-static struct {
-    lisp to;  /* 0, or where control is on its way to: a BLOCK or TAGS frame, THROWING, FAILING */
-    lisp tag; /* GO: the place in the body. THROW: the tag. An error: what went wrong, a string */
+struct handler {
+    struct handler *outer;
+    lisp clauses; /* of a HANDLER-CASE that is being evaluated: (type ([variable]) form...) each */
+};
+static struct handler *g_handlers;
+/* The collector looks at every lisp here whether or not an exit is under
+ * way, so each of them is a Lisp value at all times. */
+static struct unwind {
+    lisp to;     /* 0, or where control is on its way to: a BLOCK or TAGS frame, THROWING, HANDLING, FAILING */
+    lisp tag;    /* GO: the place in the body. THROW: the tag. HANDLING and FAILING: the condition */
+    lisp clause; /* HANDLING: the clause that takes the condition, */
+    struct handler *handler; /* and the HANDLER-CASE it belongs to */
 } g_unwind;
 struct catch {
     struct catch *outer;
@@ -74,11 +90,8 @@ static const struct lisp_primitive *g_primitive; /* the one that was called last
 static const struct boot_file *g_files;
 static struct {
     lisp lambda, declare, special, optional, rest, body, key, allow_other_keys, aux, whole, environment;
-    lisp execute, eval, allow;
+    lisp execute, eval, allow, no_error, condition;
 } S; /* symbols the evaluator knows by sight: all in COMMON-LISP or KEYWORD, so the packages hold them */
-
-static const char stack_full[] =
-    "the stack is full: the forms are nested too deep, or a function calls itself without end";
 
 static lisp eval_car(lisp cell, lisp env);
 static lisp progn(lisp body, lisp env);
@@ -111,9 +124,9 @@ int lisp_unwinding(void)
     return g_unwind.to != 0;
 }
 
-/* Errors. What went wrong is a string, made the way FORMAT would: ~S
- * prints a Lisp object, ~A prints one for a person, ~Z is a C string. It
- * is at most 255 bytes long. */
+/* Errors. What went wrong is said in a string, made the way FORMAT would:
+ * ~S prints a Lisp object, ~A prints one for a person, ~Z is a C string.
+ * It is at most 255 bytes long. */
 struct buffer {
     char text[256];
     size_t length;
@@ -164,24 +177,183 @@ static lisp text(const char *control, ...)
     return string;
 }
 
-/* An error: from here every caller returns, up to the top level. What is
- * returned is NIL, so that a function can say return lisp_fail(...). */
-lisp lisp_fail(const char *control, ...)
+/* What a symbol has under an indicator on its property list, or NIL. */
+static lisp property(lisp symbol, lisp indicator)
 {
-    va_list ap;
+    for (lisp p = lisp_as_symbol(symbol)->plist; lisp_is_cons(p); p = cdr(lisp_as_cons(p)->cdr))
+        if (lisp_as_cons(p)->car == indicator)
+            return car(lisp_as_cons(p)->cdr);
+    return LISP_NIL;
+}
+
+/* Is a condition of that type one of this type too? DEFINE-CONDITION
+ * (lisp/boot.lisp) leaves the parents of a type under %CONDITION on the
+ * property list of its name, in the CAR of what it puts there. Every
+ * condition is one of the type T. */
+static int is_a(lisp type, lisp of, unsigned depth)
+{
+    if (type == of || of == lisp_roots.t)
+        return 1;
+    if (!lisp_is_symbol(type) || depth == 16)
+        return 0;
+    for (lisp parents = car(property(type, S.condition)); lisp_is_cons(parents); parents = lisp_as_cons(parents)->cdr)
+        if (is_a(lisp_as_cons(parents)->car, of, depth + 1))
+            return 1;
+    return 0;
+}
+
+/* A condition is signalled: the innermost HANDLER-CASE that has a clause
+ * for a condition of its type takes it, and control leaves for that
+ * clause, which is 1. With none, 0, and nothing has happened. */
+int lisp_signal(lisp condition)
+{
+    lisp type = lisp_as_condition(condition)->type;
+
+    for (struct handler *h = g_handlers; h; h = h->outer)
+        for (lisp c = h->clauses; lisp_is_cons(c); c = lisp_as_cons(c)->cdr)
+            if (car(lisp_as_cons(c)->car) != S.no_error && is_a(type, car(lisp_as_cons(c)->car), 0)) {
+                g_unwind.to = HANDLING;
+                g_unwind.tag = condition;
+                g_unwind.clause = lisp_as_cons(c)->car;
+                g_unwind.handler = h;
+                return 1;
+            }
+    return 0;
+}
+
+/* A condition that somebody has to handle: when no HANDLER-CASE does,
+ * every caller returns, up to the top level. What is returned is NIL, so
+ * that a function can say return lisp_error(...). */
+lisp lisp_error(lisp condition)
+{
+    if (!lisp_signal(condition)) {
+        g_unwind.to = FAILING;
+        g_unwind.tag = condition;
+    }
+    return LISP_NIL;
+}
+
+static lisp fail(const char *type, const char *slot, lisp value, const char *control, va_list ap)
+{
+    lisp cl = lisp_roots.common_lisp, text, slots = LISP_NIL;
 
     if (g_unwind.to)
         return LISP_NIL; /* the first thing to go wrong is the one that is reported */
+    text = message(control, ap);
+    if (slot)
+        slots = lisp_cons(lisp_symbol_in(cl, slot, 0), lisp_cons(value, LISP_NIL));
+    return lisp_error(lisp_make_condition(lisp_symbol_in(cl, type, 1), text, slots));
+}
+
+/* An error that says what went wrong and no more than that. */
+lisp lisp_fail(const char *control, ...)
+{
+    va_list ap;
+    lisp value;
+
     va_start(ap, control);
-    g_unwind.tag = message(control, ap);
+    value = fail("ERROR", NULL, 0, control, ap);
     va_end(ap);
-    g_unwind.to = FAILING;
-    return LISP_NIL;
+    return value;
+}
+
+/* A condition of the type that has this name in COMMON-LISP, with a value
+ * for the slot of that name unless slot is NULL: for what a program may
+ * want to tell apart from other errors. */
+lisp lisp_fail_as(const char *type, const char *slot, lisp value, const char *control, ...)
+{
+    va_list ap;
+
+    va_start(ap, control);
+    value = fail(type, slot, value, control, ap);
+    va_end(ap);
+    return value;
 }
 
 lisp lisp_wants(const char *what, lisp x)
 {
-    return lisp_fail("~Z wants ~Z, and ~S is not one", g_primitive->name, what, x);
+    return lisp_fail_as("TYPE-ERROR", "DATUM", x, "~Z wants ~Z, and ~S is not one", g_primitive->name, what, x);
+}
+
+/* The errors that the evaluator tells apart for a program. They are
+ * functions of their own, kept out of the functions that call them: the
+ * evaluator calls itself for every form inside a form, and what one of
+ * these needs on the stack is not to be paid for at every level. */
+#define COLD __attribute__((noinline))
+
+static COLD lisp unbound_variable(lisp symbol)
+{
+    return lisp_fail_as("UNBOUND-VARIABLE", "NAME", symbol, "the variable ~S has no value", symbol);
+}
+
+static COLD lisp undefined_function(lisp symbol)
+{
+    return lisp_fail_as("UNDEFINED-FUNCTION", "NAME", symbol, "the function ~S is not defined", symbol);
+}
+
+static COLD lisp program_error(const char *control, ...)
+{
+    va_list ap;
+    lisp value;
+
+    va_start(ap, control);
+    value = fail("PROGRAM-ERROR", NULL, 0, control, ap);
+    va_end(ap);
+    return value;
+}
+
+static COLD lisp control_error(const char *control, ...)
+{
+    va_list ap;
+    lisp value;
+
+    va_start(ap, control);
+    value = fail("CONTROL-ERROR", NULL, 0, control, ap);
+    va_end(ap);
+    return value;
+}
+
+/* The stack is full, of values or of calls: not an error in the program's
+ * reasoning, so no handler for errors takes it, as under any Common Lisp. */
+static COLD lisp stack_is_full(void)
+{
+    return lisp_fail_as("STORAGE-CONDITION", NULL, 0,
+                        "the stack is full: the forms are nested too deep, or a function calls itself without end");
+}
+
+/* For the collector: everything the evaluator holds. The value stack as
+ * far as it is in use, the special variables that are bound with the
+ * values they had before, and the words that stay: the values of the last
+ * form, and the exit that is under way or was. */
+void lisp_eval_roots(void)
+{
+    for (const lisp *p = g_stack; p < g_sp; p++)
+        lisp_reach(*p);
+    for (unsigned i = 0; i < g_bound; i++) {
+        lisp_reach(g_bindings[i].symbol);
+        lisp_reach(g_bindings[i].value);
+    }
+    for (unsigned i = 0; i < LISP_VALUES_MAX; i++)
+        lisp_reach(lisp_values.value[i]);
+    lisp_reach(g_unwind.to);
+    lisp_reach(g_unwind.tag);
+    lisp_reach(g_unwind.clause);
+}
+
+/* A safe point of the evaluator's: every object it holds is where
+ * lisp_eval_roots finds it. So this is where the collector runs, when it
+ * is time, and where a computation can be stopped: by a heap that is full
+ * even after collecting, and by Ctrl-C on the serial port. Says 0 when the
+ * evaluation is not to go on. */
+static COLD int safe_point(void)
+{
+    thread_safe_point();
+    if (!lisp_heap_safe_point())
+        lisp_fail_as("STORAGE-CONDITION", NULL, 0,
+                     "the heap is full: what the collector could free is not enough to go on");
+    else if (console_break && console_interrupted())
+        lisp_fail_as("SERIOUS-CONDITION", NULL, 0, "interrupted from the keyboard");
+    return !g_unwind.to;
 }
 
 /* The value stack. lisp_push looks whether there is room; the evaluator's
@@ -199,7 +371,7 @@ void lisp_stack_drop(lisp *to)
 int lisp_push(lisp x)
 {
     if (g_sp >= g_stack + STACK_SLOTS) {
-        lisp_fail(stack_full);
+        stack_is_full();
         return 0;
     }
     *g_sp++ = x;
@@ -215,7 +387,7 @@ int lisp_out_of_stack(void)
 
     if ((uintptr_t)&here >= g_c_limit && g_sp < g_stack + STACK_SLOTS)
         return 0;
-    lisp_fail(stack_full);
+    stack_is_full();
     return 1;
 }
 
@@ -223,7 +395,8 @@ int lisp_out_of_stack(void)
 static void bind_special(lisp symbol, lisp value)
 {
     if (g_bound == BINDINGS) {
-        lisp_fail("too many special variables are bound at once: more than ~A", lisp_fixnum(BINDINGS));
+        lisp_fail_as("STORAGE-CONDITION", NULL, 0, "too many special variables are bound at once: more than ~A",
+                     lisp_fixnum(BINDINGS));
         return;
     }
     g_bindings[g_bound].symbol = symbol;
@@ -339,6 +512,8 @@ static void bind_parameter(lisp f, lisp parameter, lisp value, lisp *e, lisp *pa
         return;
     }
     flush(e, pairs);
+    if (!lisp_push(value)) /* the list itself, which a parameter after &REST or a dot takes the rest of */
+        return;
     argv = g_sp;
     for (lisp v = value; lisp_is_cons(v); v = lisp_as_cons(v)->cdr, argc++)
         if (!lisp_push(lisp_as_cons(v)->car))
@@ -366,9 +541,9 @@ static void bind(lisp f, lisp list, unsigned argc, lisp *argv, lisp source, lisp
             keys = 1;
             first = i;
             if ((argc - i) & 1)
-                lisp_fail("~S got an odd number of keyword arguments", f);
+                program_error("~S got an odd number of keyword arguments", f);
             else if (argc - i > 128)
-                lisp_fail("~S got more than 64 keyword arguments", f);
+                program_error("~S got more than 64 keyword arguments", f);
             for (k = i; k + 1 < argc; k += 2)
                 if (argv[k] == S.allow && argv[k + 1] != LISP_NIL)
                     allow = 1;
@@ -388,7 +563,7 @@ static void bind(lisp f, lisp list, unsigned argc, lisp *argv, lisp source, lisp
             switch (mode) {
             case REQUIRED:
                 if (i == argc) {
-                    lisp_fail("~S got too few arguments", f);
+                    program_error("~S got too few arguments", f);
                     return;
                 }
                 value = argv[i++];
@@ -457,11 +632,11 @@ static void bind(lisp f, lisp list, unsigned argc, lisp *argv, lisp source, lisp
         rest = 1;
     }
     if (!rest && !keys && i < argc)
-        lisp_fail("~S got too many arguments", f);
+        program_error("~S got too many arguments", f);
     if (keys && !allow)
         for (k = first; k + 1 < argc; k += 2)
             if (!(known >> ((k - first) / 2) & 1) && argv[k] != S.allow) {
-                lisp_fail("~S does not take the keyword argument ~S", f, argv[k]);
+                program_error("~S does not take the keyword argument ~S", f, argv[k]);
                 break;
             }
     flush(e, pairs);
@@ -516,13 +691,14 @@ static lisp apply_closure(lisp f, unsigned argc, lisp *argv, lisp whole)
     lisp *base = g_sp, value = LISP_NIL, body;
     unsigned bound = g_bound;
 
-    *g_sp++ = fn->env;
-    bind(f, car(fn->code), argc, argv, whole == LISP_NIL ? 0 : cdr(whole), base,
+    *g_sp++ = f;       /* in use for as long as its body is evaluated, whatever its name comes to mean meanwhile */
+    *g_sp++ = fn->env; /* base[1]: the environment of the body, once the parameters have a frame on top of it */
+    bind(f, car(fn->code), argc, argv, whole == LISP_NIL ? 0 : cdr(whole), base + 1,
          lisp_function_kind(f) == LISP_MACRO, whole);
     if (!g_unwind.to) {
         body = declarations(cdr(fn->code));
         if (!g_unwind.to)
-            value = fn->name == LISP_NIL ? progn(body, *base) : block(fn->name, body, *base);
+            value = fn->name == LISP_NIL ? progn(body, base[1]) : block(fn->name, body, base[1]);
     }
     unbind(bound);
     g_sp = base;
@@ -602,7 +778,7 @@ static lisp sf_function(lisp args, lisp env)
     local = lookup(env, FUNCTIONS, name);
     f = local ? *local : lisp_as_symbol(name)->function;
     if (f == LISP_UNBOUND)
-        return lisp_fail("the function ~S is not defined", name);
+        return undefined_function(name);
     if (lisp_function_kind(f) == LISP_SPECIAL_OPERATOR || lisp_function_kind(f) == LISP_MACRO)
         return lisp_fail("~S is a macro or a special operator, not a function", name);
     return f;
@@ -720,14 +896,14 @@ static lisp sf_return_from(lisp args, lisp env)
         if (lisp_as_vector(frame)->items[1] == lisp_fixnum(BLOCK) && lisp_as_vector(frame)->items[2] == name)
             break;
     if (frame == LISP_NIL)
-        return lisp_fail("RETURN-FROM ~S, and no block of that name is in sight", name);
+        return control_error("RETURN-FROM ~S, and no block of that name is in sight", name);
     lisp_values.count = 1;
     if (lisp_is_cons(cdr(args)))
         value = eval_car(cdr(args), env);
     if (g_unwind.to)
         return LISP_NIL;
     if (lisp_as_vector(frame)->items[3] == LISP_NIL)
-        return lisp_fail("RETURN-FROM ~S, a block that has been left already", name);
+        return control_error("RETURN-FROM ~S, a block that has been left already", name);
     settle(value);
     g_unwind.to = frame;
     return LISP_NIL;
@@ -763,7 +939,8 @@ static lisp sf_go(lisp args, lisp env)
 {
     lisp tag = car(args);
 
-    thread_safe_point();
+    if (!safe_point())
+        return LISP_NIL;
     for (; env != LISP_NIL; env = lisp_as_vector(env)->items[0]) {
         const struct lisp_vector *v = lisp_as_vector(env);
 
@@ -772,13 +949,13 @@ static lisp sf_go(lisp args, lisp env)
         for (lisp at = v->items[2]; lisp_is_cons(at); at = lisp_as_cons(at)->cdr)
             if (lisp_as_cons(at)->car == tag && !lisp_is_cons(tag)) {
                 if (v->items[3] == LISP_NIL)
-                    return lisp_fail("GO to ~S, in a TAGBODY that has been left already", tag);
+                    return control_error("GO to ~S, in a TAGBODY that has been left already", tag);
                 g_unwind.to = env;
                 g_unwind.tag = at;
                 return LISP_NIL;
             }
     }
-    return lisp_fail("GO to ~S, and no TAGBODY in sight has that tag", tag);
+    return control_error("GO to ~S, and no TAGBODY in sight has that tag", tag);
 }
 
 static lisp sf_catch(lisp args, lisp env)
@@ -816,7 +993,7 @@ static lisp sf_throw(lisp args, lisp env)
     while (c && *c->tag != tag)
         c = c->outer;
     if (!c)
-        return lisp_fail("THROW to ~S, and no CATCH is waiting for it", tag);
+        return control_error("THROW to ~S, and no CATCH is waiting for it", tag);
     settle(value);
     g_unwind.to = THROWING;
     g_unwind.tag = tag;
@@ -1109,6 +1286,82 @@ static lisp sf_quasiquote(lisp args, lisp env)
     return quasi(car(args), 1, env);
 }
 
+/* (unwind-protect form cleanup...): the cleanup forms are evaluated
+ * whichever way control leaves the form, and then it goes on the way it
+ * was going. The values of the form, or the exit that is under way and
+ * the values it carries, wait on the stack meanwhile. A cleanup form that
+ * leaves by itself goes where it wants, and the first exit is forgotten. */
+static lisp sf_unwind_protect(lisp args, lisp env)
+{
+    lisp *base = g_sp, value = eval_car(args, env);
+    struct unwind exit = g_unwind;
+    unsigned n;
+
+    if (!exit.to)
+        settle(value);
+    n = lisp_values.count;
+    memcpy(base, lisp_values.value, n * sizeof(lisp));
+    g_sp += n;
+    *g_sp++ = exit.to;
+    *g_sp++ = exit.tag;
+    g_unwind.to = 0;
+    progn(cdr(args), env);
+    if (!g_unwind.to) {
+        g_unwind = exit;
+        lisp_values.count = n;
+        memcpy(lisp_values.value, base, n * sizeof(lisp));
+        value = n ? base[0] : LISP_NIL;
+    }
+    g_sp = base;
+    return value;
+}
+
+/* (handler-case form (type ([variable]) form...)...): the values of the
+ * form, unless a condition is signalled meanwhile that one of the clauses
+ * has the type for. Then control leaves the form for the first such
+ * clause, and the values are those of its forms, with the variable, if it
+ * names one, bound to the condition. A clause (:no-error lambda-list
+ * form...) is for when the form comes to its end: its forms, with the
+ * values of the form for arguments. */
+static lisp sf_handler_case(lisp args, lisp env)
+{
+    struct handler here = { g_handlers, cdr(args) };
+    lisp *base = g_sp, value, clause, no_error = LISP_NIL, body;
+    unsigned bound = g_bound;
+
+    for (lisp c = here.clauses; lisp_is_cons(c); c = lisp_as_cons(c)->cdr) {
+        lisp type = car(lisp_as_cons(c)->car);
+
+        if (type == S.no_error)
+            no_error = lisp_as_cons(c)->car;
+        else if (!lisp_is_symbol(type) || (type != lisp_roots.t && property(type, S.condition) == LISP_NIL))
+            return lisp_fail("HANDLER-CASE has a clause for ~S, which is not the name of a type of condition", type);
+    }
+    g_handlers = &here;
+    value = eval_car(args, env);
+    g_handlers = here.outer;
+    if (g_unwind.to == HANDLING && g_unwind.handler == &here) {
+        clause = g_unwind.clause;
+        g_unwind.to = 0;
+        *g_sp++ = env;
+        if (lisp_is_cons(car(cdr(clause)))) {
+            bind_variable(car(car(cdr(clause))), g_unwind.tag);
+            flush(base, base + 1);
+        }
+        body = declarations(cdr(cdr(clause)));
+        value = g_unwind.to ? LISP_NIL : progn(body, *base);
+        unbind(bound);
+    } else if (!g_unwind.to && no_error != LISP_NIL) {
+        settle(value);
+        *g_sp++ = make_function(LISP_CLOSURE, LISP_NIL, cdr(no_error), env);
+        for (unsigned i = 0, n = lisp_values.count; i < n; i++)
+            *g_sp++ = lisp_values.value[i];
+        value = lisp_apply(*base, (unsigned)(g_sp - base - 1), base + 1);
+    }
+    g_sp = base;
+    return value;
+}
+
 static const struct special {
     const char *name;
     lisp (*fn)(lisp args, lisp env);
@@ -1145,6 +1398,8 @@ static const struct special {
     { "DEFPARAMETER", sf_defparameter, 2, 3, 0 },
     { "DEFCONSTANT", sf_defconstant, 2, 3, 0 },
     { "QUASIQUOTE", sf_quasiquote, 1, 1, 0 },
+    { "UNWIND-PROTECT", sf_unwind_protect, 1, LISP_MANY, 1 },
+    { "HANDLER-CASE", sf_handler_case, 1, LISP_MANY, 1 },
 };
 
 /* A call: the function, then each argument as it is evaluated, on the
@@ -1178,7 +1433,7 @@ static lisp eval_car(lisp cell, lisp env)
     if (lisp_is_symbol(form)) {
         local = special(form) ? NULL : lookup(env, VARIABLES, form);
         f = local ? *local : lisp_as_symbol(form)->value;
-        return f == LISP_UNBOUND ? lisp_fail("the variable ~S has no value", form) : f;
+        return f == LISP_UNBOUND ? unbound_variable(form) : f;
     }
     if (!lisp_is_cons(form))
         return form;
@@ -1189,7 +1444,7 @@ static lisp eval_car(lisp cell, lisp env)
         local = lookup(env, FUNCTIONS, operator);
         f = local ? *local : lisp_as_symbol(operator)->function;
         if (f == LISP_UNBOUND)
-            return lisp_fail("the function ~S is not defined", operator);
+            return undefined_function(operator);
     } else if (car(operator) == S.lambda && lisp_is_cons(operator))
         f = make_function(LISP_CLOSURE, LISP_NIL, lisp_as_cons(operator)->cdr, env);
     else
@@ -1201,7 +1456,7 @@ static lisp eval_car(lisp cell, lisp env)
         for (lisp a = lisp_as_cons(form)->cdr; lisp_is_cons(a) && n < most; a = lisp_as_cons(a)->cdr)
             n++;
         if (n < s->min || n > s->max)
-            return lisp_fail("~S has the wrong number of parts for ~S", form, operator);
+            return program_error("~S has the wrong number of parts for ~S", form, operator);
         f = s->fn(lisp_as_cons(form)->cdr, env);
         if (!s->values)
             lisp_values.count = 1;
@@ -1220,13 +1475,13 @@ static lisp eval_car(lisp cell, lisp env)
 static lisp wrong_count(const struct lisp_primitive *p, unsigned argc)
 {
     if (p->max == LISP_MANY)
-        return lisp_fail("the number of arguments ~Z takes is ~A or more, not ~A", p->name, lisp_fixnum(p->min),
-                         lisp_fixnum(argc));
+        return program_error("the number of arguments ~Z takes is ~A or more, not ~A", p->name, lisp_fixnum(p->min),
+                             lisp_fixnum(argc));
     if (p->min == p->max)
-        return lisp_fail("the number of arguments ~Z takes is ~A, not ~A", p->name, lisp_fixnum(p->min),
-                         lisp_fixnum(argc));
-    return lisp_fail("the number of arguments ~Z takes is ~A to ~A, not ~A", p->name, lisp_fixnum(p->min),
-                     lisp_fixnum(p->max), lisp_fixnum(argc));
+        return program_error("the number of arguments ~Z takes is ~A, not ~A", p->name, lisp_fixnum(p->min),
+                             lisp_fixnum(argc));
+    return program_error("the number of arguments ~Z takes is ~A to ~A, not ~A", p->name, lisp_fixnum(p->min),
+                         lisp_fixnum(p->max), lisp_fixnum(argc));
 }
 
 /* A function, or the symbol that names one, called with arguments that are
@@ -1236,10 +1491,11 @@ lisp lisp_apply(lisp f, unsigned argc, lisp *argv)
 {
     const struct lisp_primitive *p;
 
-    thread_safe_point();
+    if (!safe_point())
+        return LISP_NIL;
     if (lisp_is_symbol(f)) {
         if (lisp_as_symbol(f)->function == LISP_UNBOUND)
-            return lisp_fail("the function ~S is not defined", f);
+            return undefined_function(f);
         f = lisp_as_symbol(f)->function;
     }
     if (!lisp_is(f, LISP_FUNCTION))
@@ -1315,27 +1571,31 @@ lisp lisp_load(lisp name)
             break;
         }
         lisp_eval(form, LISP_NIL);
-        if (g_unwind.to == FAILING)
-            g_unwind.tag = text("~A, in the form at line ~A of ~Z", g_unwind.tag, lisp_fixnum(line), f->name);
+        if (g_unwind.to == FAILING) /* nothing handles it: what the top level prints says where it was */
+            lisp_as_condition(g_unwind.tag)->message =
+                text("~A, in the form at line ~A of ~Z", g_unwind.tag, lisp_fixnum(line), f->name);
     }
     unbind(bound);
     return lisp_roots.t;
 }
 
-/* A form evaluated at the top level, where an error ends up. Returns 1
- * with the values in lisp_values, all of them, or 0 with what went wrong
- * as the one value. The evaluator's stacks have to be where they were:
- * every piece of it gives back what it took, on every way out. */
+/* A form evaluated at the top level, where a condition that nothing
+ * handles ends up. Returns 1 with the values in lisp_values, all of them,
+ * or 0 with the condition as the one value. The evaluator's stacks have
+ * to be where they were: every piece of it gives back what it took, on
+ * every way out. */
 int lisp_evaluate(lisp form)
 {
     lisp *base = g_sp, value;
     unsigned bound = g_bound;
     const struct catch *catches = g_catches;
+    const struct handler *handlers = g_handlers;
 
     value = lisp_eval(form, LISP_NIL);
-    if (g_sp != base || g_bound != bound || g_catches != catches)
-        panic("lisp: the evaluator left %lld values on its stack, %d bindings, and the catches %s",
-              (long long)(g_sp - base), (int)(g_bound - bound), g_catches == catches ? "as they were" : "changed");
+    if (g_sp != base || g_bound != bound || g_catches != catches || g_handlers != handlers)
+        panic("lisp: the evaluator left %lld values on its stack, %d bindings, and the catches and handlers %s",
+              (long long)(g_sp - base), (int)(g_bound - bound),
+              g_catches == catches && g_handlers == handlers ? "as they were" : "changed");
     if (!g_unwind.to) {
         settle(value);
         return 1;
@@ -1346,6 +1606,7 @@ int lisp_evaluate(lisp form)
     lisp_values.value[0] = g_unwind.tag;
     g_unwind.to = 0;
     g_unwind.tag = LISP_NIL;
+    lisp_collect_if_full(); /* what was being evaluated holds nothing any more */
     return 0;
 }
 
@@ -1370,6 +1631,8 @@ void lisp_eval_init(const struct boot_file *files)
     S.environment = lisp_symbol_in(cl, "&ENVIRONMENT", 1);
     S.execute = lisp_symbol_in(lisp_roots.keyword, "EXECUTE", 1);
     S.allow = lisp_symbol_in(lisp_roots.keyword, "ALLOW-OTHER-KEYS", 1);
+    S.no_error = lisp_symbol_in(lisp_roots.keyword, "NO-ERROR", 1);
+    S.condition = lisp_symbol_in(cl, "%CONDITION", 0);
     for (unsigned i = 0; i < sizeof specials / sizeof specials[0]; i++) {
         symbol = lisp_symbol_in(cl, specials[i].name, specials[i].fn != sf_quasiquote);
         lisp_as_symbol(symbol)->function = make_function(LISP_SPECIAL_OPERATOR, symbol, lisp_fixnum(i), LISP_NIL);
