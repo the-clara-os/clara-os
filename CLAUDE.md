@@ -100,6 +100,31 @@ Rules:
   the ways that were tried, under the slow test mode. One of them got
   through the first version of the self-test, which is how it was found
   that the test never woke a sleeper while the world was stopped.
+- A device's interrupt is a message (kernel/interrupt.c): the device
+  writes a number to an address. `interrupt_message` hands one out, and
+  `arch_message` in each arch/<arch>/interrupt.c says which address and
+  number: the local APIC on x86_64, a GICv2m frame or the ITS on AArch64.
+  Each of the four boots of `make test` takes one of those ways, so a
+  change there is tried on all four: `NO_HVF=1 tools/boottest.sh aarch64
+  -machine gic-version=3` is the ITS on the Mac, where the plain boot has
+  the frame. Lisp gets the three as `clara.unsafe:message-interrupt`.
+- A driver is a file in lisp/ like the console: it finds its device among
+  `(clara.pci:devices)`, maps registers with `clara.pci:map-registers`,
+  asks for its interrupt with `clara.pci:message-interrupt`, shares
+  memory from `clara.unsafe:allocate-memory` with the device, and has a
+  thread that waits for the interrupt's event. A virtio device goes
+  through lisp/virtio.lisp. lisp/host/tests.lisp has a PCI bus and a
+  virtio device of its own making (`attach-bus`, `add-input`): a new
+  driver gets its device there, and its registers are not readable until
+  the driver has mapped them, as on the machine. The host machine refuses
+  what the kernel refuses, an address that is not a multiple of the
+  access and a value that does not fit.
+- tools/run.sh gives every machine a virtio keyboard, mouse and tablet
+  (`INPUT=` for none, `INPUT="-device ..."` for others). On AArch64 the
+  boot volume is a PCI device whose slot the firmware remembers in
+  build/vars-aarch64.fd: new devices go after it on the command line. A
+  boot that ends at the firmware's `Shell>` means the slot moved; delete
+  that file.
 - `make test` boots four times: x86_64, AArch64 with GIC version 3,
   AArch64 emulated with GIC version 2, whose files in build/ are named
   aarch64-gic2, and AArch64 once more for tools/stress.txt (aarch64-stress),
@@ -138,13 +163,16 @@ Rules:
   SBCL as it stands: the subset of Common Lisp that the evaluator has,
   no name of Common Lisp's given a new meaning (LISTEN is one), and the
   substrate only through CLARA and CLARA.UNSAFE. The kernel loads them
-  in the order of `world` in lisp.c, and lisp/host/tests.lisp loads the
-  same files: a new one goes into both. Its logic is tested there, on
-  the machine that lisp/host/clara.lisp makes up: a device is a function
-  put at an address or at a port, and a test looks at the bytes and the
-  pixels. A boot only says that the interpreter runs the file. To type
-  at the console by hand, bytes and all, run tools/run.sh with
-  `SERIAL=stdio` from a script and write to its standard input.
+  in the order of `world` in lisp.c (the console, pci, virtio, input, the
+  listener), and lisp/host/tests.lisp loads the same files: a new one
+  goes into both. What they print while they start is part of the boot
+  report, and a line of it stays under 100 characters too. Its logic is
+  tested there, on the machine that lisp/host/clara.lisp makes up: a
+  device is a function put at an address or at a port, and a test looks
+  at the bytes and the pixels. A boot only says that the interpreter runs
+  the file. To type at the console by hand, bytes and all, run
+  tools/run.sh with `SERIAL=stdio` from a script and write to its
+  standard input.
 - The console in Lisp (lisp/console.lisp) and the substrate's (fbcon.c)
   draw the same cells with the same glyphs, kernel/font.c and
   lisp/font.lisp, both from `make font`. A change to one grid or one
@@ -281,7 +309,13 @@ Rules:
   `^C` and nothing else is Ctrl-C, for the form in the line before it,
   which has to be one that never ends and that the session types once:
   the boot test waits for the kernel to echo that line before it types
-  the Ctrl-C and the rest. What a machine answered is in
+  the Ctrl-C and the rest. A line `^M command` is a command for QEMU's
+  monitor, sent at the same moment (`sendkey ctrl-c`, `mouse_move 30
+  20`), and after a line `^K` the next line is typed on the keyboard, by
+  `sendkey`, once the kernel has printed the line before the `^K`, which
+  therefore has to be one that comes nowhere else. A line for the
+  keyboard is short, 64 events at most, a key being four and eight with
+  Shift, and a session does not end with a `^M`. What a machine answered is in
   build/session-<name>.txt, and `SESSION=file tools/boottest.sh <arch>`
   types another session. A boot that panics or faults fails at once,
   without waiting for the timeout.

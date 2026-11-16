@@ -18,6 +18,7 @@
  * Interrupts reach Lisp as events (thread.c): INTERRUPT-EVENT gives the
  * event that a source of interrupts signals, and a thread waits for it
  * like for any other. */
+#include "acpi.h"
 #include "lisp.h"
 
 #define NIL LISP_NIL
@@ -373,5 +374,75 @@ LISP_PRIMITIVE(lisp_p_give_screen)
     if (!number(argv[0], &row) || !number(argv[1], &column))
         return NIL;
     fbcon_return((uint32_t)row, (uint32_t)column);
+    return NIL;
+}
+
+/* (map-memory address bytes): the registers of a device, which the
+ * firmware or the device's own configuration says are at that address, can
+ * be read and written there from now on. The kernel maps a device where it
+ * is, like everything else, so three places are refused: memory, which is
+ * mapped already and is nobody's registers; the first megabyte; and what
+ * lies where the heap of Lisp has its addresses. What is mapped already is
+ * left as it is. */
+LISP_PRIMITIVE(lisp_p_map_memory)
+{
+    uint64_t addr, bytes, first, end;
+
+    (void)argc;
+    if (!number(argv[0], &addr) || !number(argv[1], &bytes))
+        return NIL;
+    first = addr & ~(PAGE_SIZE - 1);
+    end = (addr + bytes + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+    if (!bytes || bytes > 256 << 20)
+        return lisp_fail("~A bytes are not the registers of a device: there are some, and no more than 256 MiB", argv[1]);
+    if (addr < LOW_LIMIT || end > VM_HEAP_BASE)
+        return lisp_fail("the ~A bytes at ~X cannot be mapped: the kernel maps nothing below ~X, and from ~X on"
+                         " the addresses are the heap's",
+                         argv[1], argv[0], lisp_fixnum(LOW_LIMIT), lisp_fixnum((int64_t)VM_HEAP_BASE));
+    for (uint64_t page = first; page < end; page += PAGE_SIZE)
+        if (pmm_is_ram(page))
+            return lisp_fail("~X is memory, not the registers of a device", lisp_fixnum((int64_t)page));
+    for (uint64_t page = first; page < end; page += PAGE_SIZE)
+        if (!vm_lookup(page))
+            vm_map(page, page, 1, VM_WRITE | VM_DEVICE);
+    return argv[0];
+}
+
+/* (pci-configuration): where the configuration space of the PCI devices is
+ * in memory, by the firmware's table of it (ACPI MCFG). Three values: the
+ * address at which bus 0 would begin, and the first and the last bus that
+ * are there; each bus has a megabyte, each of its 32 devices 32 KiB, and
+ * each of a device's 8 functions a page. NIL when the firmware names no
+ * such place. Of several, this is the first of segment 0. */
+LISP_PRIMITIVE(lisp_p_pci_configuration)
+{
+    const struct acpi_mcfg *mcfg = acpi_table("MCFG");
+    uint64_t entries = mcfg && mcfg->header.length > sizeof *mcfg
+                           ? (mcfg->header.length - sizeof *mcfg) / sizeof mcfg->entries[0]
+                           : 0;
+
+    (void)argc;
+    (void)argv;
+    for (uint64_t i = 0; i < entries; i++) {
+        if (mcfg->entries[i].segment)
+            continue;
+        lisp_values.count = 3;
+        lisp_values.value[0] = lisp_fixnum((int64_t)mcfg->entries[i].base);
+        lisp_values.value[1] = lisp_fixnum(mcfg->entries[i].first_bus);
+        lisp_values.value[2] = lisp_fixnum(mcfg->entries[i].last_bus);
+        return lisp_values.value[0];
+    }
+    return NIL;
+}
+
+/* (keyboard-break): Ctrl-C has been typed on a keyboard. The driver of a
+ * keyboard is a thread in Lisp, and this is how it does what the serial
+ * port's Ctrl-C does: it stops what the thread that reads from the console
+ * is computing, or the wait it is in. */
+LISP_PRIMITIVE(lisp_p_keyboard_break)
+{
+    (void)argc;
+    (void)argv;
+    console_break_now();
     return NIL;
 }

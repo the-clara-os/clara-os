@@ -6,5 +6,8 @@ T
 T
 > (car 5)
 error: CAR wants a list, and 5 is not one
+^K
+> (+ 40 2)
+42
 > (cl::%collect-every 0)
 1

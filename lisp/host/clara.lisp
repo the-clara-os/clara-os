@@ -9,7 +9,9 @@
 ;;;; interrupts. This file provides both. CLARA is made of SB-THREAD and
 ;;;; SB-GRAY. CLARA.UNSAFE is a machine that exists only here: its memory
 ;;;; is a vector, its devices are functions that a test puts at an address
-;;;; or at a port, and its interrupts are raised by calling a function.
+;;;; or at a port, and its interrupts are raised by calling a function. A
+;;;; device can be put there in the way a PCI device is found: nothing can
+;;;; be read at its address until MAP-MEMORY has been called for it.
 ;;;; The package CLARA.HOST is what a test sets that machine up with.
 ;;;;
 ;;;; Nothing in this directory is ever loaded on ClaraOS: the build copies
@@ -29,13 +31,15 @@
            "FILL-MEMORY-32" "COPY-MEMORY" "EXPAND-BITS-32" "ALLOCATE-MEMORY" "FREE-MEMORY"
            "PORT-8" "PORT-16" "PORT-32"
            "INTERRUPT-EVENT" "FRAMEBUFFER" "SERIAL-DEVICE" "SERIAL-BYTE" "SERIAL-BREAK"
-           "TAKE-SCREEN" "GIVE-SCREEN"))
+           "TAKE-SCREEN" "GIVE-SCREEN"
+           "MAP-MEMORY" "PCI-CONFIGURATION" "MESSAGE-INTERRUPT" "KEYBOARD-BREAK"))
 
 (defpackage "CLARA.HOST"
   (:use "COMMON-LISP")
   (:export "RESET-MACHINE" "+MEMORY-BASE+" "MAP-DEVICE" "MAP-PORTS"
            "SET-FRAMEBUFFER" "SET-SERIAL-DEVICE" "SET-SCREEN-CURSOR" "GIVEN-SCREEN"
-           "TYPE-BYTES" "RAISE-INTERRUPT" "SERIAL-BREAK-P"))
+           "TYPE-BYTES" "RAISE-INTERRUPT" "SERIAL-BREAK-P"
+           "SET-PCI-CONFIGURATION" "SEND-MESSAGE" "MESSAGE-INTERRUPTS" "KEYBOARD-BREAKS"))
 
 ;;; CLARA: threads
 
@@ -138,9 +142,9 @@
   event)
 
 (defun wait-event (event &optional milliseconds)
-  (and (if milliseconds
-           (sb-thread:wait-on-semaphore event :timeout (/ milliseconds 1000))
-           (sb-thread:wait-on-semaphore event))
+  (and (cond ((null milliseconds) (sb-thread:wait-on-semaphore event))
+             ((zerop milliseconds) (sb-thread:try-semaphore event))
+             (t (sb-thread:wait-on-semaphore event :timeout (/ milliseconds 1000))))
        t))
 
 ;;; CLARA: a stream made of two functions
@@ -189,7 +193,11 @@
 
 (defvar *memory* (make-array +memory-size+ :element-type '(unsigned-byte 8) :initial-element 0))
 (defvar *allocated* 0)       ; bytes of memory that ALLOCATE-MEMORY has handed out
-(defvar *devices* nil)       ; (first last read write): registers in memory
+(defvar *devices* nil)       ; (first last read write mapped): registers in memory
+(defvar *mapped* nil)        ; (first . last): what MAP-MEMORY was called for
+(defvar *pci-configuration* nil) ; what PCI-CONFIGURATION gives, as a list, or NIL
+(defvar *messages* nil)      ; (device event address data): what MESSAGE-INTERRUPT has handed out, the last first
+(defvar *keyboard-breaks* 0) ; how often KEYBOARD-BREAK was called
 (defvar *ports* nil)         ; the same for I/O ports
 (defvar *framebuffer* nil)   ; what FRAMEBUFFER gives, as a list, or NIL
 (defvar *serial-device* nil) ; (kind base)
@@ -204,13 +212,17 @@
 (defun reset-machine ()
   (fill *memory* 0)
   (setq *allocated* 0 *devices* nil *ports* nil *framebuffer* nil *serial-device* nil
-        *screen-cursor* nil *given-screen* nil *typed* nil *interrupts* nil *serial-break* t)
+        *screen-cursor* nil *given-screen* nil *typed* nil *interrupts* nil *serial-break* t
+        *mapped* nil *pci-configuration* nil *messages* nil *keyboard-breaks* 0)
   nil)
 
 ;; SIZE bytes of registers at ADDRESS: READ is called with an offset and
-;; how many bytes are read, WRITE with an offset, that and the value.
-(defun map-device (address size read write)
-  (push (list address (+ address size -1) read write) *devices*))
+;; how many bytes are read, WRITE with an offset, that and the value. With
+;; MAPPED false they are there for a driver to find, and reading or writing
+;; them is an error until the driver has called MAP-MEMORY for them, as it
+;; is on ClaraOS.
+(defun map-device (address size read write &key (mapped t))
+  (push (list address (+ address size -1) read write mapped) *devices*))
 
 (defun map-ports (port count read write)
   (push (list port (+ port count -1) read write) *ports*))
@@ -243,8 +255,30 @@
     (setq *typed* (append *typed* (coerce bytes 'list))))
   (raise-interrupt :serial))
 
+(defun set-pci-configuration (base first-bus last-bus)
+  (setq *pci-configuration* (list base first-bus last-bus)))
+
+(defun message-interrupts ()
+  *messages*)
+
+(defun keyboard-breaks ()
+  *keyboard-breaks*)
+
+;; A device writes DATA to ADDRESS: the interrupt that MESSAGE-INTERRUPT
+;; handed out with those two is raised. A message that nobody asked for is
+;; an error of the test's.
+(defun send-message (address data)
+  (let ((message (find-if (lambda (message) (and (= (third message) address) (= (fourth message) data)))
+                          *messages*)))
+    (unless message
+      (error "nothing listens for the message ~D at #x~(~X~)" data address))
+    (clara:signal-event (second message))))
+
 (defun device-at (address devices)
   (find-if (lambda (device) (<= (first device) address (second device))) devices))
+
+(defun mapped-p (address size)
+  (find-if (lambda (range) (<= (car range) address (+ address size -1) (cdr range))) *mapped*))
 
 (defun memory-index (address size)
   (let ((index (- address +memory-base+)))
@@ -252,8 +286,18 @@
       (error "nothing is mapped at #x~(~X~)" address))
     index))
 
+;; What ClaraOS refuses, this machine refuses too: an address that is not
+;; a multiple of the bytes that are read or written there, and a value that
+;; does not fit in them.
+(defun check-access (address size)
+  (unless (and (integerp address) (>= address 0) (zerop (mod address size)))
+    (error "#x~(~X~) is not the address of ~D bytes: it is not a multiple of ~D" address size size)))
+
 (defun peek (address size)
+  (check-access address size)
   (let ((device (device-at address *devices*)))
+    (when (and device (not (fifth device)) (not (mapped-p address size)))
+      (error "nothing is mapped at #x~(~X~)" address))
     (if device
         (funcall (third device) (- address (first device)) size)
         (let ((index (memory-index address size)) (value 0))
@@ -261,7 +305,12 @@
             (setq value (logior value (ash (aref *memory* (+ index i)) (* 8 i)))))))))
 
 (defun poke (address size value)
+  (check-access address size)
+  (unless (and (integerp value) (or (= size 8) (< (- -1 (ash 1 (1- (* 8 size)))) value (ash 1 (* 8 size)))))
+    (error "~S is not an integer that fits in ~D bits" value (* 8 size)))
   (let ((device (device-at address *devices*)))
+    (when (and device (not (fifth device)) (not (mapped-p address size)))
+      (error "nothing is mapped at #x~(~X~)" address))
     (if device
         (funcall (fourth device) (- address (first device)) size value)
         (let ((index (memory-index address size)))
@@ -355,4 +404,34 @@
 
 (defun give-screen (row column)
   (setq clara.host::*given-screen* (list row column))
+  nil)
+
+;; The registers of a device become memory. Whole pages are mapped, as on
+;; ClaraOS, and what is memory already is refused.
+(defun map-memory (address bytes)
+  (let ((first (* 4096 (floor address 4096)))
+        (last (1- (* 4096 (ceiling (+ address bytes) 4096)))))
+    (unless (plusp bytes)
+      (error "~D bytes are not the registers of a device" bytes))
+    (when (and (<= clara.host:+memory-base+ last)
+               (< first (+ clara.host:+memory-base+ clara.host::+memory-size+)))
+      (error "#x~(~X~) is memory, not the registers of a device" address))
+    (push (cons first last) clara.host::*mapped*)
+    address))
+
+(defun pci-configuration ()
+  (values-list clara.host::*pci-configuration*))
+
+;; An interrupt for a PCI device to raise by a message. Every one has its
+;; own number to write, and they all write to one address, which is no
+;; address of the machine's memory and has more than 32 bits to it.
+(defun message-interrupt (device)
+  (let ((event (clara:make-event (format nil "PCI ~(~2,'0X:~2,'0X.~X~)" (ash device -8) (logand (ash device -3) 31)
+                                         (logand device 7))))
+        (data (+ 64 (length clara.host::*messages*))))
+    (push (list device event #x1fee00000 data) clara.host::*messages*)
+    (values event #x1fee00000 data)))
+
+(defun keyboard-break ()
+  (incf clara.host::*keyboard-breaks*)
   nil)

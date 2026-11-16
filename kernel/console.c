@@ -111,6 +111,16 @@ void console_tick(void)
         lisp_interrupt(LISP_INTERRUPT_SERIAL); /* for a reader in Lisp, which waits for this */
 }
 
+/* Ctrl-C from somewhere else than the serial port: a keyboard, whose
+ * driver is a thread in Lisp. It does to the thread that reads from the
+ * console what the byte does when it arrives here, and no byte is kept. */
+void console_break_now(void)
+{
+    console_break = 1;
+    if (g_break_wakes)
+        thread_wake(g_break_wakes);
+}
+
 /* The next byte that was typed, or -1 when there is none. */
 static int typed(void)
 {

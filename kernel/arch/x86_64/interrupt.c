@@ -7,14 +7,20 @@
  *                the vectors they use out of the box, which are the ones
  *                the processor uses for its exceptions.
  *   I/O APICs    route the interrupt lines of devices to processors. Every
- *                pin is masked until a driver asks for one (M8).
+ *                pin is masked, and stays so: which line a device is
+ *                wired to is written in the DSDT, in a bytecode that the
+ *                kernel does not read.
  *   local APIC   part of the processor (Intel SDM volume 3, chapter 11).
  *                Interrupts reach the processor through it, and it has a
- *                timer, which gives the kernel its tick. */
+ *                timer, which gives the kernel its tick. A PCI device
+ *                reaches it without a line: it writes the number of a
+ *                vector to an address that the APIC listens at, a message
+ *                (11.11), and that is how devices interrupt here. */
 #include "acpi.h"
 #include "arch.h"
 
 /* Local APIC registers: offsets into its page, each 32 bits wide. */
+#define LAPIC_ID            0x020 /* bits 24 to 31: which processor's this is */
 #define LAPIC_TASK_PRIORITY 0x080 /* interrupts of this priority class and below wait */
 #define LAPIC_EOI           0x0b0 /* written at the end of every handler */
 #define LAPIC_SPURIOUS      0x0f0 /* the spurious vector, and the switch for the whole APIC */
@@ -150,6 +156,24 @@ void arch_interrupts_init(void)
     lapic_write(LAPIC_TIMER_INITIAL, tick);
     kprintf("timer: local APIC timer at %llu MHz by the 8254's clock, a tick every %u ms\n",
             (uint64_t)tick * 16 * TIMER_HZ / 1000000, 1000 / TIMER_HZ);
+    kprintf("interrupts: devices send messages to the local APIC, vectors %u to %u\n", VECTOR_MESSAGE,
+            VECTOR_MESSAGE + INTERRUPT_SOURCES - 1);
+}
+
+/* A message is a write of 32 bits to an address in the range that every
+ * local APIC listens at, 0xfee00000 and up. Bits 12 to 19 of the address
+ * name the processor, and the lowest byte of what is written is the
+ * vector; all the other bits zero ask for an ordinary interrupt, raised
+ * once for each write (Intel SDM volume 3, 11.11.1 and 11.11.2). */
+const char *arch_message_controller = "the local APIC";
+
+int arch_message(uint32_t device, unsigned source, struct interrupt_message *m)
+{
+    _Static_assert(VECTOR_MESSAGE + INTERRUPT_SOURCES <= VECTOR_TIMER, "the vectors for messages run into the timer's");
+    (void)device;
+    m->address = 0xfee00000ULL | (uint64_t)(lapic_read(LAPIC_ID) >> 24) << 12;
+    m->data = VECTOR_MESSAGE + source;
+    return 1;
 }
 
 /* Vectors 32 and up, from interrupt_dispatch. Every interrupt the local
@@ -161,6 +185,8 @@ void interrupt_handle(unsigned vector)
         return;
     if (vector == VECTOR_TIMER)
         timer_tick();
+    else if (vector - VECTOR_MESSAGE < INTERRUPT_SOURCES)
+        interrupt_deliver(vector - VECTOR_MESSAGE);
     else
         kprintf("interrupt on vector %u, which nothing asked for\n", vector);
     if (g_lapic)

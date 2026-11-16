@@ -1,8 +1,8 @@
 #!/bin/sh
 # Headless boot check: boot one arch under QEMU; when the kernel starts to
-# read from the serial port, type a session at it; wait for the kernel's
-# last line; compare what it answered with what the session says it must;
-# then save what the screen shows as a PNG.
+# read, type a session at it, on the serial port and on the keyboard; wait
+# for the kernel's last line; compare what it answered with what the
+# session says it must; then save what the screen shows as a PNG.
 # usage: tools/boottest.sh <x86_64|aarch64> [extra qemu args...]
 #        such as: -smp 4, -cpu max, -machine gic-version=2
 # env:   TIMEOUT=90   MARKER="text to wait for"
@@ -21,11 +21,72 @@ log=build/boot-$name.log
 shot=build/screen-$name.png
 sock=build/monitor-$name.sock
 keys=build/serial-$name.in
+orders=build/monitor-$name.in
 typing=build/typing-$name
 heard=build/session-$name.txt
 mkdir -p build
-rm -f "$shot" "$sock" "$keys" "$heard" "$typing".*
+rm -f "$shot" "$sock" "$keys" "$orders" "$heard" "$typing".*
 : > "$log"
+
+# A session is a transcript. The lines that begin with a prompt, "> " or
+# the two spaces of a form that goes on, are what gets typed, without the
+# prompt, and Ctrl-D after the last one ends the kernel's reading. The
+# lines that begin with ^ are not part of what the kernel says:
+#   ^C          Ctrl-C on the serial port, for the form in the line before
+#               it, which never ends by itself.
+#   ^M command  a command for the QEMU monitor, sent while the kernel
+#               evaluates the form in the line before it: "sendkey ctrl-c",
+#               "mouse_move 30 20".
+#   ^K          the line after it is typed on the keyboard, by sendkey, and
+#               not on the serial port. Such a line is short: a key is four
+#               events, with Shift eight, and the 64 that the keyboard's
+#               queue holds are all that is sure to arrive on a slow machine.
+# So the session is typed in parts, and a part waits for a line of the
+# kernel's: a Ctrl-C or a command, and what follows them, until the kernel
+# has echoed the line before, which it is evaluating by then; a line for
+# the keyboard until the kernel has printed the line before the ^K, since
+# what is typed on the keyboard is read ahead of what the serial port still
+# holds; and what follows such a line until that line has been echoed. A
+# line that is waited for must not come earlier in the session as well.
+#   $typing.N          what part N types on the serial port
+#   $typing.N.monitor  the commands it sends to the monitor first
+#   $typing.N.after    the line that the kernel has to have printed
+LC_ALL=C awk -v out="$typing" '
+    function keyname(c,    i) {
+        if (c ~ /^[a-z0-9]$/) return c
+        if (c ~ /^[A-Z]$/) return "shift-" tolower(c)
+        if (c == " ") return "spc"
+        if ((i = index(")!@#$%^&*(", c))) return "shift-" (i - 1)
+        if ((i = index(plain, c))) return names[i]
+        if ((i = index(shifted, c))) return "shift-" names[i]
+        printf "tools/boottest.sh: no key types \"%s\"\n", c > "/dev/stderr"
+        exit 2
+    }
+    function begin_part(after) { part++; print after > (out "." part ".after"); commands = 0 }
+    BEGIN       { part = 0; printf "" > (out "." part)
+                  plain = "-=[];\047`\\,./"; shifted = "_+{}:\"~|<>?"
+                  split("minus equal bracket_left bracket_right semicolon apostrophe grave_accent backslash comma dot slash",
+                        names, " ") }
+    /^\^C$/     { begin_part(last); printf "\003" > (out "." part); next }
+    /^\^M /     { if (!commands) begin_part(last)
+                  print substr($0, 4) > (out "." part ".monitor"); commands = 1; next }
+    /^\^K$/     { begin_part(before); keyboard = 1; next }
+    /^[> ] /    { if (keyboard) {
+                      for (i = 3; i <= length($0); i++)
+                          print "sendkey " keyname(substr($0, i, 1)) > (out "." part ".monitor")
+                      print "sendkey ret" > (out "." part ".monitor")
+                      keyboard = 0; begin_part($0)
+                  } else {
+                      if (commands) begin_part(last)
+                      print substr($0, 3) > (out "." part)
+                  }
+                  last = $0 }
+                { before = $0 }
+    END         { if (commands) {
+                      print "tools/boottest.sh: a session cannot end with a ^M line: Ctrl-D would not wait for it" > "/dev/stderr"
+                      exit 2
+                  }
+                  printf "\004" > (out "." part) }' "${session:-/dev/null}"
 
 # The serial port is QEMU's standard input and output. What the kernel
 # prints goes to the log. What it reads comes from a FIFO, which this
@@ -38,51 +99,51 @@ SERIAL=stdio tools/run.sh "$arch" -display none -monitor "unix:$sock,server=on,w
     < "$keys" > "$log" 2> "build/qemu-$name.log" 3>&- &
 pid=$!
 
-# A session is a transcript. The lines that begin with a prompt, "> " or
-# the two spaces of a form that goes on, are what gets typed, without the
-# prompt, and Ctrl-D after the last one ends the kernel's reading. A line
-# that is ^C and nothing else is Ctrl-C, for the form in the line before
-# it, which never ends by itself. Typed along with the rest it would stop
-# whatever the kernel was evaluating when it arrived, so the session is
-# typed in parts: a Ctrl-C and what follows it wait until the kernel has
-# echoed the line before, which it is evaluating by then. That line must
-# not come earlier in the session as well.
-#   $typing.N        part N, with the Ctrl-C it begins with
-#   $typing.N.after  the line that the kernel has to have echoed first
-LC_ALL=C awk -v out="$typing" '
-    BEGIN       { part = 0; printf "" > (out "." part) }
-    /^\^C$/     { part++; print last > (out "." part ".after"); printf "\003" > (out "." part); next }
-    /^[> ] /    { print substr($0, 3) > (out "." part); last = $0 }
-    END         { printf "\004" > (out "." part) }' "${session:-/dev/null}"
+# The QEMU monitor is a socket, and one connection to it stays open for the
+# whole boot, fed from a second FIFO: keys for the keyboard, moves of the
+# mouse, and at the end the order for a screenshot.
+mkfifo "$orders"
+exec 4<> "$orders"
+n=0
+while [ ! -S "$sock" ] && [ "$n" -lt 50 ]; do
+    sleep 0.1
+    n=$((n + 1))
+done
+nc -U "$sock" < "$orders" > /dev/null 2>&1 3>&- 4>&- &
+
 part=0 # the next one to type
 
 type_part() {
-    cat "$typing.$part" >&3
+    [ ! -f "$typing.$part.monitor" ] || cat "$typing.$part.monitor" >&4
+    [ ! -f "$typing.$part" ] || cat "$typing.$part" >&3
     part=$((part + 1))
 }
 
-# Has the kernel echoed the line that the next part waits for?
+# Has the kernel printed the line that the next part waits for? All of it,
+# with its end: a line typed on the keyboard is echoed key by key, and it
+# is not over before Enter is. So the log gets a byte at its end that no
+# line has, which only a line that has not ended runs into.
 echoed() {
     [ -f "$typing.$part.after" ] &&
-        LC_ALL=C tr -d '\r' < "$log" | grep -qxF -- "$(cat "$typing.$part.after")"
+        { LC_ALL=C tr -d '\r' < "$log"; printf '\001'; } | LC_ALL=C grep -qxF -- "$(cat "$typing.$part.after")"
 }
 
 # The kernel echoes what is typed after its prompt, so what it printed
 # between its invitation and its last line has to be the transcript, and
 # after it the prompt at which Ctrl-D arrived. A Ctrl-C that stops a form
-# is not echoed.
+# is not echoed, and the other lines that begin with ^ are for this script.
 check_session() {
     [ -n "$session" ] || return 0
     LC_ALL=C tr -d '\r' < "$log" | LC_ALL=C sed -n '/^clara: reading/,/^clara: nothing/p' \
         | sed '1d;$d' > "$heard"
-    { grep -v '^^C$' "$session"; echo '> '; } | diff -u - "$heard"
+    { grep -v '^^' "$session"; echo '> '; } | diff -u - "$heard"
 }
 
 # Give the last line time to reach the screen, then ask the QEMU monitor for
 # a screenshot and to quit, and wait up to five seconds for it to do so.
 screenshot_and_quit() {
-    { sleep 0.5; printf 'screendump %s -f png\nquit\n' "$PWD/$shot"; } \
-        | nc -w 5 -U "$sock" > /dev/null 2>&1 || true
+    sleep 0.5
+    printf 'screendump %s -f png\nquit\n' "$PWD/$shot" >&4
     n=0
     while kill -0 "$pid" 2>/dev/null && [ "$n" -lt 50 ]; do
         sleep 0.1

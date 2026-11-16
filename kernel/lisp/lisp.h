@@ -291,8 +291,15 @@ static inline enum lisp_function_kind lisp_function_kind(lisp function)
     return (enum lisp_function_kind)lisp_length(lisp_as_function(function)->header);
 }
 
-/* Where interrupts come from that a Lisp thread can wait for (thread.c). */
-enum lisp_interrupt { LISP_INTERRUPT_TIMER, LISP_INTERRUPT_SERIAL, LISP_INTERRUPTS };
+/* Where interrupts come from that a Lisp thread can wait for (thread.c):
+ * the timer, the serial port, and then the devices that send messages, in
+ * the order they asked (kernel/interrupt.c). */
+enum lisp_interrupt {
+    LISP_INTERRUPT_TIMER,
+    LISP_INTERRUPT_SERIAL,
+    LISP_INTERRUPT_MESSAGE,
+    LISP_INTERRUPTS = LISP_INTERRUPT_MESSAGE + INTERRUPT_SOURCES
+};
 
 /* What the substrate itself holds on to in the Lisp world. The collector
  * starts from here, and from what the evaluator keeps (eval.c): every
@@ -493,6 +500,7 @@ LISP_PRIMITIVE(lisp_p_make_event);
 LISP_PRIMITIVE(lisp_p_signal_event);
 LISP_PRIMITIVE(lisp_p_wait_event);
 LISP_PRIMITIVE(lisp_p_interrupt_event);
+LISP_PRIMITIVE(lisp_p_message_interrupt);
 LISP_PRIMITIVE(lisp_p_serial_break);
 LISP_PRIMITIVE(lisp_p_memory_8);
 LISP_PRIMITIVE(lisp_p_memory_16);
@@ -518,6 +526,9 @@ LISP_PRIMITIVE(lisp_p_serial_device);
 LISP_PRIMITIVE(lisp_p_serial_byte);
 LISP_PRIMITIVE(lisp_p_take_screen);
 LISP_PRIMITIVE(lisp_p_give_screen);
+LISP_PRIMITIVE(lisp_p_map_memory);
+LISP_PRIMITIVE(lisp_p_pci_configuration);
+LISP_PRIMITIVE(lisp_p_keyboard_break);
 extern const struct lisp_primitive lisp_primitives[];
 extern const unsigned lisp_primitive_count;
 

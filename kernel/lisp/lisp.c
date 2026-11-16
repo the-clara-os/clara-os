@@ -847,7 +847,7 @@ static const struct {
     { "(handler-case (error 'clara:keyboard-interrupt) (error () 'an-error) (clara:keyboard-interrupt () 'a-break))",
       "A-BREAK" },
     /* threads: each has stacks of its own, and its own bindings of the special variables */
-    { "(clara:thread-name (clara:current-thread))", "\"listener\"" },
+    { "(defvar *threads* (length (clara:all-threads))) (clara:thread-name (clara:current-thread))", "\"listener\"" },
     { "(clara:join-thread (clara:make-thread (lambda () (+ 1 2))))", "3" },
     { "(multiple-value-list (clara:join-thread (clara:make-thread (lambda () (values 1 2)))))", "(1 2)" },
     { "(defun five () 5) (clara:join-thread (clara:make-thread 'five))", "5" },
@@ -919,7 +919,7 @@ static const struct {
     { "(clara:join-thread (clara:current-thread))",
       "error: the thread #<THREAD \"listener\"> cannot wait for itself to finish" },
     { "(clara:join-thread 5)", "error: CLARA:JOIN-THREAD wants a thread, and 5 is not one" },
-    { "(list (sleep 0) (length (clara:all-threads)))", "(NIL 1)" },
+    { "(list (sleep 0) (- (length (clara:all-threads)) *threads*))", "(NIL 0)" }, /* the drivers have threads too */
     /* memory by its address, in page frames that are nobody else's */
     { "(defvar *page* (clara.unsafe:allocate-memory 2))"
       " (list (integerp *page*) (mod *page* 4096) (clara.unsafe:memory-64 *page*))",
@@ -960,6 +960,21 @@ static const struct {
       "(#<EVENT \"TIMER\"> T 100)" },
     { "(clara.unsafe:interrupt-event :nothing)",
       "error: CLARA.UNSAFE:INTERRUPT-EVENT wants a source of interrupts, :TIMER or :SERIAL, and :NOTHING is not one" },
+    /* a device's registers are mapped where they are, and memory is no device */
+    { "(let ((page (clara.unsafe:allocate-memory 1)))"
+      " (prog1 (handler-case (clara.unsafe:map-memory page 4096) (error () 'memory)) (clara.unsafe:free-memory page 1)))",
+      "MEMORY" },
+    { "(clara.unsafe:map-memory 4096 4096)",
+      "error: the 4096 bytes at #x1000 cannot be mapped: the kernel maps nothing below #x100000, and from"
+      " #x400000000000 on the addresses are the heap's" },
+    { "(handler-case (clara.unsafe:map-memory #x3ffffffff000 8192) (error () 'the-heap))", "THE-HEAP" },
+    { "(clara.unsafe:map-memory #x100000 0)",
+      "error: 0 bytes are not the registers of a device: there are some, and no more than 256 MiB" },
+    { "(clara.unsafe:message-interrupt 65536)",
+      "error: CLARA.UNSAFE:MESSAGE-INTERRUPT wants the bus, device and function of a PCI device, as one number of"
+      " 16 bits, and 65536 is not one" },
+    /* Ctrl-C on a keyboard is Ctrl-C */
+    { "(handler-case (progn (clara.unsafe:keyboard-break) (loop)) (clara:keyboard-interrupt () 'stopped))", "STOPPED" },
 };
 
 /* Texts that give one thing on a machine of one kind and something else on
@@ -978,6 +993,11 @@ static const struct {
     { "(list (keywordp (clara.unsafe:serial-device)) (integerp (nth-value 1 (clara.unsafe:serial-device)))"
       " (let ((screen (multiple-value-list (clara.unsafe:framebuffer)))) (or (null (car screen)) (length screen))))",
       "(T T 7)", "(T T T)" },
+    /* and where it put the configuration space of the PCI devices: the first of them is there to be read */
+    { "(multiple-value-bind (base first last) (clara.unsafe:pci-configuration)"
+      " (if base (list (= base (clara.unsafe:map-memory base 4096)) (/= (clara.unsafe:memory-16 base) #xffff)"
+      " (<= first last)) 'none))",
+      "(T T T)", "NONE" },
 };
 
 /* The evaluator, and the language that lisp/boot.lisp builds on it. Then a
@@ -1182,13 +1202,15 @@ static void load(const char *file)
 /* What the first thread of the Lisp world does. boot.lisp is the part of
  * the language that is written in Lisp, and the files after it are the
  * beginning of the world: the console, which takes the serial port and
- * the screen over from the substrate, and the listener, which reads what
- * is typed there, evaluates it and prints what it gives, until the input
- * ends. Should a condition come all the way out of the listener, it is
- * started again and told so. */
+ * the screen over from the substrate; the drivers, which find the devices
+ * on the PCI bus and start a thread for each keyboard and mouse; and the
+ * listener, which reads what is typed, evaluates it and prints what it
+ * gives, until the input ends. Should a condition come all the way out of
+ * the listener, it is started again and told so. */
 static void lisp_main(void)
 {
-    static const char *const world[] = { "font.lisp", "console.lisp", "listener.lisp" };
+    static const char *const world[] = { "font.lisp",   "console.lisp", "pci.lisp",
+                                         "virtio.lisp", "input.lisp",   "listener.lisp" };
     uint64_t before[LISP_TYPES], after[LISP_TYPES];
     lisp listen, condition = LISP_NIL;
     unsigned told = 0;
@@ -1203,10 +1225,14 @@ static void lisp_main(void)
     for (unsigned i = 0; i < sizeof world / sizeof world[0]; i++)
         load(world[i]);
     lisp_heap_census(before);
-    kprintf("lisp: the console and the listener are loaded, %llu more functions: the rest of this is theirs\n",
+    kprintf("lisp: the console, the drivers and the listener are loaded, %llu more functions: the rest is theirs\n",
             before[LISP_FUNCTION] - after[LISP_FUNCTION]);
     if (!lisp_evaluate(read_one("(clara.console:start)")))
         panic("lisp: the console did not start");
+    /* A machine without a PCI bus, or without a keyboard on it, is said
+     * and is no reason to stop: there is the serial port. */
+    if (!lisp_evaluate(read_one("(progn (clara.pci:start) (clara.input:start))")))
+        panic("lisp: the drivers did not start");
     listen = read_one("clara.listener:run");
     while (!lisp_call(listen, told, &condition)) {
         condition = lisp_values.value[0];

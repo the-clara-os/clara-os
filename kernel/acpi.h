@@ -57,7 +57,9 @@ enum {
     ACPI_MADT_LOCAL_APIC_ADDRESS = 5,
     ACPI_MADT_GICC = 11,
     ACPI_MADT_GICD = 12,
+    ACPI_MADT_GIC_MSI_FRAME = 13,
     ACPI_MADT_GICR = 14,
+    ACPI_MADT_GIC_ITS = 15,
 };
 
 struct acpi_madt_io_apic {
@@ -106,6 +108,43 @@ struct acpi_madt_gicr {         /* GICv3: a range of memory holding redistributo
     uint16_t reserved;
     uint64_t base;
     uint32_t length;
+} ACPI_PACKED;
+
+/* The two ways a GIC takes an interrupt that a device raises by writing to
+ * memory: a frame of registers that turns the write into one of a range of
+ * shared interrupts (GICv2m), or an interrupt translation service (GICv3). */
+struct acpi_madt_gic_msi_frame {
+    struct acpi_madt_entry entry;
+    uint16_t reserved;
+    uint32_t id;
+    uint64_t base;
+    uint32_t flags;             /* bit 0: the range is in the two fields below, not in the frame's own register */
+    uint16_t spi_count;
+    uint16_t spi_base;
+} ACPI_PACKED;
+
+struct acpi_madt_gic_its {
+    struct acpi_madt_entry entry;
+    uint16_t reserved;
+    uint32_t id;
+    uint64_t base;
+    uint32_t reserved2;
+} ACPI_PACKED;
+
+/* MCFG: where the configuration space of the PCI devices is in memory (PCI
+ * Firmware Specification 3.3, 4.1.2). One entry for each range of buses:
+ * 4 KiB for every function, 8 functions to a device, 32 devices to a bus. */
+struct acpi_mcfg_entry {
+    uint64_t base;              /* where bus 0 of the segment would be, whichever bus the range begins with */
+    uint16_t segment;
+    uint8_t  first_bus, last_bus;
+    uint32_t reserved;
+} ACPI_PACKED;
+
+struct acpi_mcfg {
+    struct acpi_header header;
+    uint64_t reserved;
+    struct acpi_mcfg_entry entries[];
 } ACPI_PACKED;
 
 /* GTDT: the Arm generic timer's interrupts (5.2.25). */
