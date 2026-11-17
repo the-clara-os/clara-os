@@ -65,6 +65,8 @@
 (load-source "lisp/pci.lisp")
 (load-source "lisp/virtio.lisp")
 (load-source "lisp/input.lisp")
+(load-source "lisp/disk.lisp")
+(load-source "lisp/fat.lisp")
 (load-source "lisp/listener.lisp")
 
 ;;; Names. boot.lisp is the part of Common Lisp that ClaraOS has in Lisp,
@@ -446,9 +448,10 @@
   (check '(2 0) (clara.host:given-screen)))
 
 ;;; A PCI bus that is made up: a configuration space with some devices in
-;;; it, and among them virtio input devices that do what such a device does
-;;; with its registers and its queues. The drivers find nothing mapped
-;;; there, and have to ask for every address they read.
+;;; it, and among them virtio devices, keyboards and pointers and further
+;;; down disks, that do what such a device does with its registers and its
+;;; queues. The drivers find nothing mapped there, and have to ask for
+;;; every address they read.
 
 (defconstant +ecam+ #x30000000)
 
@@ -514,7 +517,15 @@
   (queues (vector (make-vq) (make-vq)))
   (select 0) (subselect 0) ; what the driver asks its own registers about
   name bits axes           ; and the answers: a string; (type . bytes); (axis least most)
-  notified)                ; the queues it was told of new work in, the last first
+  notified                 ; the queues it was told of new work in, the last first
+  disk                     ; of a disk: its sectors, a vector of bytes,
+  read-only                ; which cannot be written,
+  (answer 0)               ; what it says of every request that is not 0, "all went well",
+  silent                   ; or that it never says anything,
+  delay                    ; how many seconds it takes over a request, when it takes any,
+  mute                     ; that it has no message to send when it is done,
+  watch                    ; a function that a test has it call at every request,
+  requests)                ; and the requests it was given, the last first: (type sector count)
 
 (defun answer (vdev)
   (case (vdev-select vdev)
@@ -561,11 +572,69 @@
     (poke (+ at 4) 4 bytes)
     (setf (vq-done vq) (logand (1+ (vq-done vq)) #xffff))
     (poke (+ (vq-used vq) 2) 2 (vq-done vq))
-    (interrupt vdev vq)))
+    (unless (vdev-mute vdev)
+      (interrupt vdev vq))))
+
+;; A disk serves what is in its first queue. A request is three buffers or
+;; more: 16 bytes for the device to read, the type in the first four and
+;; the sector in the last eight; the memory of the sectors, for the device
+;; to write when it is a read; and a byte for its answer.
+(defun serve-disk (vdev)
+  (let ((vq (aref (vdev-queues vdev) 0)) (disk (vdev-disk vdev)))
+    (loop
+      (let ((first (next-available vq)))
+        (unless first
+          (return))
+        (let* ((buffers (chain vq first))
+               (header (first buffers))
+               (answer (car (last buffers)))
+               (data (butlast (cdr buffers)))
+               (type (peek (first header) 4))
+               (sector (peek (+ (first header) 8) 8))
+               (bytes (reduce #'+ (mapcar #'second data)))
+               (at (* 512 sector))
+               (went (vdev-answer vdev)))
+          (unless (and (>= (length buffers) 3) (= (second header) 16) (not (logbitp 1 (third header)))
+                       (= (second answer) 1) (logbitp 1 (third answer))
+                       (plusp bytes) (zerop (mod bytes 512))
+                       (every (lambda (buffer) (eq (logbitp 1 (third buffer)) (= type 0))) data))
+            (failed "the driver gave the disk a request that is not one: ~S" buffers))
+          (dolist (buffer data)
+            (let ((first (floor (clara.host::memory-index (first buffer) (second buffer)) 4096)))
+              (when (find 0 clara.host::*pages* :start first :end (+ first (ceiling (second buffer) 4096)))
+                (failed "the driver gave the disk ~D bytes of memory at #x~X that are not all its own"
+                        (second buffer) (first buffer)))))
+          (push (list type sector (floor bytes 512)) (vdev-requests vdev))
+          (when (vdev-watch vdev)
+            (funcall (vdev-watch vdev)))
+          (cond ((/= went 0))
+                ((or (> (+ at bytes) (length disk)) (and (= type 1) (vdev-read-only vdev)))
+                 (setq went 1))
+                ((> type 1)
+                 (setq went 2))
+                (t
+                 (dolist (buffer data)
+                   (let ((index (clara.host::memory-index (first buffer) (second buffer))))
+                     (if (= type 0)
+                         (replace clara.host::*memory* disk :start1 index :start2 at :end2 (+ at (second buffer)))
+                         (replace disk clara.host::*memory* :start1 at :start2 index :end2 (+ index (second buffer)))))
+                   (incf at (second buffer)))))
+          (poke (first answer) 1 went)
+          ;; A disk that takes its time has read or written by now, and says so later.
+          (let ((written (+ (if (= type 0) bytes 0) 1)))
+            (cond ((vdev-silent vdev))
+                  ((vdev-delay vdev)
+                   (sb-thread:make-thread (lambda ()
+                                            (sleep (vdev-delay vdev))
+                                            (complete vdev vq first written))))
+                  (t (complete vdev vq first written)))))))))
 
 (defun vdev-read (vdev offset size)
   (let* ((n (vdev-queue vdev)) (vq (aref (vdev-queues vdev) (min n 1))))
-    (cond ((>= offset #x2000)
+    (cond ((and (>= offset #x2000) (vdev-disk vdev))
+           ;; A disk's own registers begin with how many sectors it has, in 64 bits.
+           (ldb (byte (* 8 size) (* 8 (- offset #x2000))) (floor (length (vdev-disk vdev)) 512)))
+          ((>= offset #x2000)
            (let ((at (- offset #x2000)) (answer (answer vdev)))
              (case at
                (0 (vdev-select vdev))
@@ -598,6 +667,8 @@
            ;; from the one before. The second queue is one that gives every chain straight back, with
            ;; as many bytes as the device was allowed to write.
            (push (if (= offset (+ #x3000 (* 4 value))) value :at-the-wrong-register) (vdev-notified vdev))
+           (when (and (= value 0) (vdev-disk vdev))
+             (serve-disk vdev))
            (when (= value 1)
              (let ((vq (aref (vdev-queues vdev) 1)))
                (loop
@@ -639,18 +710,18 @@
              (#x30 (setf (ldb (byte 32 0) (vq-used vq)) value))
              (#x34 (setf (ldb (byte 32 32) (vq-used vq)) value)))))))
 
-;; A virtio input device in a slot of bus 0, as QEMU makes them: its table
-;; of two messages behind base address register 1, its other registers
-;; behind register 4, which is one of 64 bits, and capabilities that say
-;; so. Without MESSAGES it cannot send any, and without REGISTERS it does
-;; not say where its registers are.
-(defun add-input (slot name bits &key axes (offers (list 0 1)) (agreeable t) (messages t) (registers t))
-  (let* ((config (add-function 0 slot 0 #x1af4 #x1052 #x090000))
+;; A virtio device in a slot of bus 0, as QEMU makes them: its table of two
+;; messages behind base address register 1, its other registers behind
+;; register 4, which is one of 64 bits, and capabilities that say so.
+;; Without MESSAGES it cannot send any, and without REGISTERS it does not
+;; say where its registers are.
+(defun add-virtio (slot id kind vdev &key (messages t) (registers t))
+  (let* ((config (add-function 0 slot 0 #x1af4 id kind))
          (table (make-array 4096 :element-type '(unsigned-byte 8) :initial-element 0))
-         (vdev (make-vdev :config config :table table :name name :bits bits :axes axes :offers offers
-                          :agreeable agreeable))
          (low (+ #x40000000 (* slot #x10000)))
          (high (+ #x8000000000 (* slot #x100000))))
+    (setf (vdev-config vdev) config
+          (vdev-table vdev) table)
     (setf (le config 6 2) #x10
           (le config #x34 1) (cond (messages #x40) (registers #x50) (t 0))
           (le config #x14 4) low
@@ -671,6 +742,20 @@
                            (lambda (offset size value) (vdev-write vdev offset size value))
                            :mapped nil)
     vdev))
+
+;; An input device: a keyboard, a mouse or a tablet, by the events it says
+;; it has.
+(defun add-input (slot name bits &key axes (offers (list 0 1)) (agreeable t) (messages t) (registers t))
+  (add-virtio slot #x1052 #x090000
+              (make-vdev :name name :bits bits :axes axes :offers offers :agreeable agreeable)
+              :messages messages :registers registers))
+
+;; A disk, whose sectors are BYTES. It can do a good deal that no driver
+;; here asks for, and bit 5 of that says that it cannot be written.
+(defun add-disk (slot bytes &key read-only (answer 0) silent delay mute (offers (list (+ #x6e54 (if read-only 32 0)) 1)))
+  (add-virtio slot #x1042 #x010000
+              (make-vdev :disk bytes :read-only read-only :answer answer :silent silent :delay delay :mute mute
+                         :offers offers)))
 
 (defvar *keys-bits* '((1 0 0 0 #x40)))        ; events of type 1, and among their codes 30, the key A
 (defvar *mouse-bits* '((1 0 0) (2 3)))        ; types 1 and 2
@@ -1000,6 +1085,688 @@
               (clara.input:start))))
   (check "input: no keyboard and no mouse that has a driver here: the serial port is where to type"
          (string-right-trim '(#\Newline) said)))
+
+;;; Disks that are made up: virtio block devices on the same bus, each
+;;; with its sectors in a vector, which do what such a device does with a
+;;; request, and look at how the driver put it to them.
+
+(defun pattern (sectors)
+  (let ((bytes (make-array (* 512 sectors) :element-type '(unsigned-byte 8))))
+    (dotimes (i (length bytes) bytes)
+      (setf (aref bytes i) (mod (+ i (* 7 (floor i 512))) 251)))))
+
+;; What is in the machine's memory at an address.
+(defun memory-bytes (address count)
+  (let ((index (- address clara.host:+memory-base+)))
+    (subseq clara.host::*memory* index (+ index count))))
+
+;; A machine with these disks and nothing else: each is (slot bytes . what
+;; ADD-DISK takes). The devices that were made of them.
+(defun new-disks (&rest disks)
+  (new-machine)
+  (attach-bus)
+  (add-function 0 0 0 #x8086 #x29c0 #x060000)
+  (prog1 (mapcar (lambda (disk) (apply #'add-disk disk)) disks)
+    (with-output-to-string (*standard-output*)
+      (clara.pci:start))))
+
+(defun said-by (function)
+  (with-output-to-string (*standard-output*)
+    (funcall function)))
+
+;; One disk: what the driver sets up, and what it reads and writes.
+(let* ((bytes (pattern 100))
+       (vdev (car (new-disks (list 3 bytes))))
+       (said (said-by #'clara.disk:start))
+       (disk (car (clara.disk:disks)))
+       (vq (aref (vdev-queues vdev) 0))
+       (memory (clara.unsafe:allocate-memory 2))
+       (pages (clara.host:allocated-pages)))
+  (check (format nil "disk: 00:03.0 has 100 sectors of 512 bytes, 0 MiB~%") said)
+  (check '(0 1 3 11 15) (reverse (vdev-history vdev)))
+  (check '(0 1) (vdev-wanted vdev))                       ; of all that it offers, version 1 and no more
+  (check '(8 1 0) (list (vq-size vq) (vq-enabled vq) (vq-message vq)))
+  (check '("00:03.0" 100 nil 1) (list (clara.disk:disk-name disk) (clara.disk:disk-sectors disk)
+                                      (clara.disk:disk-read-only disk) (length (clara.disk:disks))))
+  (check 3 (clara.disk:read-sectors disk 5 3 memory))
+  (check t (equalp (memory-bytes memory 1536) (subseq bytes 2560 4096)))
+  (check 0 (aref (memory-bytes (+ memory 1536) 1) 0))     ; and not a byte more
+  (check '((0 5 3)) (vdev-requests vdev))
+  (check '(0) (vdev-notified vdev))
+  (check 1 (clara.disk:read-sectors disk 99 1 memory))    ; the last sector
+  (check t (equalp (memory-bytes memory 512) (subseq bytes (* 99 512))))
+  (dotimes (i 1024)
+    (setf (clara.unsafe:memory-8 (+ memory i)) (mod (* 7 i) 256)))
+  (check 2 (clara.disk:write-sectors disk 97 2 memory))
+  (check t (and (equalp (subseq bytes (* 97 512) (* 99 512)) (memory-bytes memory 1024))
+                (equalp (subseq bytes (* 96 512) (* 97 512)) (subseq (pattern 100) (* 96 512) (* 97 512)))
+                (equalp (subseq bytes (* 99 512)) (subseq (pattern 100) (* 99 512)))))
+  (check '(1 97 2) (car (vdev-requests vdev)))
+  ;; Sectors that the disk does not have are refused here, and the device is not asked.
+  (check-condition error (clara.disk:read-sectors disk 99 2 memory))
+  (check-condition error (clara.disk:read-sectors disk 100 1 memory))
+  (check-condition error (clara.disk:read-sectors disk -1 1 memory))
+  (check-condition error (clara.disk:read-sectors disk 0 0 memory))
+  (check-condition error (clara.disk:write-sectors disk 100 1 memory))
+  (check-condition error (clara.disk:read-sectors disk nil 1 memory))
+  (check 3 (length (vdev-requests vdev)))
+  ;; The requests go round the queue many times, and two threads take turns at the disk.
+  (check 300 (let ((right 0))
+               (dotimes (i 300 right)
+                 (clara.disk:read-sectors disk (mod (* 37 i) 100) 1 memory)
+                 (when (equalp (memory-bytes memory 512)
+                               (subseq bytes (* 512 (mod (* 37 i) 100)) (* 512 (1+ (mod (* 37 i) 100)))))
+                   (incf right)))))
+  (check '(100 100)
+         (mapcar #'clara:join-thread
+                 (mapcar (lambda (first)
+                           (clara:make-thread
+                            (lambda ()
+                              (let ((mine (clara.unsafe:allocate-memory 1)) (right 0))
+                                (dotimes (i 100 (progn (clara.unsafe:free-memory mine 1) right))
+                                  (clara.disk:read-sectors disk (+ first (mod i 40)) 1 mine)
+                                  (when (equalp (memory-bytes mine 512)
+                                                (subseq (pattern 100) (* 512 (+ first (mod i 40)))
+                                                        (* 512 (+ first (mod i 40) 1))))
+                                    (incf right)))))))
+                         '(0 50))))
+  (check pages (clara.host:allocated-pages)))
+
+;; A disk that cannot be written says so, and is not asked to.
+(let* ((vdev (car (new-disks (list 3 (pattern 4096) :read-only t))))
+       (said (said-by #'clara.disk:start))
+       (disk (car (clara.disk:disks)))
+       (memory (clara.unsafe:allocate-memory 1)))
+  (check (format nil "disk: 00:03.0 has 4096 sectors of 512 bytes, 2 MiB, and cannot be written~%") said)
+  (check '(32 1) (vdev-wanted vdev))
+  (check t (clara.disk:disk-read-only disk))
+  (check-condition error (clara.disk:write-sectors disk 0 1 memory))
+  (check nil (vdev-requests vdev))
+  (check 1 (clara.disk:read-sectors disk 4095 1 memory)))
+
+;; A disk that fails at what it is asked, one that does not know the
+;; request, and one that never answers.
+(let* ((vdevs (new-disks (list 3 (pattern 16) :answer 1) (list 4 (pattern 16) :answer 2)
+                         (list 5 (pattern 16) :silent t)))
+       (disks (progn (said-by #'clara.disk:start) (clara.disk:disks)))
+       (memory (clara.unsafe:allocate-memory 1)))
+  (check 3 (length disks))
+  (check "the disk 00:03.0 could not read its sectors 2 to 3"
+         (handler-case (clara.disk:read-sectors (first disks) 2 2 memory) (error (c) (princ-to-string c))))
+  (check "the disk 00:03.0 could not write its sectors 0 to 0"
+         (handler-case (clara.disk:write-sectors (first disks) 0 1 memory) (error (c) (princ-to-string c))))
+  (check-condition error (clara.disk:read-sectors (second disks) 0 1 memory))
+  (check 2 (length (vdev-requests (first vdevs))))         ; and the disk can be asked again
+  (let ((clara.disk:*patience* 300))
+    (check-condition error (clara.disk:read-sectors (third disks) 0 1 memory))
+    (check "the disk 00:05.0 left a request unanswered, and is asked nothing more"
+           (handler-case (clara.disk:read-sectors (third disks) 0 1 memory) (error (c) (princ-to-string c)))))
+  (check 1 (length (vdev-requests (third vdevs)))))
+
+;; A disk that takes its time: the driver waits for its message. And one
+;; whose message never comes: the driver looks at the queue again before
+;; long, and finds its answer there.
+(let* ((bytes (pattern 16))
+       (disks (progn (new-disks (list 3 bytes :delay 0.35) (list 4 bytes :delay 0.05 :mute t))
+                     (said-by #'clara.disk:start)
+                     (clara.disk:disks)))
+       (memory (clara.unsafe:allocate-memory 1)))
+  (dolist (disk disks)
+    (let ((before (get-internal-real-time)))
+      (check 1 (clara.disk:read-sectors disk 9 1 memory))
+      (check t (equalp (memory-bytes memory 512) (subseq bytes (* 9 512) (* 10 512))))
+      (check t (< 0.04 (/ (- (get-internal-real-time) before) internal-time-units-per-second) 2)))
+    (check 1 (clara.disk:read-sectors disk 3 1 memory))
+    (check t (equalp (memory-bytes memory 512) (subseq bytes (* 3 512) (* 4 512))))))
+
+;; START: the disks among the devices, and what is said of each.
+(let ((said (progn
+              (new-machine)
+              (attach-bus)
+              (add-function 0 0 0 #x8086 #x29c0 #x060000)
+              (add-input 2 "QEMU Virtio Keyboard" *keys-bits*)
+              (add-disk 3 (pattern 2048))
+              (add-disk 4 (pattern 8) :offers (list 0 0))
+              (add-disk 5 (pattern 6000) :read-only t)
+              (with-output-to-string (*standard-output*)
+                (clara.pci:start))
+              (said-by #'clara.disk:start))))
+  (check t (and (search (format nil "disk: 00:03.0 has 2048 sectors of 512 bytes, 1 MiB~%") said)
+                (search "disk: 00:04.0 did not start: the virtio device at 00:04.0 is from before version 1" said)
+                (search (format nil "disk: 00:05.0 has 6000 sectors of 512 bytes, 2 MiB, and cannot be written~%") said)
+                t))
+  (check '("00:03.0" "00:05.0") (mapcar #'clara.disk:disk-name (clara.disk:disks))))
+(new-bus (list 3 "QEMU Virtio Keyboard" *keys-bits*))
+(check "disk: no disk that has a driver here: the files are the ones that were read as the machine started"
+       (string-right-trim '(#\Newline) (said-by #'clara.disk:start)))
+(check nil (clara.disk:disks))
+
+;;; Volumes that are made up: FAT of the three kinds, laid out here by the
+;;; specification and not by lisp/fat.lisp, with what a directory can hold
+;;; that a reader has to get right. The boots read a volume that QEMU makes
+;;; up, and the image that macOS makes: three more witnesses.
+
+(defun octets (text)
+  (if (stringp text)
+      (sb-ext:string-to-octets text :external-format :utf-8)
+      (coerce text '(vector (unsigned-byte 8)))))
+
+(defstruct fat
+  kind bytes cluster-sectors reserved table-sectors root-sectors data clusters
+  (next 2)       ; the next cluster to be handed out,
+  (stride 1)     ; how far apart the clusters of one file lie,
+  backwards      ; whether a file goes through its clusters from the highest down,
+  (end #xfffffff)) ; and what the table has for the last cluster of a file: the highest eight numbers all say so
+
+(defun cluster-offset (fat cluster)
+  (* 512 (+ (fat-data fat) (* (- cluster 2) (fat-cluster-sectors fat)))))
+
+;; An entry of the table, in every copy of it.
+(defun (setf fat-entry) (value fat cluster)
+  (dotimes (copy 2 value)
+    (let ((base (* 512 (+ (fat-reserved fat) (* copy (fat-table-sectors fat))))) (bytes (fat-bytes fat)))
+      (ecase (fat-kind fat)
+        (12 (let ((at (+ base cluster (floor cluster 2))))
+              (if (oddp cluster)
+                  (setf (ldb (byte 4 4) (aref bytes at)) (ldb (byte 4 0) value)
+                        (aref bytes (1+ at)) (ldb (byte 8 4) value))
+                  (setf (aref bytes at) (ldb (byte 8 0) value)
+                        (ldb (byte 4 0) (aref bytes (1+ at))) (ldb (byte 4 8) value)))))
+        (16 (setf (le bytes (+ base (* 2 cluster)) 2) value))
+        ;; Of 32 bits the upper four mean nothing, and are not left empty here.
+        (32 (setf (le bytes (+ base (* 4 cluster)) 4) (logior #xa0000000 (ldb (byte 28 0) value))))))))
+
+(defun fat-allocate (fat count)
+  (let ((clusters (loop repeat count
+                        collect (prog1 (fat-next fat)
+                                  (incf (fat-next fat) (fat-stride fat))))))
+    (when (> (fat-next fat) (+ 2 (fat-clusters fat)))
+      (error "the volume of the test is full"))
+    (if (fat-backwards fat) (reverse clusters) clusters)))
+
+;; Bytes as a file: in clusters, which the table chains. The first cluster,
+;; which is FIRST when the file has been promised one.
+(defun fat-store (fat bytes &optional first)
+  (let* ((each (* 512 (fat-cluster-sectors fat)))
+         (count (max 1 (ceiling (length bytes) each)))
+         (clusters (append (and first (list first)) (fat-allocate fat (- count (if first 1 0))))))
+    (loop for (cluster next) on clusters
+          for start from 0 by each
+          do (replace (fat-bytes fat) bytes :start1 (cluster-offset fat cluster)
+                                            :start2 (min start (length bytes))
+                                            :end2 (min (+ start each) (length bytes)))
+             (setf (fat-entry fat cluster) (or next (fat-end fat))))
+    (car clusters)))
+
+;; A name of eight characters and three, as its 11 bytes, when the name is
+;; one; and the name that stands in for a long one.
+(defun eight-three (name)
+  (let* ((dot (position #\. name))
+         (base (subseq name 0 dot))
+         (extension (if dot (subseq name (1+ dot)) ""))
+         (short (make-array 11 :element-type '(unsigned-byte 8) :initial-element 32)))
+    (when (and (<= 1 (length base) 8) (<= (length extension) 3)
+               (every (lambda (character)
+                        (and (< (char-code character) 127) (or (alphanumericp character) (find character "_-~"))))
+                      (concatenate 'string base extension)))
+      (replace short (octets (string-upcase base)))
+      (replace short (octets (string-upcase extension)) :start1 8)
+      short)))
+
+(defun alias (name number)
+  (let* ((dot (position #\. name :from-end t))
+         (clean (lambda (text)
+                  (remove-if-not (lambda (character) (and (< (char-code character) 127) (alphanumericp character)))
+                                 (string-upcase text))))
+         (base (funcall clean (subseq name 0 dot)))
+         (extension (if dot (funcall clean (subseq name (1+ dot))) "")))
+    (eight-three (format nil "~A~~~D~@[.~A~]"
+                         (subseq base 0 (min (- 7 (length (princ-to-string number))) (length base))) number
+                         (and (plusp (length extension)) (subseq extension 0 (min 3 (length extension))))))))
+
+(defun utf-16 (name)
+  (loop for character across name
+        for code = (char-code character)
+        if (< code #x10000) collect code
+        else collect (+ #xd800 (ash (- code #x10000) -10)) and collect (+ #xdc00 (logand code #x3ff))))
+
+(defun short-checksum (short)
+  (let ((sum 0))
+    (loop for byte across short
+          do (setq sum (logand (+ (if (oddp sum) #x80 0) (ash sum -1) byte) 255)))
+    sum))
+
+(defun short-record (short what cluster size &optional (small 0))
+  (let ((record (make-array 32 :element-type '(unsigned-byte 8) :initial-element 0)))
+    (replace record short)
+    (setf (aref record 11) what
+          (aref record 12) small
+          (le record 20 2) (ash cluster -16)
+          (le record 26 2) (logand cluster #xffff)
+          (le record 28 4) size)
+    record))
+
+;; The entries that spell a long name out, in the order they have on the
+;; disk: the last 13 characters first.
+(defun long-records (name sum)
+  (let* ((units (utf-16 name))
+         (units (if (zerop (mod (length units) 13)) units (append units (list 0))))
+         (count (ceiling (length units) 13))
+         (records nil))
+    (dotimes (i count records)
+      (let ((record (make-array 32 :element-type '(unsigned-byte 8) :initial-element 0)))
+        (setf (aref record 0) (logior (1+ i) (if (= i (1- count)) #x40 0))
+              (aref record 11) #x0f
+              (aref record 13) sum)
+        (loop for place in '(1 3 5 7 9 14 16 18 20 22 24 28 30)
+              for j from (* 13 i)
+              do (setf (le record place 2) (or (nth j units) #xffff)))
+        (push record records)))))
+
+;; The bytes of a directory that holds ITEMS, whose files and directories
+;; are put on the volume as they come. An item is (name contents . options):
+;; a string or a vector of bytes for a file, a list of items for a
+;; directory, :LABEL for the name of the volume, :DELETED for an entry that
+;; is no longer one. The options: :SMALL, the name is of eight and three
+;; and in small letters by the two bits for it; :BROKEN, its long name was
+;; made for another short name; :PARTIAL, the first part of its long name
+;; is not there; :SIZE and :CLUSTER, what the entry says in place of the
+;; truth; :FROM, the cluster that the file begins in. SELF and
+;; PARENT are the clusters for the two entries that a directory which is
+;; not the root begins with. On the kinds 12 and 16 the upper half of an
+;; entry's first cluster means nothing, and is not left empty here.
+(defun fat-directory (fat items &optional self (parent 0))
+  (let ((records nil) (aliases 0))
+    (when self
+      (push (short-record (octets ".          ") #x10 self 0) records)
+      (push (short-record (octets "..         ") #x10 parent 0) records))
+    (dolist (item items)
+      (destructuring-bind (name contents &key small broken partial size cluster from) item
+        (when from
+          (setf (fat-next fat) from))
+        (if (eq contents :label)
+            (push (short-record (octets (format nil "~11A" name)) #x08 0 0) records)
+            (let* ((plain (eight-three name))
+                   (short (or plain (alias name (incf aliases))))
+                   (long (not (and plain (or small (string= name (string-upcase name))))))
+                   (flags (if small
+                              (+ (if (some #'lower-case-p (subseq name 0 (position #\. name))) 8 0)
+                                 (if (and (position #\. name) (some #'lower-case-p (subseq name (position #\. name))))
+                                     16
+                                     0))
+                              0))
+                   (mine (cond ((eq contents :deleted) nil)
+                               ((listp contents)
+                                (let ((first (car (fat-allocate fat 1))))
+                                  (list (short-record short #x10
+                                                      (fat-store fat (fat-directory fat contents first (or self 0)) first)
+                                                      0))))
+                               (t (let ((bytes (octets contents)))
+                                    (list (short-record short #x20
+                                                        (or cluster (if (zerop (length bytes)) 0 (fat-store fat bytes)))
+                                                        (or size (length bytes)) flags)))))))
+              (when (eq contents :deleted)
+                (setq mine (list (short-record short #x20 0 0))))
+              (unless (= (fat-kind fat) 32)
+                (dolist (record mine)
+                  (setf (le record 20 2) #x00ee)))
+              (when long
+                (setq mine (append (long-records name (logand (+ (short-checksum short) (if broken 1 0)) 255)) mine)))
+              (when partial
+                (setq mine (append (butlast mine 2) (last mine))))
+              (when (eq contents :deleted)
+                (dolist (record mine)
+                  (setf (aref record 0) #xe5)))
+              (dolist (record mine)
+                (push record records))))))
+    (apply #'concatenate '(vector (unsigned-byte 8)) (reverse records))))
+
+;; A volume of a kind, with a tree of files on it. CLUSTERS is how many
+;; clusters it has, which is what makes it the kind it is, and the rest
+;; says how its files lie: from which cluster on, how far apart, in which
+;; direction, with which mark at their end; and ROOT where the directory of
+;; the root begins on the kind 32.
+(defun make-fat-volume (kind tree &key (cluster-sectors 1) clusters (from 2) (stride 1) backwards (end #xfffffff)
+                                    (root 2))
+  (let* ((clusters (or clusters (ecase kind (12 3000) (16 5000) (32 66000))))
+         (reserved (if (= kind 32) 32 1))
+         (root-entries (ecase kind (12 224) (16 512) (32 0)))
+         (root-sectors (ceiling (* 32 root-entries) 512))
+         (table-sectors (ceiling (* (+ clusters 2) kind) (* 8 512)))
+         (data (+ reserved (* 2 table-sectors) root-sectors))
+         (sectors (+ data (* clusters cluster-sectors)))
+         (bytes (make-array (* 512 sectors) :element-type '(unsigned-byte 8) :initial-element 0))
+         (fat (make-fat :kind kind :bytes bytes :cluster-sectors cluster-sectors :reserved reserved
+                        :table-sectors table-sectors :root-sectors root-sectors :data data :clusters clusters
+                        :stride stride :backwards backwards :end end)))
+    (replace bytes '(#xeb #x3c #x90))
+    (replace bytes (octets "CLARATST") :start1 3)
+    (setf (le bytes 11 2) 512
+          (le bytes 13 1) cluster-sectors
+          (le bytes 14 2) reserved
+          (le bytes 16 1) 2
+          (le bytes 17 2) root-entries
+          (le bytes 19 2) (if (< sectors 65536) sectors 0)
+          (le bytes 21 1) #xf8
+          (le bytes 22 2) (if (= kind 32) 0 table-sectors)
+          (le bytes 32 4) (if (< sectors 65536) 0 sectors)
+          (le bytes 510 2) #xaa55)
+    (when (= kind 32)
+      (setf (le bytes 36 4) table-sectors
+            (le bytes 44 4) root))
+    (setf (fat-entry fat 0) #xffffff8
+          (fat-entry fat 1) #xfffffff)
+    (if (= kind 32)
+        (progn
+          (setf (fat-next fat) (max from (1+ root)))
+          (fat-store fat (fat-directory fat tree) root))
+        (progn
+          (setf (fat-next fat) from)
+          (replace bytes (fat-directory fat tree) :start1 (* 512 (+ reserved (* 2 table-sectors))))))
+    fat))
+
+;; A disk with volumes on it. TABLE is :NONE for a disk that is one volume
+;; from end to end, :OLD for a table of partitions in the first sector, and
+;; :NEW for the one behind it. Each volume is (sector . bytes).
+(defun make-disk (table &rest volumes)
+  (if (eq table :none)
+      (cdar volumes)
+      (let* ((end (reduce #'max (mapcar (lambda (volume) (+ (car volume) (floor (length (cdr volume)) 512))) volumes)))
+             (disk (make-array (* 512 (+ end 40)) :element-type '(unsigned-byte 8) :initial-element 0)))
+        (setf (le disk 510 2) #xaa55)
+        (ecase table
+          (:old
+           ;; The first place in the table is empty, and the last is a partition that is none.
+           (setf (le disk (+ 446 48 4) 1) #x83
+                 (le disk (+ 446 48 8) 4) 1)
+           (loop for (first . bytes) in volumes
+                 for entry from (+ 446 16) by 16
+                 do (setf (le disk (+ entry 4) 1) #x0c
+                          (le disk (+ entry 8) 4) first
+                          (le disk (+ entry 12) 4) (floor (length bytes) 512))))
+          (:new
+           (setf (le disk (+ 446 4) 1) #xee
+                 (le disk (+ 446 8) 4) 1
+                 (le disk (+ 446 12) 4) (1- (floor (length disk) 512)))
+           (replace disk (octets "EFI PART") :start1 512)
+           (setf (le disk (+ 512 72) 8) 5
+                 (le disk (+ 512 80) 4) 16
+                 (le disk (+ 512 84) 4) 128)
+           ;; The entries are where the header says, which need not be the sector after it. The first
+           ;; two places are empty; a kind of partition is 16 bytes of anything but zeroes.
+           (loop for (first . bytes) in volumes
+                 for entry from (+ (* 5 512) (* 2 128)) by 128
+                 do (replace disk '(#x28 #x73 #x2a #xc1 #x1f #xf8 #xd2 #x11 #xba #x4b #x00 #xa0 #xc9 #x3e #xc9 #x3b)
+                             :start1 entry)
+                    (setf (le disk (+ entry 32) 8) first
+                          (le disk (+ entry 40) 8) (+ first (floor (length bytes) 512) -1)))))
+        (loop for (first . bytes) in volumes
+              do (replace disk bytes :start1 (* 512 first)))
+        disk)))
+
+(defvar *long-text*   ; some 20 KiB of lines that differ
+  (with-output-to-string (text)
+    (dotimes (i 500)
+      (format text "(defvar *line-~D* \"~A\") ; λ~%" i (make-string (mod (* 7 i) 40) :initial-element #\x)))))
+
+(defvar *binary* (coerce (loop for i below 3000 collect (mod (* 37 i) 256)) '(vector (unsigned-byte 8))))
+
+(defvar *long-name* "a name that is long, of more than thirteen and of more than twenty-six characters.text")
+
+(defvar *tree*
+  `(("CLARA TESTS" :label)
+    ("EFI" (("BOOT" (("BOOTX64.EFI" ,*binary*)))))
+    ("clara" (("boot.lisp" ,*long-text*)
+              ("self-test.lisp" "(car 'not-a-list)")
+              ("gone.lisp" :deleted)
+              (,*long-name* "long")
+              ("thirteen chrs" "13")
+              ("twenty-six characters, yes" "26")
+              ("café λ 🙂.txt" "names from further away")
+              ("readme.txt" "small letters, by two bits" :small t)
+              ("UPPER.txt" "capitals and small letters" :small t)
+              ("EMPTY" "")
+              ("orphan.lisp" "not by that name" :broken t)
+              ("one-cluster" ,(make-string 512 :initial-element #\c))
+              ("two-clusters" ,(make-string 1024 :initial-element #\d))
+              ,@(loop for i below 40 collect (list (format nil "file number ~D.dat" i) (format nil "~D" i)))
+              ("deep" (("deeper" (("deepest.txt" "at the bottom")))))
+              ("a long name without its first part.txt" "in parts" :partial t)))
+    ("notes.txt" "at the root")))
+
+;; What that directory holds, in the order of the names: the file that was
+;; deleted is gone, and the two whose long names are not their own, or not
+;; whole, go by their short ones.
+(defvar *names-in-clara*
+  (substitute "deep/" "deep"
+              (sort (append (list *long-name* "boot.lisp" "self-test.lisp" "thirteen chrs" "twenty-six characters, yes"
+                                  "café λ 🙂.txt" "readme.txt" "UPPER.txt" "EMPTY" "ORPHAN~8.LIS" "one-cluster"
+                                  "two-clusters" "deep" "ALONG~51.TXT")
+                            (loop for i below 40 collect (format nil "file number ~D.dat" i)))
+                    #'string-lessp)
+              :test #'string=))
+
+(defvar *disk* nil) ; the device behind the disk of START-FILES
+
+;; A machine with one disk, and the file system started on it: what START
+;; said.
+(defun start-files (bytes &rest options)
+  (setq *disk* (car (apply #'new-disks (list (list* 3 bytes options)))))
+  (said-by #'clara.disk:start)
+  (said-by #'clara.fat:start))
+
+(defun text-of-file (name)
+  (handler-case (clara.fat:file-text name)
+    (error (condition) (list :error (princ-to-string condition)))))
+
+;; The same tree on volumes of every kind, on disks of every kind, with
+;; clusters of several sizes and files that lie in one piece, in pieces and
+;; back to front.
+(dolist (how '((12 :none 0 "1 MiB") (12 :old 63 "750 KiB" :clusters 1500 :stride 3 :from 330 :end #xffffff8)
+               (12 :new 40 "3 MiB" :cluster-sectors 4 :clusters 1600 :backwards t)
+               (16 :none 0 "2 MiB" :stride 2 :backwards t) (16 :old 2048 "9 MiB" :cluster-sectors 4 :from 2040)
+               (16 :new 34 "2 MiB" :from 2000 :stride 5 :end #xffffff8)
+               (16 :none 0 "32 MiB" :cluster-sectors 16 :clusters 4200 :stride 2)
+               (32 :none 0 "32 MiB" :from 65500) (32 :new 2048 "32 MiB" :stride 4 :backwards t :end #xffffff8 :root 9 :from 12)))
+  (destructuring-bind (kind table first size &rest options) how
+    (let* ((fat (apply #'make-fat-volume kind *tree* options))
+           (said (start-files (make-disk table (cons first (fat-bytes fat)))))
+           (pages (clara.host:allocated-pages)))
+      (check (format nil "files: a FAT~D volume of ~A on the disk 00:03.0, from its sector ~D on~%" kind size first) said)
+      (check (list 1 kind first) (list (length (clara.fat:volumes)) (clara.fat:volume-kind clara.fat:*volume*)
+                                       (clara.fat:volume-first clara.fat:*volume*)))
+      (check '("clara/" "EFI/" "notes.txt") (clara.fat:names "/"))
+      (check '("clara/" "EFI/" "notes.txt") (clara.fat:names ""))
+      (check *names-in-clara* (clara.fat:names "/clara"))
+      (check '("BOOT/") (clara.fat:names "/EFI/"))
+      (check '("deepest.txt") (clara.fat:names "clara/deep//deeper"))
+      (check '(nil nil nil) (list (clara.fat:names "/nothing") (clara.fat:names "/notes.txt")
+                                  (clara.fat:names "/clara/boot.lisp/x")))
+      (check "at the root" (text-of-file "/notes.txt"))
+      (check t (string= *long-text* (text-of-file "/clara/boot.lisp")))
+      (check t (string= *long-text* (text-of-file "CLARA/BOOT.LISP")))       ; in letters of either case
+      (check "at the bottom" (text-of-file "/clara/deep/deeper/deepest.txt"))
+      (check '("long" "13" "26" "names from further away" "small letters, by two bits" "capitals and small letters" "")
+             (mapcar (lambda (name) (text-of-file (concatenate 'string "/clara/" name)))
+                     (list *long-name* "thirteen chrs" "twenty-six characters, yes" "café λ 🙂.txt" "readme.txt"
+                           "upper.TXT" "empty")))
+      (check (list (make-string 512 :initial-element #\c) (make-string 1024 :initial-element #\d) "39")
+             (mapcar #'text-of-file '("/clara/one-cluster" "/clara/two-clusters" "/clara/file number 39.dat")))
+      ;; A file is found by its short name as well, and one whose long name is not its own by that alone.
+      (check '("(car 'not-a-list)" "not by that name" "long" "in parts")
+             (mapcar #'text-of-file '("/clara/SELFTE~2.LIS" "/clara/orphan~8.lis" "/clara/ANAMET~4.TEX"
+                                      "/clara/along~51.txt")))
+      (check '(:error "there is no file /clara/orphan.lisp") (text-of-file "/clara/orphan.lisp"))
+      (check '(:error "there is no file /clara/gone.lisp") (text-of-file "/clara/gone.lisp"))
+      (check '(:error "there is no file /clara/CLARA TESTS") (text-of-file "/clara/CLARA TESTS"))
+      (check '(:error "there is no file /notes.txt/more") (text-of-file "/notes.txt/more"))
+      (check '(:error "/clara is a directory, and not a file") (text-of-file "/clara"))
+      (check '(:error "/ is a directory, and not a file") (text-of-file "/"))
+      (check '(:error "the file /EFI/BOOT/BOOTX64.EFI is not text: what it holds is not UTF-8")
+             (text-of-file "/EFI/BOOT/BOOTX64.EFI"))
+      (check-condition error (clara.fat:file-text 'notes.txt))
+      (check-condition error (clara.fat:entries "/notes.txt"))
+      (check-condition error (clara.fat:entries "/nothing"))
+      ;; What a file holds, as bytes in memory that the caller gives back.
+      (multiple-value-bind (memory size frames) (clara.fat:read-file "/efi/boot/bootx64.efi")
+        (check '(3000 1 t) (list size frames (equalp (memory-bytes memory 3000) *binary*)))
+        (clara.unsafe:free-memory memory frames))
+      (let ((entries (clara.fat:entries "/clara")))
+        (check *names-in-clara* (mapcar (lambda (entry)
+                                          (if (clara.fat:entry-directory-p entry)
+                                              (concatenate 'string (clara.fat:entry-name entry) "/")
+                                              (clara.fat:entry-name entry)))
+                                        entries))
+        (check (list "BOOT~1.LIS" (length (octets *long-text*)) nil)
+               (let ((entry (find "boot.lisp" entries :key #'clara.fat:entry-name :test #'string=)))
+                 (list (clara.fat:entry-short entry) (clara.fat:entry-size entry) (clara.fat:entry-directory-p entry)))))
+      ;; The language is told where its files are, and nothing that was taken is kept.
+      (check '("at the root" ("BOOT/")) (list (funcall (first (clara.host:provided-files)) "/notes.txt")
+                                                (funcall (second (clara.host:provided-files)) "/EFI")))
+      (check pages (clara.host:allocated-pages)))))
+
+;; A volume whose table and directories are not what they should be: each
+;; is an error that says so, and none takes anything else with it.
+(let* ((tree `(("ring" (("inside.txt" "never seen")))
+               ("short.txt" ,(make-string 600 :initial-element #\s) :size 5000)
+               ("nowhere.txt" "x" :cluster 1)
+               ("beyond.txt" "x" :cluster 9999)
+               ("wild.txt" ,(make-string 2000 :initial-element #\w))
+               ("fine.txt" "all is well here")
+               ("trap.txt" ,(short-record (octets "MORE       ") #x20 0 0)))) ; a file that holds what a directory would
+       (fat (make-fat-volume 16 tree)))
+  (setf (fat-entry fat 2) 2)       ; the directory RING, which is the first to get a cluster, leads back into itself
+  (setf (fat-entry fat 6) 1)       ; WILD.TXT has the clusters 6 to 9, and the table goes astray after the first
+  (start-files (fat-bytes fat))
+  (let ((pages (clara.host:allocated-pages)))
+    (check '("beyond.txt" "fine.txt" "nowhere.txt" "ring/" "short.txt" "trap.txt" "wild.txt") (clara.fat:names "/"))
+    (check '(:error "there is no file /trap.txt/more") (text-of-file "/trap.txt/more"))
+    (check nil (clara.fat:names "/trap.txt"))
+    (check-condition error (clara.fat:names "/ring"))
+    (check-condition error (clara.fat:file-text "/ring/inside.txt"))
+    (check '(:error "the file /short.txt is 5000 bytes by its directory, and the table of the volume has fewer for it")
+           (text-of-file "/short.txt"))
+    (check '(:error "a file begins in the cluster 1, and the volume has no such cluster") (text-of-file "/nowhere.txt"))
+    (check '(:error "a file begins in the cluster 9999, and the volume has no such cluster") (text-of-file "/beyond.txt"))
+    (check '(:error "the table of the volume has 1 after the cluster 6, and there is no such cluster")
+           (text-of-file "/wild.txt"))
+    (check "all is well here" (text-of-file "/fine.txt"))
+    (check pages (clara.host:allocated-pages))))
+
+;; How many clusters a volume has is what makes it the kind it is: the
+;; most that each kind can have, and one more.
+(dolist (how '((12 4084) (16 4085) (16 65524) (32 65525)))
+  (let ((text (make-string 1500 :initial-element #\k)))
+    (start-files (fat-bytes (make-fat-volume (first how) `(("kind.txt" ,text)) :clusters (second how) :stride 2)))
+    (check (list (first how) t) (list (clara.fat:volume-kind clara.fat:*volume*) (equal text (text-of-file "/kind.txt"))))))
+
+;; An entry of 12 bits that lies across the end of what is held of the
+;; table: the clusters 2729 to 2731, after a file at the table's beginning.
+(let ((near (make-string 1000 :initial-element #\n)) (far (make-string 1500 :initial-element #\f)))
+  (start-files (fat-bytes (make-fat-volume 12 `(("near.txt" ,near) ("far.txt" ,far :from 2729)))))
+  (check (list near far) (list (text-of-file "/near.txt") (text-of-file "/far.txt"))))
+
+;; A file of more than a mebibyte that lies in one piece is read a mebibyte
+;; at a time.
+(let ((big (make-array 1300000 :element-type '(unsigned-byte 8))))
+  (dotimes (i (length big))
+    (setf (aref big i) (mod (+ i (floor i 1000)) 251)))
+  (start-files (fat-bytes (make-fat-volume 16 `(("big.bin" ,big)) :cluster-sectors 4)))
+  (multiple-value-bind (memory size frames) (clara.fat:read-file "/big.bin")
+    (check '(1300000 318 t) (list size frames (equalp (memory-bytes memory size) big)))
+    (check '(492 2048) (mapcar #'third (subseq (vdev-requests *disk*) 0 2)))
+    (clara.unsafe:free-memory memory frames)))
+
+;; A volume of the kind 32 that keeps one of its tables only, and not the
+;; first, which holds nothing of use.
+(let* ((text (make-string 1500 :initial-element #\m))
+       (fat (make-fat-volume 32 `(("mirror.txt" ,text)) :stride 2))
+       (bytes (fat-bytes fat)))
+  (fill bytes #xff :start (* 512 32) :end (* 512 (+ 32 (fat-table-sectors fat))))
+  (setf (le bytes 40 2) #x81)
+  (start-files bytes)
+  (check text (text-of-file "/mirror.txt")))
+
+;; Two threads at one volume take turns at its table: on a disk that takes
+;; its time, with files so far apart that what is held of the table for the
+;; one is of no use to the other. Threads under SBCL are too quick for one
+;; to catch the other with the table in its hands, so the disk looks as
+;; well: whoever asks it for something has the volume's lock.
+(let ((near (make-string 1400 :initial-element #\n)) (far (make-string 1500 :initial-element #\f)))
+  (start-files (fat-bytes (make-fat-volume 12 `(("near.txt" ,near) ("far.txt" ,far :from 2800)) :stride 2))
+               :delay 0.002)
+  (setf (vdev-watch *disk*)
+        (lambda ()
+          (unless (sb-thread:mutex-owner (clara.fat::volume-lock clara.fat:*volume*))
+            (failed "the file system asked its disk for something without the lock of the volume"))))
+  (check '("far.txt" "near.txt") (clara.fat:names "/"))
+  (check 2 (length (clara.fat:entries "/")))
+  (check '(12 12)
+         (mapcar #'clara:join-thread
+                 (mapcar (lambda (name text)
+                           (clara:make-thread (lambda ()
+                                                (let ((right 0))
+                                                  (dotimes (i 12 right)
+                                                    (when (equal text (text-of-file name))
+                                                      (incf right)))))))
+                         (list "/near.txt" "/far.txt")
+                         (list near far)))))
+(start-files (fat-bytes (make-fat-volume 12 *tree* :stride 3)))
+(check '(40 40)
+       (mapcar #'clara:join-thread
+               (mapcar (lambda (name text)
+                         (clara:make-thread (lambda ()
+                                              (let ((right 0))
+                                                (dotimes (i 40 right)
+                                                  (when (equal text (text-of-file name))
+                                                    (incf right)))))))
+                       (list "/clara/boot.lisp" "/clara/two-clusters")
+                       (list *long-text* (make-string 1024 :initial-element #\d)))))
+
+;; Disks without a volume, and with more than one.
+(flet ((spoilt (offset value)
+         (let ((bytes (copy-seq (fat-bytes (make-fat-volume 12 '(("a.txt" "a")))))))
+           (setf (aref bytes offset) value)
+           bytes)))
+  (dolist (bytes (list (spoilt 510 0)        ; not the two bytes that end a first sector
+                       (spoilt 12 4)         ; sectors of 1024 bytes
+                       (spoilt 13 3)         ; clusters of three sectors
+                       (spoilt 16 0)         ; no table
+                       (spoilt 21 #x10)      ; on nothing that a volume can be on
+                       (spoilt 20 #xff)      ; more sectors than the disk has
+                       (pattern 64)))        ; and nothing of the kind
+    (check (format nil "files: the disk 00:03.0 has no volume that is known here~%~
+                        files: no volume, so LOAD finds what was read as the machine started and nothing else~%")
+           (start-files bytes))
+    (check '(nil nil nil) (list (clara.fat:volumes) clara.fat:*volume* (clara.host:provided-files)))
+    (check nil (clara.fat:names "/"))
+    (check-condition error (clara.fat:file-text "/a.txt"))
+    (check-condition error (clara.fat:entries "/"))))
+(let* ((first (fat-bytes (make-fat-volume 12 '(("first.txt" "on the first")))))
+       (second (fat-bytes (make-fat-volume 16 '(("second.txt" "on the second")))))
+       (said (start-files (make-disk :old (cons 63 first) (cons 8000 second)))))
+  (check (format nil "files: a FAT12 volume of 1 MiB on the disk 00:03.0, from its sector 63 on~%~
+                      files: a FAT16 volume of 2 MiB on the disk 00:03.0, from its sector 8000 on~%~
+                      files: names are looked up on the first of these volumes~%")
+         said)
+  (check '("first.txt") (clara.fat:names "/"))
+  (let ((clara.fat:*volume* (second (clara.fat:volumes))))
+    (check "on the second" (text-of-file "/second.txt"))))
+;; A table of the newer kind that is not one, a partition that begins past
+;; the end of the disk, and a disk that cannot be read.
+(let ((disk (make-disk :new (cons 40 (fat-bytes (make-fat-volume 12 '(("a.txt" "a"))))))))
+  (setf (aref disk 512) 0)
+  (check t (and (search "files: the disk 00:03.0 has no volume that is known here" (start-files disk)) t)))
+(let ((disk (make-disk :old (cons 63 (fat-bytes (make-fat-volume 12 '(("a.txt" "a"))))))))
+  (setf (le disk (+ 446 16 8) 4) 900000)
+  (check t (and (search "files: the disk 00:03.0 has no volume that is known here" (start-files disk)) t)))
+(check t (and (search "files: the disk 00:03.0 could not be looked at: the disk 00:03.0 could not read its sectors 0 to 0"
+                      (start-files (fat-bytes (make-fat-volume 12 '(("a.txt" "a")))) :answer 1))
+              t))
+(new-bus)
+(said-by #'clara.disk:start)
+(check (format nil "files: no volume, so LOAD finds what was read as the machine started and nothing else~%")
+       (said-by #'clara.fat:start))
 
 ;;; The listener, on strings.
 

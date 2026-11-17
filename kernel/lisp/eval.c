@@ -1672,11 +1672,42 @@ lisp lisp_eval(lisp form, lisp env)
     return value;
 }
 
-/* LOAD: the forms of a file, evaluated one after the other. The only
- * files so far are the ones the boot handoff read from the boot volume's
- * \clara directory, and a name finds one whatever the case of its
- * letters. *PACKAGE* is bound meanwhile, so that an IN-PACKAGE in the
- * file ends with the file. An error says where in the file it was. */
+/* LOAD: the forms of a text, evaluated one after the other. *PACKAGE* is
+ * bound meanwhile, so that an IN-PACKAGE in the text ends with it. An
+ * error says where in the text it was, and of which file: its name is a
+ * string that the caller holds. */
+void lisp_load_text(const void *data, size_t size, lisp name)
+{
+    struct lisp_reader r;
+    unsigned bound = g_bound, line, column;
+    lisp form;
+
+    bind_special(lisp_roots.package, lisp_current_package());
+    lisp_reader_init(&r, data, size);
+    while (!g_unwind.to) {
+        enum lisp_read_status status = lisp_read(&r, &form);
+
+        if (status == LISP_READ_END)
+            break;
+        lisp_reader_where(&r, &line, &column);
+        if (status != LISP_READ_OK) {
+            lisp_fail("~Z, at line ~A, column ~A of ~A", r.error, lisp_fixnum(line), lisp_fixnum(column), name);
+            break;
+        }
+        lisp_eval(form, LISP_NIL);
+        /* A condition on its way out of the text, to a handler or to the top level: what it says
+         * from here on says where it was, since whoever prints it is outside the text. */
+        if (g_unwind.to == FAILING || g_unwind.to == HANDLING)
+            lisp_as_condition(g_unwind.tag)->message =
+                text("~A, in the form at line ~A of ~A", g_unwind.tag, lisp_fixnum(line), name);
+    }
+    unbind(bound);
+}
+
+/* The files that the boot handoff read from the boot volume's \clara
+ * directory, before the kernel could read a disk: the Lisp world begins
+ * with them, and LOAD (lisp/boot.lisp) comes back to them for a name that
+ * no file system has. A name finds one whatever the case of its letters. */
 static uint32_t fold(uint32_t c)
 {
     return c >= 'a' && c <= 'z' ? c - ('a' - 'A') : c;
@@ -1686,10 +1717,8 @@ lisp lisp_load(lisp name)
 {
     const struct boot_file *f = g_files;
     const struct lisp_string *s = lisp_as_string(name);
-    struct lisp_reader r;
-    unsigned bound = g_bound, line, column;
+    lisp *base = g_sp;
     uint64_t i;
-    lisp form;
 
     if (!lisp_is(name, LISP_STRING))
         return lisp_fail("LOAD wants the name of a file, in a string, and ~S is not one", name);
@@ -1700,25 +1729,10 @@ lisp lisp_load(lisp name)
             break;
     }
     if (!f)
-        return lisp_fail("LOAD: the boot volume has no file ~S in its \\clara directory", name);
-    bind_special(lisp_roots.package, lisp_current_package());
-    lisp_reader_init(&r, f->data, f->size);
-    while (!g_unwind.to) {
-        enum lisp_read_status status = lisp_read(&r, &form);
-
-        if (status == LISP_READ_END)
-            break;
-        lisp_reader_where(&r, &line, &column);
-        if (status != LISP_READ_OK) {
-            lisp_fail("~Z, at line ~A, column ~A of ~Z", r.error, lisp_fixnum(line), lisp_fixnum(column), f->name);
-            break;
-        }
-        lisp_eval(form, LISP_NIL);
-        if (g_unwind.to == FAILING) /* nothing handles it: what the top level prints says where it was */
-            lisp_as_condition(g_unwind.tag)->message =
-                text("~A, in the form at line ~A of ~Z", g_unwind.tag, lisp_fixnum(line), f->name);
-    }
-    unbind(bound);
+        return lisp_fail("LOAD finds no file ~S: no disk has it, and \\clara had none of that name at boot", name);
+    *g_sp++ = lisp_string_from_utf8(f->name, strlen(f->name)); /* its name as the volume has it */
+    lisp_load_text(f->data, f->size, *base);
+    g_sp = base;
     return lisp_roots.t;
 }
 

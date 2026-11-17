@@ -179,8 +179,29 @@ Devices and storage:
   keyboard and moves the mouse through QEMU's monitor, on four machines
   that take messages in the three ways, and the host tests put a PCI bus
   and a virtio device of their own making in front of the drivers.
-- [ ] **M9 disk and files.** virtio-blk; FAT, so the ESP is the first
-  filesystem; files visible from the REPL.
+- [x] **M9 disk and files** (2026-11-17, version 0.0.13). The driver for
+  virtio's block devices (lisp/disk.lisp): a disk is a row of sectors of
+  512 bytes, read and written a request at a time, into and out of page
+  frames, by a thread that waits for the device's interrupt. The FAT file
+  system, as far as reading it (lisp/fat.lisp): its volumes are found on a
+  disk that is one from end to end, in a table of partitions of the old
+  kind and in a GUID partition table; its tables of 12, 16 and 32 bits;
+  directories with their long names, which are UTF-16, and their short
+  ones; a file by its name, a string with a slash before each part, in
+  letters of either case. So the volume that the firmware boots from is
+  the first whose files can be seen. The language has files
+  (lisp/boot.lisp): `open` and `with-open-file` to read one a line at a
+  time, `probe-file`, `directory` with `*` in its pattern, and `load`,
+  which takes a file from the disk when the file system has it and from
+  what the boot handoff read when not; a file system says that it is there
+  with `clara:provide-files`. An error in a file that is loaded says the
+  file and the line, also when something handles it. `sort`,
+  `string-equal` and `string-lessp`; text in memory becomes a string in
+  one call. The machines of `make test` boot from a virtio disk on both
+  architectures and have a second, empty one that the session writes to
+  and reads back; the host tests put disks and volumes of their own
+  making, of every kind and layout, in front of the two drivers, and a
+  disk there looks at how it is asked.
 - [ ] **M10 images.** Save the heap to disk and boot by resuming it; the
   substrate loads the image instead of the sources.
 
@@ -413,37 +434,103 @@ Infrastructure, for sessions with budget left over:
   an LPI changed without telling the redistributor, which QEMU's looks up
   again every time. Five of the breakages in Lisp were noticed by tests
   that never ended, which is why the host tests end themselves after two
-  minutes now.
+  minutes now. From M9: the session from the disk image, a GUID partition
+  table and a volume of the kind 32 that macOS makes, on AArch64 with
+  4 GiB and four processors and on x86_64; on x86_64 with `-cpu max`,
+  128 MiB and four processors; on AArch64 emulated with `-cpu max`;
+  volumes that macOS made of the kind 12, behind a table of partitions,
+  and of the kind 16, a disk from end to end that cannot be written, as a
+  third and a fourth disk, each listed and a file on each the same as on
+  the boot volume; the kernel's own image, 300 KiB, read from the volume
+  and summed, against the sum on the host; a machine whose boot disk has
+  no driver here (SATA), which says so, loads what the handoff read and
+  finds no file otherwise; devices ahead of the boot disk on AArch64 with
+  the firmware's variables as they were, which boots since the disk has a
+  boot index; tools/stress.txt emulated, 90 s where it was 77; the whole
+  of `make test` in an Ubuntu container, with QEMU 8.2 and SBCL 2.2.9.
+  And the code broken on purpose, 117 ways. The drivers, by the host
+  tests, 87 ways: what a device can do asked for though it has it not,
+  never asked for, read from the wrong half; a read that is a write, the
+  sector left out or in the wrong place, memory and an answer that the
+  device may not write, one sector's memory for several, no look at the
+  end of the disk or at the answer, no lock, a disk written that cannot
+  be, asked again after it went silent, never told that there is work; 12
+  bits with odd and even the wrong way round, an entry across the end of
+  what is held of the table, 4085 and 65525 clusters taken for the kind
+  below and 4084 for the one above, the root, the table and the clusters
+  each a step from where they are, clusters counted from 1; the parts of a
+  long name in the order of the disk, a long name for any short name or
+  with a part missing, a checksum turned the other way, a character at the
+  wrong place; deleted entries, the name of the volume, `.` and `..` kept;
+  the upper half of a first cluster on every kind and on none; clusters
+  taken to lie side by side, no end to one request, a whole cluster read
+  where a file ends, a file one cluster short; names in the order of the
+  disk, by the case of their letters, without the short ones; memory kept
+  in each of the four places that give it back; every look that START has
+  at a first sector and at the two tables of partitions; the upper four
+  bits of 32 kept, one mark only for the end of a file, a root of the kind
+  32 at cluster 2 whatever the volume says, the first table whatever it
+  says; no lock on a volume. The substrate and boot.lisp, by booting, 30
+  ways: text taken for UTF-8 unlooked at, or a byte short; STRING-EQUAL by
+  the case of the letters or without a look at the lengths, STRING-LESSP
+  the other way round; a text loaded without `*package*` bound, with no
+  place for a condition that is handled, a byte short; a world without
+  its disks or without its file system; SORT with its predicate the wrong
+  way round, its halves in the wrong order, without its key; a `*` that is
+  one character, a pattern that fits the beginning of a name, a directory
+  without its slash; PROBE-FILE by the case of the letters; DIRECTORY back
+  to front; OPEN for any direction, CLOSE that closes nothing; LOAD that
+  never asks the file system, or gives its text no name. Eight got
+  through at first, and the tests have what catches each since: a disk
+  that gives up the moment it has to wait, because the disk of the tests
+  answered at once, so that nothing ever waited for an interrupt there (it
+  can take its time now, and can lose its interrupt); a long name without
+  its first part; a file that holds what a directory would, used as one on
+  the way to a name; a GUID partition table whose entries are not in the
+  sector after its header; the upper four bits of an entry of 32 bits; a
+  root of the kind 32 that is not at cluster 2; the lock of a volume,
+  because threads under SBCL are too quick to catch each other with the
+  table in hand (the disk of the tests looks whether who asks it holds the
+  lock); and the page frames that a text keeps when it has been loaded,
+  which no boot looked at, nor at those of READ-FROM-STRING (the
+  evaluator's self-test counts them now). One still gets through and does
+  no harm: LOAD that leaves the name of a boot file on the value stack,
+  since whoever calls a function in C puts the stack back. The tests also
+  found a mistake of their own on the way: the page frames of the machine
+  that lisp/host/ makes up were handed out without a lock, to threads
+  that, unlike those of ClaraOS, run at the same time.
 
 Shortcuts and loose ends, under the milestone that settles each one. A
 session reads its own group before it starts, and whatever it leaves open
 is added here in the same change.
 
-M9:
-
-- A queue's buffers are page frames from `allocate-memory`, which a device
-  can be given because their address is their physical address. An object
-  in the heap cannot be handed to a device, so a disk driver copies between
-  the two, and CLARA.UNSAFE has nothing yet that copies bytes between
-  memory and a string or a vector: a byte at a time from Lisp is slow.
-- lisp/virtio.lisp gives a device one interrupt for all its queues, asks
-  for nothing a device offers beyond version 1 (no indirect descriptors,
-  no event index, no packed queues), never tells a device to hold its
-  interrupts back, and does not look at the bit by which a device says
-  that it has to be started afresh. A device from before version 1 is
-  refused, and so is one that insists on what was not asked for.
-- LOAD finds the files that the boot handoff read from `\clara` and no
-  others, by name, whatever the case of the letters. They arrive in
-  directory order, which no longer matters, since boot.lisp is loaded
-  first and loads what else it wants. A character outside ASCII in a name
-  becomes `?`, so two names can collide; subdirectories are not read, and
-  names that start with a dot are skipped.
-- The boot files stay in loader-data memory for good, because LOAD can be
-  asked for one at any time. Once there are files on a disk, their pages
-  can go to `pmm_free`.
-
 M10:
 
+- Nothing writes a file. `clara.disk:write-sectors` writes sectors, which
+  the session does to a disk of its own, and the file system only reads.
+  An image that the boot handoff is to find is a file on the ESP, so M10
+  has to make one: find clusters that are free, chain them in every copy
+  of the table, and write an entry into a directory, under a name of
+  eight characters and three if it is to do without a long one. The boot
+  volume of `make test` is a directory of the host's that QEMU shows as a
+  disk, and writing to that is asking for trouble: a test that writes
+  files wants a real image for its disk, which tools/mkimage.sh makes on
+  macOS only.
+- A file reaches Lisp as text, in one string, or as page frames
+  (`clara.fat:read-file`), which is what an image wants to be loaded
+  from. Nothing copies the other way, a string or the words of an object
+  into memory, and there is still no vector of bytes: CLARA.UNSAFE got
+  the one function that M9 needed, `memory-string`.
+- The boot handoff still reads every file of `\clara` into loader-data
+  memory, and there they stay: the Lisp world begins with them before any
+  driver runs, LOAD comes back to them for a name that no file system
+  has, and on a machine whose disk has no driver here they are all there
+  is. Their pages were to go to `pmm_free` once there were files on a
+  disk, and did not, for that last reason: an image takes their place.
+  They are found by name, whatever the case of the letters; a character
+  outside ASCII in a name becomes `?`, so two names can collide;
+  subdirectories are not read, and names that start with a dot are
+  skipped.
 - A thread, a lock and an event each hold an address in the kernel's own
   memory in one of their words, and `lisp_roots` holds the events of the
   interrupts: a saved heap has to come back without the first and with
@@ -466,6 +553,74 @@ M10:
   variables as well.
 
 No milestone yet, to be picked up when they start to matter:
+
+- Disks. The block device of virtio is the one disk with a driver: UTM's
+  drive has to be on its VirtIO interface, and with NVMe or USB the
+  machine boots and sees no disk. One request is under way on a disk at a
+  time, and whoever made it waits with the disk's lock: there is no queue
+  of requests, and nothing is read ahead or kept. A disk that leaves a
+  request unanswered for ten seconds (`clara.disk:*patience*`) is asked
+  nothing more until the machine starts again, the request being still in
+  its queue. A sector is 512 bytes; a disk that would rather be asked for
+  larger blocks is not asked what it would like. Nothing tells a disk to
+  put what it holds back on its platters: the driver does not ask for
+  that part of virtio, and a device then has to have written what it
+  answers for, which QEMU's does. A disk that arrives, leaves or changes
+  its size while the machine runs is not noticed.
+- lisp/virtio.lisp gives a device one interrupt for all its queues, asks
+  for what its driver names among the bits 0 to 31 and for nothing else a
+  device offers (no indirect descriptors, no event index, no packed
+  queues), never tells a device to hold its interrupts back, and does not
+  look at the bit by which a device says that it has to be started
+  afresh. A device from before version 1 is refused, and so is one that
+  insists on what was not asked for.
+- Files. FAT is the one file system, and it is read, not written. Names
+  are looked up on the first volume that START found, in the order of the
+  disks on the PCI bus: the kernel does not know which disk it was booted
+  from, and with the boot disk first on the bus, as QEMU and UTM have it,
+  that is the ESP. Another volume is reached by binding
+  `clara.fat:*volume*`, and there is no name that says which volume. A
+  name has no `.` and no `..` in it. Letters match whatever their case as
+  far as ASCII goes, where FAT means every alphabet; a short name outside
+  ASCII is in an alphabet that the volume does not name, and shows as
+  question marks. An entry's dates and its marks for hidden and system
+  files are not read: the `._` files that macOS leaves on a volume show
+  like any other. Every lookup reads its directories from the disk again,
+  whole, and of the table eight sectors are held. A file is read whole,
+  into page frames side by side, so a file larger than the largest run of
+  free frames cannot be read, and there is no reading from the middle of
+  one. Of a volume's tables the first is read, or the one the volume
+  names; a table of partitions of the newer kind is taken as it is, its
+  checksums unread and its second copy unused; partitions inside an
+  extended partition of the old kind are not looked for. What a volume
+  says of its free clusters and of whether it was left in order is not
+  read.
+- Files in the language. A name is a string: there are no pathnames, and
+  where SBCL gives one, from PROBE-FILE and DIRECTORY, there is a string
+  here. OPEN opens for reading and takes `:direction :input` or nothing;
+  the stream it gives has the whole file, read when it was opened, and
+  gives it a line at a time. The errors of files are plain ERRORs, there
+  being no FILE-ERROR. DIRECTORY knows `*`, and in the last part of its
+  pattern only. PROBE-FILE gives the last part of a name as the disk has
+  it and the directories as they were asked for. LOAD looks on the disk
+  first: a file in the root of the volume with the name of a boot file
+  takes its place. SORT takes lists, and STRING-EQUAL and STRING-LESSP two
+  strings and no keywords.
+- The disks of `make test`. The boot volume is QEMU's view of build/esp,
+  a volume of the kind 16 behind a table of partitions of the old kind,
+  the same on all four machines; the kinds 12 and 32 and the GUID
+  partition table are the host tests' to read, on volumes that the tests
+  lay out themselves, and by hand on volumes that macOS made. The second
+  disk is build/scratch-<name>.img, a mebibyte of zeroes that
+  tools/boottest.sh makes anew for every boot, and the only disk a
+  session writes to. A session cannot show all of a directory: on the
+  image that macOS makes there are `._` files beside the others, and the
+  session has to pass there too.
+- The evaluator's self-test must not come near the file system, since
+  its texts are evaluated again from the prompt with a collection at
+  every safe point, where finding one file is thousands of calls. So
+  what OPEN, PROBE-FILE and DIRECTORY do without a file system, on a
+  machine without a disk, is only looked at by hand.
 
 - A device interrupts by message or not at all. One whose interrupt is a
   line cannot be heard: which line goes where is written in the DSDT, in
@@ -523,12 +678,13 @@ No milestone yet, to be picked up when they start to matter:
   after a carriage return, it takes those rows of the character with it
   when it goes.
 - The machines of `make test` have a virtio keyboard, mouse and tablet
-  (tools/run.sh, `INPUT=`). On AArch64 the boot volume is a PCI device,
-  and the firmware keeps its place on the bus in build/vars-aarch64.fd:
-  a device added ahead of it there moves it, the firmware then boots its
-  own shell first, and goes on doing so until that file is deleted. The
-  boot test's keyboard is QEMU's `sendkey`, 0.1 s a key, and a line for
-  it has to fit the 64 events of the device's queue.
+  (tools/run.sh, `INPUT=`). The boot volume is a virtio disk with
+  `bootindex=0`, which the firmware goes by whatever its variables in
+  build/vars-<arch>.fd remember: a device ahead of the disk on the bus
+  used to send the firmware to its own shell until that file was
+  deleted, and no longer does. The boot test's keyboard is QEMU's
+  `sendkey`, 0.1 s a key, and a line for it has to fit the 64 events of
+  the device's queue.
 
 - One Lisp thread at a time has the runtime, and gives it up only at a
   safe point or to wait. The evaluator comes to a safe point at every
@@ -551,8 +707,8 @@ No milestone yet, to be picked up when they start to matter:
   kernel/thread.c are still there and run in the thread self-test at
   every boot; nothing else calls them. They can go, or stay for what
   does not evaluate.
-- A stream takes strings and gives lines. There is no `read-char`, no
-  `read` from a stream, no `with-input-from-string`, no
+- A stream takes strings and gives lines, a file's as well. There is no
+  `read-char`, no `read` from a stream, no `with-input-from-string`, no
   `*error-output*` or `*terminal-io*`, and `write-string` takes no
   `:start` and `:end`. Everything that prints makes a string first, and
   a string stream keeps every string it was given until it is asked for
@@ -572,7 +728,8 @@ No milestone yet, to be picked up when they start to matter:
   rest). What is simply not there: hash tables, which DESIGN.md counts in
   the first subset; `(defun (setf f) ...)`, `macro-function`,
   `symbol-macrolet`, `progv`; `typep`, `typecase`, `check-type`; `elt`,
-  `coerce`, and the functions on strings beyond `string=` and `subseq`.
+  `coerce`, and the functions on strings beyond `string=`,
+  `string-equal`, `string-lessp` and `subseq`.
   FORMAT knows `~A ~S ~D ~%` and `~~`. The functions on sequences take
   lists only, SUBSEQ strings as well, and of their keyword arguments
   `:test`, with `:key` for MEMBER and ASSOC and `:initial-value` for
@@ -759,7 +916,7 @@ No milestone yet, to be picked up when they start to matter:
   machine describes how its devices' interrupt lines are wired.
 - QEMU's hvf has no GIC version 2, which is why `make test` boots AArch64
   a second time, emulated.
-- None of M4 to M8 has been booted in UTM itself. UTM runs AArch64
+- None of M4 to M9 has been booted in UTM itself. UTM runs AArch64
   under hvf with GIC version 3, four processors and 4 GiB, and that was
   checked with Homebrew's QEMU 11 from the disk image; UTM brings QEMU
   10.0 and a display device of its own. Whether its machine takes
@@ -770,7 +927,8 @@ No milestone yet, to be picked up when they start to matter:
   they are added by hand, `-device virtio-keyboard-pci` and
   `-device virtio-tablet-pci` among the machine's QEMU arguments
   (README.md). Without them, and without a serial device, there is
-  nowhere to type.
+  nowhere to type. Its drive has to be on the VirtIO interface for the
+  kernel to see a disk.
 - The screen has glyphs for ASCII only (kernel/font.c). A character
   outside it takes one cell, with the font's sign for a glyph it does not
   have.
@@ -790,7 +948,7 @@ No milestone yet, to be picked up when they start to matter:
   is the longest of the four.
 - `make image` needs macOS (hdiutil), so CI neither builds nor boots the
   disk image that UTM gets.
-- site/boot.png, on the website, is a screenshot of version 0.0.12, to be
+- site/boot.png, on the website, is a screenshot of version 0.0.13, to be
   replaced by hand when the boot report has changed enough to matter:
   build/screen-aarch64.png after `make test` is the same picture of the
   current kernel.

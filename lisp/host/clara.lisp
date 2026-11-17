@@ -23,7 +23,7 @@
            "JOIN-THREAD" "DESTROY-THREAD" "THREAD-YIELD"
            "MAKE-LOCK" "ACQUIRE-LOCK" "RELEASE-LOCK" "WITH-LOCK-HELD"
            "MAKE-EVENT" "SIGNAL-EVENT" "WAIT-EVENT"
-           "MAKE-STREAM" "KEYBOARD-INTERRUPT"))
+           "MAKE-STREAM" "KEYBOARD-INTERRUPT" "PROVIDE-FILES"))
 
 (defpackage "CLARA.UNSAFE"
   (:use "COMMON-LISP")
@@ -32,14 +32,15 @@
            "PORT-8" "PORT-16" "PORT-32"
            "INTERRUPT-EVENT" "FRAMEBUFFER" "SERIAL-DEVICE" "SERIAL-BYTE" "SERIAL-BREAK"
            "TAKE-SCREEN" "GIVE-SCREEN"
-           "MAP-MEMORY" "PCI-CONFIGURATION" "MESSAGE-INTERRUPT" "KEYBOARD-BREAK"))
+           "MAP-MEMORY" "PCI-CONFIGURATION" "MESSAGE-INTERRUPT" "KEYBOARD-BREAK" "MEMORY-STRING"))
 
 (defpackage "CLARA.HOST"
   (:use "COMMON-LISP")
   (:export "RESET-MACHINE" "+MEMORY-BASE+" "MAP-DEVICE" "MAP-PORTS"
            "SET-FRAMEBUFFER" "SET-SERIAL-DEVICE" "SET-SCREEN-CURSOR" "GIVEN-SCREEN"
            "TYPE-BYTES" "RAISE-INTERRUPT" "SERIAL-BREAK-P"
-           "SET-PCI-CONFIGURATION" "SEND-MESSAGE" "MESSAGE-INTERRUPTS" "KEYBOARD-BREAKS"))
+           "SET-PCI-CONFIGURATION" "SEND-MESSAGE" "MESSAGE-INTERRUPTS" "KEYBOARD-BREAKS"
+           "ALLOCATED-PAGES" "PROVIDED-FILES"))
 
 ;;; CLARA: threads
 
@@ -184,6 +185,18 @@
 (defmethod sb-gray:stream-read-char ((stream function-stream))
   (error "~S gives lines, not characters" stream))
 
+;;; CLARA: where files come from
+;;;
+;;; On ClaraOS a file system hands OPEN, LOAD, PROBE-FILE and DIRECTORY its
+;;; two functions with this. SBCL has files of its own behind those, so
+;;; here the two are kept for a test to call.
+
+(defvar *files* nil)
+
+(defun provide-files (&key text names)
+  (setq *files* (if (and text names) (list text names)))
+  nil)
+
 ;;; CLARA.HOST: the machine that is not there
 
 (in-package "CLARA.HOST")
@@ -192,7 +205,9 @@
 (defconstant +memory-size+ #x400000)   ; and how much there is of it
 
 (defvar *memory* (make-array +memory-size+ :element-type '(unsigned-byte 8) :initial-element 0))
-(defvar *allocated* 0)       ; bytes of memory that ALLOCATE-MEMORY has handed out
+(defvar *pages*              ; the page frames that ALLOCATE-MEMORY has handed out and FREE-MEMORY not had back
+  (make-array (floor +memory-size+ 4096) :element-type 'bit :initial-element 0))
+(defvar *pages-lock* (sb-thread:make-mutex :name "pages")) ; threads here run at the same time, as they do not on ClaraOS
 (defvar *devices* nil)       ; (first last read write mapped): registers in memory
 (defvar *mapped* nil)        ; (first . last): what MAP-MEMORY was called for
 (defvar *pci-configuration* nil) ; what PCI-CONFIGURATION gives, as a list, or NIL
@@ -211,7 +226,9 @@
 ;; A machine with empty memory, no devices, no screen, and nothing typed.
 (defun reset-machine ()
   (fill *memory* 0)
-  (setq *allocated* 0 *devices* nil *ports* nil *framebuffer* nil *serial-device* nil
+  (fill *pages* 0)
+  (setf clara::*files* nil)
+  (setq *devices* nil *ports* nil *framebuffer* nil *serial-device* nil
         *screen-cursor* nil *given-screen* nil *typed* nil *interrupts* nil *serial-break* t
         *mapped* nil *pci-configuration* nil *messages* nil *keyboard-breaks* 0)
   nil)
@@ -263,6 +280,15 @@
 
 (defun keyboard-breaks ()
   *keyboard-breaks*)
+
+;; How many page frames are handed out: a driver that gives back what it
+;; takes leaves this as it was.
+(defun allocated-pages ()
+  (count 1 *pages*))
+
+;; What CLARA:PROVIDE-FILES was given last: the two functions, or NIL.
+(defun provided-files ()
+  clara::*files*)
 
 ;; A device writes DATA to ADDRESS: the interrupt that MESSAGE-INTERRUPT
 ;; handed out with those two is raised. A message that nobody asked for is
@@ -372,14 +398,28 @@
             (if (logbitp (- width 1 x) (aref bits (+ start row))) one zero))))
   nil)
 
+;; Page frames side by side, all zeroes, the lowest that are free: and
+;; what is given back has to have come from here, once.
 (defun allocate-memory (pages)
-  (let ((address (+ clara.host:+memory-base+ clara.host::*allocated*)))
-    (clara.host::memory-index address (* pages 4096))
-    (incf clara.host::*allocated* (* pages 4096))
-    address))
+  (sb-thread:with-mutex (clara.host::*pages-lock*)
+    (let* ((map clara.host::*pages*)
+           (first (and (plusp pages)
+                       (loop for start from 0 to (- (length map) pages)
+                             when (not (find 1 map :start start :end (+ start pages))) return start))))
+      (unless first
+        (error "there are no ~D page frames side by side to be had" pages))
+      (fill map 1 :start first :end (+ first pages))
+      (let ((index (* first 4096)))
+        (fill clara.host::*memory* 0 :start index :end (+ index (* pages 4096)))
+        (+ clara.host:+memory-base+ index)))))
 
 (defun free-memory (address pages)
-  (clara.host::memory-index address (* pages 4096))
+  (sb-thread:with-mutex (clara.host::*pages-lock*)
+    (let ((first (floor (clara.host::memory-index address (* pages 4096)) 4096)))
+      (unless (and (zerop (mod address 4096)) (plusp pages)
+                   (not (find 0 clara.host::*pages* :start first :end (+ first pages))))
+        (error "#x~(~X~) is not the address of ~D page frames that were handed out" address pages))
+      (fill clara.host::*pages* 0 :start first :end (+ first pages))))
   nil)
 
 (defun interrupt-event (source)
@@ -435,3 +475,11 @@
 (defun keyboard-break ()
   (incf clara.host::*keyboard-breaks*)
   nil)
+
+;; The text that some bytes of memory are: UTF-8, or it is an error.
+(defun memory-string (address bytes)
+  (let ((index (clara.host::memory-index address bytes)))
+    (handler-case (sb-ext:octets-to-string clara.host::*memory* :start index :end (+ index bytes)
+                                                                  :external-format :utf-8)
+      (error ()
+        (error "the ~D bytes at #x~(~X~) are not text: they are not UTF-8" bytes address)))))

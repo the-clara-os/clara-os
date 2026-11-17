@@ -50,7 +50,7 @@ x86_64)
     exec qemu-system-x86_64 -machine q35 -m "$mem" \
         -drive if=pflash,format=raw,readonly=on,file="$code" \
         -drive if=pflash,format=raw,file="$vars" \
-        -drive format=raw,file="$esp_file" $input \
+        -drive if=none,id=esp,format=raw,file="$esp_file" -device virtio-blk-pci,drive=esp,bootindex=0 $input \
         -serial "$serial" -no-reboot "$@"
     ;;
 aarch64)
@@ -66,7 +66,7 @@ aarch64)
     exec qemu-system-aarch64 -machine virt -accel "$accel" -cpu "$cpu" -m "$mem" \
         -drive if=pflash,format=raw,readonly=on,file="$code" \
         -drive if=pflash,format=raw,file="$vars" \
-        -drive if=none,id=esp,format=raw,file="$esp_file" -device virtio-blk-pci,drive=esp $input \
+        -drive if=none,id=esp,format=raw,file="$esp_file" -device virtio-blk-pci,drive=esp,bootindex=0 $input \
         -device ramfb -serial "$serial" -no-reboot "$@"
     ;;
 *)

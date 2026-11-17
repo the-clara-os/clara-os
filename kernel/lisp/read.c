@@ -731,6 +731,18 @@ lisp lisp_string_from_utf8(const void *text, size_t size)
     return string;
 }
 
+/* How many bytes of a text are UTF-8, from its beginning: all of them, or
+ * as far as the first that is not. */
+size_t lisp_utf8_length(const void *text, size_t size)
+{
+    struct lisp_reader r;
+
+    lisp_reader_init(&r, text, size);
+    while (next(&r) >= 0)
+        ;
+    return (size_t)(r.at - r.text);
+}
+
 /* The line and the column of r->where, counted from 1. A column is a
  * character. */
 void lisp_reader_where(const struct lisp_reader *r, unsigned *line, unsigned *column)

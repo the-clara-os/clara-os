@@ -446,3 +446,25 @@ LISP_PRIMITIVE(lisp_p_keyboard_break)
     console_break_now();
     return NIL;
 }
+
+/* (memory-string address bytes): the text that those bytes of memory are,
+ * as a string. Text outside the heap is UTF-8 (DESIGN.md), a file's on a
+ * disk for one, and this is how its driver hands it to Lisp in one piece.
+ * Bytes that are not UTF-8 are an error, which says where they stop being
+ * it. */
+LISP_PRIMITIVE(lisp_p_memory_string)
+{
+    uint64_t addr, bytes, text;
+
+    (void)argc;
+    if (!number(argv[0], &addr) || !number(argv[1], &bytes) || !mapped(addr, bytes))
+        return NIL;
+    text = lisp_utf8_length((const void *)(uintptr_t)addr, bytes);
+    if (text != bytes)
+        return lisp_fail("the ~A bytes at ~X are not text: after ~A of them they are no longer UTF-8", argv[1], argv[0],
+                         lisp_fixnum((int64_t)text));
+    if (!lisp_heap_room(1 + (bytes + 1) / 2)) /* a character to the byte at most */
+        return lisp_fail_as("STORAGE-CONDITION", NULL, 0, "the heap is full: there is no room for ~A bytes of text",
+                            argv[1]);
+    return lisp_string_from_utf8((const void *)(uintptr_t)addr, bytes);
+}
