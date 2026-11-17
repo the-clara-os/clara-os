@@ -16,6 +16,7 @@ static uint64_t g_frames;  /* how many frames the bitmap covers */
 static uint64_t g_free;    /* how many of them are free */
 static uint64_t g_lowest;  /* every frame below this index is in use */
 static struct lock g_lock; /* one thread at a time in pmm_alloc and pmm_free */
+static const struct boot_info *g_boot; /* for the firmware's memory map, which says what is RAM */
 
 static const char *const type_names[EfiMaxMemoryType] = {
     "reserved",           "loader code",  "loader data",  "boot services code",
@@ -59,6 +60,7 @@ void pmm_init(const struct boot_info *bi)
     uint64_t pages[EfiMaxMemoryType] = {0}, other = 0;
     uint64_t low = ~0ULL, high = 0, ram = 0, start;
 
+    g_boot = bi;
     /* What the map holds, and how far RAM extends. */
     for (uint64_t i = 0; i < regions; i++) {
         const EFI_MEMORY_DESCRIPTOR *d = efi_region(bi->memory_map, bi->desc_size, i);
@@ -114,7 +116,9 @@ void pmm_init(const struct boot_info *bi)
     kprintf("page-frame bitmap: %llu KiB at %p\n", bitmap_pages << 2, (void *)g_bitmap);
 }
 
-static uint64_t alloc(uint64_t pages)
+/* A run starts at a frame whose address is a multiple of align, a power of
+ * two of bytes, or not at all. */
+static uint64_t alloc(uint64_t pages, uint64_t align)
 {
     uint64_t run = 0;
 
@@ -123,7 +127,7 @@ static uint64_t alloc(uint64_t pages)
     while (g_lowest < g_frames && in_use(g_lowest))
         g_lowest++;
     for (uint64_t i = g_lowest; i < g_frames; i++) {
-        if (in_use(i)) {
+        if (in_use(i) || (!run && ((g_first + i) << PAGE_SHIFT) & (align - 1))) {
             run = 0;
             continue;
         }
@@ -142,8 +146,17 @@ static uint64_t alloc(uint64_t pages)
  * cleared. */
 uint64_t pmm_alloc(uint64_t pages)
 {
+    return pmm_alloc_aligned(pages, PAGE_SIZE);
+}
+
+/* The same, for memory that a device wants at an address with more zeroes
+ * at its end than a page frame's has. */
+uint64_t pmm_alloc_aligned(uint64_t pages, uint64_t align)
+{
+    if (align < PAGE_SIZE || (align & (align - 1)))
+        panic("pmm_alloc_aligned: %llx is not a power of two of whole page frames", align);
     lock_acquire(&g_lock);
-    uint64_t addr = alloc(pages);
+    uint64_t addr = alloc(pages, align);
     lock_release(&g_lock);
     return addr;
 }
@@ -172,6 +185,23 @@ void pmm_free(uint64_t addr, uint64_t pages)
 uint64_t pmm_free_frames(void)
 {
     return g_free;
+}
+
+/* The bitmap covers everything from the lowest frame of RAM to the highest,
+ * holes included, and a hole is where a machine keeps its devices. So the
+ * firmware's map is asked, which the handoff kept. */
+int pmm_is_ram(uint64_t addr)
+{
+    uint64_t regions = g_boot->memory_map_size / g_boot->desc_size;
+
+    for (uint64_t i = 0; i < regions; i++) {
+        const EFI_MEMORY_DESCRIPTOR *d = efi_region(g_boot->memory_map, g_boot->desc_size, i);
+
+        if (efi_is_ram(d->Type) && addr >= d->PhysicalStart &&
+            addr - d->PhysicalStart < d->NumberOfPages << PAGE_SHIFT)
+            return 1;
+    }
+    return 0;
 }
 
 /* Fill frames with a pattern that is different in every word and for every
@@ -216,9 +246,9 @@ void pmm_reclaim(const struct boot_info *bi)
  * boot that reaches its last line has passed. */
 void pmm_selftest(void)
 {
-    enum { RUN = 256 };
+    enum { RUN = 256, ALIGNED = 16 };
     uint64_t before = g_free;
-    uint64_t one = pmm_alloc(1), run = pmm_alloc(RUN), other = pmm_alloc(1);
+    uint64_t one = pmm_alloc(1), run = pmm_alloc(RUN), other = pmm_alloc(1), first, second;
 
     if (!one || !run || !other || g_free != before - RUN - 2)
         panic("pmm self-test: could not allocate %u frames out of %llu", RUN + 2, before);
@@ -237,6 +267,24 @@ void pmm_selftest(void)
     pmm_free(one, 1);
     pmm_free(run, RUN);
     pmm_free(other, 1);
+
+    /* Runs that begin at a multiple of 64 KiB. A frame is taken between
+     * the two, so that the lowest free frame is not at such an address
+     * both times. */
+    first = pmm_alloc_aligned(ALIGNED, ALIGNED * PAGE_SIZE);
+    one = pmm_alloc(1);
+    second = pmm_alloc_aligned(ALIGNED, ALIGNED * PAGE_SIZE);
+    if (!first || !one || !second || ((first | second) & (ALIGNED * PAGE_SIZE - 1)) ||
+        g_free != before - 2 * ALIGNED - 1)
+        panic("pmm self-test: runs for a multiple of %llu KiB came out at %llx and %llx", (ALIGNED * PAGE_SIZE) >> 10,
+              first, second);
+    pattern(first, ALIGNED, 0x5555555555555555ULL, 0);
+    pattern(second, ALIGNED, 0x6666666666666666ULL, 0);
+    pattern(first, ALIGNED, 0x5555555555555555ULL, 1);
+    pattern(second, ALIGNED, 0x6666666666666666ULL, 1);
+    pmm_free(first, ALIGNED);
+    pmm_free(one, 1);
+    pmm_free(second, ALIGNED);
     if (g_free != before)
         panic("pmm self-test: %llu frames free at the end, %llu at the start", g_free, before);
     if (pmm_alloc(g_free + 1))

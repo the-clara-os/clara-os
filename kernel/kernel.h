@@ -5,7 +5,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define CLARA_VERSION "0.0.11"
+#define CLARA_VERSION "0.0.12"
 
 #define PAGE_SHIFT 12
 #define PAGE_SIZE  (1ULL << PAGE_SHIFT)
@@ -68,6 +68,7 @@ void console_serial_only(void); /* leave the screen alone from now on */
 int  console_getc(void);          /* the next byte typed on the serial port, or -1: the reader does the waiting */
 void console_tick(void);          /* from the timer's interrupt: take in what has arrived on the serial port */
 extern volatile int console_break; /* Ctrl-C has arrived there, and nobody has acted on it yet */
+void console_break_now(void);     /* Ctrl-C has been typed somewhere else: on a keyboard, which has a driver in Lisp */
 struct thread;
 void console_break_wakes(struct thread *t); /* and this thread is woken when it does */
 int  console_interrupted(void);   /* for a computation that can stop: has it? Asked once, it is acted on */
@@ -89,6 +90,8 @@ const uint8_t *font_glyph(char c); /* FONT_HEIGHT bytes, one per scanline, leftm
  * which is why they are numbers and not pointers. */
 void     pmm_init(const struct boot_info *bi);
 uint64_t pmm_alloc(uint64_t pages);  /* adjacent frames, lowest first; 0 when no run is long enough */
+uint64_t pmm_alloc_aligned(uint64_t pages, uint64_t align); /* the same, at a multiple of align bytes, a power of two */
+int      pmm_is_ram(uint64_t addr);  /* does the firmware's map call the page frame at addr memory? */
 void     pmm_free(uint64_t addr, uint64_t pages);
 void     pmm_selftest(void);
 void     pmm_reclaim(const struct boot_info *bi); /* boot-services memory, once the processor uses none of it */
@@ -200,6 +203,28 @@ void arch_interrupts_init(void);
 void arch_interrupts_on(void);
 int  arch_interrupts_off(void); /* says whether they were on */
 void arch_wait(void);         /* sleep until an interrupt arrives: for the idle thread, which waits for nothing else */
+
+/* interrupt.c: interrupts from devices. A PCI device asks for attention by
+ * writing a number to an address, a message (MSI, MSI-X), and the
+ * interrupt controller makes an interrupt of the write. No wire is
+ * involved, so nothing has to be known about how the machine is wired. */
+#define INTERRUPT_SOURCES 32  /* how many such interrupts there can be */
+struct interrupt_message {
+    uint64_t address;         /* where the device has to write */
+    uint32_t data;            /* and what */
+};
+/* A message for the PCI device at that bus, device and function (8, 5 and
+ * 3 bits of one number) to send: handler is called with the number of the
+ * source, which is also what this returns, whenever the message arrives.
+ * -1 when the machine has no controller for messages that the kernel
+ * knows, -2 when there are no more to be had. Only from a thread. */
+int  interrupt_message(uint32_t device, void (*handler)(unsigned source), struct interrupt_message *m);
+void interrupt_deliver(unsigned source); /* from the architecture's handler: the message of that source has arrived */
+/* arch/<arch>/interrupt.c again: what takes messages on this machine, in
+ * words, or NULL when nothing does; and the message that arrives as
+ * interrupt_deliver(source), or 0 when the controller cannot be told. */
+extern const char *arch_message_controller;
+int  arch_message(uint32_t device, unsigned source, struct interrupt_message *m);
 
 /* arch/<arch>/entry.S: probes. Each tries one access and returns 0 when it
  * went through; when it faults, the exception handler makes it return 1. */

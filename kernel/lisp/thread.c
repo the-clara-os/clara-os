@@ -617,7 +617,7 @@ LISP_PRIMITIVE(lisp_p_serial_break)
  * on. An interrupt that arrives while the last one has not been waited for
  * is not counted again: the event says that the source wants attention,
  * as an interrupt line does. */
-static const char *const sources[LISP_INTERRUPTS] = { "TIMER", "SERIAL" };
+static const char *const sources[LISP_INTERRUPT_MESSAGE] = { "TIMER", "SERIAL" };
 
 void lisp_interrupt(enum lisp_interrupt source)
 {
@@ -635,7 +635,7 @@ void lisp_interrupt(enum lisp_interrupt source)
 LISP_PRIMITIVE(lisp_p_interrupt_event) /* :TIMER, a hundred times a second, or :SERIAL, when bytes have arrived */
 {
     (void)argc;
-    for (unsigned i = 0; i < LISP_INTERRUPTS; i++)
+    for (unsigned i = 0; i < LISP_INTERRUPT_MESSAGE; i++)
         if (argv[0] == lisp_symbol_in(lisp_roots.keyword, sources[i], 1)) {
             if (!lisp_is(lisp_roots.interrupts[i], LISP_EVENT)) {
                 struct lisp_event *e = lisp_alloc(LISP_EVENT, 0);
@@ -646,6 +646,51 @@ LISP_PRIMITIVE(lisp_p_interrupt_event) /* :TIMER, a hundred times a second, or :
             return lisp_roots.interrupts[i];
         }
     return lisp_wants("a source of interrupts, :TIMER or :SERIAL", argv[0]);
+}
+
+/* A device's interrupt. A PCI device raises one by writing a number to an
+ * address, a message, and the interrupt controller says which number and
+ * which address (kernel/interrupt.c): the driver puts both into the device.
+ * (message-interrupt device) takes the bus, device and function of the
+ * device, 8, 5 and 3 bits of one number, and gives three values: the event
+ * that the interrupt signals, the address, and the number. An interrupt
+ * that was handed out stays handed out. */
+static void message_arrived(unsigned source)
+{
+    lisp_interrupt((enum lisp_interrupt)(LISP_INTERRUPT_MESSAGE + source));
+}
+
+LISP_PRIMITIVE(lisp_p_message_interrupt)
+{
+    static const char digits[] = "0123456789abcdef";
+    char name[] = "PCI 00:00.0";
+    struct interrupt_message m;
+    struct lisp_event *e;
+    int64_t device = lisp_fixnum_value(argv[0]);
+    int source;
+
+    (void)argc;
+    if (!lisp_is_fixnum(argv[0]) || device < 0 || device > 0xffff)
+        return lisp_wants("the bus, device and function of a PCI device, as one number of 16 bits", argv[0]);
+    source = interrupt_message((uint32_t)device, message_arrived, &m);
+    if (source == -1)
+        return lisp_fail("nothing in this machine takes a device's message for an interrupt");
+    if (source < 0)
+        return lisp_fail("there is no interrupt left for the device ~X: ~Z hands out ~A, and not every device can have one",
+                         argv[0], arch_message_controller, lisp_fixnum(INTERRUPT_SOURCES));
+    name[4] = digits[device >> 12 & 0xf];
+    name[5] = digits[device >> 8 & 0xf];
+    name[7] = digits[device >> 7 & 0x1];
+    name[8] = digits[device >> 3 & 0xf];
+    name[10] = digits[device & 0x7];
+    e = lisp_alloc(LISP_EVENT, 0);
+    e->name = lisp_string_from_utf8(name, sizeof name - 1);
+    lisp_roots.interrupts[LISP_INTERRUPT_MESSAGE + source] = (lisp)(uintptr_t)e | LISP_TAG_OBJECT;
+    lisp_values.count = 3;
+    lisp_values.value[0] = lisp_roots.interrupts[LISP_INTERRUPT_MESSAGE + source];
+    lisp_values.value[1] = lisp_fixnum((int64_t)m.address);
+    lisp_values.value[2] = lisp_fixnum(m.data);
+    return lisp_values.value[0];
 }
 
 /* (wait-event event [milliseconds]): T once the event has been signalled,

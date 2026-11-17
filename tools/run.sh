@@ -5,6 +5,9 @@
 #        (mon:stdio, the default, hands Ctrl-C to the kernel, which stops a
 #        computation with it; Ctrl-A X leaves QEMU. With stdio, Ctrl-C ends QEMU.)
 #        DISK=build/claraos.img (boot the raw image instead of the ESP directory)
+#        INPUT="-device virtio-keyboard-pci ..." (the keyboard and the pointers the
+#        machine gets; the default is a virtio keyboard, mouse and tablet, and
+#        INPUT= gives a machine with none of them)
 set -eu
 arch=${1:?usage: tools/run.sh <x86_64|aarch64> [qemu args]}
 shift
@@ -12,6 +15,7 @@ esp=${ESP:-build/esp}
 share=${QEMU_SHARE:-/opt/homebrew/share/qemu}
 serial=${SERIAL:-mon:stdio}
 mem=${MEM:-512M}
+input=${INPUT--device virtio-keyboard-pci -device virtio-mouse-pci -device virtio-tablet-pci}
 mkdir -p build
 
 # EDK2 firmware is two flash images: the code, which is read-only, and a
@@ -34,9 +38,9 @@ firmware() {
 }
 
 if [ -n "${DISK:-}" ]; then
-    esp_drive="-drive format=raw,file=$DISK"
+    esp_file=$DISK
 else
-    esp_drive="-drive format=raw,file=fat:rw:$esp"
+    esp_file=fat:rw:$esp
 fi
 
 case "$arch" in
@@ -46,7 +50,7 @@ x86_64)
     exec qemu-system-x86_64 -machine q35 -m "$mem" \
         -drive if=pflash,format=raw,readonly=on,file="$code" \
         -drive if=pflash,format=raw,file="$vars" \
-        $esp_drive \
+        -drive format=raw,file="$esp_file" $input \
         -serial "$serial" -no-reboot "$@"
     ;;
 aarch64)
@@ -56,10 +60,13 @@ aarch64)
     if [ "$(uname -m)" = arm64 ] && [ -z "${NO_HVF:-}" ]; then
         accel=hvf cpu=host
     fi
+    # The boot volume is a PCI device on this machine, and the firmware
+    # remembers its place on the bus in the variable store: named before
+    # the keyboard and the pointers, it stays where it was without them.
     exec qemu-system-aarch64 -machine virt -accel "$accel" -cpu "$cpu" -m "$mem" \
         -drive if=pflash,format=raw,readonly=on,file="$code" \
         -drive if=pflash,format=raw,file="$vars" \
-        $esp_drive \
+        -drive if=none,id=esp,format=raw,file="$esp_file" -device virtio-blk-pci,drive=esp $input \
         -device ramfb -serial "$serial" -no-reboot "$@"
     ;;
 *)

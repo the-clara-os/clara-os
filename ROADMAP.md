@@ -159,9 +159,26 @@ The Lisp runtime, in the substrate:
 
 Devices and storage:
 
-- [ ] **M8 PCIe and virtio.** ECAM from ACPI MCFG, PCI enumeration in Lisp,
-  the virtio transport, virtio-input for keyboard and mouse (UTM provides
-  both on both architectures).
+- [x] **M8 PCIe and virtio** (2026-11-16, version 0.0.12). The PCI bus, in
+  Lisp (lisp/pci.lisp): the configuration space is where the ACPI MCFG
+  table says, and every device on the first bus and behind its bridges is
+  found and listed. A device's registers are mapped where they are, by a
+  function of CLARA.UNSAFE. Devices interrupt by message (MSI-X) and never
+  by a line: the substrate hands a driver an event, an address and a
+  number (kernel/interrupt.c), from whichever of three controllers the
+  machine has, the local APIC on x86_64, a GICv2m frame or the GIC's
+  interrupt translation service on AArch64, and the interrupts' handlers
+  are a table. The virtio transport of version 1 (lisp/virtio.lisp): the
+  opening moves, and queues of buffers that driver and device share. On
+  it, the driver for virtio's input devices (lisp/input.lisp): a thread
+  for each device, the keys of a US keyboard as characters, with Shift,
+  Ctrl, Caps Lock and keys that repeat while they are held, and one
+  pointer that mice and tablets move. The console reads the keyboard along
+  with the serial port, and shows a cursor while it reads a line. Page
+  frames can be asked for at an aligned address. `make test` types on the
+  keyboard and moves the mouse through QEMU's monitor, on four machines
+  that take messages in the three ways, and the host tests put a PCI bus
+  and a virtio device of their own making in front of the drivers.
 - [ ] **M9 disk and files.** virtio-blk; FAT, so the ESP is the first
   filesystem; files visible from the REPL.
 - [ ] **M10 images.** Save the heap to disk and boot by resuming it; the
@@ -177,7 +194,8 @@ The world:
   two Lisp applications, loaded and unloaded while the system runs.
 
 Later, in no order: a compiler written in Lisp; virtio-net and TCP/IP;
-outline fonts; sound; CLOS.
+outline fonts; sound; CLOS; a USB keyboard and mouse, which is what UTM
+gives a machine that is not told otherwise.
 
 The website, <https://claraos.org>, is built from this file by
 site/build.py: the milestone list above, with its version numbers, is what
@@ -345,51 +363,75 @@ Infrastructure, for sessions with budget left over:
   kernel's texts: a lock that wakes nobody and a lock that anybody can
   take, because the threads of the text never ran at the same time;
   `thread-yield` gives the processor up since, not only the runtime.
+  From M8: the session on x86_64 with `-cpu max`, 128 MiB and four
+  processors, and with 4 GiB; on AArch64 from the disk image with 4 GiB
+  and four processors, and emulated with `-cpu max`; tools/stress.txt on
+  x86_64, 52 s; a keyboard behind a PCI bridge (`-device pcie-root-port`),
+  on x86_64 and with the ITS, where the device's number is 256; a machine
+  with a keyboard and nothing else, and one with no input device at all
+  (`INPUT=`), which says so and reads the serial port; a machine that
+  takes no messages (`-machine gic-version=3,its=off`, emulated), where
+  each input device is given up with the reason; a tablet's pen moved
+  through QMP (`input-send-event` with `abs` events: the monitor that the
+  boot test types at has only moves of a mouse), on both architectures; a
+  key held for a second and a half (`sendkey a 1500`), which types 29
+  times; the whole of `make test` in an Ubuntu container, with QEMU 8.2
+  and SBCL 2.2.9, where the stress boot takes a minute. And the code
+  broken on purpose, 104 ways. The substrate, by booting: an aligned run
+  that begins anywhere; a map of the firmware's in which nothing is
+  memory; a message with the next vector, the next interrupt, the next
+  event or the next LPI in it, to a processor that is not there, or to
+  the wrong register of a frame or of the ITS; vectors, a frame's
+  interrupts and LPIs that are acknowledged and go nowhere; a source
+  whose handler is not called, every device given the first source, the
+  event of the next source signalled, an event that is not kept where the
+  handler looks; registers mapped read-only, not mapped at all, memory
+  taken for a device, a mapping where the heap is; the configuration
+  space a page further on; a break from the keyboard that does nothing,
+  or wakes nobody; drivers that are loaded and never started, or loaded
+  in the wrong order; a frame's interrupt left as one of a level, or
+  never switched on; an ITS without its collection, its queue, its tables
+  or its switch, a device it is not told about, an LPI that is switched
+  off, LPIs switched off as a whole, interrupt numbers of 13 bits. The
+  Lisp files, by the host tests: 65 ways, among them an empty place read
+  as zero, one function to a device, nothing behind a bridge, a list of
+  capabilities without an end, half an address, messages never switched
+  on or written to the wrong entry; a device that is not started afresh,
+  asked for everything, taken though it is too old or does not agree; a
+  queue of the wrong size, without its switch or its message, descriptors
+  that do not chain, that are used twice or never free again, counts that
+  do not go round; Shift, Ctrl and Caps Lock each wrong in two ways, keys
+  that stay held or never repeat, buffers that do not go back to the
+  device, a pointer off the screen, a button that stays down, a tablet
+  whose least place is taken for 0; Ctrl-C from the keyboard always or
+  never a character, the serial port read ahead of the keyboard, a cursor
+  that shows when nobody reads, moves up with a row, or stays. Three got
+  through, all in the substrate, and for a reason outside it: a frame's
+  interrupt that is bound for no processor (GIC version 2) or routed
+  nowhere in particular (version 3), because the firmware had sent every
+  shared interrupt to the processor that boots before the kernel did, and
+  an LPI changed without telling the redistributor, which QEMU's looks up
+  again every time. Five of the breakages in Lisp were noticed by tests
+  that never ended, which is why the host tests end themselves after two
+  minutes now.
 
 Shortcuts and loose ends, under the milestone that settles each one. A
 session reads its own group before it starts, and whatever it leaves open
 is added here in the same change.
 
-M8:
-
-- The console has no cursor and no keyboard. A line can be typed on the
-  serial port, with backspace for all its editing (lisp/console.lisp),
-  and what is typed is echoed on the screen.
-- A Lisp thread can wait for two interrupts, the timer's and the one that
-  says bytes have arrived on the serial port, and their names are a list
-  in kernel/lisp/thread.c. A device's interrupt needs a number to ask for
-  it by, and the table of handlers below.
-- CLARA.UNSAFE reaches what the substrate has mapped and nothing else:
-  RAM, the screen, the UART. There is no function yet that maps a
-  device's registers, which the first driver for a PCI device will want.
-- A write through CLARA.UNSAFE to memory that is mapped read-only is a
-  fault that stops the machine; only an address where nothing is mapped
-  is caught and made an error. `memory-64` gives an error for a value
-  that does not fit in a fixnum, 62 bits and a sign: a driver reads such
-  a register as two halves.
-- No interrupt arrives for a character on the serial port. The timer's
-  tick takes in what the port holds, so a character waits up to 10 ms,
-  and what arrives meanwhile has to fit in the UART's FIFO: 16
-  characters on the PL011, or 32, by its revision, and 14 on the 16550
-  as it is set up. QEMU holds the rest back; a real serial line would
-  lose it. What has been taken in and not read waits in 256 bytes, and a
-  Ctrl-C behind more typing than that is not seen until some of it has
-  been read.
-- Whether to keep GIC version 2 at all is best decided here, when device
-  interrupts would have to be written and tested for both versions. UTM
-  never uses version 2; QEMU's virt machine has it unless told otherwise,
-  and it costs `make test` a third boot, emulated.
-- No device interrupt can arrive yet. On x86_64 every I/O APIC pin is
-  masked and nothing can unmask one; a device that signals through MSI
-  needs only a vector, and nothing hands vectors out. On AArch64
-  `gic_enable` has only ever switched on a private interrupt: the path
-  for a shared one, through the distributor, is written and has never
-  run, and the trigger mode ACPI gives for an interrupt is not applied.
-- The architecture's handler tells interrupts apart with an `if`. The
-  second source needs a table of handlers.
-
 M9:
 
+- A queue's buffers are page frames from `allocate-memory`, which a device
+  can be given because their address is their physical address. An object
+  in the heap cannot be handed to a device, so a disk driver copies between
+  the two, and CLARA.UNSAFE has nothing yet that copies bytes between
+  memory and a string or a vector: a byte at a time from Lisp is slow.
+- lisp/virtio.lisp gives a device one interrupt for all its queues, asks
+  for nothing a device offers beyond version 1 (no indirect descriptors,
+  no event index, no packed queues), never tells a device to hold its
+  interrupts back, and does not look at the bit by which a device says
+  that it has to be started afresh. A device from before version 1 is
+  refused, and so is one that insists on what was not asked for.
 - LOAD finds the files that the boot handoff read from `\clara` and no
   others, by name, whatever the case of the letters. They arrive in
   directory order, which no longer matters, since boot.lisp is loaded
@@ -424,6 +466,69 @@ M10:
   variables as well.
 
 No milestone yet, to be picked up when they start to matter:
+
+- A device interrupts by message or not at all. One whose interrupt is a
+  line cannot be heard: which line goes where is written in the DSDT, in
+  a bytecode the kernel has no interpreter for, so the pins of the I/O
+  APICs stay masked. MSI-X is what the PCI code knows, and plain MSI is
+  not. There are 32 interrupts for devices, and one that was handed out
+  is never given back. With an ITS: the kernel takes a device's number
+  there to be its bus, device and function, which the IORT table could
+  say otherwise and is not read; a device has 32 events, 16 devices can
+  have any, and every event goes to the one processor. Of several GICv2m
+  frames the first is used. The trigger mode that ACPI gives for the
+  timer's interrupt is still not applied.
+- GIC version 2 stays (it was to be decided at M8). Its GICv2m frame is
+  how a device interrupts under Apple's hypervisor too, where the GIC is
+  of version 3, and the emulated boot with version 2 is the only one that
+  takes that way on CI, which has no hypervisor: without it the frame
+  would go untested there.
+- No interrupt arrives for a character on the serial port. The timer's
+  tick takes in what the port holds, so a character waits up to 10 ms,
+  and what arrives meanwhile has to fit in the UART's FIFO: 16
+  characters on the PL011, or 32, by its revision, and 14 on the 16550
+  as it is set up. QEMU holds the rest back; a real serial line would
+  lose it. What has been taken in and not read waits in 256 bytes, and a
+  Ctrl-C behind more typing than that is not seen until some of it has
+  been read.
+- CLARA.UNSAFE. A write to memory that is mapped read-only is a fault
+  that stops the machine; only an address where nothing is mapped is
+  caught and made an error. `memory-64` gives an error for a value that
+  does not fit in a fixnum, 62 bits and a sign: a driver reads such a
+  register as two halves. `map-memory` maps a device where it is, so one
+  whose registers lie at 64 TiB or above cannot be mapped: those are the
+  heap's addresses, and on x86_64 the lower half of the address space
+  ends at 128 TiB anyway. The firmware puts 64-bit registers that high
+  when the processor has 47 or more bits of physical address, and no
+  machine at hand has. What was mapped stays mapped, and nothing checks
+  that an address belongs to a device, only that it is not memory.
+- The PCI bus. Only the first range of buses of segment 0 is looked at.
+  The addresses of a device's registers are the ones the firmware gave
+  it, and a device the firmware left without any has none; nothing sizes
+  a base address register. Bridges lead where the firmware numbered the
+  buses. A device that arrives or leaves while the machine runs is not
+  noticed. Registers behind I/O ports are told apart and not used.
+- Keyboards and pointers. The keys type what a keyboard of the United
+  States has on them, and nothing else can be chosen. Alt, the arrows
+  and the function keys type nothing, so a line is still edited with
+  Backspace alone. Caps Lock has no light: the queue that would carry it
+  to the device is not set up. A mouse's wheel is ignored, and nothing
+  draws the pointer, whose place is kept for whoever asks. Every device
+  costs a Lisp thread, a megabyte of stack and 644 KiB. `clara.input:start`
+  is for the boot: called again, it opens the devices afresh and leaves
+  the old threads and their memory behind.
+- The console reads the keyboard ahead of the serial port: what is typed
+  on both at once is not read in the order it was typed. Its cursor is a
+  bar in the two lowest rows of a cell, and when it sits on a character,
+  after a carriage return, it takes those rows of the character with it
+  when it goes.
+- The machines of `make test` have a virtio keyboard, mouse and tablet
+  (tools/run.sh, `INPUT=`). On AArch64 the boot volume is a PCI device,
+  and the firmware keeps its place on the bus in build/vars-aarch64.fd:
+  a device added ahead of it there moves it, the firmware then boots its
+  own shell first, and goes on doing so until that file is deleted. The
+  boot test's keyboard is QEMU's `sendkey`, 0.1 s a key, and a line for
+  it has to fit the 64 events of the device's queue.
 
 - One Lisp thread at a time has the runtime, and gives it up only at a
   safe point or to wait. The evaluator comes to a safe point at every
@@ -654,13 +759,18 @@ No milestone yet, to be picked up when they start to matter:
   machine describes how its devices' interrupt lines are wired.
 - QEMU's hvf has no GIC version 2, which is why `make test` boots AArch64
   a second time, emulated.
-- None of M4, M5, M6a, M6b, M6c and M7 has been booted in UTM itself. UTM runs AArch64
+- None of M4 to M8 has been booted in UTM itself. UTM runs AArch64
   under hvf with GIC version 3, four processors and 4 GiB, and that was
   checked with Homebrew's QEMU 11 from the disk image; UTM brings QEMU
-  10.0 and a display device of its own. A virtual machine there has no
-  serial device unless one is added (README.md), and without one the
-  kernel waits at its prompt for good: there is nowhere else to type
-  until M8.
+  10.0 and a display device of its own. Whether its machine takes
+  messages through a GICv2m frame, as Homebrew's does under hvf, or
+  through an ITS, is not known; the kernel drives both. UTM gives a
+  machine a USB keyboard, mouse and tablet, for which there is no driver:
+  the roadmap had it that UTM provides virtio's, and it does not unless
+  they are added by hand, `-device virtio-keyboard-pci` and
+  `-device virtio-tablet-pci` among the machine's QEMU arguments
+  (README.md). Without them, and without a serial device, there is
+  nowhere to type.
 - The screen has glyphs for ASCII only (kernel/font.c). A character
   outside it takes one cell, with the font's sign for a glyph it does not
   have.
@@ -680,7 +790,7 @@ No milestone yet, to be picked up when they start to matter:
   is the longest of the four.
 - `make image` needs macOS (hdiutil), so CI neither builds nor boots the
   disk image that UTM gets.
-- site/boot.png, on the website, is a screenshot of version 0.0.11, to be
+- site/boot.png, on the website, is a screenshot of version 0.0.12, to be
   replaced by hand when the boot report has changed enough to matter:
   build/screen-aarch64.png after `make test` is the same picture of the
   current kernel.

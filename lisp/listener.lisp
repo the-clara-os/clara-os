@@ -7,8 +7,9 @@
 ;;;; line of text and nothing more.
 ;;;;
 ;;;; It reads from *STANDARD-INPUT* and writes to *STANDARD-OUTPUT*, which
-;;;; on ClaraOS are the console (lisp/console.lisp). Under SBCL the tests
-;;;; in lisp/host/ run it on strings.
+;;;; on ClaraOS are the console (lisp/console.lisp): what is typed on the
+;;;; serial port, or on a keyboard. Under SBCL the tests in lisp/host/ run
+;;;; it on strings.
 
 (defpackage "CLARA.LISTENER"
   (:use "COMMON-LISP")
@@ -61,7 +62,7 @@
       (progn
         (fresh-line)
         (format t "error: ~A~%" condition))
-      (write-line "clara: reading from the serial port: a form typed there is evaluated, Ctrl-C stops it, Ctrl-D ends"))
+      (write-line "clara: reading the serial port and the keyboard: a form is evaluated, Ctrl-C stops it, Ctrl-D ends"))
   (let ((text ""))
     (loop
       (write-string (if (zerop (length text)) "> " "  "))

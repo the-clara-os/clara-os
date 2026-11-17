@@ -6,7 +6,8 @@
 ;;;; UART whose registers are I/O ports on one machine and memory on the
 ;;;; other, and the screen is a framebuffer, memory with 32 bits to the
 ;;;; pixel. Typing arrives as an interrupt, which is an event that this
-;;;; file waits for.
+;;;; file waits for, and from the driver of a keyboard, when the machine
+;;;; has one (lisp/input.lisp).
 ;;;;
 ;;;; The substrate has a console of its own (kernel/console.c, fbcon.c),
 ;;;; which prints the boot report before there is a Lisp to run this, and
@@ -20,7 +21,8 @@
 
 (defpackage "CLARA.CONSOLE"
   (:use "COMMON-LISP")
-  (:export "START" "STOP" "WRITE-TEXT" "READ-TEXT-LINE" "USE-SERIAL" "USE-SCREEN" "MAKE-CONSOLE-STREAM"))
+  (:export "START" "STOP" "WRITE-TEXT" "READ-TEXT-LINE" "USE-SERIAL" "USE-SCREEN" "MAKE-CONSOLE-STREAM"
+           "KEY-TYPED"))
 (in-package "CLARA.CONSOLE")
 
 ;;; The serial port
@@ -91,6 +93,8 @@
 (defvar *row* 0)
 (defvar *ink* 0)        ; the pixel of a glyph,
 (defvar *paper* 0)      ; and the pixel around it
+(defvar *reading* nil)  ; a line is being read: the cursor shows, and Ctrl-C gives the line up
+(defvar *cursor* nil)   ; the address of the cursor that is on the screen, or NIL when none is
 
 ;; An 8-bit colour channel, moved to the bits of a pixel that MASK selects.
 (defun channel (mask value)
@@ -178,6 +182,29 @@
          (draw code)
          (setq *column* (1+ *column*)))))
 
+;;; The cursor
+;;;
+;;; While a line is being read, a bar under the cell where the next
+;;; character goes says where that is: the lowest two rows of the cell's
+;;; pixels, in ink. It is taken away before anything is drawn and put back
+;;; after, so it never moves up with a row. At the end of a row that is
+;;; full there is no cell for it, and it does not show.
+
+(defun paint-cursor (address pixel)
+  (clara.unsafe:fill-memory-32 address clara.font:+width+ pixel)
+  (clara.unsafe:fill-memory-32 (+ address *pitch*) clara.font:+width+ pixel))
+
+(defun hide-cursor ()
+  (when *cursor*
+    (paint-cursor *cursor* *paper*)
+    (setq *cursor* nil)))
+
+(defun show-cursor ()
+  (when (and *screen* *reading* (< *column* *columns*))
+    (setq *cursor* (+ *top* (* (- (* (1+ *row*) clara.font:+height+) 2) *pitch*)
+                      *left* (* *column* clara.font:+width+ 4)))
+    (paint-cursor *cursor* *ink*)))
+
 ;;; Writing
 ;;;
 ;;; A string goes to both, a character at a time, and no other thread's
@@ -187,11 +214,13 @@
 
 (defun write-text (string)
   (clara:with-lock-held (*lock*)
+    (hide-cursor)
     (dotimes (i (length string))
       (let ((code (char-code (char string i))))
         (serial-send-character code)
         (when *screen*
-          (show code)))))
+          (show code))))
+    (show-cursor))
   string)
 
 ;;; Reading
@@ -202,13 +231,42 @@
 ;;; the last character back, a tab counts as a space, and the other control
 ;;; characters are dropped. Ctrl-D at the start of a line means that no
 ;;; more is coming, and Ctrl-C anywhere gives the line up.
+;;;
+;;; A keyboard has a driver of its own, which hands in the characters that
+;;; are typed on it, KEY-TYPED. They are read along with the bytes of the
+;;; serial port, whichever is there first.
 
 (defconstant +line-limit+ 4096) ; characters in a line; what is typed past that is dropped
+(defconstant +keys-limit+ 1024) ; characters from a keyboard that wait to be read; what is typed past that is dropped
 
-(defvar *typed* nil)        ; the event that says bytes have arrived
+(defvar *typed* nil)        ; the event that says bytes have arrived, or keys
+(defvar *keys* nil)         ; the codes of the characters typed on a keyboard and not read yet, the oldest first
+(defvar *keys-lock* (clara:make-lock "keys"))
 (defvar *after-return* nil) ; the last line ended with a carriage return: a line feed right after it is its other half
 (defvar *stream* nil)       ; where what is typed is echoed
 (defvar *rubout* (concatenate 'string (string #\Backspace) " " (string #\Backspace)))
+
+;; From the driver of a keyboard: the character with this code was typed.
+;; Ctrl-C does there what it does on the serial port. While a line is
+;; being read it is a character like the others, which gives the line up;
+;; at any other time it is no character at all, and stops what the thread
+;; that reads from the console is computing.
+(defun key-typed (code)
+  (if (and (= code 3) (not *reading*))
+      (clara.unsafe:keyboard-break)
+      (progn
+        (clara:with-lock-held (*keys-lock*)
+          (when (< (length *keys*) +keys-limit+)
+            (setq *keys* (append *keys* (list code)))))
+        (when *typed*
+          (clara:signal-event *typed*))))
+  code)
+
+(defun next-key ()
+  (clara:with-lock-held (*keys-lock*)
+    (let ((code (car *keys*)))
+      (setq *keys* (cdr *keys*))
+      code)))
 
 (defun next-byte ()
   (loop
@@ -217,12 +275,19 @@
         (return byte)))
     (clara:wait-event *typed*)))
 
-;; The code of the next character that was typed. What is typed is UTF-8;
-;; a byte that cannot begin a character is passed over.
+;; The code of the next character that was typed: on a keyboard, or else
+;; on the serial port. What is typed there is UTF-8; a byte that cannot
+;; begin a character is passed over.
 (defun next-code ()
   (loop
-    (let ((byte (next-byte)))
-      (cond ((< byte #x80) (return byte))
+    (let ((key (and *keys* (next-key))))
+      (when key
+        (return key)))
+    (let ((byte (clara.unsafe:serial-byte)))
+      (cond ((null byte)
+             (clara:wait-event *typed*))
+            ((< byte #x80)
+             (return byte))
             ((>= byte #xc0)
              (let ((more (cond ((< byte #xe0) 1) ((< byte #xf0) 2) (t 3)))
                    (code (logand byte (cond ((< byte #xe0) #x1f) ((< byte #xf0) #x0f) (t #x07)))))
@@ -264,10 +329,17 @@
 ;; The next line that was typed, without its end, or NIL when no more is
 ;; coming. While a line is being read, Ctrl-C is a byte like the others,
 ;; which gives the line up; at any other time it stops what the thread is
-;; computing (CLARA.UNSAFE:SERIAL-BREAK says which).
+;; computing (CLARA.UNSAFE:SERIAL-BREAK says which, and *READING* says it
+;; to KEY-TYPED). The cursor shows for as long.
 (defun read-text-line ()
   (let ((computing (clara.unsafe:serial-break nil)))
+    (setq *reading* t)
+    (clara:with-lock-held (*lock*)
+      (show-cursor))
     (unwind-protect (read-typed-line)
+      (setq *reading* nil)
+      (clara:with-lock-held (*lock*)
+        (hide-cursor))
       (clara.unsafe:serial-break computing))))
 
 ;;; The stream that is both
@@ -294,6 +366,7 @@
 ;; Hand the screen back to the substrate, for its last line.
 (defun stop ()
   (when *screen*
+    (hide-cursor)
     (clara.unsafe:give-screen *row* *column*)
     (setq *screen* nil))
   nil)

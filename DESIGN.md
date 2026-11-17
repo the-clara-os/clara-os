@@ -488,6 +488,49 @@ architectures (kernel/vm.c).
   to have its stand-in. What they cannot say is whether the interpreter
   runs the files: that is what the boots are for.
 
+## Devices (decided in M8, 2026-11-16)
+
+- Devices are found, not assumed. The firmware's MCFG table says where
+  the configuration space of the PCI devices is in memory, and Lisp reads
+  it from there (lisp/pci.lisp): what is on the first bus, and what is
+  behind every bridge. The firmware has been there before and has given
+  each device addresses for its registers; they are taken as they are.
+- A driver is Lisp, all of it, and the substrate gives it four things
+  through CLARA.UNSAFE: where the configuration space is; a device's
+  registers as memory, mapped at their own address like everything else;
+  page frames whose address is their physical address, for what driver
+  and device share; and an interrupt as an event to wait for.
+- A device interrupts by sending a message: it writes a number to an
+  address, and the interrupt controller makes an interrupt of the write
+  (MSI-X). It never does so by a line. Which line of which controller a
+  device is wired to is written in the DSDT, in ACPI's bytecode, and an
+  interpreter for that is a larger thing than everything here that takes
+  messages; a message needs no wiring to be known. The price is paid on
+  AArch64, where what takes a message is one of two things, a GICv2m
+  frame or the interrupt translation service with its tables and its
+  queue of commands, and the kernel has to drive both: QEMU has the one
+  under Apple's hypervisor and with GIC version 2, and the other when it
+  emulates version 3. On x86_64 it is the local APIC, and nothing needs
+  setting up. A device that cannot send messages cannot interrupt.
+- The substrate keeps a table of the interrupts it has handed out
+  (kernel/interrupt.c), and all a handler does is signal the event of its
+  source. The driver is a thread that waits for the event, which is what
+  M7 decided for every interrupt that reaches Lisp.
+- Virtio is the one family of devices with drivers (lisp/virtio.lisp):
+  version 1 of it, over PCI, with queues of the plain kind and nothing
+  that a device merely offers. One file has what every virtio device has
+  in common, the opening moves and the queues, and a file for each kind
+  of device has the rest.
+- A keyboard's driver turns keys into characters and hands them to the
+  console, where they are read along with what the serial port brings.
+  Mice and tablets move one pointer, whose place is kept for whoever
+  asks: the window manager will. Each device has a thread of its own.
+- A driver is tested twice. Under SBCL, against a device that the tests
+  make up, registers, queues and messages and all, which is where its
+  logic is looked at closely; and by booting, where `make test` types on
+  QEMU's keyboard and moves its mouse, which says that the real device,
+  the interrupt controller and the interpreter agree with the tests.
+
 ## Conventions
 
 - C: lower_snake_case for functions and files. Kernel-wide symbols carry

@@ -81,6 +81,8 @@ error: the heap is full: there is no room for an object that large
 error: interrupted from the keyboard
 > (list (fact 5) 'still 'here)
 (120 STILL HERE)
+> (defvar *threads* (length (clara:all-threads)))
+*THREADS*
 > (defvar *jobs* 0)
 *JOBS*
 > (let ((lock (clara:make-lock)))
@@ -105,8 +107,8 @@ error: the thread #<THREAD "spinner"> was stopped
 > (clara:wait-event (clara:make-event))
 ^C
 error: interrupted from the keyboard
-> (list (clara:current-thread) (length (clara:all-threads)))
-(#<THREAD "listener"> 1)
+> (list (clara:current-thread) (- (length (clara:all-threads)) *threads*))
+(#<THREAD "listener"> 0)
 > (let ((page (clara.unsafe:allocate-memory 1)))
     (setf (clara.unsafe:memory-32 page) #xC1A4A)
     (prog1 (list (clara.unsafe:memory-8 page) (clara.unsafe:memory-16 page))
@@ -127,6 +129,29 @@ T
 (HERE)
 > (list "café" #\λ (char-code #\λ))
 ("café" #\λ 955)
+> (list (clara.pci:location (car (clara.pci:devices))) (clara.pci:description (car (clara.pci:devices))))
+("00:00.0" "a host bridge")
+> (list 'keyboards 'and 'pointers (length (clara.input:devices)))
+(KEYBOARDS AND POINTERS 3)
+^K
+> (+ 40 2)
+42
+^K
+> "Key"
+"Key"
+> (do () (nil))
+^M sendkey ctrl-c
+error: interrupted from the keyboard
+> (sleep 100)
+^M sendkey ctrl-c
+error: interrupted from the keyboard
+> (multiple-value-bind (x y) (clara.input:pointer)
+    (loop (clara:wait-event (clara.input:pointer-changed))
+          (multiple-value-bind (x1 y1 buttons) (clara.input:pointer)
+            (when (and (= buttons 1) (/= x1 x)) (return (list (- x1 x) (- y1 y) buttons))))))
+^M mouse_move 30 20
+^M mouse_button 1
+(30 20 1)
 > (defpackage "PLAY" (:use "COMMON-LISP") (:export "BALL"))
 #<PACKAGE "PLAY">
 > (in-package "PLAY")

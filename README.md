@@ -9,7 +9,7 @@ understood from the first instruction up. It is not a Unix and does not try
 to run Linux software. The kernel is its own UEFI application: the firmware
 loads `BOOTX64.EFI` or `BOOTAA64.EFI`, and from `efi_main` on it is ClaraOS.
 
-Status: milestone 7. Both architectures boot under QEMU with EDK2 firmware
+Status: milestone 8. Both architectures boot under QEMU with EDK2 firmware
 (the same firmware and machine types UTM uses), read their boot files from
 the ESP, and take the machine from the firmware. From then on they use
 nothing of the firmware's: they run on their own stack, page tables and
@@ -31,7 +31,12 @@ driver written in Lisp: it sends to the serial port, draws on the screen
 and puts together the lines that are typed. The listener, Lisp as well,
 reads the forms typed there, evaluates each one and prints what it gives;
 a mistake is answered with what went wrong, a computation that does not
-end is stopped with Ctrl-C, and the prompt comes back. The same Lisp files
+end is stopped with Ctrl-C, and the prompt comes back. The devices on the
+PCI bus are found and listed, and the ones that speak virtio have drivers,
+in Lisp as well: a keyboard, a mouse and a tablet so far, which interrupt
+by message through whatever the machine has for that, the local APIC, a
+GICv2m frame or the GIC's translation service. What is typed on the
+keyboard is read like what arrives on the serial port. The same Lisp files
 load under SBCL on the host, where they are tested against a machine that
 is made up for the purpose.
 [ROADMAP.md](ROADMAP.md) has what comes next, [DESIGN.md](DESIGN.md) the
@@ -57,8 +62,8 @@ Then, on either:
                       # wait for the kernel's last line, save build/screen-<arch>.png;
                       # AArch64 boots twice, once for each version of its interrupt controller,
                       # and once more with the Lisp collector running at every chance it has
-    make run-aarch64  # QEMU window, serial on the terminal: type a form there; Ctrl-C stops a form that
-                      # does not end, Ctrl-D ends the session, Ctrl-A X leaves QEMU;
+    make run-aarch64  # QEMU window, serial on the terminal: type a form in either; Ctrl-C stops a form
+                      # that does not end, Ctrl-D ends the session, Ctrl-A X in the terminal leaves QEMU;
                       # hvf-accelerated on Apple silicon
     make run-x86_64   # same, emulated (TCG), so the firmware takes a few seconds
     make image        # build/claraos.img, a GPT + FAT32 raw disk for UTM; needs macOS
@@ -82,10 +87,14 @@ Layout:
    of memory is plenty.
 3. Remove the drive UTM created. Drives, Import, pick `build/claraos.img`
    (VirtIO or NVMe interface, either works).
-4. Add a Serial device with mode "Built-in Terminal": the kernel talks there,
-   and it is the only place to type until there is a keyboard driver.
-5. Start. The display and the serial window both show the boot report,
-   which ends at a prompt. A form typed in the serial window,
+4. Add a Serial device with mode "Built-in Terminal": the kernel talks
+   there, and a form can be typed there.
+5. For a keyboard in the display's own window: UTM gives a machine USB
+   devices, which ClaraOS has no driver for, so add virtio's by hand.
+   QEMU, Arguments, two new ones: `-device virtio-keyboard-pci` and
+   `-device virtio-tablet-pci`.
+6. Start. The display and the serial window both show the boot report,
+   which ends at a prompt. A form typed in either,
    `(mapcar #'1+ '(1 2 3))` say, is evaluated, and what it gives is printed
    on both. Ctrl-C stops a form that does not end, `(loop)` for one, and
    the prompt comes back. Ctrl-D ends it, and the kernel halts with
