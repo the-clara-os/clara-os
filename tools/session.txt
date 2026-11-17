@@ -152,6 +152,37 @@ error: interrupted from the keyboard
 ^M mouse_move 30 20
 ^M mouse_button 1
 (30 20 1)
+> (list (directory "/e*") (directory "/clara/b*.LISP") (directory "/nowhere/*"))
+(("/EFI/") ("/clara/boot.lisp") NIL)
+> (list (probe-file "/CLARA/Listener.lisp") (probe-file "/clara") (probe-file "/clara/nothing.lisp"))
+("/CLARA/listener.lisp" "/clara/" NIL)
+> (with-open-file (in "/clara/self-test.lisp") (list (read-line in) (read-line in)))
+(";;;; self-test.lisp: a file with a mistake in it, for the evaluator's" ";;;; self-test to load")
+> (load "/clara/listener.lisp")
+T
+> (load "/clara/self-test.lisp")
+error: CAR wants a list, and NOT-A-LIST is not one, in the form at line 15 of /clara/self-test.lisp
+> (load "/clara/nothing.lisp")
+error: LOAD finds no file "/clara/nothing.lisp": no disk has it, and \clara had none of that name at boot
+> (directory "/efi/boot/boot*")
+("/efi/boot/BOOTAA64.EFI" "/efi/boot/BOOTX64.EFI")
+> (let ((entry (find-if (lambda (entry) (string= (clara.fat:entry-name entry) "boot.lisp")) (clara.fat:entries "/clara"))))
+    (list (clara.fat:entry-directory-p entry) (> (clara.fat:entry-size entry) 30000)))
+(NIL T)
+> (clara.fat:file-text "/EFI/BOOT/bootx64.efi")
+error: the file /EFI/BOOT/bootx64.efi is not text: what it holds is not UTF-8
+> (open "/EFI")
+error: /EFI is a directory, and not a file
+> (let* ((disk (car (last (clara.disk:disks)))) (page (clara.unsafe:allocate-memory 1)))
+    (setf (clara.unsafe:memory-32 page) #xC1A4A)
+    (clara.disk:write-sectors disk 2047 1 page)
+    (setf (clara.unsafe:memory-32 page) 0)
+    (clara.disk:read-sectors disk 2047 1 page)
+    (prog1 (list (clara.disk:disk-sectors disk) (clara.unsafe:memory-32 page))
+      (clara.unsafe:free-memory page 1)))
+(2048 793162)
+> (handler-case (clara.disk:read-sectors (car (last (clara.disk:disks))) 2047 2 0) (error () 'no-such-sectors))
+NO-SUCH-SECTORS
 > (defpackage "PLAY" (:use "COMMON-LISP") (:export "BALL"))
 #<PACKAGE "PLAY">
 > (in-package "PLAY")

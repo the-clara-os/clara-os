@@ -484,6 +484,46 @@ PRIMITIVE(p_string_same)
     return boolean(b && equal(a, b));
 }
 
+/* The same without regard to the case of a letter, of the letters of
+ * ASCII: that is all the folding this Lisp does. (string-lessp a b) is
+ * where the two first differ, when a is the one that comes first in the
+ * alphabet there, or ends there; NIL when it does not come first. */
+static uint32_t upper(uint32_t c)
+{
+    return c >= 'a' && c <= 'z' ? c - ('a' - 'A') : c;
+}
+
+PRIMITIVE(p_string_equal)
+{
+    lisp a = string_of(argv[0]), b = a ? string_of(argv[1]) : 0;
+    uint64_t length = b ? lisp_length(lisp_as_string(a)->header) : 0;
+
+    if (!b || length != lisp_length(lisp_as_string(b)->header))
+        return NIL;
+    for (uint64_t i = 0; i < length; i++)
+        if (upper(lisp_as_string(a)->chars[i]) != upper(lisp_as_string(b)->chars[i]))
+            return NIL;
+    return T;
+}
+
+PRIMITIVE(p_string_lessp)
+{
+    lisp a = string_of(argv[0]), b = a ? string_of(argv[1]) : 0;
+    uint64_t la, lb, i;
+
+    if (!b)
+        return NIL;
+    la = lisp_length(lisp_as_string(a)->header);
+    lb = lisp_length(lisp_as_string(b)->header);
+    for (i = 0; i < la && i < lb; i++) {
+        uint32_t x = upper(lisp_as_string(a)->chars[i]), y = upper(lisp_as_string(b)->chars[i]);
+
+        if (x != y)
+            return x < y ? lisp_fixnum((int64_t)i) : NIL;
+    }
+    return la < lb ? lisp_fixnum((int64_t)la) : NIL;
+}
+
 PRIMITIVE(p_string_append)
 {
     uint64_t length = 0, at = 0;
@@ -1185,6 +1225,31 @@ PRIMITIVE(p_read_from_string)
     return form;
 }
 
+/* (%load-text text name): the forms of a text, evaluated one after the
+ * other, for LOAD (lisp/boot.lisp) when a file system has the file: it
+ * hands the file over as a string. The reader wants UTF-8, so the string
+ * is written out in page frames here as well. */
+PRIMITIVE(p_load_text)
+{
+    struct bytes text = { NULL, 0 };
+    uint64_t memory, pages;
+
+    if (!lisp_is(argv[0], LISP_STRING))
+        return lisp_wants("a string", argv[0]);
+    if (!lisp_is(argv[1], LISP_STRING))
+        return lisp_wants("a string", argv[1]);
+    lisp_princ(argv[0], bytes_put, &text);
+    pages = text.length / PAGE_SIZE + 1;
+    if (!(memory = pmm_alloc(pages)))
+        return no_room();
+    text.at = phys_ptr(memory);
+    text.length = 0;
+    lisp_princ(argv[0], bytes_put, &text);
+    lisp_load_text(text.at, text.length, argv[1]);
+    pmm_free(memory, pages);
+    return T;
+}
+
 /* Conditions. One is a type, a symbol that DEFINE-CONDITION gave parents
  * and slots (lisp/boot.lisp), what it says to a person, and the values of
  * its slots. */
@@ -1363,6 +1428,8 @@ const struct lisp_primitive lisp_primitives[] = {
     { "CODE-CHAR", p_code_char, 1, 1 },
     { "STRING", p_string, 1, 1 },
     { "STRING=", p_string_same, 2, 2 },
+    { "STRING-EQUAL", p_string_equal, 2, 2 },
+    { "STRING-LESSP", p_string_lessp, 2, 2 },
     { "%STRING-APPEND", p_string_append, 0, LISP_MANY },
     { "CHAR", p_char, 2, 2 },
     { "SCHAR", p_char, 2, 2 },
@@ -1402,6 +1469,8 @@ const struct lisp_primitive lisp_primitives[] = {
     { "EVAL", p_eval, 1, 1 },
     { "MACROEXPAND-1", p_macroexpand_1, 1, 1 },
     { "LOAD", p_load, 1, 1 },
+    { "%LOAD", p_load, 1, 1 },
+    { "%LOAD-TEXT", p_load_text, 2, 2 },
     { "PRIN1-TO-STRING", p_prin1_to_string, 1, 1 },
     { "PRINC-TO-STRING", p_princ_to_string, 1, 1 },
     { "%FORMAT", p_format, 1, LISP_MANY },
@@ -1461,6 +1530,7 @@ const struct lisp_primitive lisp_primitives[] = {
     { "CLARA.UNSAFE:MAP-MEMORY", lisp_p_map_memory, 2, 2 },
     { "CLARA.UNSAFE:PCI-CONFIGURATION", lisp_p_pci_configuration, 0, 0 },
     { "CLARA.UNSAFE:KEYBOARD-BREAK", lisp_p_keyboard_break, 0, 0 },
+    { "CLARA.UNSAFE:MEMORY-STRING", lisp_p_memory_string, 2, 2 },
     { "CLARA.UNSAFE:FRAMEBUFFER", lisp_p_framebuffer, 0, 0 },
     { "CLARA.UNSAFE:SERIAL-DEVICE", lisp_p_serial_device, 0, 0 },
     { "CLARA.UNSAFE:SERIAL-BYTE", lisp_p_serial_byte, 0, 0 },

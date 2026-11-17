@@ -24,9 +24,15 @@ keys=build/serial-$name.in
 orders=build/monitor-$name.in
 typing=build/typing-$name
 heard=build/session-$name.txt
+scratch=build/scratch-$name.img
 mkdir -p build
-rm -f "$shot" "$sock" "$keys" "$orders" "$heard" "$typing".*
+rm -f "$shot" "$sock" "$keys" "$orders" "$heard" "$typing".* "$scratch"
 : > "$log"
+
+# A second disk, a mebibyte of zeroes, for a session to write to: the boot
+# volume is a directory of the host's that QEMU shows as a disk, and not
+# for writing sectors to. It comes after every other device of the machine.
+dd if=/dev/zero of="$scratch" bs=1024 count=1024 2> /dev/null
 
 # A session is a transcript. The lines that begin with a prompt, "> " or
 # the two spaces of a form that goes on, are what gets typed, without the
@@ -96,6 +102,7 @@ LC_ALL=C awk -v out="$typing" '
 mkfifo "$keys"
 exec 3<> "$keys"
 SERIAL=stdio tools/run.sh "$arch" -display none -monitor "unix:$sock,server=on,wait=off" "$@" \
+    -drive "if=none,id=scratch,format=raw,file=$scratch" -device virtio-blk-pci,drive=scratch \
     < "$keys" > "$log" 2> "build/qemu-$name.log" 3>&- &
 pid=$!
 

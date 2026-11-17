@@ -9,7 +9,7 @@ understood from the first instruction up. It is not a Unix and does not try
 to run Linux software. The kernel is its own UEFI application: the firmware
 loads `BOOTX64.EFI` or `BOOTAA64.EFI`, and from `efi_main` on it is ClaraOS.
 
-Status: milestone 8. Both architectures boot under QEMU with EDK2 firmware
+Status: milestone 9. Both architectures boot under QEMU with EDK2 firmware
 (the same firmware and machine types UTM uses), read their boot files from
 the ESP, and take the machine from the firmware. From then on they use
 nothing of the firmware's: they run on their own stack, page tables and
@@ -36,9 +36,13 @@ PCI bus are found and listed, and the ones that speak virtio have drivers,
 in Lisp as well: a keyboard, a mouse and a tablet so far, which interrupt
 by message through whatever the machine has for that, the local APIC, a
 GICv2m frame or the GIC's translation service. What is typed on the
-keyboard is read like what arrives on the serial port. The same Lisp files
-load under SBCL on the host, where they are tested against a machine that
-is made up for the purpose.
+keyboard is read like what arrives on the serial port. A virtio disk has
+its driver too, and on it the FAT file system is read: the volume the
+machine booted from is the first whose files can be listed, read and
+loaded from the prompt, `(directory "/clara/*.lisp")` or
+`(load "/clara/hello.lisp")`. The same Lisp files load under SBCL on the
+host, where they are tested against a machine that is made up for the
+purpose.
 [ROADMAP.md](ROADMAP.md) has what comes next, [DESIGN.md](DESIGN.md) the
 ideas and conventions.
 
@@ -73,7 +77,8 @@ Layout:
     kernel/          architecture-independent code and the UEFI handoff (boot.c)
     kernel/arch/     one directory per architecture: the only assembly and the only MMIO addresses
     kernel/lisp/     the Lisp runtime: objects and the heap, symbols and packages, the reader, the printer
-    lisp/            Lisp sources; the build copies them to the ESP's \clara directory, read at boot
+    lisp/            Lisp sources: the language's own part, the console, the drivers, the file system, the listener;
+                     the build copies them to the ESP's \clara directory, read at boot
     fonts/           the console font, Spleen 8x16, which tools/bdf2c.py turns into kernel/font.c
     site/            the website: one page, filled in from ROADMAP.md by site/build.py (`make site`)
     tools/           run.sh (QEMU), boottest.sh (headless check, typed session and screenshot),
@@ -85,8 +90,9 @@ Layout:
 2. UTM, New, then Virtualize (AArch64 on Apple silicon) or Emulate (x86_64),
    operating system Other. Skip the ISO. Leave "UEFI Boot" checked. 512 MiB
    of memory is plenty.
-3. Remove the drive UTM created. Drives, Import, pick `build/claraos.img`
-   (VirtIO or NVMe interface, either works).
+3. Remove the drive UTM created. Drives, Import, pick `build/claraos.img`,
+   with the VirtIO interface: that is the disk ClaraOS has a driver for.
+   With NVMe the machine still boots, and sees no disk and no files.
 4. Add a Serial device with mode "Built-in Terminal": the kernel talks
    there, and a form can be typed there.
 5. For a keyboard in the display's own window: UTM gives a machine USB
@@ -96,8 +102,9 @@ Layout:
 6. Start. The display and the serial window both show the boot report,
    which ends at a prompt. A form typed in either,
    `(mapcar #'1+ '(1 2 3))` say, is evaluated, and what it gives is printed
-   on both. Ctrl-C stops a form that does not end, `(loop)` for one, and
-   the prompt comes back. Ctrl-D ends it, and the kernel halts with
+   on both. `(directory "/clara/*")` lists the files the system was
+   loaded from. Ctrl-C stops a form that does not end, `(loop)` for one,
+   and the prompt comes back. Ctrl-D ends it, and the kernel halts with
    `clara: nothing more to do`.
 
 UTM copies the image into the VM bundle, so after a rebuild either import it

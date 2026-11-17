@@ -386,6 +386,7 @@ void lisp_reader_init(struct lisp_reader *r, const void *text, size_t size);
 enum lisp_read_status lisp_read(struct lisp_reader *r, lisp *form); /* the next form of the text */
 void lisp_reader_where(const struct lisp_reader *r, unsigned *line, unsigned *column); /* r->where, both from 1 */
 lisp lisp_string_from_utf8(const void *text, size_t size); /* as far as it is UTF-8 */
+size_t lisp_utf8_length(const void *text, size_t size);   /* which is this many of its bytes */
 
 /* What the characters of a token spell when none of them was escaped
  * (CLHS 2.3.1). The printer asks too: a symbol whose name looks like a
@@ -447,6 +448,8 @@ lisp lisp_error(lisp condition);            /* the same, and with no handler to 
 void lisp_eval_roots(void);                 /* for the collector: lisp_reach for everything the evaluator holds */
 lisp lisp_macroexpand_1(lisp form, int *expanded);
 lisp lisp_load(lisp name);                  /* evaluate the forms of the boot file of that name */
+void lisp_load_text(const void *text, size_t size, lisp name); /* and of a text in UTF-8; the name is for what an
+                                               error says, a string that the caller holds */
 int  lisp_out_of_stack(void);               /* for C that calls itself: fails, and says 1, when it must go no deeper */
 lisp *lisp_stack(void);                     /* the top of the value stack */
 int  lisp_push(lisp x);                     /* 0 after failing, when the stack is full */
@@ -529,6 +532,7 @@ LISP_PRIMITIVE(lisp_p_give_screen);
 LISP_PRIMITIVE(lisp_p_map_memory);
 LISP_PRIMITIVE(lisp_p_pci_configuration);
 LISP_PRIMITIVE(lisp_p_keyboard_break);
+LISP_PRIMITIVE(lisp_p_memory_string);
 extern const struct lisp_primitive lisp_primitives[];
 extern const unsigned lisp_primitive_count;
 

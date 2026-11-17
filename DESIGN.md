@@ -531,6 +531,56 @@ architectures (kernel/vm.c).
   QEMU's keyboard and moves its mouse, which says that the real device,
   the interrupt controller and the interpreter agree with the tests.
 
+## Disks and files (decided in M9, 2026-11-17)
+
+- A disk, to its driver, is a row of sectors and nothing else
+  (lisp/disk.lisp, on virtio like the keyboard's). A request names the
+  sectors and the memory, and the thread that makes it waits for the
+  device's interrupt with the disk's lock in its hands, so one request is
+  under way at a time. Queues of requests, and anything held back in
+  memory, can come when something is slow for the want of them.
+- What a disk reads and writes is page frames, not objects. The device
+  goes by physical addresses, and the heap is somewhere else. A file
+  system looks at what was read where it lies, a byte or a word at an
+  address, as the other drivers look at their devices' memory, and Lisp
+  gets what a file holds in one piece: its text as a string, or the page
+  frames themselves for whoever can use those. There is no vector of
+  bytes yet for anything between the two.
+- The first file system is FAT, because that is what the firmware boots
+  from: the volume that the kernel came from is there to be read without
+  another format having to be made up, on the tests' machines and in UTM
+  alike. It is read and not written. Writing it comes with the first
+  thing that has to be kept, the image of M10.
+- Volumes are found by looking: a disk that is one volume from its first
+  sector on, the partitions of a table in that sector, the partitions of
+  a GUID partition table. Which of the three kinds of FAT a volume is
+  follows from how many clusters it has, as its specification says, and
+  from nothing that the volume says of itself.
+- A file is named by a string: the directories that lead to it from the
+  root and then its own name, with a slash before each. There are no
+  pathnames. Common Lisp's are a small language of their own, and what
+  they are for, a name that means the same on every file system, is
+  nothing this system needs while it has one. Letters match whatever
+  their case, as FAT has it.
+- The language's own functions for files, OPEN, LOAD, PROBE-FILE and
+  DIRECTORY, are in lisp/boot.lisp and know nothing of disks. A file
+  system is two functions that it hands over when it has started
+  (`clara:provide-files`): one that gives the text of the file of a
+  name, and one that gives the names in a directory. That is the shape a
+  stream has, for the same reason: generic functions wait for CLOS. A
+  program written with those four runs under SBCL on the host's files.
+- LOAD takes a file from the disk when the file system has one of that
+  name, and otherwise from the files that the boot handoff read. Those
+  stay: the world is loaded from them before there is any driver, and a
+  machine whose disk has no driver here still starts. An image will
+  take their place.
+- The disk driver and the file system are tested three times over. Under
+  SBCL, on disks that the tests make up, which look at how they are
+  asked, and on volumes that the tests lay out by the specification, of
+  every kind, in pieces and back to front; by booting, on the volume
+  that QEMU makes of a directory, which is a second opinion on the
+  format; and by hand on volumes that macOS made, which is a third.
+
 ## Conventions
 
 - C: lower_snake_case for functions and files. Kernel-wide symbols carry

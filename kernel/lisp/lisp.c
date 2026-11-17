@@ -713,12 +713,53 @@ static const struct {
     { "(list 'scratch:thing (let ((*package* *package*)) (in-package \"SCRATCH\") (package-name *package*)))",
       "(SCRATCH:THING \"SCRATCH\")" },
     { "(error \"~A went wrong\" 'this)", "error: THIS went wrong" },
-    { "(load \"nothing.lisp\")", "error: LOAD: the boot volume has no file \"nothing.lisp\" in its \\clara directory" },
+    { "(load \"nothing.lisp\")",
+      "error: LOAD finds no file \"nothing.lisp\": no disk has it, and \\clara had none of that name at boot" },
     /* a file with a form that fails (kernel/lisp/self-test.lisp) */
     { "(load \"self-test.lisp\")",
       "error: CAR wants a list, and NOT-A-LIST is not one, in the form at line 15 of self-test.lisp" },
     { "(list (package-name *package*) clara.loaded::*reached*)",
       "(\"CLARA.SELF-TEST\" CLARA.LOADED::THE-FORM-BEFORE)" },
+    /* a text that is loaded, as LOAD does with a file from a disk */
+    { "(cl::%load-text \"(defvar *from-a-text* 'the-form-before)\n(car 'not-a-list)\n(setq *from-a-text* nil)\" \"a text\")",
+      "error: CAR wants a list, and NOT-A-LIST is not one, in the form at line 2 of a text" },
+    { "*from-a-text*", "THE-FORM-BEFORE" },
+    { "(handler-case (cl::%load-text \"(list 1 2)\n\n(car 'x)\" \"a text\") (error (c) (princ-to-string c)))",
+      "\"CAR wants a list, and X is not one, in the form at line 3 of a text\"" },
+    { "(handler-case (cl::%load-text \"(handler-case (car 'x) (error () 'handled-inside))\" \"a text\") (error () 'not-inside))",
+      "T" },
+    { "(cl::%load-text \"(in-package \\\"COMMON-LISP\\\") (defvar clara.loaded::*text* (package-name *package*))\" \"x\")",
+      "T" },
+    { "(list (package-name *package*) clara.loaded::*text*)", "(\"CLARA.SELF-TEST\" \"COMMON-LISP\")" },
+    /* strings whatever the case of their letters, and SORT */
+    { "(list (string-equal \"Boot.Lisp\" \"BOOT.lisp\") (string-equal \"a\" \"ab\") (string-equal #\\a 'a))",
+      "(T NIL T)" },
+    { "(list (string-lessp \"abc\" \"ABD\") (string-lessp \"b\" \"A\") (string-lessp \"ab\" \"abc\") (string-lessp \"x\" \"X\"))",
+      "(2 NIL 2 NIL)" },
+    { "(string-equal \"a\" 5)", "error: STRING-EQUAL wants a string, a symbol or a character, and 5 is not one" },
+    { "(sort '(3 1 2) #'<)", "(1 2 3)" },
+    { "(sort (list \"pci\" \"Boot\" \"console\" \"FAT\") #'string-lessp)", "(\"Boot\" \"console\" \"FAT\" \"pci\")" },
+    { "(sort '((2 . a) (1 . b) (2 . c) (1 . d)) #'< :key #'car)", "((1 . B) (1 . D) (2 . A) (2 . C))" },
+    { "(list (sort nil #'<) (sort '(7) #'<))", "(NIL (7))" },
+    { "(sort (vector 2 1) #'<)", "error: SORT takes a list, and not #(2 1) yet" },
+    /* files: names and patterns, and what can be refused before any file system is asked */
+    { "(list (cl::%fits \"*.lisp\" \"boot.LISP\" 0 0) (cl::%fits \"b*t*\" \"boot.lisp\" 0 0) (cl::%fits \"*\" \"\" 0 0)"
+      " (cl::%fits \"*.lisp\" \"lisp\" 0 0) (cl::%fits \"boot\" \"boot.lisp\" 0 0))",
+      "(T T T NIL NIL)" },
+    { "(list (multiple-value-list (cl::%split-name \"/clara/boot.lisp\")) (multiple-value-list (cl::%split-name \"boot.lisp\"))"
+      " (cl::%plain-name \"/clara//\") (cl::%plain-name \"/\"))",
+      "((\"/clara/\" \"boot.lisp\") (\"\" \"boot.lisp\") \"/clara\" \"\")" },
+    { "(open \"/clara/boot.lisp\" :direction :output)",
+      "error: OPEN: a file can be read and not written yet, so there is none to open for :OUTPUT" },
+    { "(open 'boot)", "error: the name of a file is a string, and BOOT is not one" },
+    { "(let ((in (make-string-input-stream \"a line\"))) (list (close in) (read-line in nil 'closed)))", "(T CLOSED)" },
+    /* memory as text */
+    { "(let ((page (clara.unsafe:allocate-memory 1)))"
+      " (setf (clara.unsafe:memory-32 page) #x21bbce68)"
+      " (prog1 (list (clara.unsafe:memory-string page 4) (clara.unsafe:memory-string page 0)"
+      "              (handler-case (clara.unsafe:memory-string page 2) (error () 'not-text)))"
+      "   (clara.unsafe:free-memory page 1)))",
+      "(\"h\xce\xbb!\" \"\" NOT-TEXT)" },
     /* conditions */
     { "(handler-case (error \"~A went wrong\" 'this) (error (c) (list 'caught (format nil \"~A\" c))))",
       "(CAUGHT \"THIS went wrong\")" },
@@ -1062,7 +1103,7 @@ unsigned lisp_eval_texts(void)
  * self-tests' own objects have been collected. */
 static void eval_selftest(void)
 {
-    uint64_t count[LISP_TYPES], bytes, collections;
+    uint64_t count[LISP_TYPES], bytes, collections, frames;
     struct lisp_heap heap;
     struct text printed;
     int64_t depth;
@@ -1078,6 +1119,16 @@ static void eval_selftest(void)
     lisp_heap_state(&heap);
     if (heap.collections == collections)
         panic("lisp self-test: the evaluator made 5000 lists and did not once stop to collect");
+
+    /* A text that is read or loaded is written out in page frames first, and those have to come
+     * back. A hundred texts of either kind that kept theirs would be a hundred frames; what the
+     * heap grows by meanwhile is a few. */
+    frames = pmm_free_frames();
+    evaluate_text("(dotimes (i 100) (read-from-string \"(a text)\") (cl::%load-text \"(car '(a text))\" \"a text\"))",
+                  &printed);
+    if ((int64_t)(frames - pmm_free_frames()) > 50)
+        panic("lisp self-test: two hundred texts were read and loaded, and %llu page frames did not come back",
+              frames - pmm_free_frames());
 
     kprintf("lisp: the evaluator passed: %u texts evaluated, and a function called itself %lld deep\n", texts,
             (long long)depth);
@@ -1203,14 +1254,15 @@ static void load(const char *file)
  * the language that is written in Lisp, and the files after it are the
  * beginning of the world: the console, which takes the serial port and
  * the screen over from the substrate; the drivers, which find the devices
- * on the PCI bus and start a thread for each keyboard and mouse; and the
+ * on the PCI bus, start a thread for each keyboard and mouse, and open
+ * the disks; the file system, which finds the volumes on them; and the
  * listener, which reads what is typed, evaluates it and prints what it
  * gives, until the input ends. Should a condition come all the way out of
  * the listener, it is started again and told so. */
 static void lisp_main(void)
 {
-    static const char *const world[] = { "font.lisp",   "console.lisp", "pci.lisp",
-                                         "virtio.lisp", "input.lisp",   "listener.lisp" };
+    static const char *const world[] = { "font.lisp",  "console.lisp", "pci.lisp", "virtio.lisp",
+                                         "input.lisp", "disk.lisp",    "fat.lisp", "listener.lisp" };
     uint64_t before[LISP_TYPES], after[LISP_TYPES];
     lisp listen, condition = LISP_NIL;
     unsigned told = 0;
@@ -1225,13 +1277,14 @@ static void lisp_main(void)
     for (unsigned i = 0; i < sizeof world / sizeof world[0]; i++)
         load(world[i]);
     lisp_heap_census(before);
-    kprintf("lisp: the console, the drivers and the listener are loaded, %llu more functions: the rest is theirs\n",
+    kprintf("lisp: the console, the drivers, the files and the listener are loaded, %llu more functions\n",
             before[LISP_FUNCTION] - after[LISP_FUNCTION]);
     if (!lisp_evaluate(read_one("(clara.console:start)")))
         panic("lisp: the console did not start");
-    /* A machine without a PCI bus, or without a keyboard on it, is said
-     * and is no reason to stop: there is the serial port. */
-    if (!lisp_evaluate(read_one("(progn (clara.pci:start) (clara.input:start))")))
+    /* A machine without a PCI bus, or without a keyboard or a disk on it,
+     * is said and is no reason to stop: there is the serial port, and
+     * there are the files that came with the kernel. */
+    if (!lisp_evaluate(read_one("(progn (clara.pci:start) (clara.input:start) (clara.disk:start) (clara.fat:start))")))
         panic("lisp: the drivers did not start");
     listen = read_one("clara.listener:run");
     while (!lisp_call(listen, told, &condition)) {

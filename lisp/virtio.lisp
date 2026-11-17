@@ -26,12 +26,12 @@
 ;;;; This file is the part that no kind of device has to itself: OPEN-DEVICE
 ;;;; takes a PCI device through the opening moves, OPEN-QUEUE sets a queue
 ;;;; up, QUEUE-ADD, QUEUE-NOTIFY and QUEUE-TAKE are the driver's side of it,
-;;;; and START-DEVICE says that the driver is ready. lisp/input.lisp is the
-;;;; first driver on top of it.
+;;;; and START-DEVICE says that the driver is ready. lisp/input.lisp and
+;;;; lisp/disk.lisp are the drivers on top of it.
 
 (defpackage "CLARA.VIRTIO"
   (:use "COMMON-LISP")
-  (:export "DEVICE-TYPE" "OPEN-DEVICE" "START-DEVICE" "DEVICE-P" "DEVICE-PCI" "DEVICE-EVENT"
+  (:export "DEVICE-TYPE" "OPEN-DEVICE" "START-DEVICE" "DEVICE-P" "DEVICE-PCI" "DEVICE-EVENT" "DEVICE-FEATURES"
            "REGISTER-8" "REGISTER-16" "REGISTER-32"
            "OPEN-QUEUE" "QUEUE-P" "QUEUE-SIZE" "QUEUE-ADD" "QUEUE-NOTIFY" "QUEUE-TAKE"))
 (in-package "CLARA.VIRTIO")
@@ -54,27 +54,33 @@
   notify       ; the address of the registers through which queues are told of new work,
   multiplier   ; and how many bytes apart the queues' registers are there
   specific     ; the address of the registers of its own kind, or NIL
+  features     ; what the driver asked for of the things the device can do, and got
   event)       ; what its interrupt signals
 
 ;;; The registers of its own kind
 
+(defun register (device offset)
+  (unless (device-specific device)
+    (error "the virtio device at ~A has no registers of its own kind" (clara.pci:location (device-pci device))))
+  (+ (device-specific device) offset))
+
 (defun register-8 (device offset)
-  (clara.unsafe:memory-8 (+ (device-specific device) offset)))
+  (clara.unsafe:memory-8 (register device offset)))
 
 (defun register-16 (device offset)
-  (clara.unsafe:memory-16 (+ (device-specific device) offset)))
+  (clara.unsafe:memory-16 (register device offset)))
 
 (defun register-32 (device offset)
-  (clara.unsafe:memory-32 (+ (device-specific device) offset)))
+  (clara.unsafe:memory-32 (register device offset)))
 
 (defun set-register-8 (device offset value)
-  (setf (clara.unsafe:memory-8 (+ (device-specific device) offset)) value))
+  (setf (clara.unsafe:memory-8 (register device offset)) value))
 
 (defun set-register-16 (device offset value)
-  (setf (clara.unsafe:memory-16 (+ (device-specific device) offset)) value))
+  (setf (clara.unsafe:memory-16 (register device offset)) value))
 
 (defun set-register-32 (device offset value)
-  (setf (clara.unsafe:memory-32 (+ (device-specific device) offset)) value))
+  (setf (clara.unsafe:memory-32 (register device offset)) value))
 
 (defsetf register-8 set-register-8)
 (defsetf register-16 set-register-16)
@@ -130,13 +136,15 @@
                (setf (device-specific device) (clara.pci:map-registers pci bar offset bytes))))))))
 
 ;; Take a PCI device that is a virtio device through its opening moves
-;; (3.1.1), as far as agreeing on what it is to do. Of all that a device
-;; can do, the driver asks for one thing, which is bit 32 and says that
-;; both go by version 1 of the specification. The device gets one
-;; interrupt, by a message, for all its queues, and none for a change of
-;; its own registers. Then the driver sets up its queues, and calls
-;; START-DEVICE.
-(defun open-device (pci)
+;; (3.1.1), as far as agreeing on what it is to do. What a device can do
+;; is a bit each, 64 of them in two halves. The driver always asks for bit
+;; 32, which says that both go by version 1 of the specification, and of
+;; the bits 0 to 31, which mean something else for every kind of device,
+;; for the ones in WANTED that the device has: DEVICE-FEATURES says which
+;; those were. The device gets one interrupt, by a message, for all its
+;; queues, and none for a change of its own registers. Then the driver
+;; sets up its queues, and calls START-DEVICE.
+(defun open-device (pci &optional (wanted 0))
   (let ((device (make-device :pci pci)))
     (clara.pci:enable pci)
     (find-registers device)
@@ -154,11 +162,13 @@
         (setq waited (1+ waited)))
       (set-status device 1)
       (set-status device 3)
+      (setf (clara.unsafe:memory-32 common) 0)
+      (setf (device-features device) (logand (clara.unsafe:memory-32 (+ common 4)) wanted))
       (setf (clara.unsafe:memory-32 common) 1)
       (when (zerop (logand (clara.unsafe:memory-32 (+ common 4)) 1))
         (give-up device "is from before version 1 of virtio, which this driver does not speak"))
       (setf (clara.unsafe:memory-32 (+ common 8)) 0
-            (clara.unsafe:memory-32 (+ common 12)) 0
+            (clara.unsafe:memory-32 (+ common 12)) (device-features device)
             (clara.unsafe:memory-32 (+ common 8)) 1
             (clara.unsafe:memory-32 (+ common 12)) 1)
       (set-status device 11)

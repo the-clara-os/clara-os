@@ -24,7 +24,7 @@
           first rest second third fourth endp nthcdr nth last
           reverse nreverse copy-list mapcar mapc mapcan
           member assoc remove-if remove-if-not remove find-if find position
-          every some reduce getf get
+          every some reduce sort getf get
           zerop plusp minusp evenp oddp abs max min expt
           char= char< concatenate make-array macroexpand
           define-condition make-condition ignore-errors
@@ -40,7 +40,8 @@
           write-string write-char write-line terpri fresh-line
           prin1 princ print format finish-output force-output
           make-string-output-stream get-output-stream-string with-output-to-string
-          make-string-input-stream read-line read-from-string))
+          make-string-input-stream read-line read-from-string
+          open close with-open-file probe-file directory))
 
 ;;; Control
 
@@ -308,6 +309,31 @@
   (let ((value (if initial-value-p initial-value (car list))))
     (dolist (item (if initial-value-p list (cdr list)) value)
       (setq value (funcall function value item)))))
+
+;; SORT may use up the list it is given, and does not: it makes a new one,
+;; by merging, and what the predicate does not tell apart stays in the
+;; order it was in.
+(defun %merge (a b predicate key)
+  (let* ((head (list nil)) (tail head))
+    (loop
+      (cond ((null a) (rplacd tail b) (return (cdr head)))
+            ((null b) (rplacd tail a) (return (cdr head)))
+            ((funcall predicate (funcall key (car b)) (funcall key (car a)))
+             (setq tail (cdr (rplacd tail (list (car b))))
+                   b (cdr b)))
+            (t
+             (setq tail (cdr (rplacd tail (list (car a))))
+                   a (cdr a)))))))
+
+(defun sort (list predicate &key (key #'identity))
+  (unless (listp list)
+    (error "SORT takes a list, and not ~S yet" list))
+  (if (null (cdr list))
+      list
+      (let ((half (floor (length list) 2)))
+        (%merge (sort (subseq list 0 half) predicate :key key)
+                (sort (nthcdr half list) predicate :key key)
+                predicate key))))
 
 (defun getf (plist indicator &optional default)
   (do ((rest plist (cddr rest))) ((null rest) default)
@@ -776,6 +802,116 @@
           (eof-error-p (error 'end-of-file))
           (t (values eof-value (length string))))))
 
+;;; Files
+;;;
+;;; A file has a name, and the name is a string: the directories that lead
+;;; to it and then its own name, with a slash before each, as in
+;;; "/clara/boot.lisp". There are no pathnames. What knows about disks is
+;;; Lisp that is loaded after this file (lisp/fat.lisp), and it says that
+;;; it is there with CLARA:PROVIDE-FILES, which it gives two functions: one
+;;; for the text of the file of a name, and one for the names of what the
+;;; directory of a name holds, in order, a directory's with a slash at its
+;;; end, or NIL when there is no such directory. Until then, and on a
+;;; machine without a disk that has a driver, there are no files here, and
+;;; LOAD finds the ones that the kernel read from the boot volume as it
+;;; started.
+
+(defvar %files nil) ; the two functions, in a list, once a file system has said that it is there
+
+(defun %file-text (name)
+  (unless (stringp name)
+    (error "the name of a file is a string, and ~S is not one" name))
+  (if %files
+      (funcall (car %files) name)
+      (error "there is no file ~A: no disk has a file system that is known here" name)))
+
+(defun %file-names (directory)
+  (if %files (funcall (cadr %files) directory)))
+
+;; A name without the slashes at its end, which a directory's may have.
+(defun %plain-name (name)
+  (let ((end (length name)))
+    (loop
+      (unless (and (> end 0) (char= (char name (1- end)) #\/))
+        (return))
+      (setq end (1- end)))
+    (subseq name 0 end)))
+
+;; The two parts of a name: its directory, as far as the last slash, and
+;; what comes after that. A name without a slash is in the first directory
+;; of all.
+(defun %split-name (name)
+  (let ((slash nil))
+    (dotimes (i (length name))
+      (if (char= (char name i) #\/) (setq slash i)))
+    (if slash
+        (values (subseq name 0 (1+ slash)) (subseq name (1+ slash)))
+        (values "" name))))
+
+;; Does a name fit a pattern, from the places P and N on? A * in a pattern
+;; stands for any characters, or for none, and a letter for itself in
+;; either case.
+(defun %fits (pattern name p n)
+  (cond ((= p (length pattern)) (= n (length name)))
+        ((char= (char pattern p) #\*)
+         (or (%fits pattern name (1+ p) n)
+             (and (< n (length name)) (%fits pattern name p (1+ n)))))
+        (t (and (< n (length name))
+                (string-equal (char pattern p) (char name n))
+                (%fits pattern name (1+ p) (1+ n))))))
+
+;; The name of a file or of a directory as the file system has it, when
+;; there is one of that name, and NIL when there is none.
+(defun probe-file (name)
+  (multiple-value-bind (directory rest) (%split-name (%plain-name name))
+    (if (= (length rest) 0)
+        (if %files name)
+        (dolist (entry (%file-names directory))
+          (if (string-equal rest (%plain-name entry))
+              (return (concatenate 'string directory entry)))))))
+
+;; The names that fit a pattern: what the pattern's directory holds whose
+;; own name fits what the pattern has after its last slash, in the order
+;; the file system gives them.
+(defun directory (pattern)
+  (multiple-value-bind (directory rest) (%split-name pattern)
+    (if (= (length rest) 0)
+        (let ((found (probe-file pattern)))
+          (if found (list found)))
+        (let ((found nil))
+          (dolist (entry (%file-names directory))
+            (if (%fits rest (%plain-name entry) 0 0)
+                (setq found (cons (concatenate 'string directory entry) found))))
+          (reverse found)))))
+
+;; A file to read from, a line at a time. Nothing writes a file yet.
+(defun open (name &key (direction :input))
+  (unless (eq direction :input)
+    (error "OPEN: a file can be read and not written yet, so there is none to open for ~S" direction))
+  (make-string-input-stream (%file-text name)))
+
+;; A stream that is closed gives nothing more, and takes nothing.
+(defun close (stream)
+  (unless (%stream-p stream)
+    (error "~S is not a stream" stream))
+  (setf (%stream-read stream) nil
+        (%stream-write stream) nil)
+  t)
+
+(defmacro with-open-file ((variable name &rest options) &body body)
+  `(let ((,variable (open ,name ,@options)))
+     (unwind-protect (progn ,@body)
+       (close ,variable))))
+
+;; LOAD: the file of that name when a file system has it, and otherwise the
+;; one of that name among the files that the kernel read as it started.
+;; From here on this is LOAD, in place of the function in C that is
+;; loading this file.
+(defun load (name)
+  (if (and (stringp name) (probe-file name))
+      (%load-text (%file-text name) name)
+      (%load name)))
+
 ;; With no HANDLER-CASE for it, a warning is written down and the program
 ;; goes on.
 (defun warn (datum &rest arguments)
@@ -798,14 +934,14 @@
 ;;;
 ;;; What the substrate offers that Common Lisp has no name for: threads,
 ;;; locks and events, under the names that Bordeaux Threads made usual, a
-;;; way to make a stream of two functions, and the condition that Ctrl-C
-;;; is. Their functions are in C (kernel/lisp/thread.c), and what is said
-;;; more easily in Lisp is here. Under SBCL, lisp/host/ stands in for all
-;;; of it.
+;;; way to make a stream of two functions, a way for a file system to say
+;;; that it is there, and the condition that Ctrl-C is. Their functions are
+;;; in C (kernel/lisp/thread.c), and what is said more easily in Lisp is
+;;; here. Under SBCL, lisp/host/ stands in for all of it.
 
 (in-package "CLARA")
 
-(export '(make-thread with-lock-held make-stream keyboard-interrupt))
+(export '(make-thread with-lock-held make-stream keyboard-interrupt provide-files))
 
 ;; What Ctrl-C on the console is, to the computation it stops and to
 ;; whoever was reading a line.
@@ -815,6 +951,15 @@
 ;; by calling READ-LINE, which gives a line or NIL when no more will come.
 (defun make-stream (&key write-string read-line)
   (cl::make-%stream :write write-string :read read-line))
+
+;; A file system says that it is there: TEXT gives the text of the file of
+;; a name, and NAMES the names of what the directory of a name holds (the
+;; comment on files, further up, says more). From then on those two are
+;; what OPEN, LOAD, PROBE-FILE and DIRECTORY ask. Without them, there is
+;; no file system any more.
+(defun provide-files (&key text names)
+  (setq cl::%files (if (and text names) (list text names)))
+  nil)
 
 ;; The substrate calls this when a thread ends with a condition that
 ;; nothing handled: nobody may ever ask what became of the thread.

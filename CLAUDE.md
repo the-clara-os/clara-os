@@ -120,11 +120,41 @@ Rules:
   what the kernel refuses, an address that is not a multiple of the
   access and a value that does not fit.
 - tools/run.sh gives every machine a virtio keyboard, mouse and tablet
-  (`INPUT=` for none, `INPUT="-device ..."` for others). On AArch64 the
-  boot volume is a PCI device whose slot the firmware remembers in
-  build/vars-aarch64.fd: new devices go after it on the command line. A
-  boot that ends at the firmware's `Shell>` means the slot moved; delete
-  that file.
+  (`INPUT=` for none, `INPUT="-device ..."` for others), and its boot
+  volume as a virtio disk with `bootindex=0`, which is what the firmware
+  boots from whatever build/vars-<arch>.fd remembers. A boot that ends at
+  the firmware's `Shell>` means the firmware did not find that disk.
+- Disks and files. lisp/disk.lisp is the driver for virtio's disks:
+  sectors of 512 bytes, into and out of page frames, one request at a
+  time. lisp/fat.lisp reads FAT volumes on them, and hands the language
+  its two functions with `clara:provide-files`; OPEN, LOAD, PROBE-FILE
+  and DIRECTORY are in lisp/boot.lisp and ask those. Whatever a function
+  there takes from `clara.unsafe:allocate-memory` it gives back on every
+  way out, with UNWIND-PROTECT, and whatever looks at a volume's table
+  holds the volume's lock. The host tests have the other side:
+  `add-disk` makes a disk of a vector of bytes, which can fail, take its
+  time, lose its interrupt or say nothing, and which fails the run when
+  it is asked in the wrong way, given memory that was not handed out, or
+  (`vdev-watch`) asked without a lock; `make-fat-volume` lays a tree of
+  files out as a volume of any kind, with its files in pieces, back to
+  front, or wrong in the ways its options say, and `make-disk` puts
+  volumes behind a table of partitions. A new case of what a disk can
+  hold is a row or an option there. `clara.host:allocated-pages` before
+  and after says whether page frames were kept. The boot volume of the
+  boots is a directory that QEMU shows as a disk: read it, and never
+  write a sector to it. The disk to write to is the last one,
+  build/scratch-<name>.img, which tools/boottest.sh makes anew for every
+  boot. `DISK=build/claraos.img tools/boottest.sh <arch>` boots the
+  image that `make image` makes, a GUID partition table and a volume of
+  the kind 32, and the session has to pass there as well: macOS puts
+  `._` files beside the others, so a session shows a file or a pattern,
+  not a whole directory.
+- LOAD is Lisp since boot.lisp defines it, over two functions in C:
+  `%load`, the boot files, and `%load-text`, a text with a name. A text
+  of the evaluator's self-test must not reach the file system (PROBE-FILE,
+  DIRECTORY, OPEN with a name that could be there): the texts run again
+  with a collection at every safe point, and one lookup would take
+  minutes on CI.
 - `make test` boots four times: x86_64, AArch64 with GIC version 3,
   AArch64 emulated with GIC version 2, whose files in build/ are named
   aarch64-gic2, and AArch64 once more for tools/stress.txt (aarch64-stress),
@@ -163,9 +193,9 @@ Rules:
   SBCL as it stands: the subset of Common Lisp that the evaluator has,
   no name of Common Lisp's given a new meaning (LISTEN is one), and the
   substrate only through CLARA and CLARA.UNSAFE. The kernel loads them
-  in the order of `world` in lisp.c (the console, pci, virtio, input, the
-  listener), and lisp/host/tests.lisp loads the same files: a new one
-  goes into both. What they print while they start is part of the boot
+  in the order of `world` in lisp.c (the console, pci, virtio, input,
+  disk, fat, the listener), and lisp/host/tests.lisp loads the same
+  files: a new one goes into both. What they print while they start is part of the boot
   report, and a line of it stays under 100 characters too. Its logic is
   tested there, on the machine that lisp/host/clara.lisp makes up: a
   device is a function put at an address or at a port, and a test looks
@@ -295,9 +325,10 @@ Rules:
   lisp/ that the host tests do; ROADMAP.md lists what was tried, under the
   slow test mode. Doing that for the evaluator found a text that could
   not fail. When a source is patched for such a check, delete the object
-  that was built from it before `make`: make goes by the second, and a
-  patch written in the second of the last build is not built, so the
-  check passes on the kernel that was there before.
+  that was built from it before `make`, and the kernel image with it:
+  make goes by the second, and a patch written in the second of the last
+  build is not built, or built and not linked, so the check passes on
+  the kernel that was there before.
 - kernel/lisp/self-test.lisp is a file with a mistake in it, which the
   build puts on the boot volume beside lisp/boot.lisp and the evaluator's
   self-test loads. A text that needs a file to load finds one there.
