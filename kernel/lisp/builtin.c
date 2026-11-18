@@ -546,6 +546,34 @@ PRIMITIVE(p_string_append)
     return string;
 }
 
+/* (%join strings): the strings of a list as one string. What a program
+ * has written to a string stream, or to a file, is a list of the strings
+ * it wrote, which can be more of them than a function can be given as
+ * arguments: the evaluator's stack would have to hold them all. */
+PRIMITIVE(p_join)
+{
+    uint64_t length = 0, at = 0;
+    lisp string, list;
+
+    for (list = argv[0]; lisp_is_cons(list); list = lisp_as_cons(list)->cdr) {
+        if (!lisp_is(lisp_as_cons(list)->car, LISP_STRING))
+            return lisp_wants("a list of strings", argv[0]);
+        length += lisp_length(lisp_as_string(lisp_as_cons(list)->car)->header);
+    }
+    if (list != NIL)
+        return lisp_wants("a list of strings", argv[0]);
+    if (!lisp_heap_room(1 + (length + 1) / 2))
+        return no_room();
+    string = lisp_make_string(NULL, length);
+    for (list = argv[0]; lisp_is_cons(list); list = lisp_as_cons(list)->cdr) {
+        const struct lisp_string *s = lisp_as_string(lisp_as_cons(list)->car);
+
+        memcpy(lisp_as_string(string)->chars + at, s->chars, lisp_length(s->header) * sizeof s->chars[0]);
+        at += lisp_length(s->header);
+    }
+    return string;
+}
+
 /* Letters in capitals, or in small letters: the letters of ASCII, like
  * everything here that looks at the case of one. A character alone, and a
  * new string of what a string, a symbol or a character stands for. */
@@ -1489,6 +1517,7 @@ const struct lisp_primitive lisp_primitives[] = {
     { "CHAR-UPCASE", p_char_upcase, 1, 1 },
     { "CHAR-DOWNCASE", p_char_downcase, 1, 1 },
     { "%STRING-APPEND", p_string_append, 0, LISP_MANY },
+    { "%JOIN", p_join, 1, 1 },
     { "CHAR", p_char, 2, 2 },
     { "SCHAR", p_char, 2, 2 },
     { "%SET-CHAR", p_set_char, 3, 3 },

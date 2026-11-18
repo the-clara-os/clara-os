@@ -588,19 +588,20 @@ Infrastructure, for sessions with budget left over:
   that begins like three, STRING-BYTES that counts characters; CLOSE that
   makes no file, a file made although the body that wrote it failed,
   `:append` that forgets what was there, a file written over without a word,
-  DELETE-FILE that deletes nothing, strings past the 200th dropped, a text a
-  byte short, a file opened for `:io`, SAVE-IMAGE that saves nothing. One
-  got through at first, the heap that came back a word short, because the
-  checksum was taken of the file: it is taken of the heap now, after the
-  copy. And three of them showed a mistake that no case was looking for: an
-  image that was refused after its heap had been copied left the page frames
-  where they were, and the world made from the files then failed the heap's
-  own test; they are given back, and the machine of `make test` that boots
-  from a damaged image goes that way every time. The first real session
-  found two more that the host tests could not, both older than this
-  milestone: a function that takes any number of arguments refused more than
-  255, and so a string stream that had been written to 300 times could not
-  be read.
+  DELETE-FILE that deletes nothing, the strings of a list joined one on top
+  of the other, a text a byte short, a file opened for `:io`, SAVE-IMAGE
+  that saves nothing. One got through at first, the heap that came back a
+  word short, because the checksum was taken of the file: it is taken of the
+  heap now, after the copy. And three of them showed a mistake that no case
+  was looking for: an image that was refused after its heap had been copied
+  left the page frames where they were, and the world made from the files
+  then failed the heap's own test; they are given back, and the machine of
+  `make test` that boots from a damaged image goes that way every time. The
+  first real session found two more that the host tests could not, both
+  older than this milestone: a function that takes any number of arguments
+  refused more than 255, and so a string stream that had been written to 300
+  times could not be read. The strings of a stream are joined by a function
+  in C now, which takes them as a list, however many there are.
 
 Shortcuts and loose ends, under the milestone that settles each one. A
 session reads its own group before it starts, and whatever it leaves open
@@ -894,13 +895,14 @@ No milestone yet, to be picked up when they start to matter:
   the console and the listener have no self-test at boot but the
   session.
 - CI has SBCL 2.6.0, the Mac 2.6.10, and the Ubuntu 24.04 container that
-  stands in for CI on the Mac 2.2.9. The stress boot, a collection at
-  every safe point, takes 18 s on the Mac, two minutes there when
-  AArch64 is emulated, and three on CI, of the ten that the boot test
-  gives it, and it grows with the world, since each of those collections
-  goes through the whole heap; a text in the kernel's self-test that goes
-  round a thousand times costs seconds there, since every call of a
-  function in Lisp is a safe point, FORMAT's among them.
+  stands in for CI on the Mac 2.2.9. The stress boot, a collection at every
+  safe point, takes 18 s on the Mac, two minutes there when AArch64 is
+  emulated, and three to four on CI, 185 s on one run and 257 s on the next,
+  of the ten that the boot test gives it; it grows with the world, since
+  each of those collections goes through the whole heap; a text in the
+  kernel's self-test that goes round a thousand times costs seconds there,
+  since every call of a function in Lisp is a safe point, FORMAT's among
+  them.
 - lisp/font.lisp and kernel/font.c hold the same glyphs, one for each
   console, from the one generator.
 

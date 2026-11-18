@@ -761,27 +761,6 @@
             (setf (%stream-parts stream) (cons string (%stream-parts stream)))))
     stream))
 
-;; The strings of a list as one string. They go to %STRING-APPEND as its
-;; arguments, 200 at a time: what a program writes to a stream can be more
-;; strings than the evaluator's stack has room for arguments.
-(defun %join (strings)
-  (loop
-    (when (null (cdr strings))
-      (return (if strings (car strings) "")))
-    (let ((joined nil))
-      (loop
-        (when (null strings)
-          (return))
-        (let ((run nil) (count 0))
-          (loop
-            (when (or (null strings) (= count 200))
-              (return))
-            (setq run (cons (car strings) run)
-                  strings (cdr strings)
-                  count (1+ count)))
-          (setq joined (cons (apply #'%string-append (reverse run)) joined))))
-      (setq strings (reverse joined)))))
-
 (defun get-output-stream-string (stream)
   (let ((parts (reverse (%stream-parts stream))))
     (setf (%stream-parts stream) nil)

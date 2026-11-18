@@ -812,13 +812,15 @@ static const struct {
     { "(let ((in (make-string-input-stream \"a line\"))) (list (close in) (read-line in nil 'closed)))", "(T CLOSED)" },
     { "(let ((in (make-string-input-stream \"a line\"))) (list (close in :abort t) (read-line in nil 'closed)))",
       "(T CLOSED)" },
-    /* more arguments than the 255 that stand for "any number" in the tables, and more strings than a stream
-     * that was written to hands over in one call */
-    { "(let ((numbers nil) (parts nil))"
-      " (dotimes (i 260) (push i numbers) (push \"ab\" parts))"
-      " (list (apply #'+ numbers) (length (apply #'list numbers)) (length (cl::%join parts))))",
-      "(33670 260 520)" },
+    /* more arguments than the 255 that stand for "any number" in the tables, and the strings of a list as
+     * one string, which is what a stream that was written to hands over, however many they are */
+    { "(let ((numbers '(1 2 3 4 5)) (parts '(\"ab\" \"c\")))"
+      " (dotimes (i 8) (setq numbers (append numbers numbers) parts (append parts parts)))"
+      " (list (length numbers) (apply #'+ numbers) (length (apply #'list numbers)) (length (cl::%join parts))))",
+      "(1280 3840 1280 768)" },
     { "(list (cl::%join nil) (cl::%join '(\"one\")) (cl::%join '(\"a\" \"\" \"b\" \"c\")))", "(\"\" \"one\" \"abc\")" },
+    { "(cl::%join '(\"a\" 5))", "error: %JOIN wants a list of strings, and (\"a\" 5) is not one" },
+    { "(length (with-output-to-string (s) (dotimes (i 12) (write-string \"abc\" s) (write-char #\\d s))))", "48" },
     /* letters in capitals and in small letters, as far as ASCII has them */
     { "(list (string-upcase \"Hello, world!\") (string-downcase \"Hello\") (char-upcase #\\a) (char-downcase #\\A)"
       " (string-upcase 'abc) (string-downcase #\\Q) (string-upcase \"caf\xc3\xa9\"))",
