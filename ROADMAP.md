@@ -826,6 +826,12 @@ is added here in the same change.
 
 M13:
 
+- The boot with a collection at every safe point takes 331 s on CI of the
+  600 that it is given, and took 227 s before the window manager was in
+  the world: each of its collections goes through the whole heap. An
+  editor and a file browser are more world again. Before they go in, that
+  session has to get cheaper, by collecting at every tenth safe point, or
+  by not loading boot.lisp a second time under it, or its limit longer.
 - Keys that type no character reach nobody: the arrows, Home and End, the
   function keys, Alt. An editor needs the arrows, and the window manager
   has no key of its own: nothing on the keyboard brings another window to
@@ -1207,8 +1213,9 @@ No milestone yet, to be picked up when they start to matter:
   safe point, takes 18 s on the Mac, two minutes there when AArch64 is
   emulated, and between two and five on CI, 132 s to 294 s on four runs of
   nearly the same kernel, of the ten that the boot test gives it. With the
-  window manager in the world (0.0.17) it is 19 s on the Mac and two and a
-  half minutes in the container. It grows
+  window manager in the world (0.0.17) it is 19 s on the Mac, two and a
+  half minutes in the container, and 331 s on CI, where the kernel before
+  took 227 s. It grows
   with the world, since each of those collections goes through the whole
   heap, so it wants a cheaper session or a longer limit before the world is
   half as large again; a text in the kernel's self-test that goes round a
