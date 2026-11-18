@@ -83,8 +83,9 @@ host-test:
 # tools/stress.txt, a session in which the collector runs at every safe
 # point of the evaluator while boot.lisp is loaded again and the
 # evaluator's self-test is repeated: whatever the evaluator fails to hold
-# on to is gone at its next call. That takes the best part of a minute
-# where AArch64 is emulated. Its disk is the one with the saved world,
+# on to is gone at its next call. That takes three minutes where AArch64
+# is emulated, on CI, and more as the world grows, so it is given ten. Its
+# disk is the one with the saved world,
 # with one byte of it changed: the kernel has to say so, and start from the
 # files.
 RESUME := SESSION=tools/resumed.txt EXPECT='^lisp: the heap is an image'
@@ -96,7 +97,7 @@ test: all host-test
 	NAME=aarch64-gic2 NO_HVF=1 MKDISK="--fat 12 --table none" tools/boottest.sh aarch64 -machine gic-version=2
 	NAME=aarch64-gic2-resumed NO_HVF=1 DISK=$(BUILD)/boot-aarch64-gic2.img $(RESUME) \
 		tools/boottest.sh aarch64 -machine gic-version=2
-	NAME=aarch64-stress SESSION=tools/stress.txt TIMEOUT=300 DISK=$(BUILD)/boot-aarch64.img SPOIL=1 \
+	NAME=aarch64-stress SESSION=tools/stress.txt TIMEOUT=600 DISK=$(BUILD)/boot-aarch64.img SPOIL=1 \
 		EXPECT='^lisp: clara.image is not resumed: it is not what was saved' \
 		tools/boottest.sh aarch64 -machine gic-version=3
 

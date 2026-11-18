@@ -895,10 +895,10 @@ No milestone yet, to be picked up when they start to matter:
   session.
 - CI has SBCL 2.6.0, the Mac 2.6.10, and the Ubuntu 24.04 container that
   stands in for CI on the Mac 2.2.9. The stress boot, a collection at
-  every safe point, takes 18 s on the Mac and some two minutes where
-  AArch64 is emulated, of the five that the boot test gives it, and it
-  grows with the world, since each of those collections goes through the
-  whole heap; a text in the kernel's self-test that goes
+  every safe point, takes 18 s on the Mac, two minutes there when
+  AArch64 is emulated, and three on CI, of the ten that the boot test
+  gives it, and it grows with the world, since each of those collections
+  goes through the whole heap; a text in the kernel's self-test that goes
   round a thousand times costs seconds there, since every call of a
   function in Lisp is a safe point, FORMAT's among them.
 - lisp/font.lisp and kernel/font.c hold the same glyphs, one for each
@@ -1065,7 +1065,7 @@ No milestone yet, to be picked up when they start to matter:
   clang 23 and QEMU 11, and fsck.fat for the checker of volumes where the
   Mac has fsck_msdos. Nothing builds or boots on macOS except by hand.
   The boot with a collection at every safe point is emulated there, and
-  is the longest of the four.
+  is the longest of the seven.
 - `make image` needs macOS (hdiutil), so CI neither builds nor boots the
   disk image that UTM gets.
 - site/boot.png, on the website, is a screenshot of version 0.0.14, to be
