@@ -353,7 +353,14 @@ The compiler:
   before the form that stops that thread when the editor is stopped, so an
   editor that was stopped while it drew left the forms running. The host
   test of it lost that race one run in three on CI, which is how main
-  came to fail there after M13 was merged.
+  came to fail there after M13 was merged. And the pointer: its place was
+  read in one step and written in another, by the thread of whichever
+  device had moved it, so a mouse and a tablet that acted in the same
+  instant could undo each other. A session of the boot test lets a button
+  go on the one and moves the other at once, and one run on CI ended with
+  the pointer where it had been. The place is read and written in one
+  step now, and the host tests have two devices move the pointer two
+  thousand times each at the same moment.
 - [ ] **M14b a compiled world.** Nothing is compiled yet unless somebody
   asks. The world is: `defun` gives a compiled function when a compiler is
   there, at the prompt and in a file that is loaded; the compiler compiles

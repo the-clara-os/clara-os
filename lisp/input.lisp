@@ -145,11 +145,17 @@
           *y* (floor height 2)
           *buttons* 0)))
 
-(defun move-pointer (x y buttons)
-  (let ((x (max 0 (min x (1- *width*))))
-        (y (max 0 (min y (1- *height*))))
-        (changed nil))
+;; The pointer goes to a place, where one is given, and from there by so
+;; much. Where it is now is read and written with the lock held all the
+;; while: each device has a thread of its own, and a mouse and a tablet
+;; that move the pointer at the same moment would otherwise undo each
+;; other, the one writing back the place that it read before the other
+;; moved.
+(defun move-pointer (to-x to-y by-x by-y buttons)
+  (let ((x nil) (y nil) (changed nil))
     (clara:with-lock-held (*lock*)
+      (setq x (max 0 (min (+ (or to-x *x*) by-x) (1- *width*)))
+            y (max 0 (min (+ (or to-y *y*) by-y) (1- *height*))))
       (unless (and (= x *x*) (= y *y*) (= buttons *buttons*))
         (setq *x* x
               *y* y
@@ -245,16 +251,13 @@
              ((= code 1) (setf (input-dy input) (+ (input-dy input) value)))))
     (3 (cond ((= code 0) (setf (input-ax input) value))
              ((= code 1) (setf (input-ay input) value))))
-    (0 (multiple-value-bind (x y) (pointer)
-         (when (input-ax input)
-           (setq x (scale (input-ax input) (input-x-limits input) *width*)))
-         (when (input-ay input)
-           (setq y (scale (input-ay input) (input-y-limits input) *height*)))
+    (0 (let ((buttons (input-buttons input)))
          ;; A button is down when it is down on any of the devices.
-         (let ((buttons (input-buttons input)))
-           (dolist (other *inputs*)
-             (setq buttons (logior buttons (input-buttons other))))
-           (move-pointer (+ x (input-dx input)) (+ y (input-dy input)) buttons))
+         (dolist (other *inputs*)
+           (setq buttons (logior buttons (input-buttons other))))
+         (move-pointer (and (input-ax input) (scale (input-ax input) (input-x-limits input) *width*))
+                       (and (input-ay input) (scale (input-ay input) (input-y-limits input) *height*))
+                       (input-dx input) (input-dy input) buttons)
          (setf (input-dx input) 0
                (input-dy input) 0
                (input-ax input) nil

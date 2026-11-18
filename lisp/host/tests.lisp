@@ -2022,6 +2022,23 @@
   (check "input: no keyboard and no mouse that has a driver here: the serial port is where to type"
          (string-right-trim '(#\Newline) said)))
 
+;; Two devices that move the pointer at the same moment. Each has a thread
+;; of its own, here as on the machine, and neither may undo what the other
+;; did. Under SBCL the two really run at once, so a pointer whose place is
+;; read in one step and written in another loses moves here by the
+;; hundred; on ClaraOS it took a button let go on the tablet in the same
+;; instant as a move of the mouse, which is what a session of the boot test
+;; does, and one boot in ten or so.
+(let ((mouse (clara.input::make-input)) (tablet (clara.input::make-input)))
+  (clara.input:set-pointer-limits 10000 10000)
+  (flet ((moves (input axis)
+           (clara:make-thread (lambda ()
+                                (dotimes (i 2000)
+                                  (clara.input::handle-event input 2 axis 1)
+                                  (clara.input::handle-event input 0 0 0))))))
+    (mapc #'clara:join-thread (list (moves mouse 0) (moves tablet 1))))
+  (check '(7000 7000 0) (multiple-value-list (clara.input:pointer))))
+
 ;;; Disks that are made up: virtio block devices on the same bus, each
 ;;; with its sectors in a vector, which do what such a device does with a
 ;;; request, and look at how the driver put it to them.

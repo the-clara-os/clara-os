@@ -404,6 +404,12 @@ Rules:
   the session first runs the pointer into the corner; and a line that is
   waited for must be the only one of its text, which is why those lines
   are told apart by a word in a list.
+- What several devices share, the pointer for one, is read and written
+  with its lock held from the reading to the writing: every device has a
+  thread of its own, and a thread can lose its turn at any call. The
+  pointer's place was read, worked on and written back in three steps
+  once, and a move of the mouse was undone by a button of the tablet in
+  the same instant, one boot of CI in ten.
 - Keys (lisp/input.lisp). What a keyboard hands on is a code: a
   character's, or for a key that types none a code from `char-code-limit`
   on (`clara.input:+up+` and its like, `+f1+` and the eleven after it), and
