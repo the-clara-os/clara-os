@@ -1100,7 +1100,12 @@ M14b, a compiled world:
   the first. So the collector runs before the first two hundred safe points
   that compiled code comes to in each text (`lisp_compiled_watched`): 1600
   collections, 8 s for that boot under hvf, 41 s where the Mac emulates,
-  and 215 s of the 600 on CI, where the whole run takes 7 minutes again.
+  and on CI 215 s of the 600 in one run and 328 s in the next, of the same
+  code: the runners differ by that much, and the whole run took 7 minutes
+  and then 9. What the compiled texts add to it is small beside that; the
+  boot is long there because of the evaluator's 32000 collections, as it
+  was, and a slow runner on a day when that boot took 435 s for other
+  reasons would have run out of time.
   Two mistakes were planted to see that this still finds what it is for:
   the arguments of a call taken off the stack before the call, which every
   boot notices, and those of a MULTIPLE-VALUE-CALL, which only this one
