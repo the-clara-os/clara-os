@@ -476,7 +476,7 @@ int  lisp_function_rebind(lisp function);               /* for an image: a funct
  * runtime, and it gives it up only at a safe point or to wait. */
 enum lisp_turn { LISP_GO_ON, LISP_STOP, LISP_BREAK };
 struct thread *lisp_first_thread(void (*main)(void));   /* the thread that the Lisp world starts on: it runs main */
-enum lisp_turn lisp_thread_safe_point(void);            /* from the evaluator's safe point: let another thread have its
+enum lisp_turn lisp_thread_safe_point(int may_stop);    /* from the evaluator's safe point: let another thread have its
                                                            turn, and say whether this one is to stop, or was interrupted */
 void lisp_thread_roots(void);                           /* for the collector: what the other threads hold */
 void lisp_interrupt(enum lisp_interrupt source);        /* from its handler: the event of that source is signalled */
@@ -505,6 +505,7 @@ LISP_PRIMITIVE(lisp_p_thread_alive_p);
 LISP_PRIMITIVE(lisp_p_all_threads);
 LISP_PRIMITIVE(lisp_p_join_thread);
 LISP_PRIMITIVE(lisp_p_destroy_thread);
+LISP_PRIMITIVE(lisp_p_interrupt_thread);
 LISP_PRIMITIVE(lisp_p_thread_yield);
 LISP_PRIMITIVE(lisp_p_sleep);
 LISP_PRIMITIVE(lisp_p_make_lock);

@@ -49,7 +49,13 @@ everything that was defined, and loads no Lisp. Lisp draws: a rasterizer
 what a surface has of them, copies one surface to another, and shows on
 the screen what has changed of a picture that was made out of sight,
 `(clara.draw:fill-rectangle (clara.draw:screen) 40 40 200 120 (clara.draw:color 255 184 108))`
-for a start. The same Lisp files load
+for a start. And there is a window manager (lisp/windows.lisp):
+`(clara.windows:start)` takes the screen from the console and puts windows
+on it, each a surface that its program draws on, with the focus, the keys
+and the pointer going to the one that is picked, a launcher along the top,
+and a listener in a window (lisp/terminal.lisp), which is the same world
+as the prompt on the serial port. A world that is saved while it runs
+boots straight into it. The same Lisp files load
 under SBCL on the host, where they are tested against a machine that is
 made up for the purpose.
 [ROADMAP.md](ROADMAP.md) has what comes next, [DESIGN.md](DESIGN.md) the
@@ -96,7 +102,8 @@ Layout:
     kernel/          architecture-independent code and the UEFI handoff (boot.c)
     kernel/arch/     one directory per architecture: the only assembly and the only MMIO addresses
     kernel/lisp/     the Lisp runtime: objects and the heap, symbols and packages, the reader, the printer
-    lisp/            Lisp sources: the language's own part, the console, drawing, the drivers, the file system, the listener;
+    lisp/            Lisp sources: the language's own part, the console, drawing, the drivers, the file system, the listener,
+                     the window manager and the terminal in a window;
                      the build copies them to the ESP's \clara directory, read at boot
     fonts/           the console font, Spleen 8x16, which tools/bdf2c.py turns into kernel/font.c
     site/            the website: the front page and the user manual (manual.html), filled in from the
@@ -130,7 +137,9 @@ what to do at the prompt once it is there.
    on both. `(directory "/clara/*")` lists the files the system was
    loaded from. Ctrl-C stops a form that does not end, `(loop)` for one,
    and the prompt comes back. Ctrl-D ends it, and the kernel halts with
-   `clara: nothing more to do`.
+   `clara: nothing more to do`. `(clara.windows:start)` puts the window
+   manager on the display, with a prompt in a window; the tablet of step 5
+   is its pointer.
 7. `(clara:save-image)` saves the world on the disk. The next start says
    `lisp: the heap is an image` in its report, and whatever was defined is
    there. To start from the Lisp files again, import `build/claraos.img`

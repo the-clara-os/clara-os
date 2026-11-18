@@ -1053,6 +1053,40 @@ static const struct {
     { "(clara:join-thread (clara:current-thread))",
       "error: the thread #<THREAD \"listener\"> cannot wait for itself to finish" },
     { "(clara:join-thread 5)", "error: CLARA:JOIN-THREAD wants a thread, and 5 is not one" },
+    /* values that leave a loop, through its TAGBODY, are all still there */
+    { "(list (multiple-value-list (dolist (x '(1 2)) (return (values x 'two))))"
+      " (multiple-value-list (loop (return (values 1 2 3))))"
+      " (multiple-value-list (dotimes (i 3) (when (= i 1) (return (values i 'one))))))",
+      "((1 TWO) (1 2 3) (1 ONE))" },
+    /* Ctrl-C for one thread: computing, waiting, and the thread itself; it is no error, and can be handled */
+    { "(let* ((started (clara:make-event))"
+      " (thread (clara:make-thread (lambda () (handler-case (progn (clara:signal-event started) (loop))"
+      " (clara:keyboard-interrupt (c) (format nil \"~A\" c)))))))"
+      " (clara:wait-event started)"
+      " (list (clara:interrupt-thread thread) (clara:join-thread thread) (clara:interrupt-thread thread)))",
+      "(T \"interrupted from the keyboard\" NIL)" },
+    { "(let* ((never (clara:make-event)) (waiting (clara:make-event))"
+      " (thread (clara:make-thread (lambda () (clara:signal-event waiting)"
+      " (handler-case (clara:wait-event never) (error () 'an-error) (clara:keyboard-interrupt () 'interrupted))))))"
+      " (clara:wait-event waiting) (clara:thread-yield) (clara:interrupt-thread thread) (clara:join-thread thread))",
+      "INTERRUPTED" },
+    { "(handler-case (progn (clara:interrupt-thread (clara:current-thread)) (identity 1) 'went-on)"
+      " (clara:keyboard-interrupt () 'interrupted))",
+      "INTERRUPTED" },
+    { "(clara:interrupt-thread 5)", "error: CLARA:INTERRUPT-THREAD wants a thread, and 5 is not one" },
+    /* a cleanup is not cut short: a thread that is interrupted or told to stop in the middle of one finishes it first */
+    { "(let ((log nil))"
+      " (handler-case (progn (unwind-protect nil (clara:interrupt-thread (clara:current-thread)) (identity 1)"
+      " (setq log 'cleaned)) (identity 2) 'went-on)"
+      " (clara:keyboard-interrupt () (list 'interrupted log))))",
+      "(INTERRUPTED CLEANED)" },
+    { "(let* ((cleaning (clara:make-event)) (go (clara:make-event)) (log nil)"
+      " (thread (clara:make-thread (lambda () (unwind-protect nil (clara:signal-event cleaning) (clara:wait-event go)"
+      " (identity 1) (push 'cleaned log)) (identity 2) 'went-on))))"
+      " (clara:wait-event cleaning) (clara:destroy-thread thread) (clara:thread-yield) (clara:signal-event go)"
+      " (list (handler-case (clara:join-thread thread) (error () 'stopped)) log))",
+      "(STOPPED (CLEANED))" },
+    { "(list (lisp-implementation-type) (lisp-implementation-version))", "(\"ClaraOS\" \"" CLARA_VERSION "\")" },
     { "(list (sleep 0) (- (length (clara:all-threads)) *threads*))", "(NIL 0)" }, /* the drivers have threads too */
     /* memory by its address, in page frames that are nobody else's */
     { "(defvar *page* (clara.unsafe:allocate-memory 2))"
@@ -1395,8 +1429,8 @@ static void load(const char *file)
  * the world. */
 static void new_world(void)
 {
-    static const char *const world[] = { "font.lisp",  "console.lisp", "draw.lisp", "pci.lisp",     "virtio.lisp",
-                                         "input.lisp", "disk.lisp",    "fat.lisp",  "listener.lisp" };
+    static const char *const world[] = { "font.lisp", "console.lisp", "draw.lisp",     "pci.lisp",     "virtio.lisp",  "input.lisp",
+                                         "disk.lisp", "fat.lisp",     "listener.lisp", "windows.lisp", "terminal.lisp" };
     uint64_t before[LISP_TYPES], after[LISP_TYPES];
 
     collector_selftest();
@@ -1409,7 +1443,7 @@ static void new_world(void)
     for (unsigned i = 0; i < sizeof world / sizeof world[0]; i++)
         load(world[i]);
     lisp_heap_census(before);
-    kprintf("lisp: the console, drawing, the drivers, the files and the listener are loaded, %llu more functions\n",
+    kprintf("lisp: the console, drawing, the drivers, the files, the listener and the windows are loaded, %llu more functions\n",
             before[LISP_FUNCTION] - after[LISP_FUNCTION]);
 }
 
@@ -1419,9 +1453,11 @@ static void new_world(void)
  * the console, which takes the serial port and the screen over from the
  * substrate; the drivers, which find the devices on the PCI bus, start a
  * thread for each keyboard and mouse, and open the disks; the file system,
- * which finds the volumes on them; what draws, which finds the screen; and
- * the listener, which reads what is
- * typed, evaluates it and prints what it gives, until the input ends.
+ * which finds the volumes on them; what draws, which finds the screen; the
+ * window manager, when the world was saved with it running; and the
+ * listener, which reads what is typed on the serial port, and on the
+ * keyboard unless the window manager has that, evaluates it and prints
+ * what it gives, until the input ends.
  * Should a condition come all the way out of the listener, it is started
  * again and told so. */
 static void lisp_main(void)
@@ -1445,6 +1481,14 @@ static void lisp_main(void)
     if (!lisp_evaluate(own_form("(let ((draw (find-package \"CLARA.DRAW\")))"
                                 "  (if draw (funcall (intern \"START\" draw))))")))
         panic("lisp: drawing did not start");
+    /* The window manager, in a world that was saved while it ran: it takes
+     * the screen, the keyboard and the pointer again, and opens a listener
+     * in a window. That is the world's to say and not the substrate's, so
+     * all that is here is the question. The listener below goes on all the
+     * same, with the serial port. */
+    if (!lisp_evaluate(own_form("(let ((windows (find-package \"CLARA.WINDOWS\")))"
+                                "  (if windows (funcall (intern \"RESUME\" windows))))")))
+        panic("lisp: the window manager did not start");
     listen = own_form("clara.listener:run");
     while (!lisp_call(listen, told, &condition)) {
         condition = lisp_values.value[0];

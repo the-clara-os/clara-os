@@ -14,7 +14,10 @@
 ;;;; is where the listener reads its lines (lisp/console.lisp). Where the
 ;;;; pointer is and which of its buttons are down is kept here for whoever
 ;;;; asks, POINTER, with an event for whoever waits for it to change,
-;;;; POINTER-CHANGED: nothing draws a pointer yet.
+;;;; POINTER-CHANGED. Both can be sent somewhere else, to a function that
+;;;; is called for every character and one that is called for every change
+;;;; of the pointer: the window manager asks for that (lisp/windows.lisp),
+;;;; and it is what draws the pointer.
 ;;;;
 ;;;; The codes are Linux's (include/uapi/linux/input-event-codes.h), and a
 ;;;; key's code is the key and not the character on it: which character a
@@ -24,7 +27,7 @@
 (defpackage "CLARA.INPUT"
   (:use "COMMON-LISP")
   (:export "START" "DEVICES" "POINTER" "POINTER-CHANGED" "SET-POINTER-LIMITS" "KEY-CHARACTER"
-           "*REPEAT-DELAY*" "*REPEAT-INTERVAL*"))
+           "SEND-KEYS-TO" "SEND-POINTER-TO" "*REPEAT-DELAY*" "*REPEAT-INTERVAL*"))
 (in-package "CLARA.INPUT")
 
 ;;; Keys
@@ -72,6 +75,24 @@
 (defvar *x* 512)
 (defvar *y* 384)
 (defvar *buttons* 0)
+(defvar *keys-to* nil)     ; a function of a character's code, for what is typed; NIL means the console
+(defvar *pointer-to* nil)  ; a function of the pointer's place and its buttons, called when any has changed, or NIL
+
+;; What is typed goes to FUNCTION from now on, a character's code to the
+;; call, and with NIL to the console again. The function is called in the
+;; thread of the keyboard, and so is the one that is told of the pointer:
+;; what either does wrong is said, and the device goes on.
+(defun send-keys-to (function)
+  (setq *keys-to* function))
+
+(defun send-pointer-to (function)
+  (setq *pointer-to* function))
+
+(defun deliver (function &rest arguments)
+  (handler-case (apply function arguments)
+    (error (condition)
+      (fresh-line)
+      (format t "input: what was typed or pointed at came to nothing: ~A~%" condition))))
 
 ;; Where the pointer is, and its buttons: three values.
 (defun pointer ()
@@ -101,7 +122,10 @@
               *y* y
               *buttons* buttons
               changed t)))
+    ;; Whoever waits for the event finds that the function has been told.
     (when changed
+      (when *pointer-to*
+        (deliver *pointer-to* x y buttons))
       (clara:signal-event *changed*))))
 
 ;;; A device
@@ -152,7 +176,9 @@
 (defun type-key (input key)
   (let ((code (key-character key (/= 0 (input-shift input)) (/= 0 (input-control input)) (input-caps input))))
     (when code
-      (clara.console:key-typed code))))
+      (if *keys-to*
+          (deliver *keys-to* code)
+          (clara.console:key-typed code)))))
 
 ;; A place on a tablet's axis, as the place on the screen's.
 (defun scale (value limits size)
@@ -301,7 +327,9 @@
 ;; each. A device that does not start is said, and left alone: the serial
 ;; port is still there to type on.
 (defun start ()
-  (setq *inputs* nil)
+  (setq *inputs* nil
+        *keys-to* nil
+        *pointer-to* nil)
   (multiple-value-bind (address width height) (clara.unsafe:framebuffer)
     (when address
       (set-pointer-limits width height)))

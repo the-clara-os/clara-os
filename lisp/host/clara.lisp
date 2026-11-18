@@ -20,7 +20,7 @@
 (defpackage "CLARA"
   (:use "COMMON-LISP")
   (:export "MAKE-THREAD" "CURRENT-THREAD" "THREADP" "THREAD-NAME" "THREAD-ALIVE-P" "ALL-THREADS"
-           "JOIN-THREAD" "DESTROY-THREAD" "THREAD-YIELD"
+           "JOIN-THREAD" "DESTROY-THREAD" "INTERRUPT-THREAD" "THREAD-YIELD"
            "MAKE-LOCK" "ACQUIRE-LOCK" "RELEASE-LOCK" "WITH-LOCK-HELD"
            "MAKE-EVENT" "SIGNAL-EVENT" "WAIT-EVENT"
            "MAKE-STREAM" "KEYBOARD-INTERRUPT" "PROVIDE-FILES" "SAVE-IMAGE"))
@@ -115,6 +115,13 @@
 (defun destroy-thread (thread)
   (when (thread-alive-p thread)
     (sb-thread:terminate-thread (thread-native thread))
+    t))
+
+;; Ctrl-C, for that thread: KEYBOARD-INTERRUPT is signalled in it, wherever
+;; it is, computing or waiting.
+(defun interrupt-thread (thread)
+  (when (thread-alive-p thread)
+    (sb-thread:interrupt-thread (thread-native thread) (lambda () (error 'keyboard-interrupt)))
     t))
 
 (defun thread-yield ()

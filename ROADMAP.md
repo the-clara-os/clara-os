@@ -256,8 +256,37 @@ The world:
   screen: it carries the version it shows, and the site is not built from
   one of another version. The manual lists what every package of the world
   exports, held against the files.
-- [ ] **M12 the window manager.** Windows, focus, input routing, a REPL
-  window, a launcher; the saved image boots straight into it.
+- [x] **M12 the window manager** (2026-11-18, version 0.0.17). Windows
+  (lisp/windows.lisp): each is a surface that its program draws on, in a
+  frame with its title, and they lie over one another on a desk. The
+  screen is put together out of sight, the desk, the windows from the
+  lowest up, the launcher's list and the pointer over them all, and only
+  the rectangles that have changed are put together again and copied to
+  it. The window on top has the focus: what is typed goes to it, a click
+  brings a window to the top, its title is where it is taken hold of and
+  moved, and the box at the end of the title closes it. The keyboard and
+  the pointer reach the window manager as calls from their drivers, a
+  character or a change at a time, and a window is told of its keys, of
+  the buttons on its inside and of its close box by functions that it was
+  opened with. A launcher along the top of the screen lists the
+  applications that are defined and starts the one that is picked, in a
+  thread of its own, whose windows are closed when it ends. The first
+  application is the listener in a window (lisp/terminal.lisp): a
+  terminal, which is a window with cells and a stream, and the console's
+  own listener reading from it, a thread to the window and one world for
+  them all. Ctrl-C in a window stops what that window computes: any
+  thread can be interrupted the way the one at the serial port is
+  (`clara:interrupt-thread`). The console lends the screen, goes on with
+  the serial port, and has the screen back when the window manager stops.
+  A world that is saved while the window manager runs boots straight into
+  it. `lisp-implementation-type` and `lisp-implementation-version` say
+  what the system is, which the launcher's bar shows. Found on the way and
+  mended: values that left a loop by RETURN lost all but the first of
+  them. The host tests hold every pixel of the screen against a rule of
+  their own after everything that is done to it, and every machine of
+  `make test` types into a window on QEMU's keyboard, moves, launches and
+  closes with QEMU's mouse, saves the world there, and starts again in the
+  window manager, whose screen is the picture on the website.
 - [ ] **M13 applications.** A text editor and a file browser as the first
   two Lisp applications, loaded and unloaded while the system runs.
 
@@ -702,36 +731,163 @@ Infrastructure, for sessions with budget left over:
   is; two texts begin in memory now and run off the end of it. And the
   tests found a mistake as they were written: the outline of a rectangle
   that has no width drew its left edge.
+  From M12: the two sessions from the disk image that macOS makes, with
+  4 GiB and four processors, and on x86_64 with 128 MiB, `-cpu max` and
+  four processors; a machine without a screen (x86_64 with `-vga none`),
+  where the window manager does not start, and says so when a window is
+  asked for; a machine with no keyboard and no pointer (`INPUT=`), where it
+  starts, and its window is typed in and moved by the functions that the
+  drivers would call; the window manager started and stopped, a window
+  opened, drawn on, moved and closed and a form typed into the listener's
+  window on the keyboard, all with a collection at every safe point of the
+  evaluator, 20 s; how long things take, in the hundredths of a second
+  that the machine counts: under Apple's hypervisor half a millisecond for
+  a line of 72 characters in a window of 80 by 24 cells that moves up a
+  row for it, half a millisecond to move that window, and 50 µs to move
+  the pointer; emulated on the same Mac, 5 ms, 4 ms and 0.75 ms; the
+  manual's new chapter, as a browser shows it; the whole of `make test` in
+  an Ubuntu container, with clang 18, QEMU 8.2 and SBCL 2.2.9. And the
+  code broken on purpose, 105 ways. lisp/windows.lisp, by the host tests,
+  57 ways: rectangles that are joined into less than both; the damage of a
+  window without its band, or a column short, and that of the pointer too
+  low by a third; a bar without its word, or with the system's name where
+  there is no room; a frame that is never lit, or always, without its
+  bottom line, with a side a column in; a title that runs into the box,
+  and a box on a window that cannot be closed; a window that hides more
+  than it covers, a band that is not counted as window, the topmost
+  painted first, the pointer under the list, a screen that is put together
+  and not shown, and a rectangle forgotten that was never painted; a
+  window that can go above the bar, or is kept wholly on the screen; an
+  old top that stays lit under a new window or a raised one, and a next
+  one that is not lit after a close; a new window that is not the colour
+  of paper, that keeps the damage of being made, that goes where the one
+  before went; a window closed by a thread that is not its own, a surface
+  that is not freed, a closed window that is still held; what was drawn,
+  shown at the corner of the screen; a move that leaves the old picture;
+  keys that go to the lowest window; the line of a frame taken for desk,
+  the whole band taken for the box, the lowest window found under the
+  pointer and not the topmost; a program told the place on the screen and
+  not on its inside, not told of a button that comes up, or told at every
+  move; a list read from the top of the screen, left open, opened by the
+  whole bar; a click that does not raise, a box that calls at every click,
+  a window of no thread that cannot be closed; a pointer that leaves a
+  trail, a hold that outlasts the button, every move taken for a press; an
+  application defined twice over, one that leaves its windows; keys that
+  stay with the console, a console that keeps the screen, a stop that
+  keeps the keys, the surface, the applications or the screen; a boot that
+  keeps the windows of the machine before, that starts the window manager
+  whatever the world says, or never. All were noticed. lisp/terminal.lisp,
+  the console and the driver of the keyboards and pointers, by the host
+  tests, 35 ways: a terminal that does not move its rows up, or leaves the
+  last one as it was; a place that does not move on, no new row at the
+  last column, a run of characters as long as the string; Backspace and a
+  carriage return that do nothing, a tab that is one space; text that is
+  drawn and not shown; a cursor that is never taken away, that shows when
+  nobody reads, that is at the top of its cell; CLEAR that leaves the
+  place; Ctrl-C that is always a character, or never, with what was typed
+  ahead kept, with a line that waits not seen; a reading that goes on past
+  the end of its line, or is never over; a listener that writes somewhere
+  else, whose box does nothing, that says nothing first; a terminal of any
+  size; a console that draws while the screen is lent, a screen that comes
+  back as it was left, or to where the console was, or that was never
+  lent; a loan that outlasts the machine; a line feed after a carriage
+  return taken for a line, an echo on another stream; a failure in what is
+  told of a key or the pointer that takes the driver down; the pointer
+  told after whoever waits, or when nothing changed; keys that go to the
+  console whatever was asked; a boot that keeps where they went. Three got
+  through at first, and the tests have what catches each since: the last
+  row left as it was after a scroll, because the row that the test wrote
+  there was as long as the one before; the refusal of a terminal of no
+  size, which the window under it refused in other words; and the loan of
+  the screen that outlasts the machine. The substrate and the sessions, by
+  booting, 13 ways: values that are lost on the way out of a loop; an
+  interrupt that stops the thread for good, or is never looked at; a
+  version that is the name; a world without the terminal; a boot that does
+  not ask the window manager; and, for the sessions to notice on a real
+  keyboard and mouse, a box that does nothing, a hold that does not move, a
+  list that launches nothing, a stop that leaves the desk on the screen,
+  keys that go nowhere; a cleanup that can be cut short, and a stop that
+  is forgotten when it came during one. All were noticed, and one of them
+  showed a mistake that no case was looking for. With the launcher broken,
+  a listener's thread once ended holding the window manager's lock: Ctrl-C
+  had reached it at the safe point before the call that gives a lock back,
+  in the cleanup of an UNWIND-PROTECT, and the cleanup stopped there. DESTROY-THREAD
+  could always do that to a thread, which then died with the lock; an
+  interrupt leaves the thread alive to ask for the lock again. A thread is
+  no longer stopped or interrupted in the middle of a cleanup. And before
+  any of this, the first boot with windows found that values which leave a
+  loop by RETURN lost all but the first, in the evaluator since M6b, where
+  SBCL keeps them: the function that says which window the pointer is on
+  gives two.
 
 Shortcuts and loose ends, under the milestone that settles each one. A
 session reads its own group before it starts, and whatever it leaves open
 is added here in the same change.
 
-M12:
+M13:
 
-- The console does not draw with lisp/draw.lisp. It has the screen, draws
-  its cells with CLARA.UNSAFE as before, turns a colour into a pixel by a
-  function of its own, and moves the pixels up when a line is full,
-  whatever they show: what a program puts on the screen lies under the
-  next line of text that reaches it and scrolls away with the rest. A
-  window manager has to take the screen from the console, which then goes
-  on with the serial port alone, and a console in a window draws like
-  everything else.
-- Nothing draws the pointer yet. A picture of one bit to the pixel, drawn
-  without a background, is what it would be drawn with, and what was under
-  it has to be put back when it moves.
-- A surface is one thread's at a time. What drawing is kept to and what was
-  drawn on are the surface's own, and nothing locks them: two threads that
-  draw on one surface get in each other's way.
-- What a world starts with is three lines of C, the same for a world that
-  was loaded from the files and for one that came as an image: the console,
-  the drivers and the file system, and the listener (kernel/lisp/lisp.c). An
-  image that is to boot straight into a window manager has to say so itself:
-  a function of its own that the substrate calls in place of the listener.
+- The boot with a collection at every safe point takes 331 s on CI of the
+  600 that it is given, and took 227 s before the window manager was in
+  the world: each of its collections goes through the whole heap. An
+  editor and a file browser are more world again. Before they go in, that
+  session has to get cheaper, by collecting at every tenth safe point, or
+  by not loading boot.lisp a second time under it, or its limit longer.
+- Keys that type no character reach nobody: the arrows, Home and End, the
+  function keys, Alt. An editor needs the arrows, and the window manager
+  has no key of its own: nothing on the keyboard brings another window to
+  the top, opens the launcher's list or closes a window, which the pointer
+  does, or a function at a prompt.
+- An application is a function that is defined in the world, by a file
+  that was loaded or at a prompt, and the launcher lists what is defined.
+  Nothing loads an application from its file when it is picked, and
+  nothing takes one out of the list again.
+- A window's program is told of a button of the pointer that goes down or
+  comes up on its inside, and not of the pointer moving there, nor of the
+  wheel. A window is the size it was opened with.
+- A terminal keeps no memory of what it shows: text that has moved off its
+  top is gone, nothing can be marked or copied, and its window cannot be
+  drawn again in another size. A line that is typed there is edited with
+  Backspace alone, as on the console.
 
 No milestone yet, to be picked up when they start to matter:
 
-- Drawing. What can be drawn is rectangles, outlines a pixel thick, text
+- Windows. The windows that were open when a world was saved do not come
+  back: the window manager starts with one listener, whatever was open.
+  One lock is held for everything that is done to the screen, and what a
+  window is told is called in the thread of the keyboard or of the mouse:
+  a function there that takes long, LAUNCH for one, which waits for the
+  application's window, holds that device up. QEMU sends the buttons of
+  its mouse through another device than its moves, the tablet, each with a
+  thread of its own, so a burst of both from a script can be handled out
+  of order; a person is slower than that. A window whose thread ended
+  without closing it, one that a thread opened at no launcher's bidding
+  and then finished, stays on the screen: its close box closes it, if it
+  has one, and CLOSE-WINDOW from anybody. CLOSE-WINDOW is refused to every thread but the
+  window's own while that one lives, also where it would do no harm.
+  Ctrl-C in a window forgets what was typed ahead of it. The cursor of a
+  terminal shows while its thread reads, whether or not its window has the
+  focus. What is drawn on the screen itself while the window manager runs,
+  by `clara.draw:show` or on the screen as a surface, is painted over when
+  a window moves there. The surface that the screen is put together on is
+  as large as the screen, page frames side by side, 469 of them for 800 by
+  600, and a rectangle that changes is painted from the desk up unless one
+  window takes in all of it: how long that takes on a large screen, or on
+  a real display, has not been measured. Ctrl-D on the serial port halts
+  the machine with its windows open. A world that an older kernel saved
+  starts without the window manager, as one from before 0.0.16 starts
+  without what draws, and its console and its driver for the keyboard are
+  the older ones as well: whether the files of lisp/, loaded at its
+  prompt, bring the window manager in has not been tried. Nor has the
+  window manager been tried in UTM, where the keyboard and the tablet of
+  virtio have to be added by hand.
+
+- Drawing. A surface is one thread's at a time: what drawing is kept to
+  and what was drawn on are the surface's own, and nothing locks them, so
+  two threads that draw on one surface get in each other's way, and a
+  surface that one thread frees while another draws on it is memory that
+  is written to after it was given back. The window manager keeps a
+  window's surface to the thread that opened the window for that reason.
+  What can be drawn is rectangles, outlines a pixel thick, text
   in the one font and its one size, pictures of one bit to the pixel that
   are 62 pixels wide at most, and copies. There are no lines but along a
   row or a column, no curves, no scaling, and nothing between a pixel that
@@ -932,8 +1088,8 @@ No milestone yet, to be picked up when they start to matter:
   States has on them, and nothing else can be chosen. Alt, the arrows
   and the function keys type nothing, so a line is still edited with
   Backspace alone. Caps Lock has no light: the queue that would carry it
-  to the device is not set up. A mouse's wheel is ignored, and nothing
-  draws the pointer, whose place is kept for whoever asks. Every device
+  to the device is not set up. A mouse's wheel is ignored. The pointer is
+  drawn by the window manager, and by nothing while that does not run. Every device
   costs a Lisp thread, a megabyte of stack and 644 KiB. `clara.input:start`
   is for the boot: called again, it opens the devices afresh and leaves
   the old threads and their memory behind.
@@ -962,6 +1118,10 @@ No milestone yet, to be picked up when they start to matter:
   no priorities, like the substrate's. A Lisp thread costs a megabyte of
   stack and 644 KiB for the evaluator whatever it does, and
   `make-thread` is an error when the machine has no such memory left.
+- A thread is not stopped and not interrupted in the middle of the
+  cleanup of an UNWIND-PROTECT: that waits until the cleanup is done. So a
+  cleanup that never ends, one that waits for what does not come, makes a
+  thread that nothing stops.
 - A lock that a thread holds when it ends stays held. A lock cannot be
   taken twice by its holder, there is no wait for one with a limit, and
   there are no condition variables: an event does for what they would.
@@ -1018,7 +1178,10 @@ No milestone yet, to be picked up when they start to matter:
   it. A character has one of the ten names in read.c, or `U+` and its
   code point.
 - The console in Lisp writes a character at a time, some forty calls of
-  the evaluator for each, and its lock is taken once for every string.
+  the evaluator for each, and its lock is taken once for every string. It
+  draws its cells with CLARA.UNSAFE and a pixel of its own making, and not
+  with lisp/draw.lisp: a terminal in a window does, a row of characters to
+  the call.
   It has one colour. It scrolls by copying every row of pixels up, and
   so does the substrate's console since M7: that reads the framebuffer,
   which a real display is slow at. When the kernel reports a fault while
@@ -1049,7 +1212,10 @@ No milestone yet, to be picked up when they start to matter:
   stands in for CI on the Mac 2.2.9. The stress boot, a collection at every
   safe point, takes 18 s on the Mac, two minutes there when AArch64 is
   emulated, and between two and five on CI, 132 s to 294 s on four runs of
-  nearly the same kernel, of the ten that the boot test gives it. It grows
+  nearly the same kernel, of the ten that the boot test gives it. With the
+  window manager in the world (0.0.17) it is 19 s on the Mac, two and a
+  half minutes in the container, and 331 s on CI, where the kernel before
+  took 227 s. It grows
   with the world, since each of those collections goes through the whole
   heap, so it wants a cheaper session or a longer limit before the world is
   half as large again; a text in the kernel's self-test that goes round a
@@ -1189,7 +1355,7 @@ No milestone yet, to be picked up when they start to matter:
   machine describes how its devices' interrupt lines are wired.
 - QEMU's hvf has no GIC version 2, which is why `make test` boots AArch64
   a second time, emulated.
-- None of M4 to M11 has been booted in UTM itself. UTM runs AArch64
+- None of M4 to M12 has been booted in UTM itself. UTM runs AArch64
   under hvf with GIC version 3, four processors and 4 GiB, and that was
   checked with Homebrew's QEMU 11 from the disk image; UTM brings QEMU
   10.0 and a display device of its own. Whether its machine takes

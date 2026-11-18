@@ -69,6 +69,9 @@
 (load-source "lisp/disk.lisp")
 (load-source "lisp/fat.lisp")
 (load-source "lisp/listener.lisp")
+(load-source "lisp/windows.lisp")
+(load-source "lisp/terminal.lisp")
+(defvar *defined-applications* clara.windows::*applications*) ; what the files defined, for the tests to put back
 
 ;;; Names. boot.lisp is the part of Common Lisp that ClaraOS has in Lisp,
 ;;; and SBCL has all of it already, so it is read here as text. What it
@@ -415,15 +418,15 @@
                           (push (list (cursor) (and clara.console::*cursor* t)) seen)))
   (clara.host:type-bytes '(120 13))
   ;; A look at the screen from inside the line: when the x has been echoed.
-  (let ((echo (symbol-function 'clara.console::echo)))
+  (let ((stream clara.console::*stream*))
     (unwind-protect
          (progn
-           (setf (symbol-function 'clara.console::echo)
-                 (lambda (string)
-                   (funcall echo string)
-                   (setf (clara.unsafe:port-8 #x80) 0)))
+           (setq clara.console::*stream*
+                 (clara:make-stream :write-string (lambda (string)
+                                                    (clara.console:write-text string)
+                                                    (setf (clara.unsafe:port-8 #x80) 0))))
            (check "x" (clara.console:read-text-line)))
-      (setf (symbol-function 'clara.console::echo) echo)))
+      (setq clara.console::*stream* stream)))
   (check '(((1 0) t) ((0 1) t)) seen))
 (check '(nil nil) (list clara.console::*cursor* clara.console::*reading*))
 (check t (and (shows-p 0 0 #\x) (bar-p 0 1 clara.console::*paper*) (bar-p 1 0 clara.console::*paper*)))
@@ -455,6 +458,7 @@
 (let ((*standard-output* *standard-output*) (*standard-input* *standard-input*))
   (setq *sent* nil
         clara.console::*screen* #x7fff0000
+        clara.console::*lent* t
         clara.console::*cursor* #x7fff0100
         clara.console::*reading* t
         clara.console::*keys* (list 97)
@@ -462,9 +466,9 @@
   (clara.host:set-serial-device :pl011 #x9000000)
   (attach-pl011 #x9000000)
   (clara.console:start)
-  (check '(nil nil nil nil nil)
+  (check '(nil nil nil nil nil nil)
          (list clara.console::*screen* clara.console::*cursor* clara.console::*reading* clara.console::*keys*
-               clara.console::*after-return*))
+               clara.console::*after-return* clara.console::*lent*))
   (format t "still here~%")
   (check "still here" (string-right-trim '(#\Return #\Newline) (text-of (sent)))))
 
@@ -1541,7 +1545,49 @@
     (check '((0 0 0) t) (events tablet (second vdevs) 3 0 0 0 0 0))      ; one axis, and the other stays
     (check '((0 249 0) t) (events tablet (second vdevs) 3 1 600 0 0 0))
     (check '((0 0 0) t) (events tablet (second vdevs) 3 1 -5 0 0 0))     ; a tablet that counts past its own ends
-    (check '((10 0 0) t) (events mouse (first vdevs) 2 0 10 0 0 0))))    ; and the mouse goes on from where the pen was
+    (check '((10 0 0) t) (events mouse (first vdevs) 2 0 10 0 0 0))     ; and the mouse goes on from where the pen was
+    ;; The pointer can be sent to a function, which is told of every change
+    ;; of it, and before whoever waits for the event is. A function that
+    ;; fails is said, and the pointer goes on.
+    (let ((told nil))
+      (clara.input:send-pointer-to (lambda (x y buttons) (push (list x y buttons (clara:wait-event changed 0)) told)))
+      (check '((15 0 0) t) (events mouse (first vdevs) 2 0 5 0 0 0))
+      (check '((15 0 1) t) (events mouse (first vdevs) 1 #x110 1 0 0 0))
+      (check '((15 0 1) nil) (events mouse (first vdevs) 0 0 0))         ; nothing changed: nobody is told
+      (check '((15 0 1 nil) (15 0 0 nil)) told)
+      (clara.input:send-pointer-to (lambda (x y buttons) (error "no place like ~D ~D ~D" x y buttons)))
+      (check (format nil "input: what was typed or pointed at came to nothing: no place like 20 0 1~%")
+             (with-output-to-string (*standard-output*)
+               (check '((20 0 1) t) (events mouse (first vdevs) 2 0 5 0 0 0))))
+      (clara.input:send-pointer-to nil)
+      (check '((25 0 1) t) (events mouse (first vdevs) 2 0 5 0 0 0))
+      (check 2 (length told)))))
+
+;; What is typed can be sent to a function as well, in place of the
+;; console; and START, which is for a new boot, sends both where they went
+;; at first.
+(let ((input (clara.input::make-input)) (got nil))
+  (setq clara.console::*keys* nil)
+  (clara.input:send-keys-to (lambda (code) (push code got)))
+  (clara.input::key-event input 30 1)          ; the key A, down and up
+  (clara.input::key-event input 30 0)
+  (check '((97) nil) (list got clara.console::*keys*))
+  (clara.input:send-keys-to (lambda (code) (error "nobody is at ~D" code)))
+  (check (format nil "input: what was typed or pointed at came to nothing: nobody is at 97~%")
+         (with-output-to-string (*standard-output*)
+           (clara.input::key-event input 30 1)))
+  (clara.input::key-event input 30 0)
+  (clara.input:send-keys-to nil)
+  (clara.input::key-event input 31 1)          ; S, for the console
+  (clara.input::key-event input 31 0)
+  (check '((97) (115)) (list got clara.console::*keys*))
+  (setq clara.console::*keys* nil)
+  (clara.input:send-keys-to #'identity)
+  (clara.input:send-pointer-to #'list)
+  (new-bus)
+  (with-output-to-string (*standard-output*)
+    (clara.input:start))
+  (check '(nil nil) (list clara.input::*keys-to* clara.input::*pointer-to*)))
 
 ;; START: it finds the devices, says what they are, and gives each a
 ;; thread, which takes in what the device's message announces.
@@ -2845,6 +2891,604 @@
                                                          (error 'clara:keyboard-interrupt)
                                                          line))))))
              (clara.listener:run)))))
+
+;;; The window manager, on a screen that is made up. What the screen should
+;;; show is worked out here, pixel by pixel, from the windows there are and
+;;; where they lie, by a rule of the tests' own: the pointer over the
+;;; launcher's list, that over the windows from the topmost down, those over
+;;; the bar and the desk. After everything that is done, every pixel of the
+;;; screen has to be what the rule says.
+
+(defconstant +desk+ #x2d2942)
+(defconstant +paper+ #x1e1b2e)
+(defconstant +ink+ #xe8e3f4)
+(defconstant +lit+ #xffb86c)
+(defconstant +dim+ #x4a4466)
+
+(defvar *desk-width* 0)
+(defvar *desk-height* 0)
+
+(defun eventually (function)
+  (loop repeat 1000
+        do (when (funcall function)
+             (return t))
+           (sleep 0.005)))
+
+;; A machine with a screen, what draws started on it, and the window manager
+;; as a world has it that never ran one.
+(defun new-desk (&key (width 200) (height 140) applications (start t))
+  (clara.host:reset-machine)
+  (setq *desk-width* width
+        *desk-height* height
+        *pitch* (* 4 (+ width 2))
+        *pixels* (clara.unsafe:allocate-memory (ceiling (* *pitch* height) 4096)))
+  (clara.host:set-framebuffer *pixels* width height *pitch* #xff0000 #x00ff00 #x0000ff)
+  (with-output-to-string (*standard-output*)
+    (clara.draw:start))
+  (clara.input:set-pointer-limits width height)
+  (clara.input:send-keys-to nil)
+  (clara.input:send-pointer-to nil)
+  (setq clara.windows::*running* nil
+        clara.windows::*applications* applications)
+  (clara.windows:resume)
+  (and start (clara.windows:start)))
+
+;; What a window puts at a place on the screen, or NIL when it is not there.
+(defun window-rule (window x y lit)
+  (let* ((wx (clara.windows::window-x window)) (wy (clara.windows::window-y window))
+         (width (clara.windows::window-width window)) (height (clara.windows::window-height window))
+         (box (clara.windows::window-close window))
+         (frame (if lit +lit+ +dim+)) (text (if lit +paper+ +ink+)))
+    (cond ((and (<= wx x (+ wx width -1)) (<= wy y (+ wy height -1)))
+           (word-at (clara.windows:window-surface window) (- x wx) (- y wy)))
+          ((not (and (<= (1- wx) x (+ wx width)) (<= (- wy 21) y (+ wy height))))
+           nil)
+          ((>= y wy) frame)                   ; the line down each side and along the bottom
+          ((and (<= (+ wx 3) x) (< x (- (+ wx width) 3 (if box 16 0)))
+                (text-p (clara.windows:window-title window) (- x wx 3) (- y (- wy 19))))
+           text)
+          ((and box (glyph-p #\x (- x (- (+ wx width) 12)) (- y (- wy 19)))) text)
+          (t frame))))
+
+(defun bar-rule (x y)
+  (let* ((name (format nil "~A ~A" (lisp-implementation-type) (lisp-implementation-version)))
+         (at (- *desk-width* 8 (* 8 (length name)))))
+    (cond ((>= y 20) nil)
+          ((text-p "Applications" (- x 8) (- y 2)) +ink+)
+          ((and (>= at 112) (text-p name (- x at) (- y 2))) +ink+)
+          (t +paper+))))
+
+(defun menu-rule (x y)
+  (let* ((names (clara.windows:applications))
+         (width (reduce #'max (mapcar (lambda (name) (+ 16 (* 8 (length name)))) names) :initial-value 112))
+         (height (* 20 (length names))))
+    (cond ((not (and clara.windows::*menu* (< -1 x width) (<= 20 y (+ 19 height)))) nil)
+          ((or (= x 0) (= x (1- width)) (= y 20) (= y (+ 19 height))) +ink+)
+          ((text-p (nth (floor (- y 20) 20) names) (- x 8) (- (mod (- y 20) 20) 2)) +ink+)
+          (t +paper+))))
+
+(defun pointer-rule (x y)
+  (let ((dx (- x clara.windows::*pointer-x*)) (dy (- y clara.windows::*pointer-y*)))
+    (and (<= 0 dx 11) (<= 0 dy 18)
+         (cond ((logbitp (- 11 dx) (aref clara.windows::*arrow-edge* dy)) 0)
+               ((logbitp (- 11 dx) (aref clara.windows::*arrow-fill* dy)) +ink+)))))
+
+(defun should-show (x y)
+  (or (pointer-rule x y)
+      (menu-rule x y)
+      (let ((windows (clara.windows:windows)))
+        (loop for window in windows
+              thereis (window-rule window x y (eq window (first windows)))))
+      (bar-rule x y)
+      +desk+))
+
+;; How many pixels of the screen are not what they should be, and the first
+;; of them, for whoever has to find out why.
+(defun wrong-pixels ()
+  (let ((wrong 0) (first nil))
+    (dotimes (y *desk-height*)
+      (dotimes (x *desk-width*)
+        (let ((shown (pixel-at x y)) (should (should-show x y)))
+          (unless (= shown should)
+            (incf wrong)
+            (unless first
+              (setq first (list x y shown should)))))))
+    (if first (list wrong first) 0)))
+
+;; Without a screen there is nothing to start, and nothing to open a window with.
+(clara.host:reset-machine)
+(with-output-to-string (*standard-output*) (clara.draw:start))
+(setq clara.windows::*running* nil)
+(check '(nil nil nil) (list (clara.windows:resume) (clara.windows:start) (clara.windows:running-p)))
+(check-condition error (clara.windows:open-window "nowhere" 40 30))
+(check nil (clara.windows:stop))
+
+;; Started: the desk, the bar with what the system is, and the pointer in
+;; the middle. The keys and the pointer are the window manager's.
+(check t (new-desk))
+(check 0 (wrong-pixels))
+(check '(t t nil) (list (clara.windows:running-p) (clara.windows:start) (clara.windows:windows)))
+(check t (and (eq clara.input::*keys-to* #'clara.windows:key-typed)
+              (eq clara.input::*pointer-to* #'clara.windows:pointer-moved)))
+(check 65 (clara.windows:key-typed 65))        ; typed with no window to have it: nothing happens
+(new-desk :width 110)                          ; too narrow for the system's name: the button alone
+(check 0 (wrong-pixels))
+
+;; A window: on top, with the focus, the colour of paper inside; what is
+;; drawn on its surface is on the screen when it has been shown, and not
+;; before.
+(new-desk)
+(defvar *a* (clara.windows:open-window "First" 60 40))
+(check 0 (wrong-pixels))
+(check '(t "First" (40 64) 60 40)
+       (list (clara.windows:window-p *a*) (clara.windows:window-title *a*)
+             (multiple-value-list (clara.windows:window-position *a*))
+             (clara.draw:surface-width (clara.windows:window-surface *a*))
+             (clara.draw:surface-height (clara.windows:window-surface *a*))))
+(check (list +paper+ +paper+) (list (clara.draw:pixel (clara.windows:window-surface *a*) 0 0) (pixel-at 99 103)))
+(check '(t t) (list (eq (clara.windows:focused-window) *a*) (equal (clara.windows:windows) (list *a*))))
+(check nil (clara.windows:show *a*))           ; nothing was drawn
+(clara.draw:fill-rectangle (clara.windows:window-surface *a*) 5 5 20 10 #x112233)
+(clara.draw:draw-text (clara.windows:window-surface *a*) 2 20 "hello" +ink+)
+(check t (listp (wrong-pixels)))
+(check '(t 0 nil) (list (clara.windows:show *a*) (wrong-pixels) (clara.windows:show *a*)))
+
+;; A second one lies over the first and has the focus; the first is still
+;; drawn on, as far as it can be seen.
+(defvar *closed* 0)
+(defvar *b* (clara.windows:open-window "Second window, with a long title" 70 50 :x 80 :y 80
+                                       :close (lambda () (incf *closed*))))
+(check 0 (wrong-pixels))
+(check t (equal (clara.windows:windows) (list *b* *a*)))
+(clara.draw:fill-rectangle (clara.windows:window-surface *a*) 30 10 30 30 #x445566)
+(clara.draw:fill-rectangle (clara.windows:window-surface *b*) 0 0 70 50 #x778899)
+(check '(t t 0) (list (clara.windows:show *a*) (clara.windows:show *b*) (wrong-pixels)))
+(check (list #x778899 #x445566) (list (pixel-at 95 100) (pixel-at 75 100)))
+(check '(t t 0) (list (eq (clara.windows:raise-window *a*) *a*) (eq (clara.windows:focused-window) *a*) (wrong-pixels)))
+(check 0 (progn (clara.windows:raise-window *a*) (wrong-pixels)))        ; on top already
+(defvar *c* (clara.windows:open-window "3" 24 1))                        ; the third goes a step down and across
+(check '((88 112) 0) (list (multiple-value-list (clara.windows:window-position *c*)) (wrong-pixels)))
+
+;; Moving: anywhere, as long as its band stays below the bar and some of
+;; it on the screen.
+(check '((100 60) 0) (list (multiple-value-list (clara.windows:move-window *a*  100 60)) (wrong-pixels)))
+(check '((176 136) 0) (list (multiple-value-list (clara.windows:move-window *a* 500 500)) (wrong-pixels)))
+(check '((-36 41) 0) (list (multiple-value-list (clara.windows:move-window *a* -500 -500)) (wrong-pixels)))
+(check '((150 41) 0) (list (multiple-value-list (clara.windows:move-window *b* 150 0)) (wrong-pixels)))
+(check '((30 50) 0) (list (multiple-value-list (clara.windows:move-window *a* 30 50)) (wrong-pixels)))
+(check t (equal (clara.windows:windows) (list *c* *a* *b*)))             ; moving does not raise
+
+;; The pointer: its picture goes where it is said to be, also half off the
+;; screen, and what was under it is there again.
+(dolist (place '((0 0) (10 5) (199 139) (195 130) (33 47) (60 70) (150 30) (100 100)))
+  (clara.windows:pointer-moved (first place) (second place) 0)
+  (check (list place 0) (list place (wrong-pixels))))
+
+;; A click on a window brings it to the top. By its frame it is taken hold
+;; of, and goes where the pointer goes until the button comes up.
+(clara.windows:pointer-moved 160 30 0)
+(clara.windows:pointer-moved 160 30 1)         ; on the band of the second one
+(check '(t 0) (list (eq (clara.windows:focused-window) *b*) (wrong-pixels)))
+(clara.windows:pointer-moved 120 70 1)
+(check '((110 81) 0) (list (multiple-value-list (clara.windows:window-position *b*)) (wrong-pixels)))
+(clara.windows:pointer-moved 20 60 1)
+(check '((10 71) 0) (list (multiple-value-list (clara.windows:window-position *b*)) (wrong-pixels)))
+(clara.windows:pointer-moved 20 60 0)          ; let go
+(clara.windows:pointer-moved 90 90 0)
+(check '((10 71) 0) (list (multiple-value-list (clara.windows:window-position *b*)) (wrong-pixels)))
+(clara.windows:pointer-moved 85 90 1)          ; the line along the bottom of the first one, which is frame too
+(check t (eq (clara.windows:focused-window) *a*))
+(clara.windows:pointer-moved 95 100 1)
+(check '((40 60) 0) (list (multiple-value-list (clara.windows:window-position *a*)) (wrong-pixels)))
+(clara.windows:pointer-moved 95 100 0)
+(clara.windows:pointer-moved 190 130 1)        ; the desk: nothing to take hold of
+(clara.windows:pointer-moved 150 100 1)
+(clara.windows:pointer-moved 150 100 0)
+(check t (equal (list (clara.windows:windows) 0) (list (list *a* *b* *c*) (wrong-pixels))))
+
+;; What is typed is for the window that has the focus, and a button that
+;; goes down or up on the inside of a window is for that window: its
+;; program is told where, counted from its own corner.
+(let* ((typed nil) (pointed nil)
+       (d (clara.windows:open-window "keys" 40 30 :x 120 :y 60
+                                     :key (lambda (code) (push code typed))
+                                     :pointer (lambda (x y buttons) (push (list x y buttons) pointed)))))
+  (clara.windows:key-typed 97)
+  (clara.windows:raise-window *a*)
+  (clara.windows:key-typed 98)                 ; the first has no use for keys
+  (clara.windows:pointer-moved 130 70 0)       ; over it: nothing to tell
+  (clara.windows:pointer-moved 130 70 1)       ; down on its inside: it has the focus, and is told
+  (clara.windows:key-typed 99)
+  (clara.windows:pointer-moved 135 75 1)       ; moving with the button down is not a button
+  (clara.windows:pointer-moved 135 75 5)       ; another button
+  (clara.windows:pointer-moved 135 75 4)
+  (clara.windows:pointer-moved 135 75 0)
+  (clara.windows:pointer-moved 125 45 1)       ; its band: taken hold of, and nothing to tell
+  (clara.windows:pointer-moved 125 45 0)
+  (check '((99 97) ((15 15 0) (15 15 4) (15 15 5) (10 10 1))) (list typed pointed))
+  (check '(t 0) (list (eq (clara.windows:focused-window) d) (wrong-pixels)))
+  (check nil (clara.windows:close-window d))
+  (check '(0 3) (list (wrong-pixels) (length (clara.windows:windows)))))
+
+;; The close box, in the band of a window that has a function for it: the
+;; function is called, once, and the window is its program's to close.
+(clara.windows:raise-window *b*)
+(multiple-value-bind (x y) (clara.windows:window-position *b*)
+  (clara.windows:pointer-moved (+ x 60) (- y 10) 0)
+  (clara.windows:pointer-moved (+ x 60) (- y 10) 1)
+  (clara.windows:pointer-moved (+ x 60) (- y 10) 0)
+  (clara.windows:pointer-moved (+ x 60) (- y 10) 1)
+  (clara.windows:pointer-moved (+ x 60) (- y 10) 0)
+  (check '(1 3 nil) (list *closed* (length (clara.windows:windows)) clara.windows::*drag*))
+  (clara.windows:pointer-moved (+ x 50) (- y 10) 1)   ; a pixel short of the box: the band
+  (check t (eq (car clara.windows::*drag*) *b*))
+  (clara.windows:pointer-moved (+ x 50) (- y 10) 0))
+(clara.windows:pointer-moved 100 49 1)         ; where the box would be in a window that has none: its band
+(check '(t 1) (list (eq (car clara.windows::*drag*) *a*) *closed*))
+(clara.windows:pointer-moved 100 49 0)
+
+;; Closing: the window is gone from the screen, the one below has the
+;; focus, and its page frames are given back. It is closed by the thread
+;; that opened it, which is the one that draws on it, or by anybody when
+;; that thread is no more.
+(let ((pages (clara.host:allocated-pages)))
+  (check :refused (clara:join-thread (clara:make-thread (lambda ()
+                                                           (handler-case (clara.windows:close-window *a*)
+                                                             (error () :refused))))))
+  (check '(nil 0 t) (list (clara.windows:close-window *a*) (wrong-pixels) (equal (clara.windows:windows) (list *b* *c*))))
+  (check 3 (- pages (clara.host:allocated-pages)))                        ; 60 by 40 pixels of 4 bytes
+  (check nil (clara.windows:close-window *a*))                            ; closed already
+  (check-condition error (clara.windows:show *a*))
+  (check-condition error (clara.windows:move-window *a* 0 0))
+  (check-condition error (clara.windows:raise-window *a*))
+  (check-condition error (clara.windows:close-window 5))
+  (check nil (clara.windows:window-surface *a*)))
+(let* ((made nil)
+       (thread (clara:make-thread (lambda () (setq made (clara.windows:open-window "left behind" 30 20 :close #'list))))))
+  (clara:join-thread thread)
+  (check '(3 0) (list (length (clara.windows:windows)) (wrong-pixels)))
+  (multiple-value-bind (x y) (clara.windows:window-position made)
+    (clara.windows:pointer-moved (+ x 25) (- y 10) 1)                     ; its close box: nobody is left to ask
+    (clara.windows:pointer-moved (+ x 25) (- y 10) 0))
+  (check '(2 0 nil) (list (length (clara.windows:windows)) (wrong-pixels) (clara.windows:window-surface made))))
+(check-condition error (clara.windows:open-window "small" 23 10))          ; too narrow to have a band to hold
+(check-condition error (clara.windows:open-window 'title 40 30))
+(check-condition error (clara.windows:open-window "none" 40 0))
+(check 2 (length (clara.windows:windows)))
+
+;; The launcher: a click on the bar's button opens the list of what is
+;; defined, and a click on a name launches that application, in a thread
+;; of its own; any other click shuts the list. LAUNCH comes back when the
+;; application has its window, and the windows that it leaves open when it
+;; is done are closed for it.
+(defvar *finish* (clara:make-event "finish"))
+(defvar *ran* nil)
+
+(defun waits-in-a-window (title)
+  (lambda ()
+    (clara.windows:open-window title 50 20)
+    (push title *ran*)
+    (clara:wait-event *finish*)))
+
+(new-desk :applications (list (cons "One" (waits-in-a-window "one"))
+                              (cons "The second of them" (waits-in-a-window "two"))))
+(check '("One" "The second of them") (clara.windows:applications))
+(check t (eventually (lambda () (equal *ran* '("one")))))               ; START launches the first
+(check '(("one") 0) (list (mapcar #'clara.windows:window-title (clara.windows:windows)) (wrong-pixels)))
+(clara.windows:pointer-moved 150 10 1)         ; the bar, and not its button
+(clara.windows:pointer-moved 150 10 0)
+(check '(nil 0) (list clara.windows::*menu* (wrong-pixels)))
+(clara.windows:pointer-moved 111 19 1)         ; the last pixel of the button
+(clara.windows:pointer-moved 111 19 0)
+(check '(t 0) (list clara.windows::*menu* (wrong-pixels)))
+(clara.windows:pointer-moved 20 50 0)          ; the pointer over the list
+(check 0 (wrong-pixels))
+(clara.windows:pointer-moved 20 50 1)          ; the second name
+(clara.windows:pointer-moved 20 50 0)
+(check t (eventually (lambda () (equal *ran* '("two" "one")))))
+(check '(nil ("two" "one") 0)
+       (list clara.windows::*menu* (mapcar #'clara.windows:window-title (clara.windows:windows)) (wrong-pixels)))
+(clara.windows:pointer-moved 5 5 1)
+(clara.windows:pointer-moved 5 5 0)
+(clara.windows:pointer-moved 190 30 1)         ; beside the list: it shuts, and nothing is launched
+(clara.windows:pointer-moved 190 30 0)
+(check '(nil 2 0) (list clara.windows::*menu* (length (clara.windows:windows)) (wrong-pixels)))
+(clara.windows:pointer-moved 5 5 1)
+(clara.windows:pointer-moved 5 5 0)
+(clara.windows:pointer-moved 20 70 1)          ; under the last name
+(clara.windows:pointer-moved 20 70 0)
+(check '(nil 2 0) (list clara.windows::*menu* (length (clara.windows:windows)) (wrong-pixels)))
+(let ((thread (clara.windows:launch "one")))    ; by its name, in letters of either case
+  (check '(t 3 0) (list (clara:thread-alive-p thread) (length (clara.windows:windows)) (wrong-pixels)))
+  (clara:signal-event *finish* 3)
+  (clara:join-thread thread)
+  (check t (eventually (lambda () (null (clara.windows:windows)))))
+  (check 0 (wrong-pixels)))
+(check-condition error (clara.windows:launch "nothing of the kind"))
+;; An application that opens no window, one that fails, and one that is
+;; stopped: LAUNCH comes back all the same, and nothing stays open.
+(clara.windows:define-application "Quiet" (lambda () 'done))
+(clara.windows:define-application "one" (lambda () (clara.windows:open-window "stopped" 40 20) (clara:wait-event *finish*)))
+(check '("One" "The second of them" "Quiet") (clara.windows:applications))
+(check 'done (clara:join-thread (clara.windows:launch "Quiet")))
+(let ((thread (clara.windows:launch "One")))
+  (check '("stopped") (mapcar #'clara.windows:window-title (clara.windows:windows)))
+  (clara:destroy-thread thread)
+  (check t (eventually (lambda () (null (clara.windows:windows)))))
+  (check 0 (wrong-pixels)))
+(check-condition error (clara.windows:define-application 'name #'list))
+
+;; Stopping: the keys and the pointer are the console's again, the page
+;; frames of what the screen was put together on are given back, the
+;; applications are stopped and close their windows, and a window of some
+;; other thread is off the screen and still that thread's to close.
+(let* ((pages (clara.host:allocated-pages))
+       (thread (clara.windows:launch "One"))
+       (mine (clara.windows:open-window "mine" 40 20)))
+  (check '(t nil nil nil) (list (clara.windows:stop) (clara.windows:running-p) clara.input::*keys-to* clara.input::*pointer-to*))
+  (check nil (clara.windows:stop))
+  (check t (eventually (lambda () (not (clara:thread-alive-p thread)))))
+  (check '(nil nil) (list (clara.windows:windows) (clara.windows:show mine)))
+  (check-condition error (clara.windows:move-window mine 0 0))
+  (check-condition error (clara.windows:launch "One"))
+  (clara.windows:close-window mine)
+  (check 28 (- pages (clara.host:allocated-pages)))                        ; 200 by 140 pixels of 4 bytes
+  (check nil clara.windows::*made*))
+(check '(t 0) (list (clara.windows:start) (wrong-pixels)))                 ; and again, afresh
+(clara:signal-event *finish* 5)
+(check t (eventually (lambda () (null (clara.windows:windows)))))
+
+;; A world that was saved while the window manager ran starts in it: what
+;; it knew of windows and pixels was another machine's, and is forgotten.
+(let ((window (clara.windows:open-window "of another boot" 40 20)))
+  (with-output-to-string (*standard-output*) (clara.draw:start))             ; the machine is another now
+  (setq clara.windows::*applications* nil)
+  (check (format nil "windows: the window manager has the screen again, as it had when the world was saved~%")
+         (with-output-to-string (*standard-output*)
+           (check t (clara.windows:resume))))
+  (check '(nil 0 nil) (list (clara.windows:windows) (wrong-pixels) (clara.windows:window-surface window)))
+  (check nil (clara.windows:close-window window)))
+(clara.host:reset-machine)
+(with-output-to-string (*standard-output*) (clara.draw:start))
+(check (format nil "windows: this world was saved with the window manager running, and this machine has no screen~%")
+       (with-output-to-string (*standard-output*)
+         (check nil (clara.windows:resume))))
+(check "" (with-output-to-string (*standard-output*) (check nil (clara.windows:resume)))) ; and one that was not
+
+;; The console lends the screen and has it back: while the window manager
+;; runs, what is written goes to the serial port alone.
+(new-desk :start nil)
+(attach-pl011 #x9000000)
+(clara.console:use-screen *pixels* 200 140 *pitch* #xff0000 #x00ff00 #x0000ff 3 4)
+(setq *sent* nil
+      clara.console::*lent* nil
+      clara.console::*cursor* nil
+      clara.console::*reading* nil)
+(clara.console:write-text "a")
+(check t (shows-p 3 4 #\a :left 0 :top 6))
+(check t (clara.windows:start))
+(clara.console:write-text "b")
+(check '("ab" 0 nil) (list (text-of (sent)) (wrong-pixels) clara.console::*screen*))
+(check nil (clara.console:lend-screen))                                     ; it has none to lend
+(check t (clara.windows:stop))
+(check (list +paper+ +paper+ '(0 0)) (list (pixel-at 0 0) (pixel-at 199 139) (cursor)))
+(clara.console:write-text "c")
+(check t (shows-p 0 0 #\c :left 0 :top 6))
+(check nil (clara.console:return-screen))                                   ; it was not lent
+
+;; Whatever is done, and in whatever order, the screen is what the rule
+;; says: windows opened, moved, raised, drawn on and closed, and the
+;; pointer taken across them with its button down and up.
+(new-desk :width 120 :height 90)
+(let ((state (sb-ext:seed-random-state 12)) (wrong 0) (steps 0))
+  (dotimes (step 160)
+    (let ((windows (clara.windows:windows)))
+      (case (if (null windows) 0 (random 9 state))
+        (0 (when (< (length windows) 5)
+             (clara.windows:open-window (format nil "~D" step) (+ 24 (random 50 state)) (+ 1 (random 40 state))
+                                        :x (- (random 140 state) 20) :y (random 100 state)
+                                        :close (and (zerop (random 2 state)) #'list))))
+        (1 (clara.windows:move-window (nth (random (length windows) state) windows)
+                                      (- (random 160 state) 30) (random 110 state)))
+        (2 (clara.windows:raise-window (nth (random (length windows) state) windows)))
+        (3 (when (zerop (random 3 state))
+             (clara.windows:close-window (nth (random (length windows) state) windows))))
+        ((4 5) (let ((window (nth (random (length windows) state) windows)))
+                 (clara.draw:fill-rectangle (clara.windows:window-surface window) (- (random 60 state) 10)
+                                            (- (random 40 state) 10) (random 40 state) (random 30 state)
+                                            (1+ (random #xffffff state)))
+                 (clara.draw:draw-text (clara.windows:window-surface window) (random 30 state) (random 20 state)
+                                       "ab" (1+ (random #xffffff state)))
+                 (clara.windows:show window)))
+        (t (clara.windows:pointer-moved (random 120 state) (random 90 state) (random 2 state)))))
+    (incf steps)
+    (unless (eql (wrong-pixels) 0)
+      (incf wrong)))
+  (check '(160 0) (list steps wrong)))
+(dolist (window (clara.windows:windows))
+  (clara.windows:close-window window))
+(clara.windows:stop)
+
+;;; A console in a window: a terminal, whose cells are looked at on the
+;;; surface of its window, and what its stream gives back when keys are
+;;; typed at the window manager.
+
+(defun cell-shows-p (surface row column character)
+  (let* ((code (char-code character))
+         (glyph (* clara.font:+height+
+                   (- (if (<= clara.font:+first+ code clara.font:+last+) code (1+ clara.font:+last+))
+                      clara.font:+first+))))
+    (dotimes (y clara.font:+height+ t)
+      (dotimes (x clara.font:+width+)
+        (unless (= (word-at surface (+ (* column clara.font:+width+) x) (+ (* row clara.font:+height+) y))
+                   (if (logbitp (- clara.font:+width+ 1 x) (aref clara.font:*glyphs* (+ glyph y))) +ink+ +paper+))
+          (return-from cell-shows-p nil))))))
+
+;; The cells of a row from its first on show STRING.
+(defun row-shows-p (surface row string)
+  (loop for column below (length string)
+        always (cell-shows-p surface row column (char string column))))
+
+;; The lowest two rows of a cell's pixels, where the cursor is drawn, are all of PIXEL.
+(defun bar-at-p (surface row column pixel)
+  (loop for y from 14 to 15
+        always (loop for x below 8
+                     always (= (word-at surface (+ (* column 8) x) (+ (* row 16) y)) pixel))))
+
+(defun type-text (text)
+  (map nil (lambda (character) (clara.windows:key-typed (char-code character))) text))
+
+(new-desk :width 300 :height 220)
+(defvar *terminal* (clara.terminal:open-terminal "A terminal" :columns 10 :rows 3))
+(defvar *out* (clara.terminal:terminal-stream *terminal*))
+(defvar *face* (clara.windows:window-surface (clara.terminal:terminal-window *terminal*)))
+(check '(t "A terminal" 80 48 0)
+       (list (clara.terminal:terminal-p *terminal*) (clara.windows:window-title (clara.terminal:terminal-window *terminal*))
+             (clara.draw:surface-width *face*) (clara.draw:surface-height *face*) (wrong-pixels)))
+(write-string "ab" *out*)
+(check '(t 0) (list (row-shows-p *face* 0 "ab ") (wrong-pixels)))        ; drawn, and shown
+(write-string "cdefghijkl" *out*)                                         ; the eleventh character starts a new row
+(check t (and (row-shows-p *face* 0 "abcdefghij") (row-shows-p *face* 1 "kl ")))
+(write-string (format nil "~%3") *out*)                                    ; three rows in use,
+(write-string (format nil "~%4") *out*)                                    ; and a new line moves them all up
+(check '(t 0) (list (and (row-shows-p *face* 0 "kl        ") (row-shows-p *face* 1 "3         ")
+                         (row-shows-p *face* 2 "4         "))
+                    (wrong-pixels)))
+(write-string (format nil "~%wide row~%x") *out*)                        ; the last row was made blank first
+(check t (and (row-shows-p *face* 1 "wide row  ") (row-shows-p *face* 2 "x         ")))
+(write-string (coerce (list #\Backspace #\x #\Return #\y (code-char 233)) 'string) *out*)
+(check t (and (cell-shows-p *face* 2 0 #\y) (cell-shows-p *face* 2 1 (code-char 127)))) ; no glyph: a box
+(check nil (clara.terminal:clear *terminal*))
+(check '(t 0) (list (loop for row below 3 always (row-shows-p *face* row "          ")) (wrong-pixels)))
+(write-string (coerce (list #\a #\Tab #\b #\Tab #\c) 'string) *out*)      ; a tab at the end of a row ends the row
+(check t (and (row-shows-p *face* 0 "a       b ") (row-shows-p *face* 1 "c ")))
+(clara.terminal:clear *terminal*)
+(write-string "0123456789ABCDEFGHIJxyz" *out*)                             ; one string, three rows
+(check '(t 0) (list (and (row-shows-p *face* 0 "0123456789") (row-shows-p *face* 1 "ABCDEFGHIJ") (row-shows-p *face* 2 "xyz "))
+                    (wrong-pixels)))
+(check '("a terminal has a number of columns and of rows, and 0 by 24 are not that"
+         "a terminal has a number of columns and of rows, and 80 by \"many\" are not that")
+       (flet ((said (&rest size)
+                (handler-case (apply #'clara.terminal:open-terminal "none" size)
+                  (error (condition) (princ-to-string condition)))))
+         (list (said :columns 0) (said :rows "many"))))
+
+;; Reading: what is typed while the window has the focus is echoed and
+;; comes back as a line; the cursor shows for as long.
+(defun reads-a-line ()
+  (clara:make-thread (lambda ()
+                       (handler-case (read-line *out* nil :end)
+                         (clara:keyboard-interrupt () :given-up)))))
+
+(clara.terminal:clear *terminal*)
+(let ((reader (reads-a-line)))
+  (check t (eventually (lambda () (clara.terminal::terminal-cursor *terminal*))))
+  (check '(t 0) (list (bar-at-p *face* 0 0 +ink+) (wrong-pixels)))
+  (type-text "hi")
+  (check t (eventually (lambda () (and (row-shows-p *face* 0 "hi") (bar-at-p *face* 0 2 +ink+)))))
+  (clara.windows:key-typed 8)                                              ; Backspace takes the i back
+  (check t (eventually (lambda () (and (bar-at-p *face* 0 1 +ink+) (bar-at-p *face* 0 2 +paper+)))))
+  (clara.windows:key-typed 9)                                              ; a tab is a space
+  (type-text (format nil "o~%"))
+  (check "h o" (clara:join-thread reader))
+  (check '(t t nil nil 0)
+         (list (row-shows-p *face* 0 "h o ") (bar-at-p *face* 1 0 +paper+) (clara.terminal::terminal-cursor *terminal*)
+               (clara.terminal::terminal-reading *terminal*) (wrong-pixels))))
+(let ((reader (reads-a-line)))                 ; Ctrl-D at the start of a line: no more is coming
+  (clara.windows:key-typed 4)
+  (check '(:end nil) (list (clara:join-thread reader) (clara.terminal::terminal-reading *terminal*))))
+(let ((reader (reads-a-line)))                 ; and Ctrl-C gives the line up
+  (check t (eventually (lambda () (clara.terminal::terminal-reading *terminal*))))
+  (type-text "x")
+  (clara.windows:key-typed 3)
+  (check :given-up (clara:join-thread reader))
+  (check t (row-shows-p *face* 1 "x^C ")))
+;; Ctrl-C while nobody reads stops what the thread that read last is
+;; doing, and what was typed ahead is forgotten.
+(let* ((computing (clara:make-event))
+       (thread (clara:make-thread (lambda ()
+                                    (list (read-line *out*)
+                                          (handler-case (progn (clara:signal-event computing) (loop (sleep 0.01)))
+                                            (clara:keyboard-interrupt () :stopped)))))))
+  (type-text (format nil "go~%"))
+  (clara:wait-event computing)
+  (type-text "typed ahead")
+  (check 11 (length (clara.terminal::terminal-keys *terminal*)))
+  (clara.windows:key-typed 3)
+  (check '("go" :stopped) (clara:join-thread thread))
+  (check nil (clara.terminal::terminal-keys *terminal*)))
+;; So does one that comes while a line is being read and the end of that
+;; line has been typed already: the line is as good as read.
+(let* ((waiting (clara:make-event)) (never (clara:make-event))
+       (thread (clara:make-thread (lambda ()
+                                    (handler-case (progn (clara:signal-event waiting) (clara:wait-event never))
+                                      (clara:keyboard-interrupt () :stopped))))))
+  (clara:wait-event waiting)
+  (setf (clara.terminal::terminal-thread *terminal*) thread
+        (clara.terminal::terminal-reading *terminal*) t)
+  (type-text "a")
+  (clara.windows:key-typed 3)                  ; in the middle of a line it is a character like the others
+  (check '(97 3) (clara.terminal::terminal-keys *terminal*))
+  (type-text (format nil "b~%"))
+  (clara.windows:key-typed 3)
+  (check :stopped (clara:join-thread thread))
+  (check nil (clara.terminal::terminal-keys *terminal*))
+  ;; The reading is over with the end of the line, as it is taken: a Ctrl-C
+  ;; right behind it finds a thread that computes.
+  (setf (clara.terminal::terminal-keys *terminal*) (list 97 10 98))
+  (check '(97 t 10 nil)
+         (list (clara.terminal::next-code *terminal*) (clara.terminal::terminal-reading *terminal*)
+               (clara.terminal::next-code *terminal*) (clara.terminal::terminal-reading *terminal*)))
+  (setf (clara.terminal::terminal-keys *terminal*) nil))
+(clara.windows:close-window (clara.terminal:terminal-window *terminal*))
+
+;; The listener in a window: the application that START launches. It says
+;; what it is, reads what is typed, evaluates it and prints what it gives,
+;; in the one world there is.
+(let ((open-terminal #'clara.terminal:open-terminal))
+  (setf (symbol-function 'clara.terminal:open-terminal)
+        (lambda (&rest arguments) (setq *terminal* (apply open-terminal arguments))))
+  (unwind-protect
+       (progn
+         (new-desk :width 300 :height 220 :applications (list (cons "Listener" #'clara.terminal:listener)))
+         (let* ((window (clara.windows:focused-window))
+                (face (clara.windows:window-surface window))
+                (thread (car clara.windows::*launched*)))
+           (check '("Listener" 248 96 "Listener")
+                  (list (clara.windows:window-title window) (clara.draw:surface-width face) (clara.draw:surface-height face)
+                        (clara:thread-name thread)))
+           (check t (eventually (lambda () (and (row-shows-p face 3 "> ") (bar-at-p face 3 2 +ink+)))))
+           (check t (and (row-shows-p face 0 "ClaraOS: a form is evaluated, C") (row-shows-p face 2 "es the window ")))
+           (type-text (format nil "(+ 1 2)~%"))
+           (check t (eventually (lambda () (and (row-shows-p face 3 "> (+ 1 2) ") (row-shows-p face 4 "3 ")
+                                                (row-shows-p face 5 "> ") (bar-at-p face 5 2 +ink+)))))
+           (check 0 (wrong-pixels))
+           (type-text (format nil "(defvar *in-a-window* 7)~%"))
+           (flet ((in-a-window ()
+                    (let ((symbol (find-symbol "*IN-A-WINDOW*" "COMMON-LISP-USER")))
+                      (and symbol (boundp symbol) (symbol-value symbol)))))
+             (check t (eventually (lambda () (eql (in-a-window) 7))))
+             ;; Ctrl-C stops what it computes, and it reads again.
+             (type-text (format nil "(loop)~%"))
+             (check t (eventually (lambda () (not (clara.terminal::terminal-reading *terminal*)))))
+             (clara.windows:key-typed 3)
+             (check t (eventually (lambda () (clara.terminal::terminal-reading *terminal*))))
+             (type-text (format nil "(setq *in-a-window* 8)~%"))
+             (check t (eventually (lambda () (eql (in-a-window) 8)))))
+           (clara.windows:key-typed 4)             ; Ctrl-D at its prompt: it ends, and its window goes with it
+           (check t (eventually (lambda () (and (null (clara.windows:windows)) (not (clara:thread-alive-p thread))))))
+           (check '(0 nil) (list (wrong-pixels) clara.windows::*made*)))
+         ;; The close box ends it as well.
+         (let ((thread (clara.windows:launch "listener")))
+           (multiple-value-bind (x y) (clara.windows:window-position (clara.windows:focused-window))
+             (clara.windows:pointer-moved (+ x 240) (- y 10) 1)
+             (clara.windows:pointer-moved (+ x 240) (- y 10) 0))
+           (check t (eventually (lambda () (and (null (clara.windows:windows)) (not (clara:thread-alive-p thread))))))
+           (check 0 (wrong-pixels)))
+         (clara.windows:stop))
+    (setf (symbol-function 'clara.terminal:open-terminal) open-terminal)))
+(setq clara.windows::*applications* *defined-applications*)
+(check '("Listener") (clara.windows:applications))  ; what lisp/terminal.lisp defined when it was loaded
 
 ;;; The stand-ins themselves, as far as what is written for ClaraOS will
 ;;; lean on them: threads, a lock, an event, as the kernel's own self-test

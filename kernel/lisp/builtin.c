@@ -1458,6 +1458,19 @@ PRIMITIVE(p_get_internal_real_time)
     return lisp_fixnum((int64_t)timer_ticks());
 }
 
+/* What this Lisp is, and which: the system's name and the kernel's version. */
+PRIMITIVE(p_lisp_implementation_type)
+{
+    (void)argv;
+    return lisp_string_from_utf8("ClaraOS", 7);
+}
+
+PRIMITIVE(p_lisp_implementation_version)
+{
+    (void)argv;
+    return lisp_string_from_utf8(CLARA_VERSION, strlen(CLARA_VERSION));
+}
+
 const struct lisp_primitive lisp_primitives[] = {
     { "CONS", p_cons, 2, 2 },
     { "CAR", p_car, 1, 1 },
@@ -1584,6 +1597,7 @@ const struct lisp_primitive lisp_primitives[] = {
     { "CLARA:ALL-THREADS", lisp_p_all_threads, 0, 0 },
     { "CLARA:JOIN-THREAD", lisp_p_join_thread, 1, 1 },
     { "CLARA:DESTROY-THREAD", lisp_p_destroy_thread, 1, 1 },
+    { "CLARA:INTERRUPT-THREAD", lisp_p_interrupt_thread, 1, 1 },
     { "CLARA:THREAD-YIELD", lisp_p_thread_yield, 0, 0 },
     { "CLARA:MAKE-LOCK", lisp_p_make_lock, 0, 1 },
     { "CLARA:ACQUIRE-LOCK", lisp_p_acquire_lock, 1, 1 },
@@ -1592,6 +1606,8 @@ const struct lisp_primitive lisp_primitives[] = {
     { "CLARA:SIGNAL-EVENT", lisp_p_signal_event, 1, 2 },
     { "CLARA:WAIT-EVENT", lisp_p_wait_event, 1, 2 },
     { "GET-INTERNAL-REAL-TIME", p_get_internal_real_time, 0, 0 },
+    { "LISP-IMPLEMENTATION-TYPE", p_lisp_implementation_type, 0, 0 },
+    { "LISP-IMPLEMENTATION-VERSION", p_lisp_implementation_version, 0, 0 },
     /* what only a driver should touch (unsafe.c) */
     { "CLARA.UNSAFE:MEMORY-8", lisp_p_memory_8, 1, 1 },
     { "CLARA.UNSAFE:MEMORY-16", lisp_p_memory_16, 1, 1 },

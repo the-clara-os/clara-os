@@ -15,6 +15,12 @@
 ;;;; screen over from it, at the place where it left off, and STOP hands it
 ;;;; back. The two draw the same characters in the same cells.
 ;;;;
+;;;; The screen can go to somebody else for a time, who draws on all of it:
+;;;; the window manager (lisp/windows.lisp), with LEND-SCREEN. The console
+;;;; goes on with the serial port alone until it has the screen again, and
+;;;; a console in a window is another file's (lisp/terminal.lisp), which
+;;;; puts its lines together the way this one does, READ-EDITED-LINE.
+;;;;
 ;;;; This file loads under SBCL as well, where lisp/host/ stands in for the
 ;;;; machine, and the tests there look at what it puts on a screen that is
 ;;;; a vector.
@@ -22,7 +28,7 @@
 (defpackage "CLARA.CONSOLE"
   (:use "COMMON-LISP")
   (:export "START" "STOP" "WRITE-TEXT" "READ-TEXT-LINE" "USE-SERIAL" "USE-SCREEN" "MAKE-CONSOLE-STREAM"
-           "KEY-TYPED"))
+           "KEY-TYPED" "READ-EDITED-LINE" "LEND-SCREEN" "RETURN-SCREEN"))
 (in-package "CLARA.CONSOLE")
 
 ;;; The serial port
@@ -94,6 +100,7 @@
 (defvar *ink* 0)        ; the pixel of a glyph,
 (defvar *paper* 0)      ; and the pixel around it
 (defvar *reading* nil)  ; a line is being read: the cursor shows, and Ctrl-C gives the line up
+(defvar *lent* nil)     ; the screen is somebody else's for the time being: LEND-SCREEN
 (defvar *cursor* nil)   ; the address of the cursor that is on the screen, or NIL when none is
 
 ;; An 8-bit colour channel, moved to the bits of a pixel that MASK selects.
@@ -295,36 +302,46 @@
                  (setq code (logior (ash code 6) (logand (next-byte) #x3f))))
                (return code)))))))
 
-(defun echo (string)
-  (write-string string *stream*))
+;; The next code, for a line: a line feed that comes right after a
+;; carriage return is the other half of the end of the line before, and is
+;; passed over.
+(defun next-typed ()
+  (loop
+    (let ((code (next-code)))
+      (if (and (= code 10) *after-return*)
+          (setq *after-return* nil)
+          (progn
+            (setq *after-return* (= code 13))
+            (return code))))))
 
-(defun read-typed-line ()
+;; A line, put together from the codes of the characters that were typed,
+;; which NEXT gives one at a time, and echoed to STREAM as it grows: the
+;; line without its end, or NIL when no more is coming. It is how a line
+;; is typed on this console, and on a console in a window, which has other
+;; codes and another stream.
+(defun read-edited-line (next stream)
   (let ((line ""))
     (loop
-      (let ((code (next-code)))
-        (if (and (= code 10) *after-return*)
-            (setq *after-return* nil)
-            (progn
-              (setq *after-return* (= code 13))
-              (cond ((or (= code 13) (= code 10))
-                     (echo (string #\Newline))
-                     (return line))
-                    ((= code 4)
-                     (when (zerop (length line))
-                       (return nil)))
-                    ((= code 3)
-                     (echo "^C")
-                     (echo (string #\Newline))
-                     (error 'clara:keyboard-interrupt))
-                    ((or (= code 8) (= code 127))
-                     (when (plusp (length line))
-                       (setq line (subseq line 0 (1- (length line))))
-                       (echo *rubout*)))
-                    (t
-                     (let ((character (if (= code 9) #\Space (and (>= code 32) (code-char code)))))
-                       (when (and character (< (length line) +line-limit+))
-                         (setq line (concatenate 'string line (string character)))
-                         (echo (string character))))))))))))
+      (let ((code (funcall next)))
+        (cond ((or (= code 13) (= code 10))
+               (write-string (string #\Newline) stream)
+               (return line))
+              ((= code 4)
+               (when (zerop (length line))
+                 (return nil)))
+              ((= code 3)
+               (write-string "^C" stream)
+               (write-string (string #\Newline) stream)
+               (error 'clara:keyboard-interrupt))
+              ((or (= code 8) (= code 127))
+               (when (plusp (length line))
+                 (setq line (subseq line 0 (1- (length line))))
+                 (write-string *rubout* stream)))
+              (t
+               (let ((character (if (= code 9) #\Space (and (>= code 32) (code-char code)))))
+                 (when (and character (< (length line) +line-limit+))
+                   (setq line (concatenate 'string line (string character)))
+                   (write-string (string character) stream)))))))))
 
 ;; The next line that was typed, without its end, or NIL when no more is
 ;; coming. While a line is being read, Ctrl-C is a byte like the others,
@@ -336,7 +353,7 @@
     (setq *reading* t)
     (clara:with-lock-held (*lock*)
       (show-cursor))
-    (unwind-protect (read-typed-line)
+    (unwind-protect (read-edited-line #'next-typed *stream*)
       (setq *reading* nil)
       (clara:with-lock-held (*lock*)
         (hide-cursor))
@@ -354,6 +371,7 @@
 ;; was another machine's.
 (defun start ()
   (setq *screen* nil
+        *lent* nil
         *cursor* nil
         *reading* nil
         *keys* nil
@@ -371,7 +389,31 @@
         *standard-input* *stream*)
   *stream*)
 
-;; Hand the screen back to the substrate, for its last line.
+;; The screen goes to whoever asks, to draw on all of it, and this console
+;; goes on with the serial port alone. NIL when it had no screen to lend.
+(defun lend-screen ()
+  (clara:with-lock-held (*lock*)
+    (when *screen*
+      (hide-cursor)
+      (setq *screen* nil
+            *lent* t))))
+
+;; And it has the screen again: all of it is cleared, whatever was drawn
+;; there meanwhile, and the next character goes to the first cell.
+(defun return-screen ()
+  (clara:with-lock-held (*lock*)
+    (when *lent*
+      (setq *lent* nil)
+      (multiple-value-bind (address width height pitch red green blue) (clara.unsafe:framebuffer)
+        (when address
+          (clara.unsafe:fill-rectangle-32 address pitch width height (pixel #x1e1b2e red green blue))
+          (use-screen address width height pitch red green blue 0 0)
+          (show-cursor)
+          t)))))
+
+;; Hand the screen back to the substrate, for its last line. While it is
+;; lent to somebody else there is nothing to hand back: the substrate says
+;; its last line on the serial port, and the screen stays as it is.
 (defun stop ()
   (when *screen*
     (hide-cursor)

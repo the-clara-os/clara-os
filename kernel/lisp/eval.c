@@ -99,6 +99,7 @@ struct catch {
 static struct catch *g_catches;
 static uintptr_t g_c_limit; /* the lowest address the thread's own stack may reach while it evaluates */
 static const struct lisp_primitive *g_primitive; /* the one that was called last */
+static unsigned g_cleaning; /* the cleanups of UNWIND-PROTECT that the thread is in the middle of: none is cut short */
 
 /* All of the above for a thread that is not running, and the memory of its
  * two stacks right after. */
@@ -111,6 +112,7 @@ struct lisp_evaluator {
     struct catch *catches;
     uintptr_t c_limit;
     const struct lisp_primitive *primitive;
+    unsigned cleaning;
     struct lisp_values values;
 };
 static const struct boot_file *g_files;
@@ -423,6 +425,7 @@ void lisp_evaluator_out(struct lisp_evaluator *e)
     e->catches = g_catches;
     e->c_limit = g_c_limit;
     e->primitive = g_primitive;
+    e->cleaning = g_cleaning;
     e->values = lisp_values;
 }
 
@@ -439,6 +442,7 @@ void lisp_evaluator_in(const struct lisp_evaluator *e)
     g_catches = e->catches;
     g_c_limit = e->c_limit;
     g_primitive = e->primitive;
+    g_cleaning = e->cleaning;
     lisp_values = e->values;
     lisp_bindings_in();
 }
@@ -481,11 +485,14 @@ void lisp_evaluator_reach(const struct lisp_evaluator *e)
  * where the collector runs, when it is time, and where a computation can
  * be stopped: by DESTROY-THREAD, by Ctrl-C on the serial port, and by a
  * heap that is full even after collecting. Says 0 when the evaluation is
- * not to go on. */
+ * not to go on. In the middle of a cleanup of UNWIND-PROTECT a thread is
+ * neither stopped nor interrupted: what the cleanup is there to give back,
+ * a lock for one, would stay taken. It is stopped at the first safe point
+ * after the cleanup. */
 static COLD int safe_point(void)
 {
     thread_safe_point();
-    switch (lisp_thread_safe_point()) {
+    switch (lisp_thread_safe_point(!g_cleaning)) {
     case LISP_STOP:
         if (!g_unwind.to) {
             g_unwind.to = STOPPING;
@@ -1460,7 +1467,9 @@ static lisp sf_unwind_protect(lisp args, lisp env)
     *g_sp++ = exit.to;
     *g_sp++ = exit.tag;
     g_unwind.to = 0;
+    g_cleaning++;
     progn(cdr(args), env);
+    g_cleaning--;
     if (!g_unwind.to) {
         g_unwind = exit;
         lisp_values.count = n;
@@ -1615,7 +1624,9 @@ static lisp eval_car(lisp cell, lisp env)
         if (n < s->min || n > s->max)
             return program_error("~S has the wrong number of parts for ~S", form, operator);
         f = s->fn(lisp_as_cons(form)->cdr, env);
-        if (!s->values)
+        /* Not on the way out of it: a RETURN-FROM that passes through, out
+         * of a loop for one, has its own values in hand. */
+        if (!s->values && !g_unwind.to)
             lisp_values.count = 1;
         return f;
     case LISP_MACRO:
