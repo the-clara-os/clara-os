@@ -24,6 +24,11 @@
 #define NIL LISP_NIL
 #define T   lisp_roots.t
 
+/* The most that a rectangle of pixels can be, as the functions below take
+ * one: pixels in a row and rows, and bytes from one row to the next. */
+#define SIDE_LIMIT  (1 << 16)
+#define PITCH_LIMIT (1 << 24)
+
 static const struct framebuffer *g_screen;
 
 void lisp_unsafe_init(const struct framebuffer *fb)
@@ -194,25 +199,30 @@ LISP_PRIMITIVE(lisp_p_copy_memory)
     return NIL;
 }
 
-/* (expand-bits-32 address pitch bits start rows width one zero): a bitmap
- * of one bit to the pixel becomes 32-bit pixels. The rows of the bitmap
- * are items of the vector bits, from start on, each an integer whose
- * lowest width bits are the row, the leftmost pixel in the highest of
+/* (expand-bits-32 address pitch bits start rows width one zero) and, for
+ * a ninth argument, skip: a bitmap of one bit to the pixel becomes 32-bit
+ * pixels. The rows of the bitmap are items of the vector bits, from start
+ * on, each an integer; the lowest skip bits of it are passed over, and the
+ * width bits above them are the row, the leftmost pixel in the highest of
  * them. A row of pixels begins pitch bytes after the one before. A pixel
- * is the word one where the bit is set and the word zero where it is not.
- * This is how a character of a bitmap font gets on the screen in one call. */
+ * is the word one where the bit is set and the word zero where it is not,
+ * and NIL for either leaves those pixels as they are. This is how a
+ * character of a bitmap font gets on the screen in one call: with its
+ * paper, as the console draws it, or without, over a picture, and with
+ * skip when its right-hand end is not to be drawn. */
 LISP_PRIMITIVE(lisp_p_expand_bits_32)
 {
-    uint64_t addr, pitch, start, rows, width, one, zero;
+    uint64_t addr, pitch, start, rows, width, one = 0, zero = 0, skip = 0;
     const struct lisp_vector *bits = lisp_as_vector(argv[2]);
+    int ink = argv[6] != NIL, paper = argv[7] != NIL;
 
-    (void)argc;
     if (!lisp_is(argv[2], LISP_VECTOR))
         return lisp_wants("a vector of the rows of a bitmap", argv[2]);
     if (!number(argv[1], &pitch) || !number(argv[3], &start) || !number(argv[4], &rows) ||
-        !number(argv[5], &width) || !fits(argv[6], 4, &one) || !fits(argv[7], 4, &zero) || !place(argv[0], 4, &addr))
+        !number(argv[5], &width) || (ink && !fits(argv[6], 4, &one)) || (paper && !fits(argv[7], 4, &zero)) ||
+        (argc > 8 && !number(argv[8], &skip)) || !place(argv[0], 4, &addr))
         return NIL;
-    if (width > 62 || pitch % 4 || pitch < width * 4)
+    if (width > 62 || skip > 62 - width || pitch % 4 || pitch < width * 4 || pitch > PITCH_LIMIT)
         return lisp_fail("a row of ~A pixels does not fit in a fixnum, or in ~A bytes", argv[5], argv[1]);
     if (start + rows > lisp_length(bits->header))
         return lisp_fail("the bitmap has ~A rows, not the ~A from ~A on", lisp_fixnum((int64_t)lisp_length(bits->header)),
@@ -221,10 +231,80 @@ LISP_PRIMITIVE(lisp_p_expand_bits_32)
         return NIL;
     for (uint64_t r = 0; r < rows; r++) {
         volatile uint32_t *at = (volatile uint32_t *)(uintptr_t)(addr + r * pitch);
-        uint64_t row = (uint64_t)lisp_fixnum_value(bits->items[start + r]);
+        uint64_t row = (uint64_t)lisp_fixnum_value(bits->items[start + r]) >> skip;
+
+        for (uint64_t x = 0; x < width; x++) {
+            if (row >> (width - 1 - x) & 1) {
+                if (ink)
+                    at[x] = (uint32_t)one;
+            } else if (paper)
+                at[x] = (uint32_t)zero;
+        }
+    }
+    return NIL;
+}
+
+/* A rectangle of 32-bit pixels in memory, for the two functions below:
+ * across of them in each of down rows, a row beginning row bytes after
+ * the one before. Says 0 after failing. No screen comes near the limits,
+ * which keep the sums within 64 bits. */
+static int rectangle(lisp at, lisp row, lisp across, lisp down, uint64_t *addr, uint64_t *pitch, uint64_t *width,
+                     uint64_t *height)
+{
+    if (!number(row, pitch) || !number(across, width) || !number(down, height) || !place(at, 4, addr))
+        return 0;
+    if (*width > SIDE_LIMIT || *height > SIDE_LIMIT || *pitch % 4 || *pitch < *width * 4 || *pitch > PITCH_LIMIT) {
+        lisp_fail("~A rows of ~A pixels, ~A bytes from one row to the next, are not a rectangle of 32-bit pixels", down,
+                  across, row);
+        return 0;
+    }
+    return !*width || !*height || mapped(*addr, (*height - 1) * *pitch + *width * 4);
+}
+
+/* (fill-rectangle-32 address pitch width height value): a rectangle of
+ * 32-bit pixels, all the same: width of them in each of height rows, a
+ * row beginning pitch bytes after the one before. */
+LISP_PRIMITIVE(lisp_p_fill_rectangle_32)
+{
+    uint64_t addr, pitch, width, height, value;
+
+    (void)argc;
+    if (!fits(argv[4], 4, &value) || !rectangle(argv[0], argv[1], argv[2], argv[3], &addr, &pitch, &width, &height))
+        return NIL;
+    for (uint64_t r = 0; r < height; r++) {
+        volatile uint32_t *at = (volatile uint32_t *)(uintptr_t)(addr + r * pitch);
 
         for (uint64_t x = 0; x < width; x++)
-            at[x] = (uint32_t)(row >> (width - 1 - x) & 1 ? one : zero);
+            at[x] = (uint32_t)value;
+    }
+    return NIL;
+}
+
+/* (copy-rectangle-32 to to-pitch from from-pitch width height): the pixels
+ * of one rectangle become those of another of the same size. The two may
+ * be parts of one picture that lie over each other: the rows, and the
+ * pixels of a row, are taken in the order in which each is read before it
+ * is written over, which is what moving a part of a picture within the
+ * picture wants. */
+LISP_PRIMITIVE(lisp_p_copy_rectangle_32)
+{
+    uint64_t to, to_pitch, from, from_pitch, width, height;
+
+    (void)argc;
+    if (!rectangle(argv[0], argv[1], argv[4], argv[5], &to, &to_pitch, &width, &height) ||
+        !rectangle(argv[2], argv[3], argv[4], argv[5], &from, &from_pitch, &width, &height))
+        return NIL;
+    for (uint64_t n = 0; n < height; n++) {
+        uint64_t r = to <= from ? n : height - 1 - n;
+        volatile uint32_t *d = (volatile uint32_t *)(uintptr_t)(to + r * to_pitch);
+        const volatile uint32_t *s = (const volatile uint32_t *)(uintptr_t)(from + r * from_pitch);
+
+        if (d <= s)
+            for (uint64_t x = 0; x < width; x++)
+                d[x] = s[x];
+        else
+            for (uint64_t x = width; x--;)
+                d[x] = s[x];
     }
     return NIL;
 }

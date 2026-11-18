@@ -1081,6 +1081,40 @@ static const struct {
     { "(progn (clara.unsafe:expand-bits-32 *page* 16 (vector #b1010 #b0110) 0 2 4 9 1)"
       " (mapcar (lambda (at) (clara.unsafe:memory-32 (+ *page* at))) '(0 4 8 12 16 20 24 28)))",
       "(9 1 9 1 1 9 9 1)" },
+    /* a bit that is not set leaves its pixel as it was, a bit that is set does, and the lowest bit is passed over */
+    { "(progn (clara.unsafe:fill-memory-32 *page* 8 5)"
+      " (clara.unsafe:expand-bits-32 *page* 16 (vector #b1010 #b0110) 0 2 3 9 nil 1)"
+      " (mapcar (lambda (at) (clara.unsafe:memory-32 (+ *page* at))) '(0 4 8 12 16 20 24 28)))",
+      "(9 5 9 5 5 9 9 5)" },
+    { "(progn (clara.unsafe:expand-bits-32 *page* 16 (vector #b1010 #b0110) 0 2 4 nil 1)"
+      " (mapcar (lambda (at) (clara.unsafe:memory-32 (+ *page* at))) '(0 4 8 12 16 20 24 28)))",
+      "(9 1 9 1 1 9 9 1)" },
+    /* rectangles of pixels: rows of four here, 16 bytes from one to the next */
+    { "(progn (clara.unsafe:fill-memory-32 *page* 2048 0) (clara.unsafe:fill-rectangle-32 (+ *page* 20) 16 2 3 7)"
+      " (mapcar (lambda (at) (clara.unsafe:memory-32 (+ *page* at))) '(16 20 24 28 32 36 40 52 56 60 64 68)))",
+      "(0 7 7 0 0 7 7 7 7 0 0 0)" },
+    { "(progn (dotimes (i 16) (setf (clara.unsafe:memory-32 (+ *page* (* 4 i))) i))"
+      " (clara.unsafe:copy-rectangle-32 (+ *page* 20) 16 *page* 16 2 2)" /* down and to the right, over itself */
+      " (mapcar (lambda (i) (clara.unsafe:memory-32 (+ *page* (* 4 i)))) '(0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15)))",
+      "(0 1 2 3 4 0 1 7 8 4 5 11 12 13 14 15)" },
+    { "(progn (clara.unsafe:copy-rectangle-32 *page* 16 (+ *page* 20) 16 2 2)" /* and back up */
+      " (mapcar (lambda (i) (clara.unsafe:memory-32 (+ *page* (* 4 i)))) '(0 1 2 3 4 5 6 7 8 9 10 11)))",
+      "(0 1 2 3 4 5 1 7 8 4 5 11)" },
+    { "(progn (clara.unsafe:copy-rectangle-32 (+ *page* 4) 16 *page* 16 3 1)" /* along a row, to the right and back */
+      " (clara.unsafe:copy-rectangle-32 (+ *page* 16) 16 (+ *page* 20) 16 3 1)"
+      " (mapcar (lambda (i) (clara.unsafe:memory-32 (+ *page* (* 4 i)))) '(0 1 2 3 4 5 6 7)))",
+      "(0 0 1 2 5 1 7 7)" },
+    { "(progn (clara.unsafe:copy-rectangle-32 (+ *page* 4096) 8 (+ *page* 36) 16 2 2)" /* into rows of another length */
+      " (mapcar (lambda (at) (clara.unsafe:memory-32 (+ *page* 4096 at))) '(0 4 8 12 16)))",
+      "(4 5 13 14 0)" },
+    { "(clara.unsafe:fill-rectangle-32 *page* 8 3 1 0)",
+      "error: 1 rows of 3 pixels, 8 bytes from one row to the next, are not a rectangle of 32-bit pixels" },
+    { "(clara.unsafe:fill-rectangle-32 4096 16 4 1 0)", "error: nothing is mapped at #x1000" },
+    { "(handler-case (clara.unsafe:copy-rectangle-32 *page* 16 4096 16 4 2) (error () 'nothing-there))", "NOTHING-THERE" },
+    /* a rectangle that begins in memory and whose rows, 16 MiB apart, go on for a tebibyte: past the end of it */
+    { "(handler-case (clara.unsafe:fill-rectangle-32 *page* #x1000000 1 65536 0) (error () 'off-the-end))", "OFF-THE-END" },
+    { "(handler-case (clara.unsafe:copy-rectangle-32 *page* 16 *page* #x1000000 1 65536) (error () 'off-the-end))",
+      "OFF-THE-END" },
     { "(clara.unsafe:memory-8 0)", "error: nothing is mapped at #x0" },
     { "(clara.unsafe:memory-8 -1)", "error: CLARA.UNSAFE:MEMORY-8 wants an integer that is not negative, and -1 is not one" },
     { "(setf (clara.unsafe:memory-8 *page*) 256)", "error: 256 is not an integer that fits in 8 bits" },
@@ -1361,8 +1395,8 @@ static void load(const char *file)
  * the world. */
 static void new_world(void)
 {
-    static const char *const world[] = { "font.lisp",  "console.lisp", "pci.lisp", "virtio.lisp",
-                                         "input.lisp", "disk.lisp",    "fat.lisp", "listener.lisp" };
+    static const char *const world[] = { "font.lisp",  "console.lisp", "draw.lisp", "pci.lisp",     "virtio.lisp",
+                                         "input.lisp", "disk.lisp",    "fat.lisp",  "listener.lisp" };
     uint64_t before[LISP_TYPES], after[LISP_TYPES];
 
     collector_selftest();
@@ -1375,7 +1409,7 @@ static void new_world(void)
     for (unsigned i = 0; i < sizeof world / sizeof world[0]; i++)
         load(world[i]);
     lisp_heap_census(before);
-    kprintf("lisp: the console, the drivers, the files and the listener are loaded, %llu more functions\n",
+    kprintf("lisp: the console, drawing, the drivers, the files and the listener are loaded, %llu more functions\n",
             before[LISP_FUNCTION] - after[LISP_FUNCTION]);
 }
 
@@ -1385,7 +1419,8 @@ static void new_world(void)
  * the console, which takes the serial port and the screen over from the
  * substrate; the drivers, which find the devices on the PCI bus, start a
  * thread for each keyboard and mouse, and open the disks; the file system,
- * which finds the volumes on them; and the listener, which reads what is
+ * which finds the volumes on them; what draws, which finds the screen; and
+ * the listener, which reads what is
  * typed, evaluates it and prints what it gives, until the input ends.
  * Should a condition come all the way out of the listener, it is started
  * again and told so. */
@@ -1405,6 +1440,11 @@ static void lisp_main(void)
      * there are the files that came with the kernel. */
     if (!lisp_evaluate(own_form("(progn (clara.pci:start) (clara.input:start) (clara.disk:start) (clara.fat:start))")))
         panic("lisp: the drivers did not start");
+    /* What draws finds the screen. A world that was saved before there was
+     * anything to draw with has no such package, and starts without it. */
+    if (!lisp_evaluate(own_form("(let ((draw (find-package \"CLARA.DRAW\")))"
+                                "  (if draw (funcall (intern \"START\" draw))))")))
+        panic("lisp: drawing did not start");
     listen = own_form("clara.listener:run");
     while (!lisp_call(listen, told, &condition)) {
         condition = lisp_values.value[0];

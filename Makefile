@@ -29,7 +29,7 @@ COMMON_SRCS := $(wildcard kernel/*.c kernel/lisp/*.c)
 HEADERS     := $(wildcard kernel/*.h kernel/lisp/*.h kernel/arch/*/*.h)
 BOOT_FILES  := $(BUILD)/boot-files.stamp
 
-.PHONY: all test host-test image font site clean
+.PHONY: all test host-test image font site screenshot clean
 all:
 
 # $(1) arch  $(2) clang target  $(3) extra CFLAGS  $(4) EFI file name  $(5) lld machine
@@ -121,6 +121,14 @@ font:
 # about.
 site:
 	python3 -I site/build.py $(BUILD)/site
+
+# The picture on the website's front page: what the screen of AArch64
+# showed at the end of `make test`, in the world that came back, with the
+# version that the machine itself named written into the file. `make site`
+# refuses a picture of another version than the kernel's, so this goes
+# with every change of version, after `make test`.
+screenshot:
+	python3 -I site/build.py --screenshot $(BUILD)/screen-aarch64-resumed.png $(BUILD)/boot-aarch64-resumed.log
 
 clean:
 	rm -rf $(BUILD)

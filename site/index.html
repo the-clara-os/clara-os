@@ -133,8 +133,8 @@ footer p { max-width: 40rem; }
     {{roadmap}}
     <p>The <a href="https://github.com/the-clara-os/clara-os/blob/main/ROADMAP.md">roadmap</a> says what each milestone holds and what was left open along the way.</p>
     <figure>
-      <img src="boot.png" alt="The ClaraOS console at the end of a boot that started from a saved world: a session typed on the serial port and on the keyboard, in which the kernel reads a file that was written before the machine was last switched off, loads another, is interrupted from the keyboard in the middle of two loops without end, runs the evaluator's tests, writes a file and saves the world again, until it halts with nothing more to do." width="800" height="600" loading="lazy">
-      <figcaption>The screen of version {{screenshot}} on AArch64 under QEMU, in a world that an earlier boot saved, after the boot test has typed its session.</figcaption>
+      <img src="boot.png" alt="The ClaraOS console at the end of a boot that started from a saved world: a session typed on the serial port and on the keyboard, in which the kernel is interrupted from the keyboard in the middle of two loops without end, runs the evaluator's tests, writes a file, saves the world again, refuses to draw on a surface whose pixels stayed behind with the machine that was switched off, and then draws a picture and shows it: over the text on the right, a small window with the title ClaraOS, five squares of colour and the words drawn in Lisp. Then it halts with nothing more to do." width="800" height="600" loading="lazy">
+      <figcaption>The screen of version {{screenshot}} on AArch64 under QEMU, in a world that an earlier boot saved, after the boot test has typed its session. The picture on the right was drawn by the last form of it.</figcaption>
     </figure>
   </section>
 

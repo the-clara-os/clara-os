@@ -13,9 +13,8 @@ fall behind it:
   {{done}} {{total}} {{latest}} {{roadmap}}
       from the milestone list in ROADMAP.md
   {{screenshot}}
-      the version that site/boot.png is a picture of, which ROADMAP.md
-      records where it says when to replace it: the picture is replaced
-      by hand, and its caption is not
+      the version that site/boot.png is a picture of, which is written in
+      the picture itself (below)
   {{spleen:some text}}
       the text drawn with the console's font, fonts/spleen-8x16.bdf, one
       inline SVG per word
@@ -23,27 +22,41 @@ fall behind it:
       in the manual: the style sheet of site/index.html, which the two
       pages share
 
+       python3 -I site/build.py --screenshot <png> <serial log>
+
 The manual cannot fall behind either, in two ways. Every name that the
-kernel gives a meaning, the special forms and the functions in C
-(kernel/lisp/eval.c, builtin.c, symbol.c) and what lisp/boot.lisp exports,
-has to be in one of the manual's lists of names, the elements of the class
-"names", and nothing else may be in one: a function that is added without
-a word in the manual stops the build, and so does a word about one that is
-gone. And what the manual shows of the prompt is typed at a kernel:
+system gives a meaning, the special forms and the functions in C
+(kernel/lisp/eval.c, builtin.c, symbol.c), what lisp/boot.lisp exports,
+and what the package of every other file in lisp/ exports, has to be in
+one of the manual's lists of names, the elements of the class "names", and
+nothing else may be in one: a function that is added without a word in the
+manual stops the build, and so does a word about one that is gone. And
+what the manual shows of the prompt is typed at a kernel:
 --sessions writes the manual's transcripts, the <pre> elements of the
 class "session", out as sessions for tools/boottest.sh, manual-first.txt
 for a machine that has just started and manual-again.txt for the same
 machine started again from the world that the first session saved (the
 class "session again"), and `make test` boots both.
 
+Nor can the picture on the front page, site/boot.png, which is what a
+screen showed at the end of `make test`. --screenshot makes it of such a
+screenshot and writes into it, as a line of text that a PNG file can
+carry, the version that the machine named in the first line of its report
+on the serial port. The site is not built from a picture of another
+version than the kernel's: `make test` and `make screenshot` go with
+every change of version.
+
 Run by `make site` and by .github/workflows/site.yml, which publishes the
 result on GitHub Pages. Only the standard library is used.
 """
+import glob
 import html
 import os
 import re
 import shutil
+import struct
 import sys
+import zlib
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SITE = os.path.join(ROOT, "site")
@@ -92,10 +105,11 @@ def spleen(text, font):
 
 
 def defined():
-    """The names that the kernel itself gives a meaning, by package: the
-    special forms, the functions in C whose names do not begin with a %,
-    the symbols that the substrate makes external by hand, and what
-    lisp/boot.lisp exports."""
+    """The names that the system gives a meaning as it starts, by package:
+    the special forms, the functions in C whose names do not begin with a
+    %, the symbols that the substrate makes external by hand, what
+    lisp/boot.lisp exports, and what the package of each other file in
+    lisp/ does."""
     names = {"COMMON-LISP": {"NIL"}, "CLARA": set(), "CLARA.UNSAFE": set()}
     evaluator, builtins = read("kernel", "lisp", "eval.c"), read("kernel", "lisp", "builtin.c")
     for name in re.findall(r'^    \{ "([^"]+)"', evaluator + builtins, flags=re.M):
@@ -111,6 +125,12 @@ def defined():
         if not exports:
             sys.exit(f"site/build.py: lisp/boot.lisp no longer says what it exports from {package}")
         names[package].update(word.upper() for word in exports.group(1).split())
+    for path in sorted(glob.glob(os.path.join(ROOT, "lisp", "*.lisp"))):
+        with open(path, encoding="utf-8") as f:
+            text = f.read()
+        for package, options in re.findall(r'^\(defpackage "([^"]+)"(.*?)^\(in-package', text, flags=re.M | re.S):
+            exports = re.search(r"\(:export(.*?)\)\)", options, flags=re.S)
+            names[package] = set(re.findall(r'"([^"]+)"', exports.group(1))) if exports else set()
     return names
 
 
@@ -134,6 +154,49 @@ def check_names(manual):
             problems.append(f"the manual lists {' '.join(sorted(gone))} in {package}, and nothing defines that")
     if problems:
         sys.exit("site/build.py: site/manual.html is behind the kernel:\n  " + "\n  ".join(problems))
+
+
+PNG = b"\x89PNG\r\n\x1a\n"
+
+
+def png_chunks(data, name):
+    """The chunks of a PNG file as [(type, data), ...]."""
+    if data[:8] != PNG:
+        sys.exit(f"site/build.py: {name} is not a PNG file")
+    chunks, at = [], 8
+    while at + 12 <= len(data):
+        length, kind = struct.unpack(">I4s", data[at:at + 8])
+        chunks.append((kind, data[at + 8:at + 8 + length]))
+        at += 12 + length
+    return chunks
+
+
+def pictured(data, name):
+    """The version that a picture says it is of, or None when it says none."""
+    for kind, text in png_chunks(data, name):
+        key, _, value = text.partition(b"\0")
+        if kind == b"tEXt" and key == b"ClaraOS":
+            return value.decode("latin-1")
+    return None
+
+
+def screenshot(picture, log):
+    """site/boot.png, made of a screenshot of the boot test and of what the
+    same machine wrote to its serial port, whose first line names the
+    version: the picture carries it from then on."""
+    with open(picture, "rb") as f:
+        data = f.read()
+    with open(log, encoding="utf-8", errors="replace") as f:
+        version = re.search(r"^ClaraOS ([\d.]+) on ", f.read(), flags=re.M)
+    if not version:
+        sys.exit(f"site/build.py: {log} does not say which version of ClaraOS started")
+    chunks = [chunk for chunk in png_chunks(data, picture) if chunk[0] != b"tEXt"]
+    chunks.insert(1, (b"tEXt", b"ClaraOS\0" + version.group(1).encode("ascii")))
+    with open(os.path.join(SITE, "boot.png"), "wb") as f:
+        f.write(PNG)
+        for kind, text in chunks:
+            f.write(struct.pack(">I", len(text)) + kind + text + struct.pack(">I", zlib.crc32(kind + text)))
+    print(f"wrote site/boot.png: the screen of version {version.group(1)}")
 
 
 def sessions(manual):
@@ -182,6 +245,9 @@ def roadmap_html(groups):
 
 def main():
     manual = read("site", "manual.html")
+    if sys.argv[1:2] == ["--screenshot"] and len(sys.argv) == 4:
+        screenshot(sys.argv[2], sys.argv[3])
+        return
     if sys.argv[1:2] == ["--sessions"] and len(sys.argv) == 3:
         os.makedirs(sys.argv[2], exist_ok=True)
         for name, lines in sessions(manual).items():
@@ -203,13 +269,15 @@ def main():
     if not version:
         sys.exit("site/build.py: could not find CLARA_VERSION in kernel/kernel.h")
 
-    screenshot = re.search(r"site/boot\.png, on the website, is a screenshot of version ([\d.]+)", read("ROADMAP.md"))
-    if not screenshot:
-        sys.exit("site/build.py: ROADMAP.md no longer says which version site/boot.png is a screenshot of")
+    with open(os.path.join(SITE, "boot.png"), "rb") as f:
+        shown = pictured(f.read(), "site/boot.png")
+    if shown != version.group(1):
+        sys.exit(f"site/build.py: site/boot.png is a picture of {'version ' + shown if shown else 'no version that it names'},"
+                 f" and the kernel is version {version.group(1)}: run `make test`, then `make screenshot`")
 
     values = {
         "version": version.group(1),
-        "screenshot": screenshot.group(1),
+        "screenshot": shown,
         "done": str(len(done)),
         "total": str(len(items)),
         "latest": f"{done[-1][0]}, {done[-1][1]}",

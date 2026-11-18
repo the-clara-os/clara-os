@@ -62,6 +62,7 @@
 (load-source "lisp/host/clara.lisp")
 (load-source "lisp/font.lisp")
 (load-source "lisp/console.lisp")
+(load-source "lisp/draw.lisp")
 (load-source "lisp/pci.lisp")
 (load-source "lisp/virtio.lisp")
 (load-source "lisp/input.lisp")
@@ -466,6 +467,489 @@
                clara.console::*after-return*))
   (format t "still here~%")
   (check "still here" (string-right-trim '(#\Return #\Newline) (text-of (sent)))))
+
+;;; Drawing, on surfaces of a machine that is made up. A picture is looked
+;;; at here as its rows, a character to the pixel: a dot for a pixel that
+;;; is 0, and a digit or a letter for one that is a small number, which is
+;;; all that a colour is to what draws. What a surface should show after
+;;; something was drawn on it is worked out here pixel by pixel, from what
+;;; was asked for, and not by the code that drew it.
+
+(defun dot (word)
+  (cond ((zerop word) #\.)
+        ((< word 36) (char "0123456789abcdefghijklmnopqrstuvwxyz" word))
+        (t #\?)))
+
+(defun word-at (surface x y)
+  (clara.unsafe:memory-32 (+ (clara.draw::surface-address surface) (* y (clara.draw::surface-pitch surface)) (* 4 x))))
+
+(defun picture (surface)
+  (loop for y below (clara.draw:surface-height surface)
+        collect (coerce (loop for x below (clara.draw:surface-width surface) collect (dot (word-at surface x y)))
+                        'string)))
+
+;; The picture in which the pixel at X and Y is what PIXEL says of them.
+(defun expected (width height pixel)
+  (loop for y below height
+        collect (coerce (loop for x below width collect (dot (funcall pixel x y))) 'string)))
+
+(defun clear (surface)
+  (clara.unsafe:fill-rectangle-32 (clara.draw::surface-address surface) (clara.draw::surface-pitch surface)
+                                  (clara.draw:surface-width surface) (clara.draw:surface-height surface) 0)
+  (setf (clara.draw::surface-damage surface) nil))
+
+;; A machine with a screen, or without one, and what draws started on it:
+;; the screen, and what START had to say.
+(defvar *said* "")
+
+(defun new-drawing (&key width (height 10) (slack 2) (red #xff0000) (green #x00ff00) (blue #x0000ff))
+  (clara.host:reset-machine)
+  (when width
+    (clara.host:set-framebuffer (clara.unsafe:allocate-memory 4) width height (* 4 (+ width slack)) red green blue))
+  (setq *said* (with-output-to-string (*standard-output*) (clara.draw:start)))
+  (clara.draw:screen))
+
+;; A machine without a screen: there is nothing to show on, and everything
+;; to draw on. A colour is red, green and blue in the places that the
+;; screen has them, and without a screen in the commonest ones.
+(check nil (new-drawing))
+(check (format nil "draw: no screen, and surfaces to draw on all the same~%") *said*)
+(check '(#xff0000 #x00ff00 #x0000ff #x010203 0 #xffffff)
+       (list (clara.draw:color 255 0 0) (clara.draw:color 0 255 0) (clara.draw:color 0 0 255) (clara.draw:color 1 2 3)
+             (clara.draw:color 0 0 0) (clara.draw:color 255 255 255)))
+(check-condition error (clara.draw:color 256 0 0))
+(check-condition error (clara.draw:color 0 -1 0))
+(check-condition error (clara.draw:fill-rectangle (clara.draw:screen) 0 0 1 1 1)) ; NIL is no surface
+(check-condition error (clara.draw:fill-rectangle "a picture" 0 0 1 1 1))
+
+;; With a screen: its size is said, and a colour goes where the screen's
+;; masks say, the highest bits of it when there are fewer than eight.
+(let ((screen (new-drawing :width 20 :height 10 :red #x0000ff :blue #xff0000)))
+  (check (format nil "draw: a screen of 20 by 10 pixels~%") *said*)
+  (check '(t 20 10) (list (clara.draw:surface-p screen) (clara.draw:surface-width screen) (clara.draw:surface-height screen)))
+  (check #xf4e3e8 (clara.draw:color #xe8 #xe3 #xf4)))
+(new-drawing :width 20 :red #xf800 :green #x07e0 :blue #x001f)
+(check 61214 (clara.draw:color #xe8 #xe3 #xf4))
+(new-drawing :width 20 :red #x300 :green 0 :blue #x0f0)
+(check #x3f0 (clara.draw:color #xe8 #xe3 #xf4))
+
+;; A surface is page frames, all zeroes, and gives them back when it is
+;; freed; after that it is not drawn on, read or freed again.
+(new-drawing :width 20)
+(let* ((pages (clara.host:allocated-pages))
+       (surface (clara.draw:allocate-surface 40 30)))
+  (check 2 (- (clara.host:allocated-pages) pages)) ; 4800 bytes
+  (check '(40 30 0 0 nil nil)
+         (list (clara.draw:surface-width surface) (clara.draw:surface-height surface)
+               (clara.draw:pixel surface 0 0) (clara.draw:pixel surface 39 29)
+               (clara.draw:pixel surface 40 0) (clara.draw:pixel surface 0 -1)))
+  (check nil (clara.draw:free-surface surface))
+  (check pages (clara.host:allocated-pages))
+  (check-condition error (clara.draw:fill-rectangle surface 0 0 1 1 1))
+  (check-condition error (clara.draw:pixel surface 0 0))
+  (check-condition error (clara.draw:free-surface surface))
+  (check pages (clara.host:allocated-pages))
+  ;; What is refused is refused in words that say why.
+  (flet ((said (function)
+           (handler-case (progn (funcall function) nil)
+             (error (condition) (princ-to-string condition)))))
+    (check '("this surface was freed" "the screen is not a surface that can be freed" "5 is not a surface")
+           (list (said (lambda () (clara.draw:draw-text surface 0 0 "gone" 1)))
+                 (said (lambda () (clara.draw:free-surface (clara.draw:screen))))
+                 (said (lambda () (clara.draw:show 5))))))
+  (check-condition error (clara.draw:allocate-surface 0 10))
+  (check-condition error (clara.draw:allocate-surface 10 16385))
+  (check-condition error (clara.draw:allocate-surface 10 "ten"))
+  (check pages (clara.host:allocated-pages)))
+
+;; Rectangles. Every place a rectangle of every size can lie in, on a
+;; surface and around it: what is on the surface is drawn, and the
+;; function says whether anything was.
+(defvar *canvas* nil)
+
+(defun sweep (function)
+  (loop for x from -6 to 14
+        do (loop for y from -5 to 9
+                 do (funcall function x y))))
+
+(new-drawing :width 20)
+(setq *canvas* (clara.draw:allocate-surface 12 8))
+(let ((wrong 0))
+  (dolist (size '((5 3) (1 1) (30 30) (12 8) (0 4) (4 0) (-3 2)))
+    (destructuring-bind (width height) size
+      (sweep (lambda (x y)
+               (clear *canvas*)
+               (let ((drew (clara.draw:fill-rectangle *canvas* x y width height 7))
+                     (want (expected 12 8 (lambda (px py)
+                                            (if (and (<= x px (+ x width -1)) (<= y py (+ y height -1))) 7 0)))))
+                 (unless (and (equal want (picture *canvas*))
+                              (eq drew (and (find #\7 (format nil "~{~A~}" want)) t)))
+                   (incf wrong)))))))
+  (check '(fill 0) (list 'fill wrong)))
+(clear *canvas*)
+(check t (clara.draw:fill-rectangle *canvas* 2 1 5 3 7))
+(check '("............"
+         "..77777....."
+         "..77777....."
+         "..77777....."
+         "............"
+         "............"
+         "............"
+         "............")
+       (picture *canvas*))
+
+;; The outline of one is a pixel thick and just inside it, also when the
+;; rectangle is too small to have an inside.
+(let ((wrong 0))
+  (dolist (size '((6 4) (1 1) (2 2) (1 5) (5 1) (2 5) (30 30) (12 8) (0 3) (5 0) (-2 4) (4 -2)))
+    (destructuring-bind (width height) size
+      (sweep (lambda (x y)
+               (clear *canvas*)
+               (clara.draw:draw-rectangle *canvas* x y width height 3)
+               (unless (equal (picture *canvas*)
+                              (expected 12 8 (lambda (px py)
+                                               (if (and (<= x px (+ x width -1)) (<= y py (+ y height -1))
+                                                        (or (= px x) (= px (+ x width -1)) (= py y) (= py (+ y height -1))))
+                                                   3 0))))
+                 (incf wrong))))))
+  (check '(outline 0) (list 'outline wrong)))
+(clear *canvas*)
+(check t (clara.draw:draw-rectangle *canvas* 1 1 6 4 3))
+(check nil (clara.draw:draw-rectangle *canvas* 12 0 6 4 3))
+(check '("............"
+         ".333333....."
+         ".3....3....."
+         ".3....3....."
+         ".333333....."
+         "............"
+         "............"
+         "............")
+       (picture *canvas*))
+
+;; Drawing can be kept to a part of a surface for a while, and to a part
+;; of that part within it; afterwards it is kept to what it was before,
+;; also when what was done meanwhile failed.
+(let ((wrong 0))
+  (dolist (part '((3 2 5 4) (-2 -2 6 5) (8 5 30 30) (4 4 0 2) (20 20 3 3) (0 0 12 8)))
+    (destructuring-bind (left top width height) part
+      (sweep (lambda (x y)
+               (clear *canvas*)
+               (clara.draw:with-clip (*canvas* left top width height)
+                 (clara.draw:fill-rectangle *canvas* x y 6 4 5))
+               (unless (equal (picture *canvas*)
+                              (expected 12 8 (lambda (px py)
+                                               (if (and (<= x px (+ x 5)) (<= y py (+ y 3))
+                                                        (<= left px (+ left width -1)) (<= top py (+ top height -1)))
+                                                   5 0))))
+                 (incf wrong))))))
+  (check '(clip 0) (list 'clip wrong)))
+(clear *canvas*)
+(check '(one two)
+       (multiple-value-list
+        (clara.draw:with-clip (*canvas* 2 1 8 6)
+          (clara.draw:with-clip (*canvas* 0 0 6 4)        ; the part of the part: from 2 and 1 to 5 and 3
+            (clara.draw:fill-rectangle *canvas* 0 0 12 8 1))
+          (clara.draw:fill-rectangle *canvas* 9 0 3 8 2)  ; kept to the outer part again
+          (values 'one 'two))))
+(check '("............"
+         "..1111...2.."
+         "..1111...2.."
+         "..1111...2.."
+         ".........2.."
+         ".........2.."
+         ".........2.."
+         "............")
+       (picture *canvas*))
+(check-condition error (clara.draw:with-clip (*canvas* 0 0 2 2) (error "in the middle")))
+(clara.draw:fill-rectangle *canvas* 0 7 12 1 4)
+(check "444444444444" (car (last (picture *canvas*))))
+
+;; A picture of one bit to the pixel. This one is an arrow, seven pixels
+;; wide; where a bit is set the pixel takes the colour, and where it is not
+;; the background, when there is one.
+(defvar *arrow* (vector #b1000000 #b1100000 #b1110000 #b1111000 #b1111100 #b1100000 #b0010000))
+
+(defun arrow-p (x y)
+  (and (<= 0 x 6) (<= 0 y 6) (logbitp (- 6 x) (aref *arrow* y))))
+
+(dolist (background '(nil 2))
+  (let ((wrong 0))
+    (sweep (lambda (x y)
+             (clear *canvas*)
+             (clara.draw:fill-rectangle *canvas* 0 0 12 8 9)
+             (clara.draw:draw-bitmap *canvas* x y *arrow* 7 4 background)
+             (unless (equal (picture *canvas*)
+                            (expected 12 8 (lambda (px py)
+                                             (cond ((arrow-p (- px x) (- py y)) 4)
+                                                   ((and background (<= x px (+ x 6)) (<= y py (+ y 6))) background)
+                                                   (t 9)))))
+               (incf wrong))))
+    (check '(bitmap 0) (list 'bitmap wrong))))
+(clear *canvas*)
+(check t (clara.draw:draw-bitmap *canvas* 1 0 *arrow* 7 4))
+(check nil (clara.draw:draw-bitmap *canvas* 1 8 *arrow* 7 4))
+(check t (clara.draw:draw-bitmap *canvas* 9 4 *arrow* 7 nil 6)) ; the background alone, and cut off on two sides
+(check '(".4.........."
+         ".44........."
+         ".444........"
+         ".4444......."
+         ".44444....66"
+         ".44........6"
+         "...4........"
+         "............")
+       (picture *canvas*))
+
+;; Text, in the console's font. A character is a cell of 8 by 16 pixels,
+;; and a character that the font has no glyph for is the box after its
+;; last glyph.
+(defun glyph-p (character x y)
+  (let ((code (char-code character)))
+    (and (<= 0 x (1- clara.font:+width+)) (<= 0 y (1- clara.font:+height+))
+         (logbitp (- clara.font:+width+ 1 x)
+                  (aref clara.font:*glyphs*
+                        (+ y (* clara.font:+height+
+                                (- (if (<= clara.font:+first+ code clara.font:+last+) code (1+ clara.font:+last+))
+                                   clara.font:+first+))))))))
+
+(defun text-p (string x y)
+  (and (<= 0 x (1- (* clara.font:+width+ (length string))))
+       (glyph-p (char string (floor x clara.font:+width+)) (mod x clara.font:+width+) y)))
+
+(clara.draw:free-surface *canvas*)
+(setq *canvas* (clara.draw:allocate-surface 30 20))
+(dolist (background '(nil 2))
+  (let ((wrong 0) (string (coerce (list #\A #\g (code-char 955) #\!) 'string)))
+    (loop for x from -40 to 34 by 3
+          do (loop for y from -18 to 22 by 3
+                   do (clear *canvas*)
+                      (clara.draw:fill-rectangle *canvas* 0 0 30 20 9)
+                      (let ((drew (clara.draw:draw-text *canvas* x y string 4 background))
+                            (want (expected 30 20 (lambda (px py)
+                                                    (cond ((text-p string (- px x) (- py y)) 4)
+                                                          ((and background (<= x px (+ x 31)) (<= y py (+ y 15))) background)
+                                                          (t 9))))))
+                        (unless (and (equal want (picture *canvas*))
+                                     (eq drew (and (< -32 x 30) (< -16 y 20))))
+                          (incf wrong)))))
+    (check '(text 0) (list 'text wrong))))
+(check '(0 8 104) (mapcar #'clara.draw:text-width (list "" "a" "thirteen long")))
+(check nil (clara.draw:draw-text *canvas* 0 0 "" 4))
+(clear *canvas*)
+(clara.draw:draw-text *canvas* 3 2 "Hi" 1)
+(check t (and (find #\1 (format nil "~{~A~}" (picture *canvas*))) t))
+(check (expected 30 20 (lambda (px py) (if (text-p "Hi" (- px 3) (- py 2)) 1 0))) (picture *canvas*))
+
+;; Copying. The pixels of a part of one surface become those of a part of
+;; another: what the first has of the rectangle, where the second can be
+;; drawn on. To know what should be there, each pixel of the first is its
+;; own place, as a number.
+(defvar *source* (clara.draw:allocate-surface 9 6))
+
+(defun number-pixels (surface)
+  (dotimes (y (clara.draw:surface-height surface))
+    (dotimes (x (clara.draw:surface-width surface))
+      (clara.draw:fill-rectangle surface x y 1 1 (+ 1 (mod (+ x (* 5 y)) 35)))))
+  (setf (clara.draw::surface-damage surface) nil))
+
+(number-pixels *source*)
+(check t (loop for y below 6 always (loop for x below 9 always (= (clara.draw:pixel *source* x y) (word-at *source* x y)))))
+(check '(1 9 6 nil nil) (list (clara.draw:pixel *source* 0 0) (clara.draw:pixel *source* 8 0) (clara.draw:pixel *source* 0 1)
+                              (clara.draw:pixel *source* 9 0) (clara.draw:pixel *source* 0 6)))
+(clara.draw:free-surface *canvas*)
+(setq *canvas* (clara.draw:allocate-surface 12 8))
+(let ((wrong 0))
+  (dolist (part '((0 0 9 6) (2 1 4 3) (-3 -2 8 6) (5 3 30 30) (9 0 2 2) (3 3 0 2) (0 0 100 100)))
+    (destructuring-bind (x y width height) part
+      (sweep (lambda (to-x to-y)
+               (clear *canvas*)
+               (let ((drew (clara.draw:copy-rectangle *source* x y width height *canvas* to-x to-y))
+                     (want (expected 12 8 (lambda (px py)
+                                            (let ((sx (+ x (- px to-x))) (sy (+ y (- py to-y))))
+                                              (if (and (<= x sx (+ x width -1)) (<= y sy (+ y height -1))
+                                                       (<= 0 sx 8) (<= 0 sy 5))
+                                                  (word-at *source* sx sy)
+                                                  0))))))
+                 (unless (and (equal want (picture *canvas*))
+                              (eq drew (and (notevery (lambda (row) (every (lambda (c) (char= c #\.)) row)) want) t)))
+                   (incf wrong)))))))
+  (check '(copy 0) (list 'copy wrong)))
+;; Kept to a part of where it goes, as everything that draws is.
+(clear *canvas*)
+(clara.draw:with-clip (*canvas* 1 1 3 2)
+  (clara.draw:copy-rectangle *source* 0 0 9 6 *canvas* 0 0))
+(check (expected 12 8 (lambda (px py) (if (and (<= 1 px 3) (<= 1 py 2)) (word-at *source* px py) 0)))
+       (picture *canvas*))
+;; And what the first surface is kept to makes no difference: that is for
+;; drawing on it, not for reading it.
+(clear *canvas*)
+(clara.draw:with-clip (*source* 4 4 1 1)
+  (clara.draw:copy-rectangle *source* 0 0 9 6 *canvas* 0 0))
+(check (expected 12 8 (lambda (px py) (if (and (<= px 8) (<= py 5)) (word-at *source* px py) 0)))
+       (picture *canvas*))
+
+;; Within one surface, with the two rectangles over each other, in every
+;; direction: each pixel gets what was there before anything moved.
+(let ((wrong 0))
+  (loop for dx from -4 to 4
+        do (loop for dy from -3 to 3
+                 do (number-pixels *source*)
+                    (let ((before (loop for y below 6 collect (loop for x below 9 collect (word-at *source* x y)))))
+                      (clara.draw:copy-rectangle *source* 2 1 5 4 *source* (+ 2 dx) (+ 1 dy))
+                      (unless (equal (picture *source*)
+                                     (expected 9 6 (lambda (px py)
+                                                     (let ((sx (- px dx)) (sy (- py dy)))
+                                                       (if (and (<= 2 sx 6) (<= 1 sy 4))
+                                                           (nth sx (nth sy before))
+                                                           (nth px (nth py before)))))))
+                        (incf wrong)))))
+  (check '(overlap 0) (list 'overlap wrong)))
+(check-condition error (clara.draw:copy-rectangle "nothing" 0 0 1 1 *canvas* 0 0))
+(check-condition error (clara.draw:copy-rectangle *source* 0 0 1 1 nil 0 0))
+
+;; Damage: what was drawn on, as a few rectangles. What lies in one that
+;; is there adds none; one that takes others in replaces them; and two that
+;; make one rectangle between them become it.
+(defun damage ()
+  (sort (clara.draw:damage *canvas*)
+        (lambda (a b) (or (< (second a) (second b)) (and (= (second a) (second b)) (< (first a) (first b)))))))
+
+(clara.draw:free-surface *canvas*)
+(setq *canvas* (clara.draw:allocate-surface 40 30))
+(check nil (damage))
+(clara.draw:fill-rectangle *canvas* 4 4 10 6 1)
+(check '((4 4 10 6)) (damage))
+(clara.draw:fill-rectangle *canvas* 5 5 3 3 2)        ; inside it
+(clara.draw:fill-rectangle *canvas* 4 4 10 6 2)        ; the same again
+(check '((4 4 10 6)) (damage))
+(clara.draw:fill-rectangle *canvas* 50 50 3 3 2)       ; nothing was drawn
+(clara.draw:fill-rectangle *canvas* 38 28 10 10 2)     ; what was drawn of it
+(check '((4 4 10 6) (38 28 2 2)) (damage))
+(clara.draw:fill-rectangle *canvas* 20 4 5 6 1)        ; apart from the first,
+(check '((4 4 10 6) (20 4 5 6) (38 28 2 2)) (damage))
+(clara.draw:fill-rectangle *canvas* 14 4 6 6 1)        ; and what lies between them: one rectangle, of the three
+(check '((4 4 21 6) (38 28 2 2)) (damage))
+(clara.draw:fill-rectangle *canvas* 4 10 21 3 1)       ; under it
+(clara.draw:fill-rectangle *canvas* 4 2 21 4 1)        ; over its upper edge
+(check '((4 2 21 11) (38 28 2 2)) (damage))
+(clara.draw:fill-rectangle *canvas* 4 13 20 2 1)       ; not as wide: two rectangles do not make one
+(check '((4 2 21 11) (4 13 20 2) (38 28 2 2)) (damage))
+(clara.draw:fill-rectangle *canvas* 0 0 40 30 3)       ; all of it
+(check '((0 0 40 30)) (damage))
+(check '((0 0 40 30)) (clara.draw:take-damage *canvas*))
+(check nil (damage))
+;; Text that is written a character at a time is one rectangle, and so is
+;; an outline with what is inside it.
+(dotimes (i 4)
+  (clara.draw:draw-text *canvas* (+ 3 (* 8 i)) 5 (string (char "text" i)) 1 2))
+(check '((3 5 32 16)) (damage))
+(clara.draw:take-damage *canvas*)
+(clara.draw:draw-rectangle *canvas* 10 10 8 6 1)
+(check 4 (length (damage)))
+(clara.draw:fill-rectangle *canvas* 11 11 6 4 1)
+(check '((10 10 8 6)) (damage))
+;; More than a few rectangles become the one around them all.
+(clara.draw:take-damage *canvas*)
+(dotimes (i 8)
+  (clara.draw:fill-rectangle *canvas* (* 4 i) (* 3 i) 2 2 1))
+(check 8 (length (damage)))
+(clara.draw:fill-rectangle *canvas* 36 27 2 2 1)
+(check '((0 0 38 29)) (damage))
+;; By hand: as much of a rectangle as the surface has.
+(clara.draw:take-damage *canvas*)
+(check '(t nil nil) (list (clara.draw:add-damage *canvas* -5 -5 10 10) (clara.draw:add-damage *canvas* 40 0 5 5)
+                          (clara.draw:add-damage *canvas* 3 3 0 5)))
+(check '((0 0 5 5)) (damage))
+(clara.draw:take-damage *canvas*)
+(clara.draw:copy-rectangle *source* 0 0 9 6 *canvas* 35 27)
+(clara.draw:draw-bitmap *canvas* -2 -3 *arrow* 7 1)
+(check '((0 0 5 4) (35 27 5 3)) (damage))
+
+;; Whatever is drawn, and wherever: a pixel that has changed lies in the
+;; damage, which is never more than a few rectangles.
+(let ((seed 11) (wrong 0))
+  (flet ((pick (n) (setq seed (mod (+ (* seed 1103515245) 12345) 2147483648)) (mod (floor seed 65536) n)))
+    (dotimes (round 60)
+      (clear *canvas*)
+      (let ((before (picture *canvas*)))
+        (dotimes (i (1+ (pick 12)))
+          (let ((x (- (pick 60) 10)) (y (- (pick 50) 10)) (colour (1+ (pick 9))))
+            (case (pick 5)
+              (0 (clara.draw:fill-rectangle *canvas* x y (pick 20) (pick 15) colour))
+              (1 (clara.draw:draw-rectangle *canvas* x y (pick 20) (pick 15) colour))
+              (2 (clara.draw:draw-text *canvas* x y (subseq "damage" (pick 6)) colour (and (zerop (pick 2)) 1)))
+              (3 (clara.draw:draw-bitmap *canvas* x y *arrow* 7 colour))
+              (4 (clara.draw:copy-rectangle *source* 0 0 9 6 *canvas* x y)))))
+        (let ((after (picture *canvas*)) (damage (clara.draw:damage *canvas*)))
+          (when (> (length damage) 8)
+            (incf wrong))
+          (dotimes (y 30)
+            (dotimes (x 40)
+              (unless (or (char= (char (nth y before) x) (char (nth y after) x))
+                          (some (lambda (r) (and (<= (first r) x (+ (first r) (third r) -1))
+                                                 (<= (second r) y (+ (second r) (fourth r) -1))))
+                                damage))
+                (incf wrong))))))))
+  (check '(damage 0) (list 'damage wrong)))
+
+;; The screen. Its rows are longer than it is wide, and what lies past the
+;; end of a row is not the screen's. Drawing on it keeps no damage, since
+;; what is drawn there shows already.
+(let ((screen (new-drawing :width 20 :height 10 :slack 3)))
+  (check t (clara.draw:fill-rectangle screen -5 -5 100 100 6))
+  (check nil (clara.draw:damage screen))
+  (check '(6 6 0 0 0) (list (word-at screen 0 0) (word-at screen 19 9) (word-at screen 20 0) (word-at screen 22 9)
+                            (clara.unsafe:memory-32 (+ (clara.draw::surface-address screen) (* 10 92)))))
+  ;; Showing: what was drawn on a surface since it was last shown goes to
+  ;; the screen, to the place that is asked for, and nothing else does.
+  (clear screen)
+  (setq *canvas* (clara.draw:allocate-surface 8 6))
+  (clara.draw:fill-rectangle *canvas* 0 0 8 6 1)
+  (check t (clara.draw:show *canvas* 3 2))
+  (check nil (clara.draw:damage *canvas*))
+  (check (expected 20 10 (lambda (px py) (if (and (<= 3 px 10) (<= 2 py 7)) 1 0))) (picture screen))
+  (clear screen)
+  (check nil (clara.draw:show *canvas* 3 2))          ; nothing has changed, so nothing is copied
+  (check (expected 20 10 (lambda (px py) (declare (ignore px py)) 0)) (picture screen))
+  (clara.draw:fill-rectangle *canvas* 1 1 2 2 4)
+  (clara.draw:fill-rectangle *canvas* 6 4 2 2 5)
+  (check t (clara.draw:show *canvas* 3 2))             ; two small parts, and not what is between them
+  (check (expected 20 10 (lambda (px py)
+                           (cond ((and (<= 4 px 5) (<= 3 py 4)) 4)
+                                 ((and (<= 9 px 10) (<= 6 py 7)) 5)
+                                 (t 0))))
+         (picture screen))
+  (clear screen)
+  (clara.draw:add-damage *canvas* 0 0 8 6)
+  (check t (clara.draw:show *canvas* 16 7))            ; partly on the screen
+  (check (expected 20 10 (lambda (px py) (if (and (<= 16 px) (<= 7 py)) (word-at *canvas* (- px 16) (- py 7)) 0)))
+         (picture screen))
+  (check 0 (word-at screen 20 7))
+  (clara.draw:add-damage *canvas* 0 0 8 6)
+  (check nil (clara.draw:show *canvas* 20 0))          ; and not on it at all: the damage is gone all the same
+  (check nil (clara.draw:damage *canvas*))
+  (check nil (clara.draw:show screen)))
+
+;; Without a screen there is nothing to show on.
+(new-drawing)
+(setq *canvas* (clara.draw:allocate-surface 8 6))
+(clara.draw:fill-rectangle *canvas* 0 0 8 6 1)
+(check '(nil nil) (list (clara.draw:show *canvas*) (clara.draw:damage *canvas*)))
+
+;; A world that was saved comes back without its pixels: the surfaces in it
+;; are another machine's, whose memory is somebody else's by now. Nothing
+;; is drawn on one, and nothing of it is freed.
+(let ((old *canvas*) (old-screen (new-drawing :width 20)) (pages (clara.host:allocated-pages)))
+  (new-drawing :width 20)                               ; the machine starts again
+  (check-condition error (clara.draw:fill-rectangle old 0 0 1 1 1))
+  (check-condition error (clara.draw:fill-rectangle old-screen 0 0 1 1 1))
+  (check-condition error (clara.draw:copy-rectangle old 0 0 1 1 (clara.draw:screen) 0 0))
+  (check-condition error (clara.draw:show old))
+  (check-condition error (clara.draw:free-surface old))
+  (check "this surface is of a machine that was switched off: a world is saved without its pixels"
+         (handler-case (clara.draw:pixel old 0 0) (error (condition) (princ-to-string condition))))
+  (check 4 (clara.host:allocated-pages))                ; the new screen's, and no fewer
+  (check t (> pages 0))
+  (check t (clara.draw:fill-rectangle (clara.draw:screen) 0 0 1 1 1)))
 
 ;;; A PCI bus that is made up: a configuration space with some devices in
 ;;; it, and among them virtio devices, keyboards and pointers and further

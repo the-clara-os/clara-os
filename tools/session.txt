@@ -214,6 +214,37 @@ NIL
 (T "written by ClaraOS")
 > (with-open-file (out "/EFI/BOOT" :direction :output :if-exists :supersede) (write-line "never" out))
 error: /EFI/BOOT is a directory, and not a file
+> (defvar *canvas* (clara.draw:allocate-surface 200 120))
+*CANVAS*
+> (defun picture (s)
+    (let ((ink (clara.draw:color 232 227 244)) (sun (clara.draw:color 255 184 108)))
+      (clara.draw:fill-rectangle s 0 0 200 120 (clara.draw:color 45 41 66))
+      (clara.draw:fill-rectangle s 0 0 200 20 sun)
+      (clara.draw:draw-rectangle s 0 0 200 120 ink)
+      (clara.draw:draw-text s 8 2 "ClaraOS" (clara.draw:color 30 27 46))
+      (dotimes (i 5)
+        (clara.draw:fill-rectangle s (+ 12 (* i 36)) 36 28 28 (clara.draw:color (* i 60) 120 (- 255 (* i 60)))))
+      (clara.draw:draw-text s 12 84 "drawn in Lisp" ink)))
+PICTURE
+> (list (picture *canvas*) (clara.draw:damage *canvas*))
+(T ((0 0 200 120)))
+> (let ((sun (clara.draw:color 255 184 108)))
+    (list (= (clara.draw:pixel *canvas* 100 10) sun) (= (clara.draw:pixel *canvas* 100 30) sun)
+          (clara.draw:pixel *canvas* 200 10) (clara.draw:take-damage *canvas*)))
+(T NIL NIL ((0 0 200 120)))
+> (list (clara.draw:with-clip (*canvas* 190 110 100 100) (clara.draw:fill-rectangle *canvas* -5 -5 500 500 0))
+        (clara.draw:draw-text *canvas* 150 -8 "cut off" 0) (clara.draw:fill-rectangle *canvas* 200 0 10 10 0)
+        (clara.draw:copy-rectangle *canvas* 12 36 28 28 *canvas* 160 86) (clara.draw:damage *canvas*))
+(T T NIL T ((160 86 28 28) (190 110 10 10) (150 0 50 8)))
+> (let ((screen (clara.draw:screen)))
+    (list (clara.draw:show *canvas* 590 10)
+          (= (clara.draw:pixel screen 755 101) (clara.draw:color 0 120 255))  ; what had changed is on the screen,
+          (= (clara.draw:pixel screen 600 15) (clara.draw:color 255 184 108)) ; and what had not is not
+          (clara.draw:show *canvas* 590 10) (clara.draw:damage *canvas*)))
+(T T NIL NIL NIL)
+> (let ((spare (clara.draw:allocate-surface 16 16)))
+    (list (clara.draw:free-surface spare) (handler-case (clara.draw:pixel spare 0 0) (error (c) (princ-to-string c)))))
+(NIL "this surface was freed")
 > (defpackage "PLAY" (:use "COMMON-LISP") (:export "BALL"))
 #<PACKAGE "PLAY">
 > (in-package "PLAY")
