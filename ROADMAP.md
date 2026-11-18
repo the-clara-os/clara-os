@@ -923,12 +923,13 @@ No milestone yet, to be picked up when they start to matter:
 - CI has SBCL 2.6.0, the Mac 2.6.10, and the Ubuntu 24.04 container that
   stands in for CI on the Mac 2.2.9. The stress boot, a collection at every
   safe point, takes 18 s on the Mac, two minutes there when AArch64 is
-  emulated, and three to four on CI, 185 s on one run and 257 s on the next,
-  of the ten that the boot test gives it; it grows with the world, since
-  each of those collections goes through the whole heap; a text in the
-  kernel's self-test that goes round a thousand times costs seconds there,
-  since every call of a function in Lisp is a safe point, FORMAT's among
-  them.
+  emulated, and between two and five on CI, 132 s to 294 s on four runs of
+  nearly the same kernel, of the ten that the boot test gives it. It grows
+  with the world, since each of those collections goes through the whole
+  heap, so it wants a cheaper session or a longer limit before the world is
+  half as large again; a text in the kernel's self-test that goes round a
+  thousand times costs seconds there, since every call of a function in Lisp
+  is a safe point, FORMAT's among them.
 - lisp/font.lisp and kernel/font.c hold the same glyphs, one for each
   console, from the one generator.
 
