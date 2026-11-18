@@ -374,6 +374,39 @@ The compiler:
   and their like, guarded so that defining one of them again still counts,
   and a safe point that costs a look and no call.
 
+Upgrades:
+
+- [ ] **M15a an upgrade in place.** A newer ClaraOS comes to a machine
+  today as another disk, and what was on the old one goes with it: the
+  files that were written there and the world that was saved. The upgrade
+  is done by the system that is running instead. It takes the newer system
+  from a second disk, the one that `make image` makes, attached as one
+  more VirtIO drive, and writes its kernels and its Lisp files onto the
+  disk that it was started from, where everything else stays as it is. It
+  writes them in an order that a machine can stop in at any moment and
+  still start, and the system that was there is kept until the new one has
+  come to its prompt. `make run-*` keeps its disk from one build to the
+  next and is given a new build the same way, and the manual's way of
+  putting a newer ClaraOS into UTM becomes this one.
+- [ ] **M15b work kept as text.** What is defined at the prompt is in the
+  heap and nowhere else, so it lasts as long as the world it was defined
+  in, and a world that was saved is of no use to a kernel that lays its
+  objects out in another way. So the work is kept as text as well, which
+  every version reads: a directory on the boot volume that is the user's,
+  and that no upgrade writes to; a file there that every world loads once
+  it has been made from the files; and a second one that the listener
+  writes, each form that defines something as it was typed, so that a
+  world that is made again has what was defined in the one before it
+  without anybody having written it down. The image stays what makes a
+  machine start quickly.
+- [ ] **M15c a world made again.** An upgrade ends in a world of the new
+  system. After one, the world is made from the new system's files, the
+  user's text is loaded into it and it is saved, without anybody asking,
+  and the report says what was done and what did not come across. That
+  holds also where the world that was saved could be gone on with, its
+  objects being laid out as before: the system's own Lisp in it is the
+  older system's.
+
 Later, in no order: code for the processor behind the compiler's first
 pass; virtio-net and TCP/IP; outline fonts; sound; CLOS; a USB keyboard and
 mouse, which is what UTM gives a machine that is not told otherwise.
@@ -1120,6 +1153,98 @@ M14b, a compiled world:
   what the first run of this milestone passed. Compiling under the
   collector was not tried and would take hours: the compiler is the
   evaluator's business there.
+
+M15a, an upgrade in place:
+
+- Where things stand (2026-11-18). A newer ClaraOS reaches a machine as a
+  new disk: in UTM `build/claraos.img` is imported again in place of the
+  drive, and `make run-*` makes build/disk-<arch>.img again when build/esp
+  has something newer. The world that was saved and every file that was
+  written go with the old disk, and the manual says to import the disk
+  again without saying so. UTM keeps a drive that it imported as a qcow2
+  file of its own, so the host does not open it afterwards.
+- It was done by hand once, under QEMU on AArch64: 0.0.18 running from its
+  disk, the disk that tools/mkdisk.py makes of 0.0.19's build/esp attached
+  as a second VirtIO drive, and at the prompt, for every name of
+  `/EFI/BOOT/*` and `/clara/*.lisp` on the second volume,
+  `clara.fat:read-file` with `clara.fat:*volume*` bound to that volume,
+  `clara.fat:write-file` with it bound to the first, and
+  `clara.unsafe:free-memory`: eighteen files. Started again from that disk
+  the machine was 0.0.19 and a text file that had been written before was
+  there. The world that 0.0.18 had saved was refused, its objects being
+  laid out otherwise, and a function that was defined in it was gone. What
+  the host's checker makes of the volume after that was not looked at.
+- What the slice has to settle. Which volume is the system's: the kernel
+  does not know which disk it was booted from, and names are looked up on
+  the first volume on the bus, so a second disk that comes first is taken
+  for the system's. How the newer system says what it is, its version and
+  its files, before anything is written. The order: a file is written so
+  that a machine can stop at any moment, a set of files is not, and a
+  kernel of one version beside the Lisp files of another is a machine that
+  may not start. A directory of its own for the files of each version,
+  with the kernel written last, is one way. How the system that was there
+  is started when the new one does not come up: whether the firmware's
+  variables can still be written once boot services are left was not
+  looked into, and the firmware's shell starts a kernel that is kept under
+  another name. Both kernels are on the disk, and both are replaced.
+- UTM. The second drive is added by hand for an upgrade and taken out
+  after it; whether it has to come after the system's drive in UTM's list
+  was not tried, and nothing of this was tried in UTM. A folder that UTM
+  shares is no way in: of its two kinds one needs a SPICE agent in the
+  guest and the other a driver for a virtio-9p device (1af4:1009, which
+  0.0.19 lists as a device of a class without a name), and ClaraOS has
+  neither. A newer system over the network waits for a network
+  (virtio-net, under "Later").
+- `make test` needs an older system to upgrade from, and CI has the tree
+  of one commit. A second kernel built of the same sources under another
+  version is one way; the image checks of M10 were done by hand with a
+  kernel that had a row more in a table.
+
+M15b, work kept as text:
+
+- Which forms the listener writes down: DEFUN, DEFMACRO, DEFVAR,
+  DEFPARAMETER, DEFSTRUCT, DEFPACKAGE, DEFINE-CONDITION and their like,
+  with the package that each was read in; whether a LOAD is written down
+  as a LOAD; and what to make of a form that defines something by way of a
+  macro of the user's. A name that is defined a second time is in the file
+  twice: when the file is made shorter, and by whom. A form that a newer
+  system cannot evaluate has to be said and passed over, and not keep the
+  world from being made. The listener of the serial port and the one in a
+  window write the one file.
+- What is not a definition is not kept: a variable that was changed after
+  its DEFVAR comes back with the value that the form gives it. That is
+  M15c's, below.
+- Where the directory is and what it is called, and whether `make image`
+  and tools/mkdisk.py make it. Whether a second disk can be the user's: a
+  volume other than the first is reached by binding `clara.fat:*volume*`
+  and has no name of its own. On 2026-11-18 a file was loaded from such a
+  volume and one was written to it, under QEMU.
+
+M15c, a world made again:
+
+- An image outlives the kernel that saved it (DESIGN.md, Images), and what
+  it has in Lisp stays the older system's. Tried on 2026-11-18: a world
+  that 0.0.17 saved was started by the kernel of 0.0.18, with a function
+  of the user's in it and with what 0.0.18 has more of in C, and its
+  launcher had the one application of 0.0.17 and not the three of 0.0.18.
+  A world that is made again after every upgrade changes that decision,
+  and DESIGN.md with it. Whether an older world can still be gone on with
+  when somebody asks for it is open.
+- Until this milestone a world that is refused is lost, and the user's
+  definitions with it. The number in image.c went from 1 to 2 with M14a
+  and will go up again when M14b adds instructions: a slice that raises it
+  says so in its pull request.
+- What only the heap has: the value that a variable came to, a list that
+  was built by hand. A converter from each layout to the next would keep
+  those, and is a piece of work for every change of layout, too many while
+  a layout lasts a milestone. The other way is for the old system to write
+  them out as text before the upgrade, which needs no converter, the old
+  system knowing its own objects and the new one reading text: lists,
+  numbers, strings, symbols and characters as the printer writes them, and
+  structures once the reader takes back the `#S(...)` that the printer
+  writes. A closure, a thread, a lock, a stream, a surface, and anything
+  that points round in a ring are not text, and would be named and left
+  behind. Neither way is in the milestone as it is written above.
 
 No milestone yet, to be picked up when they start to matter:
 
