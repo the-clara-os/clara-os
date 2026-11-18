@@ -1412,8 +1412,8 @@ No milestone yet, to be picked up when they start to matter:
   with the world, since each of those collections went through the whole
   heap. Since 0.0.18 the kernel makes them before the world is loaded,
   34 000 of them in a heap of 270 KiB, when the boot volume asks for it,
-  and that boot is 15 s on the Mac and 100 s in the container, whatever
-  is added to the world; a text in the kernel's self-test that goes round a
+  and that boot is 15 s on the Mac, 100 s in the container and 145 s on
+  CI, whatever is added to the world; a text in the kernel's self-test that goes round a
   thousand times still costs seconds there, since every call of a function
   in Lisp is a safe point, FORMAT's among them.
 - lisp/font.lisp and kernel/font.c hold the same glyphs, one for each
