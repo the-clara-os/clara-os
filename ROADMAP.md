@@ -415,6 +415,16 @@ Upgrades:
   GitHub, the kernels and the Lisp files of a version being the files of
   its release. It waits for two things that are not there: a network,
   which is under "Later" and is work of its own, and releases.
+- [ ] **M15e shutting down.** A machine that runs ClaraOS is stopped from
+  outside today, by leaving QEMU or with UTM's button, and that is the
+  plug pulled: the system is not told, and what the world holds that was
+  not saved is gone. Shutting down is something that the system does
+  itself. It is asked to at the prompt, in the window manager, or by the
+  machine's power button, which is what a host presses when it wants a
+  machine to stop. It tells the applications, stops the threads, saves the
+  world unless it is told not to, sees that what was written is on the
+  disk, and turns the machine off, or starts it again. Starting again is
+  how an upgrade ends, so M15a needs that half of it.
 
 Later, in no order: code for the processor behind the compiler's first
 pass; virtio-net and TCP/IP; outline fonts; sound; CLOS; a USB keyboard and
@@ -1292,6 +1302,43 @@ M15d, upgrades over the network:
   function: the files, their version and their sums. A machine that stops
   while it fetches has changed nothing on its disk. To begin with, the
   system looks for a newer version when it is asked to, and not by itself.
+
+M15e, shutting down:
+
+- Where things stand (2026-11-18). Nothing in the kernel turns a machine
+  off or starts it again. Ctrl-D at the first prompt ends the session, the
+  kernel says that it has nothing more to do and halts, and the machine
+  stands still until the host stops it; nothing in the window manager
+  stops the machine. A file is on the disk from the moment the form that
+  wrote it has answered, so no file is lost by stopping. What is lost is
+  the world as it has become since it was last saved. tools/run.sh starts
+  QEMU with `-no-reboot`, under which a machine that starts itself again
+  ends QEMU instead.
+- How a machine is turned off and started again. The firmware has a
+  service for both among its runtime services, ResetSystem, the same on
+  both architectures. The kernel has never called a runtime service, and
+  whether it still can from its own page tables was not looked into.
+  Without that it is PSCI on AArch64, and ACPI on x86_64, where the value
+  that turns a machine off is in AML, which the kernel does not read: the
+  tables it reads are XSDT, APIC, GTDT and MCFG. Where a machine cannot be
+  turned off, the system says that it can be now, and stands still.
+- The power button. A host asks a machine to stop by pressing its power
+  button (`system_powerdown` in QEMU's monitor), and that comes as an
+  event of ACPI, by another way on each architecture. The system does not
+  hear it. Which of UTM's ways of stopping a machine is that request, and
+  which the plug, was not looked at.
+- What a shutdown does with the world. That it is saved without anybody
+  asking is a call to be settled: a world that was broken is then saved
+  broken and starts like that, and there is no key that says "from the
+  files" (the loose end of M10). So the image before it is kept, or the
+  system asks. And what becomes of what is not finished: a thread that
+  runs, an editor with text that was not saved, a file that is open for
+  writing.
+- What is on the disk. The driver for virtio's disks never asks a disk to
+  flush: whether a write that the device has answered is in the host's
+  file when QEMU is ended a moment later was not tried.
+- The order. An upgrade ends by starting the machine again, so that half
+  comes before M15a, or with it.
 
 No milestone yet, to be picked up when they start to matter:
 
