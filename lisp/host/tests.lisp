@@ -71,6 +71,8 @@
 (load-source "lisp/listener.lisp")
 (load-source "lisp/windows.lisp")
 (load-source "lisp/terminal.lisp")
+(load-source "lisp/editor.lisp")               ; the two that the kernel leaves on the volume for the launcher to load
+(load-source "lisp/files.lisp")
 (defvar *defined-applications* clara.windows::*applications*) ; what the files defined, for the tests to put back
 
 ;;; Names. boot.lisp is the part of Common Lisp that ClaraOS has in Lisp,
@@ -1453,8 +1455,21 @@
 (check '(10 10 8 127 9 32 47 42) (mapcar (lambda (key) (clara.input:key-character key nil nil nil)) '(28 96 14 111 15 57 98 55)))
 (check "789-456+1230." (map 'string (lambda (key) (code-char (clara.input:key-character key nil nil nil)))
                             '(71 72 73 74 75 76 77 78 79 80 81 82 83)))
-(check '(nil nil nil nil nil nil nil nil nil nil nil)   ; the keys that type nothing: Esc, the modifiers, the arrows
-       (mapcar (lambda (key) (clara.input:key-character key t t t)) '(0 1 29 42 54 56 58 59 103 108 300)))
+(check '(nil nil nil nil nil nil nil nil nil)   ; the keys that type nothing and have no code: the modifiers, and no key at all
+       (mapcar (lambda (key) (clara.input:key-character key t t t)) '(0 29 42 54 56 58 100 99 300)))
+;; Escape is a character. The arrows and their like and the function keys
+;; type none, and each has a code of its own past the last that a character
+;; can have.
+(defvar *keys-without-characters*
+  (list clara.input:+up+ clara.input:+down+ clara.input:+left+ clara.input:+right+ clara.input:+home+ clara.input:+end+
+        clara.input:+page-up+ clara.input:+page-down+ clara.input:+insert+
+        clara.input:+f1+ (+ clara.input:+f1+ 1) (+ clara.input:+f1+ 9) (+ clara.input:+f1+ 10) (+ clara.input:+f1+ 11)))
+(check (cons 27 *keys-without-characters*)
+       (mapcar (lambda (key) (clara.input:key-character key t nil t)) '(1 103 108 105 106 102 107 104 109 110 59 60 68 87 88)))
+(check '(14 t t)
+       (list (length (remove-duplicates *keys-without-characters*))
+             (every (lambda (code) (<= char-code-limit code)) *keys-without-characters*)
+             (every (lambda (code) (< code clara.input:+alt+)) *keys-without-characters*)))
 
 ;; A keyboard: what its driver sets up, and what comes of the keys.
 (let* ((vdev (car (new-bus (list 3 "QEMU Virtio Keyboard" *keys-bits*))))
@@ -1502,6 +1517,24 @@
   (tap vdev 14 14 31 28)                                  ; and Backspace takes back what there is
   (clara.input::take-events input)
   (check "s" (clara.console:read-text-line))
+  (tap vdev 30 103 105 1 59 31 28)                        ; a line takes no arrow, no Escape and no function key
+  (clara.input::take-events input)
+  (check "as" (clara.console:read-text-line))
+  ;; Whoever has the keys is handed those as well, and a key with Alt held,
+  ;; either of the two, has +ALT+ added to its code.
+  (let ((typed nil))
+    (clara.input:send-keys-to (lambda (code) (push code typed)))
+    (tap vdev 103)
+    (press vdev 56)
+    (tap vdev 15)
+    (press vdev 100)
+    (release vdev 56)
+    (tap vdev 108)
+    (release vdev 100)
+    (tap vdev 30 111)
+    (clara.input::take-events input)
+    (clara.input:send-keys-to nil)
+    (check (list clara.input:+up+ (+ clara.input:+alt+ 9) (+ clara.input:+alt+ clara.input:+down+) 97 127) (reverse typed)))
   (dotimes (i 300)                                        ; the buffers go round many times
     (tap vdev 30)
     (clara.input::take-events input))
@@ -2929,7 +2962,12 @@
   (clara.input:send-keys-to nil)
   (clara.input:send-pointer-to nil)
   (setq clara.windows::*running* nil
-        clara.windows::*applications* applications)
+        clara.windows::*applications*
+        (mapcar (lambda (application)
+                  (if (consp application)
+                      (clara.windows::make-application :name (car application) :function (cdr application))
+                      application))
+                applications))
   (clara.windows:resume)
   (and start (clara.windows:start)))
 
@@ -3313,7 +3351,7 @@
 ;;; surface of its window, and what its stream gives back when keys are
 ;;; typed at the window manager.
 
-(defun cell-shows-p (surface row column character)
+(defun cell-shows-p (surface row column character &optional (ink +ink+) (paper +paper+))
   (let* ((code (char-code character))
          (glyph (* clara.font:+height+
                    (- (if (<= clara.font:+first+ code clara.font:+last+) code (1+ clara.font:+last+))
@@ -3321,13 +3359,13 @@
     (dotimes (y clara.font:+height+ t)
       (dotimes (x clara.font:+width+)
         (unless (= (word-at surface (+ (* column clara.font:+width+) x) (+ (* row clara.font:+height+) y))
-                   (if (logbitp (- clara.font:+width+ 1 x) (aref clara.font:*glyphs* (+ glyph y))) +ink+ +paper+))
+                   (if (logbitp (- clara.font:+width+ 1 x) (aref clara.font:*glyphs* (+ glyph y))) ink paper))
           (return-from cell-shows-p nil))))))
 
 ;; The cells of a row from its first on show STRING.
-(defun row-shows-p (surface row string)
+(defun row-shows-p (surface row string &optional (ink +ink+) (paper +paper+))
   (loop for column below (length string)
-        always (cell-shows-p surface row column (char string column))))
+        always (cell-shows-p surface row column (char string column) ink paper)))
 
 ;; The lowest two rows of a cell's pixels, where the cursor is drawn, are all of PIXEL.
 (defun bar-at-p (surface row column pixel)
@@ -3488,7 +3526,838 @@
          (clara.windows:stop))
     (setf (symbol-function 'clara.terminal:open-terminal) open-terminal)))
 (setq clara.windows::*applications* *defined-applications*)
-(check '("Listener") (clara.windows:applications))  ; what lisp/terminal.lisp defined when it was loaded
+;; What lisp/terminal.lisp defined and installed when it was loaded: the two
+;; that are files have a function here because the tests loaded the files.
+(check '(("Listener" nil) ("Editor" "/clara/editor.lisp") ("Files" "/clara/files.lisp"))
+       (mapcar (lambda (application)
+                 (list (clara.windows::application-name application) (clara.windows::application-file application)))
+               clara.windows::*applications*))
+(check '("Listener" "Editor" "Files") (clara.windows:applications))
+(check (list #'clara.terminal:listener #'clara.editor:edit #'clara.files:browse)
+       (mapcar #'clara.windows::application-function clara.windows::*applications*))
+
+;;; What happens to a window, kept for its program: the keys that are typed
+;;; while it has the focus, the buttons on its inside and its close box, in
+;;; the order in which they happened.
+
+(defun click (x y)
+  (clara.windows:pointer-moved x y 1)
+  (clara.windows:pointer-moved x y 0))
+
+(new-desk :width 300 :height 220)
+(let ((kept (clara.windows:open-window "kept" 80 40 :events t))
+      (told (clara.windows:open-window "told" 80 40 :x 150 :y 120)))
+  (flet ((refused (window)                     ; a window that was opened without, and what is no window
+           (handler-case (clara.windows:next-event window 0)
+             (error (condition) (and (search "OPEN-WINDOW with :EVENTS makes one" (princ-to-string condition)) t)))))
+    (check '(t t) (list (refused told) (refused 'window))))
+  (check '(nil nil) (list (clara.windows:next-event kept 0) (clara.windows:next-event kept 20))) ; nothing has happened
+  (type-text "no")                                                           ; typed at the other window
+  (clara.windows:raise-window kept)
+  (type-text "hi")
+  (clara.windows:key-typed clara.input:+up+)
+  (multiple-value-bind (x y) (clara.windows:window-position kept)
+    (clara.windows:pointer-moved (+ x 5) (+ y 7) 1)
+    (clara.windows:pointer-moved (+ x 6) (+ y 7) 1)                          ; a move is not told
+    (clara.windows:pointer-moved (+ x 6) (+ y 7) 0)
+    (click (+ x 75) (- y 10))                                                ; the box,
+    (click (+ x 75) (- y 10))                                                ; and again before anybody heard
+    (check (list '(:key 104) '(:key 105) (list :key clara.input:+up+) '(:pointer 5 7 1) '(:pointer 6 7 0) '(:close) nil)
+           (loop repeat 7 collect (clara.windows:next-event kept 0)))
+    (click (+ x 75) (- y 10))                                                ; heard: the next click is told again
+    (check '((:close) nil) (list (clara.windows:next-event kept) (clara.windows:next-event kept 0))))
+  (let ((thread (clara:make-thread (lambda () (clara.windows:next-event kept))))) ; it waits for as long as it takes
+    (sleep 0.02)
+    (check t (clara:thread-alive-p thread))
+    (clara.windows:key-typed 65)
+    (check '(:key 65) (clara:join-thread thread)))
+  (dotimes (i 1100)                                                          ; what nobody takes is kept up to a limit
+    (clara.windows:key-typed 66))
+  (check '(1024 (:key 66)) (list (length (clara.windows::window-events kept)) (clara.windows:next-event kept)))
+  (setf (clara.windows::window-events kept) nil)
+  ;; Another title, on the screen at once; and Tab with Alt held brings the
+  ;; lowest window to the top, each in its turn, and is no key of a window's.
+  (check '("renamed" "renamed" 0)
+         (list (clara.windows:rename-window kept "renamed") (clara.windows:window-title kept) (wrong-pixels)))
+  (check-condition error (clara.windows:rename-window kept 'renamed))
+  (check-condition error (clara.windows:rename-window "kept" "renamed"))
+  (let ((third (clara.windows:open-window "third" 60 30 :x 100 :y 60)))
+    (flet ((order ()
+             (clara.windows:key-typed (+ clara.input:+alt+ 9))
+             (list (mapcar #'clara.windows:window-title (clara.windows:windows)) (wrong-pixels))))
+      (check '(("told" "third" "renamed") 0) (order))
+      (check '(("renamed" "told" "third") 0) (order))
+      (check '(("third" "renamed" "told") 0) (order)))
+    (check nil (clara.windows:next-event kept 0))
+    (clara.windows:close-window third)
+    (clara.windows:close-window told)
+    (check (+ clara.input:+alt+ 9) (clara.windows:key-typed (+ clara.input:+alt+ 9))) ; one window: nothing to bring up
+    (check '(("renamed") 0) (list (mapcar #'clara.windows:window-title (clara.windows:windows)) (wrong-pixels)))
+    (clara.windows:rename-window kept "closed")                              ; a window that is off the screen has a title too
+    (clara.windows:close-window kept)
+    (check '("gone" 0) (list (clara.windows:rename-window kept "gone") (wrong-pixels)))))
+
+;;; Applications that are files. The files are the host's, in a directory of
+;;; this run's own: LOAD, OPEN and DELETE-FILE are SBCL's here.
+
+(defvar *scratch* (format nil "/tmp/clara-host-tests-~36R/" (random (expt 36 10) (make-random-state t))))
+(ensure-directories-exist *scratch*)
+
+(defun scratch (name)
+  (concatenate 'string *scratch* name))
+
+(defun write-scratch (name &rest lines)
+  (ensure-directories-exist (scratch name))
+  (with-open-file (out (scratch name) :direction :output :if-exists :supersede)
+    (format out "~{~A~%~}" lines))
+  (scratch name))
+
+(defun scratch-text (name)
+  (with-open-file (in (scratch name))
+    (let ((text (make-string (file-length in))))
+      (subseq text 0 (read-sequence text in)))))
+
+;; What a thread that fails says goes where every thread writes, the value
+;; that *STANDARD-OUTPUT* has outside every binding: not for this run's
+;; output to show, which this thread goes on writing to.
+(defmacro silently (&body body)
+  `(let* ((output (sb-ext:symbol-global-value '*standard-output*)) (*standard-output* output)
+          (errors (sb-ext:symbol-global-value '*error-output*)))
+     (setf (sb-ext:symbol-global-value '*standard-output*) (make-broadcast-stream)
+           (sb-ext:symbol-global-value '*error-output*) (make-broadcast-stream)) ; where SBCL's LOAD says which form failed
+     (unwind-protect (progn ,@body)
+       (setf (sb-ext:symbol-global-value '*standard-output*) output
+             (sb-ext:symbol-global-value '*error-output*) errors))))
+
+(defun titles ()
+  (mapcar #'clara.windows:window-title (clara.windows:windows)))
+
+(defun hello-file (title)
+  (write-scratch "hello.lisp"
+                 "(defpackage \"CLARA.TESTS.HELLO\" (:use \"COMMON-LISP\"))"
+                 "(in-package \"CLARA.TESTS.HELLO\")"
+                 "(defvar *loaded* 0)"
+                 "(setq *loaded* (1+ *loaded*))"
+                 "(defun hello (&rest arguments)"
+                 (format nil "  (clara.windows:open-window (format nil \"~A~~{ ~~A~~}\" arguments) 60 30)" title)
+                 "  (clara:wait-event (clara:make-event)))"
+                 "(clara.windows:define-application \"Hello\" #'hello)"))
+
+(defun hello-loaded ()
+  (let ((symbol (and (find-package "CLARA.TESTS.HELLO") (find-symbol "*LOADED*" "CLARA.TESTS.HELLO"))))
+    (and symbol (symbol-value symbol))))
+
+(new-desk :width 300 :height 220)
+(check '("Hello" ("Hello") nil)                 ; installed: in the list, and nobody has loaded the file
+       (list (clara.windows:install-application "Hello" (hello-file "hello")) (clara.windows:applications) (hello-loaded)))
+(let ((first (clara.windows:launch "hello" 1 2)))                            ; loaded now, and called with the arguments
+  (check '(("hello 1 2") 1 t 0) (list (titles) (hello-loaded) (clara:thread-alive-p first) (wrong-pixels)))
+  (let ((second (clara.windows:launch "Hello")))                             ; and not loaded a second time
+    (check '(("hello" "hello 1 2") 1) (list (titles) (hello-loaded)))
+    (hello-file "again")
+    ;; Unloaded: stopped wherever it ran, its windows closed, its package
+    ;; deleted, and still in the list.
+    (check '("Hello" nil nil nil nil ("Hello") 0)
+           (list (clara.windows:unload-application "HELLO") (titles) (clara:thread-alive-p first)
+                 (clara:thread-alive-p second) (find-package "CLARA.TESTS.HELLO") (clara.windows:applications)
+                 (wrong-pixels)))))
+(let ((thread (clara.windows:launch "Hello" 3)))                             ; the file as it is by now
+  (check '(("again 3") 1) (list (titles) (hello-loaded)))
+  (clara.windows:pointer-moved 5 5 1)                                        ; with the launcher's list open:
+  (clara.windows:pointer-moved 5 5 0)
+  (check '(t "Hello" nil nil nil nil 0)                                      ; removed, it is shut, and one name shorter
+         (list clara.windows::*menu* (clara.windows:remove-application "hello") clara.windows::*menu* (titles)
+               (clara:thread-alive-p thread) (find-package "CLARA.TESTS.HELLO") (wrong-pixels))))
+(check nil (clara.windows:applications))
+(check-condition error (clara.windows:launch "Hello"))
+(check-condition error (clara.windows:unload-application "Hello"))
+(check-condition error (clara.windows:remove-application "Hello"))
+(check-condition error (clara.windows:install-application "Hello" 'hello.lisp))
+(check-condition error (clara.windows:install-application 'hello "hello.lisp"))
+;; An application of the world's own has no file to load again: it is not
+;; unloaded, and it can be removed. One that is installed under its name
+;; keeps the function that it has.
+(clara.windows:define-application "World" (lambda () 'done))
+(check-condition error (clara.windows:unload-application "World"))
+(check '("world" ("World") done)
+       (list (clara.windows:install-application "world" (scratch "never.lisp")) (clara.windows:applications)
+             (clara:join-thread (clara.windows:launch "World"))))
+(check '("World" nil) (list (clara.windows:remove-application "World") (clara.windows:applications)))
+;; A file that defines no application of the name, one that fails halfway
+;; and one that is not there: the thread ends with the reason, LAUNCH comes
+;; back, and what the file made before it failed is deleted with the rest.
+(clara.windows:install-application "Nothing" (write-scratch "nothing.lisp"
+                                                            "(defpackage \"CLARA.TESTS.NOTHING\" (:use \"COMMON-LISP\"))"))
+(clara.windows:install-application "Broken" (write-scratch "broken.lisp"
+                                                           "(defpackage \"CLARA.TESTS.BROKEN\" (:use \"COMMON-LISP\"))"
+                                                           "(error \"halfway\")"
+                                                           "(clara.windows:define-application \"Broken\" #'list)"))
+(clara.windows:install-application "Missing" (scratch "missing.lisp"))
+(silently
+  (flet ((fails (name words)                    ; the thread ended with an error that says WORDS
+           (handler-case (clara:join-thread (clara.windows:launch name))
+             (error (condition)
+               (and (search "ended with an error" (princ-to-string condition))
+                    (search words (princ-to-string condition))
+                    t)))))
+    (check '(t t t) (list (fails "Nothing" "it defined no application \"Nothing\"") (fails "Broken" "halfway")
+                          (fails "Missing" "missing.lisp")))
+    (check '(t t) (list (and (find-package "CLARA.TESTS.NOTHING") t) (and (find-package "CLARA.TESTS.BROKEN") t)))
+    (check t (fails "Broken" "halfway"))                                     ; and it is tried again at the next launch
+    (clara.windows:unload-application "Nothing")
+    (clara.windows:unload-application "Broken")
+    (check '(nil nil) (list (find-package "CLARA.TESTS.NOTHING") (find-package "CLARA.TESTS.BROKEN")))))
+(dolist (name '("Nothing" "Broken" "Missing"))
+  (clara.windows:remove-application name))
+;; Two that are launched at once load the file once between them.
+(clara.windows:install-application "Hello" (hello-file "twice"))
+(let ((threads (mapcar (lambda (n) (clara:make-thread (lambda () (clara.windows:launch "Hello" n)))) '(1 2))))
+  (mapc #'clara:join-thread threads)
+  (check '(2 1) (list (length (titles)) (hello-loaded))))
+(check '(t nil nil) (list (clara.windows:stop) (titles) (clara.windows:running-p)))
+(clara.windows:remove-application "Hello")
+(setq clara.windows::*applications* *defined-applications*)
+
+;;; The editor. What its window shows is held against the text, cell by
+;;; cell, and the text against an editor of the tests' own, which keeps its
+;;; lines in one list and does everything the slow way.
+
+(defun pad (string width)
+  (subseq (concatenate 'string string (make-string width :initial-element #\Space)) 0 width))
+
+;; How many cells of a window of text are not what they should be. ROWS is
+;; what each row shows from its first cell on: a string, in ink on paper,
+;; or a list of one, with the two the other way round. BARS are the cursors
+;; that are drawn, each the row, the column and the pixel of the two rows of
+;; pixels at the foot of a cell.
+(defun wrong-cells (surface rows &optional bars)
+  (let ((wrong 0))
+    (loop for spec in rows
+          for row from 0
+          do (let* ((text (if (consp spec) (car spec) spec))
+                    (ink (if (consp spec) +paper+ +ink+)) (paper (if (consp spec) +ink+ +paper+)))
+               (dotimes (column (length text))
+                 (let* ((bar (find-if (lambda (bar) (and (= (first bar) row) (= (second bar) column))) bars))
+                        (code (char-code (char text column)))
+                        (glyph (* 16 (- (if (<= 32 code 126) code 127) 32))))
+                   (unless (loop for y below 16
+                                 always (loop for x below 8
+                                              always (= (word-at surface (+ (* 8 column) x) (+ (* 16 row) y))
+                                                        (cond ((and bar (>= y 14)) (third bar))
+                                                              ((logbitp (- 7 x) (aref clara.font:*glyphs* (+ glyph y))) ink)
+                                                              (t paper)))))
+                     (incf wrong))))))
+    wrong))
+
+(defun editor-state (editor)
+  (list (clara.editor::all-lines editor) (clara.editor::editor-row editor) (clara.editor::editor-column editor)))
+
+;; The window of an editor against its text, after it was drawn.
+(defun editor-wrong (editor)
+  (clara.editor::render editor)
+  (let* ((lines (clara.editor::all-lines editor))
+         (top (clara.editor::editor-top editor)) (left (clara.editor::editor-left editor))
+         (columns (clara.editor::editor-columns editor)) (rows (clara.editor::editor-rows editor))
+         (asking (clara.editor::editor-asking editor)))
+    (wrong-cells (clara.editor::editor-surface editor)
+                 (append (loop for r below rows
+                               collect (let ((line (or (nth (+ top r) lines) "")))
+                                         (pad (if (< left (length line)) (subseq line left) "") columns)))
+                         (list (list (pad (clara.editor::status editor) columns))))
+                 (cons (list (- (clara.editor::editor-row editor) (clara.editor::editor-top editor))
+                             (- (clara.editor::editor-column editor) (clara.editor::editor-left editor)) +ink+)
+                       (and asking
+                            (list (list rows (+ 1 (length (car asking)) (length (clara.editor::editor-answer editor)))
+                                        +paper+)))))))
+
+(defun keys (editor &rest codes)
+  (dolist (code codes)
+    (if (stringp code)
+        (map nil (lambda (character) (clara.editor::key editor (char-code character))) code)
+        (clara.editor::key editor code))))
+
+(new-desk :width 300 :height 220)
+;; An editor with no file: one line with nothing in it, the cursor at its
+;; start, and words about the keys until the first of them.
+(let ((editor (clara.editor::open-editor nil :columns 30 :rows 4)))
+  (check '((("") 0 0) "Editor" 240 80)
+         (list (editor-state editor) (clara.windows:window-title (clara.editor::editor-window editor))
+               (clara.draw:surface-width (clara.editor::editor-surface editor))
+               (clara.draw:surface-height (clara.editor::editor-surface editor))))
+  (check '(0 0 "Ctrl-S saves, Ctrl-O opens a file, Ctrl-E evaluates, Ctrl-Q closes")
+         (list (editor-wrong editor) (wrong-pixels) (clara.editor::editor-message editor)))
+  (keys editor "ab")
+  (check '((("ab") 0 2) " a text with no file yet, not " nil 0)       ; the words, cut to the row
+         (list (editor-state editor) (clara.editor::status editor) (clara.editor::editor-message editor)
+               (editor-wrong editor)))
+  ;; Enter in the middle of a line makes two of it, and the new one begins
+  ;; as far in as the one it came from, up to where the cursor was.
+  (keys editor clara.input:+home+ "  " clara.input:+end+ clara.input:+left+ 10)
+  (check '(("  a" "  b") 1 2) (editor-state editor))
+  (keys editor clara.input:+home+ " " clara.input:+home+ 10)
+  (check '(("  a" "" "   b") 2 0) (editor-state editor))
+  ;; Backspace at the start of a line joins it to the one above, and Delete
+  ;; at the end of one joins the next to it.
+  (keys editor 8 8)
+  (check '(("  a   b") 0 3) (editor-state editor))
+  (keys editor 127 127 127)
+  (check '(("  ab") 0 3) (editor-state editor))
+  (keys editor 10 clara.input:+up+ clara.input:+end+ 127)
+  (check '(("  a  b") 0 3) (editor-state editor))
+  ;; The arrows go round the ends of the lines, and stop at those of the text.
+  (keys editor clara.input:+home+ 11 "ab" 10 "cd" clara.input:+home+ clara.input:+left+)
+  (check '(("ab" "cd") 0 2) (editor-state editor))
+  (keys editor clara.input:+right+ clara.input:+right+)
+  (check '(("ab" "cd") 1 1) (editor-state editor))
+  (keys editor clara.input:+down+ clara.input:+down+ clara.input:+end+ clara.input:+right+)
+  (check '(("ab" "cd") 1 2) (editor-state editor))
+  (keys editor clara.input:+up+ clara.input:+up+ clara.input:+home+ clara.input:+left+ clara.input:+up+)
+  (check '(("ab" "cd") 0 0) (editor-state editor))
+  ;; A tab is spaces up to the next column that is a multiple of eight.
+  (keys editor clara.input:+right+ 9 "x" 9)
+  (check '("a       x       b" 16 0)
+         (list (clara.editor::editor-line editor) (clara.editor::editor-column editor) (editor-wrong editor)))
+  ;; A key that is no character and none of the editor's does nothing.
+  (let ((state (editor-state editor)))
+    (keys editor clara.input:+insert+ clara.input:+f1+ 27 1 (+ clara.input:+alt+ 97))
+    (check state (editor-state editor)))
+  (clara.windows:close-window (clara.editor::editor-window editor)))
+
+(let ((editor (clara.editor::open-editor nil :columns 30 :rows 4)))
+  (keys editor "one" 10 "two" 10 "three")
+  (check '((("one" "two" "three") 2 5) t) (list (editor-state editor) (clara.editor::editor-changed editor)))
+  ;; Ctrl-K takes the rest of the line, then the end of the line, and what
+  ;; it took in a row comes back with Ctrl-Y, as often as is asked. At the
+  ;; end of the text it takes nothing, and what it has stays.
+  (keys editor clara.input:+up+ clara.input:+home+ clara.input:+right+ 11)
+  (check '("t" "wo") (list (clara.editor::editor-line editor) (clara.editor::editor-cut editor)))
+  (keys editor 11 11)
+  (check (list '(("one" "t") 1 1) (format nil "wo~%three")) (list (editor-state editor) (clara.editor::editor-cut editor)))
+  (keys editor 11 clara.input:+end+ 11)
+  (check (list '(("one" "t") 1 1) (format nil "wo~%three")) (list (editor-state editor) (clara.editor::editor-cut editor)))
+  (keys editor 25)
+  (check '(("one" "two" "three") 2 5) (editor-state editor))
+  (keys editor clara.input:+up+ clara.input:+up+ clara.input:+home+ 25)
+  (check '(("wo" "threeone" "two" "three") 1 5) (editor-state editor))
+  (keys editor clara.input:+home+ 11 clara.input:+down+ 11)                  ; a key in between, and it begins afresh
+  (check '((("wo" "" "" "three") 2 0) "two") (list (editor-state editor) (clara.editor::editor-cut editor)))
+  ;; A click puts the cursor on the character it is on, or at the end of
+  ;; its line; a button that comes up does nothing, and neither does a
+  ;; click on the status row.
+  (clara.editor::point editor 17 5 1)
+  (check '(0 2) (cdr (editor-state editor)))
+  (clara.editor::point editor 200 53 1)
+  (check '(3 5) (cdr (editor-state editor)))
+  (clara.editor::point editor 0 20 1)
+  (check '(1 0) (cdr (editor-state editor)))
+  (clara.editor::point editor 100 5 0)
+  (clara.editor::point editor 100 70 1)
+  (check '(1 0 0 0) (append (cdr (editor-state editor)) (list (editor-wrong editor) (wrong-pixels))))
+  (clara.editor::go-to editor 99 99)                                         ; as near as there is a line, and a column
+  (check '(3 5) (cdr (editor-state editor)))
+  ;; The window follows the cursor: down past its last row and up again,
+  ;; and along a line that is longer than it is wide.
+  (keys editor 10 "five" 10 "six")
+  (check '(5 0 2) (list (clara.editor::editor-row editor) (editor-wrong editor) (clara.editor::editor-top editor)))
+  (keys editor clara.input:+page-up+)
+  (check '(2 0 2) (list (clara.editor::editor-row editor) (editor-wrong editor) (clara.editor::editor-top editor)))
+  (keys editor clara.input:+up+ clara.input:+up+ clara.input:+up+)
+  (check '(0 0 0) (list (clara.editor::editor-row editor) (editor-wrong editor) (clara.editor::editor-top editor)))
+  (keys editor clara.input:+page-down+ clara.input:+page-down+ clara.input:+end+ " is a line of more than thirty characters")
+  (check '(5 44 0 2 15)
+         (list (clara.editor::editor-row editor) (clara.editor::editor-column editor) (editor-wrong editor)
+               (clara.editor::editor-top editor) (clara.editor::editor-left editor)))
+  (keys editor clara.input:+home+)
+  (check '(0 0 0) (list (editor-wrong editor) (clara.editor::editor-left editor) (wrong-pixels)))
+  (clara.windows:close-window (clara.editor::editor-window editor)))
+
+;; The same keys to the editor and to one that is written here, a few
+;; hundred of them as they come: the two have the same text, the cursor at
+;; the same place and the same lines in the window, and every cell of the
+;; window shows it.
+(defstruct ref (lines (list "")) (row 0) (column 0) (cut "") cutting (top 0) (left 0))
+
+(defun ref-line (ref)
+  (nth (ref-row ref) (ref-lines ref)))
+
+(defun ref-put (ref &rest lines)       ; in place of the cursor's line
+  (setf (ref-lines ref) (append (subseq (ref-lines ref) 0 (ref-row ref)) lines (nthcdr (1+ (ref-row ref)) (ref-lines ref)))))
+
+(defun ref-join (ref)                  ; the cursor's line and the next are one
+  (let ((next (nth (1+ (ref-row ref)) (ref-lines ref))))
+    (setf (ref-lines ref) (append (subseq (ref-lines ref) 0 (ref-row ref))
+                                  (list (concatenate 'string (ref-line ref) next))
+                                  (nthcdr (+ 2 (ref-row ref)) (ref-lines ref))))))
+
+(defun ref-insert (ref text)
+  (loop for character across text
+        do (let ((line (ref-line ref)) (column (ref-column ref)))
+             (cond ((char= character #\Newline)
+                    (ref-put ref (subseq line 0 column) (subseq line column))
+                    (incf (ref-row ref))
+                    (setf (ref-column ref) 0))
+                   (t
+                    (ref-put ref (concatenate 'string (subseq line 0 column) (string character) (subseq line column)))
+                    (incf (ref-column ref)))))))
+
+(defun ref-key (ref code rows)
+  (let* ((cutting (ref-cutting ref)) (line (ref-line ref)) (row (ref-row ref)) (column (ref-column ref))
+         (last (1- (length (ref-lines ref)))))
+    (setf (ref-cutting ref) nil)
+    (flet ((clamp ()
+             (setf (ref-column ref) (min (ref-column ref) (length (ref-line ref))))))
+      (cond ((= code 10)
+             (let ((indent (or (position #\Space line :test-not #'char= :end column) column)))
+               (ref-insert ref (string #\Newline))
+               (ref-insert ref (make-string indent :initial-element #\Space))))
+            ((= code 8)
+             (cond ((plusp column)
+                    (ref-put ref (concatenate 'string (subseq line 0 (1- column)) (subseq line column)))
+                    (decf (ref-column ref)))
+                   ((plusp row)
+                    (decf (ref-row ref))
+                    (setf (ref-column ref) (length (ref-line ref)))
+                    (ref-join ref))))
+            ((= code 127)
+             (cond ((< column (length line))
+                    (ref-put ref (concatenate 'string (subseq line 0 column) (subseq line (1+ column)))))
+                   ((< row last) (ref-join ref))))
+            ((= code 9) (ref-insert ref (make-string (- 8 (mod column 8)) :initial-element #\Space)))
+            ((= code clara.input:+up+) (when (plusp row) (decf (ref-row ref)) (clamp)))
+            ((= code clara.input:+down+) (when (< row last) (incf (ref-row ref)) (clamp)))
+            ((= code clara.input:+left+)
+             (cond ((plusp column) (decf (ref-column ref)))
+                   ((plusp row) (decf (ref-row ref)) (setf (ref-column ref) (length (ref-line ref))))))
+            ((= code clara.input:+right+)
+             (cond ((< column (length line)) (incf (ref-column ref)))
+                   ((< row last) (incf (ref-row ref)) (setf (ref-column ref) 0))))
+            ((= code clara.input:+home+) (setf (ref-column ref) 0))
+            ((= code clara.input:+end+) (setf (ref-column ref) (length line)))
+            ((= code clara.input:+page-up+) (dotimes (i (1- rows)) (ref-key ref clara.input:+up+ rows)))
+            ((= code clara.input:+page-down+) (dotimes (i (1- rows)) (ref-key ref clara.input:+down+ rows)))
+            ((= code 11)
+             (let ((taken (cond ((< column (length line)) (ref-put ref (subseq line 0 column)) (subseq line column))
+                                ((< row last) (ref-join ref) (string #\Newline)))))
+               (when taken
+                 (setf (ref-cut ref) (if cutting (concatenate 'string (ref-cut ref) taken) taken)
+                       (ref-cutting ref) t))))
+            ((= code 25) (ref-insert ref (ref-cut ref)))
+            ((<= 32 code 126) (ref-insert ref (string (code-char code))))))))
+
+;; Where the window is after it was drawn: it moves as little as shows the cursor.
+(defun ref-view (ref rows columns)
+  (cond ((< (ref-row ref) (ref-top ref)) (setf (ref-top ref) (ref-row ref)))
+        ((>= (ref-row ref) (+ (ref-top ref) rows)) (setf (ref-top ref) (- (ref-row ref) rows -1))))
+  (cond ((< (ref-column ref) (ref-left ref)) (setf (ref-left ref) (ref-column ref)))
+        ((>= (ref-column ref) (+ (ref-left ref) columns)) (setf (ref-left ref) (- (ref-column ref) columns -1)))))
+
+(let ((editor (clara.editor::open-editor nil :columns 12 :rows 5 :x 20 :y 60))
+      (ref (make-ref)) (state (sb-ext:seed-random-state 13)) (apart 0) (wrong 0) (pixels 0) (most 0))
+  (dotimes (step 700)
+    (let* ((n (random 100 state))
+           (code (cond ((< n 34) (char-code (char "abcde ()" (random 8 state))))
+                       ((< n 45) 10)
+                       ((< n 53) 8)
+                       ((< n 58) 127)
+                       ((< n 60) 9)
+                       ((< n 66) clara.input:+up+)
+                       ((< n 72) clara.input:+down+)
+                       ((< n 78) clara.input:+left+)
+                       ((< n 84) clara.input:+right+)
+                       ((< n 86) clara.input:+home+)
+                       ((< n 88) clara.input:+end+)
+                       ((< n 91) clara.input:+page-up+)
+                       ((< n 94) clara.input:+page-down+)
+                       ((< n 97) 11)
+                       (t 25))))
+      (clara.editor::key editor code)
+      (ref-key ref code 5)
+      (unless (zerop (editor-wrong editor))     ; which draws it
+        (incf wrong))
+      (ref-view ref 5 12)
+      (unless (equal (list (ref-lines ref) (ref-row ref) (ref-column ref) (ref-cut ref) (ref-top ref) (ref-left ref))
+                     (append (editor-state editor)
+                             (list (clara.editor::editor-cut editor) (clara.editor::editor-top editor)
+                                   (clara.editor::editor-left editor))))
+        (incf apart))
+      (setq most (max most (length (ref-lines ref))))
+      (when (zerop (mod step 50))
+        (unless (eql (wrong-pixels) 0)
+          (incf pixels)))))
+  (check '(0 0 0 t) (list apart wrong pixels (> most 12)))
+  (clara.windows:close-window (clara.editor::editor-window editor)))
+
+;; The text of a file, read whole: after its last line comes one with
+;; nothing in it, where the text ends, and saving writes every line but
+;; that one. So a file comes back as it was, and a text with nothing in it
+;; is a file with nothing in it.
+(let* ((poem (write-scratch "poem.txt" "roses" "  violets" ""))
+       (editor (clara.editor::open-editor poem :columns 90 :rows 4)))
+  (check (list '(("roses" "  violets" "" "") 0 0) poem nil "3 lines" poem 0)
+         (list (editor-state editor) (clara.editor::editor-name editor) (clara.editor::editor-changed editor)
+               (clara.editor::editor-message editor) (clara.windows:window-title (clara.editor::editor-window editor))
+               (editor-wrong editor)))
+  (keys editor 19)                                                           ; saved as it came
+  (check (list (format nil "roses~%  violets~%~%") "saved, 3 lines") (list (scratch-text "poem.txt") (clara.editor::editor-message editor)))
+  (keys editor "red ")
+  ;; The status: which file, that it has changed, and where the cursor is.
+  (let ((words (concatenate 'string poem ", not saved")) (place "line 1, column 5 "))
+    (check (list (concatenate 'string " " words (make-string (- 89 (length words) (length place)) :initial-element #\Space) place) 0)
+           (list (clara.editor::status editor) (editor-wrong editor))))
+  (keys editor 19)
+  (check (list (format nil "red roses~%  violets~%~%") nil "saved, 3 lines" 0)
+         (list (scratch-text "poem.txt") (clara.editor::editor-changed editor) (clara.editor::editor-message editor)
+               (editor-wrong editor)))
+  (keys editor clara.input:+page-down+ "end" 19)                             ; a last line with something in it gets its end
+  (check (list (format nil "red roses~%  violets~%~%end~%") "saved, 4 lines")
+         (list (scratch-text "poem.txt") (clara.editor::editor-message editor)))
+  (clara.windows:close-window (clara.editor::editor-window editor)))
+(let ((editor (clara.editor::open-editor (scratch "empty.txt") :columns 70 :rows 3)))
+  (check '((("") 0 0) "a new file: Ctrl-S makes it" nil nil)                 ; a file that is not there yet
+         (list (editor-state editor) (clara.editor::editor-message editor) (clara.editor::editor-changed editor)
+               (probe-file (scratch "empty.txt"))))
+  (keys editor 19)
+  (check '("" "saved, 0 lines") (list (scratch-text "empty.txt") (clara.editor::editor-message editor)))
+  (keys editor "x" 19)
+  (check (format nil "x~%") (scratch-text "empty.txt"))
+  (clara.windows:close-window (clara.editor::editor-window editor)))
+(let ((editor (clara.editor::open-editor (scratch "empty.txt") :columns 70 :rows 3)))
+  (check '((("x" "") 0 0) "1 lines") (list (editor-state editor) (clara.editor::editor-message editor)))
+  (clara.windows:close-window (clara.editor::editor-window editor)))
+;; An editor that is opened on what cannot be read, a directory for one,
+;; says so, and is an editor with no file: its window is not named after it.
+(let ((editor (clara.editor::open-editor *scratch* :columns 70 :rows 3)))
+  (check '((("") 0 0) t nil nil "Editor" 0)
+         (list (editor-state editor) (stringp (clara.editor::editor-message editor)) (clara.editor::editor-name editor)
+               (clara.editor::editor-changed editor) (clara.windows:window-title (clara.editor::editor-window editor))
+               (editor-wrong editor)))
+  (clara.windows:close-window (clara.editor::editor-window editor)))
+
+;; A question in the status row: a text that has no file is asked for a
+;; name when it is saved. What is typed then is the answer, Backspace takes
+;; a character of it back, Enter hands it over, and Escape gives it up.
+(let ((editor (clara.editor::open-editor nil :columns 70 :rows 3)) (note (scratch "note.txt")))
+  (flet ((asked ()
+           (list (car (clara.editor::editor-asking editor)) (clara.editor::editor-answer editor) (editor-wrong editor))))
+    (keys editor "note" 19)
+    (check '("Save as: " "" 0) (asked))
+    (keys editor "xyz" 8 clara.input:+up+ 9 1)
+    (check '("Save as: " "xy" 0) (asked))
+    (keys editor 8 8 8 10)                                                   ; no answer: nothing is saved, or tried
+    (check '((nil "" 0) (("note") 0 4) t nil nil)
+           (list (asked) (editor-state editor) (clara.editor::editor-changed editor) (clara.editor::editor-name editor)
+                 (clara.editor::editor-message editor)))
+    (keys editor 19 note 27)                                                 ; given up
+    (check '(nil 0 nil nil)
+           (list (car (asked)) (editor-wrong editor) (clara.editor::editor-name editor) (probe-file note)))
+    (keys editor 19 note 10)
+    (check (list nil note nil "saved, 1 lines" note (format nil "note~%") 0)
+           (list (clara.editor::editor-asking editor) (clara.editor::editor-name editor) (clara.editor::editor-changed editor)
+                 (clara.editor::editor-message editor) (clara.windows:window-title (clara.editor::editor-window editor))
+                 (scratch-text "note.txt") (editor-wrong editor)))
+    ;; Another file, in place of this text: refused once while the text is
+    ;; not saved, and done when the key is typed again right after.
+    (keys editor "s" 15)
+    (check '(nil "the text is not saved: Ctrl-S saves it, and asking once more goes on without")
+           (list (clara.editor::editor-asking editor) (clara.editor::editor-message editor)))
+    (keys editor clara.input:+left+ 15)                                      ; a key in between: refused again
+    (check nil (clara.editor::editor-asking editor))
+    (keys editor 15)
+    (check '("Open: " "" 0) (asked))
+    (keys editor (scratch "poem.txt") 10)
+    (check (list '(("red roses" "  violets" "" "end" "") 0 0) (scratch "poem.txt") nil "4 lines" (scratch "poem.txt") 0)
+           (list (editor-state editor) (clara.editor::editor-name editor) (clara.editor::editor-changed editor)
+                 (clara.editor::editor-message editor) (clara.windows:window-title (clara.editor::editor-window editor))
+                 (editor-wrong editor)))
+    ;; What cannot be read, a directory for one, is said, and the text stays.
+    (keys editor 15 *scratch* 10)
+    (check (list t '(("red roses" "  violets" "" "end" "") 0 0) (scratch "poem.txt") nil)
+           (list (stringp (clara.editor::editor-message editor)) (editor-state editor) (clara.editor::editor-name editor)
+                 (clara.editor::editor-asking editor)))
+    ;; Closing: at once when the text is saved; refused once when it is not,
+    ;; whether it is Ctrl-Q or the close box that asks.
+    (keys editor 17)
+    (check t (clara.editor::editor-done editor))
+    (setf (clara.editor::editor-done editor) nil)
+    (keys editor "!" 17)
+    (check '(nil t) (list (clara.editor::editor-done editor) (stringp (clara.editor::editor-message editor))))
+    (clara.editor::happened editor '(:close))
+    (check t (clara.editor::editor-done editor))
+    (setf (clara.editor::editor-done editor) nil)
+    (clara.editor::happened editor '(:close))
+    (clara.editor::happened editor (list :key clara.input:+down+))
+    (clara.editor::happened editor '(:close))
+    (check nil (clara.editor::editor-done editor))
+    (clara.editor::happened editor '(:pointer 9 20 1))                       ; and a button is the pointer's
+    (check '(1 1) (cdr (editor-state editor))))
+  (clara.windows:close-window (clara.editor::editor-window editor)))
+
+;; Ctrl-E evaluates the forms of the text, in order, as LOAD would: how
+;; many there were is said; what goes wrong is said with the line that the
+;; form begins on, where the cursor goes; and Ctrl-C stops them.
+(defvar *evaluated* nil)
+(let ((editor (clara.editor::open-editor nil :columns 70 :rows 4)))
+  (flet ((said (prefix)
+           (let ((message (clara.editor::editor-message editor)))
+             (list (and (>= (length message) (length prefix)) (string= prefix message :end2 (length prefix)))
+                   (clara.editor::editor-row editor) (clara.editor::editor-column editor)))))
+    (keys editor "(setq clara.tests::*evaluated* (list 1" 10 "2))" 10 10 "  (push 3 clara.tests::*evaluated*) ; and a comment" 10 5)
+    (check '("2 forms evaluated" (3 1 2) 0)
+           (list (clara.editor::editor-message editor) *evaluated* (editor-wrong editor)))
+    (keys editor "(car 5)" 5)
+    (check '((t 4 0) (3 1 2)) (list (said "line 5: ") *evaluated*))
+    (keys editor 11 "(list 1" 5)                                             ; a form that the text ends in the middle of
+    (check '(t 4 0) (said "line 5: "))
+    ;; The forms are read in COMMON-LISP-USER, whatever package the thread
+    ;; is in that asks, until the text itself says IN-PACKAGE: which holds
+    ;; for the rest of the text, and for nobody else.
+    (keys editor 11 "(defvar *in-the-editor* (package-name *package*))" 10 "(in-package \"CLARA.TESTS\")" 10
+          "(setq *evaluated* (package-name *package*))" 5)
+    (check '("5 forms evaluated" "COMMON-LISP-USER" "CLARA.TESTS" "COMMON-LISP-USER" "CLARA.TESTS")
+           (list (clara.editor::editor-message editor)
+                 (symbol-value (find-symbol "*IN-THE-EDITOR*" "COMMON-LISP-USER")) *evaluated*
+                 (package-name (sb-ext:symbol-global-value '*package*)) (package-name *package*)))
+    (keys editor clara.input:+up+ clara.input:+up+ clara.input:+home+ 11 11 11 11 11)
+    (keys editor 11 "(loop (sleep 0.01))")
+    (let ((thread (clara:make-thread (lambda () (clara.editor::key editor 5)))))
+      (check t (eventually (lambda () (equal (clara.editor::editor-message editor) "evaluating: Ctrl-C stops it"))))
+      (clara.windows:key-typed 65)                                           ; any other key is nothing to it
+      (sleep 0.05)
+      (check t (clara:thread-alive-p thread))
+      (clara.windows:key-typed 3)
+      (clara:join-thread thread)
+      (check '(t 4 0) (said "line 5: ")))
+    ;; An editor that is stopped while its forms run takes them with it.
+    (flet ((evaluating ()
+             (find "evaluating" (clara:all-threads) :key #'clara:thread-name :test #'equal)))
+      (let ((thread (clara:make-thread (lambda () (clara.editor::key editor 5)))))
+        (check t (eventually (lambda () (and (evaluating) (clara:thread-alive-p (evaluating))))))
+        (clara:destroy-thread thread)
+        (check t (eventually (lambda () (and (not (clara:thread-alive-p thread)) (null (evaluating)))))))))
+  (clara.windows:close-window (clara.editor::editor-window editor)))
+
+;; The application, as the launcher runs it: in a thread of its own, with
+;; what is typed and pointed at coming to it from the window manager.
+(setq clara.windows::*applications* *defined-applications*)
+(let* ((thread (clara.windows:launch "editor" (scratch "poem.txt") :columns 30 :rows 3))
+       (window (clara.windows:focused-window))
+       (face (clara.windows:window-surface window)))
+  (check (list (scratch "poem.txt") 240 64 t)
+         (list (clara.windows:window-title window) (clara.draw:surface-width face) (clara.draw:surface-height face)
+               (clara:thread-alive-p thread)))
+  (check t (eventually (lambda () (zerop (wrong-cells face '("red roses " "  violets ") (list (list 0 0 +ink+)))))))
+  (type-text "big ")
+  (check t (eventually (lambda () (zerop (wrong-cells face '("big red roses ") (list (list 0 4 +ink+)))))))
+  (clara.windows:key-typed 19)
+  (check t (eventually (lambda () (equal (scratch-text "poem.txt") (format nil "big red roses~%  violets~%~%end~%")))))
+  (multiple-value-bind (x y) (clara.windows:window-position window)
+    (click (+ x 34) (+ y 20))                                                ; the fifth cell of the second row
+    (type-text "#")
+    (check t (eventually (lambda () (zerop (wrong-cells face '("big red roses " "  vi#olets ") (list (list 1 5 +ink+)))))))
+    (click (+ x 235) (- y 10))                                               ; the box, with the text not saved
+    (check t (eventually (lambda () (row-shows-p face 3 " the text is not saved: Ctrl-S" +paper+ +ink+))))
+    (check '(1 0) (list (length (clara.windows:windows)) (wrong-pixels)))
+    (click (+ x 235) (- y 10)))                                              ; and once more
+  (check t (eventually (lambda () (and (null (clara.windows:windows)) (not (clara:thread-alive-p thread))))))
+  (check '(0 nil) (list (wrong-pixels) clara.windows::*made*)))
+
+;;; The file browser. What a directory holds is asked of the language, and
+;;; the language here is SBCL's, whose DIRECTORY gives pathnames of the
+;;; host's: the tests put a function in its place that makes names of them,
+;;; the way lisp/boot.lisp has them, and the directories are this run's own.
+
+(defun host-names (place)
+  (mapcar (lambda (path)
+            (concatenate 'string place
+                         (if (pathname-name path)
+                             (file-namestring path)
+                             (concatenate 'string (car (last (pathname-directory path))) "/"))))
+          (directory (concatenate 'string place "*.*"))))
+
+(setq clara.files::*names* #'host-names)
+(defvar *shelf* (scratch "tree/"))
+(write-scratch "tree/b.txt" "b")
+(write-scratch "tree/a.txt" "first" "second")
+(write-scratch "tree/sub/inner.txt" "inner")
+(write-scratch "tree/Zed/z.txt" "z")
+(dotimes (i 12)
+  (write-scratch (format nil "tree/many/f~2,'0D" i) "x"))
+
+(defun browser-state (browser)
+  (list (clara.files::browser-names browser) (clara.files::browser-picked browser)))
+
+;; The window of a browser against its list, after it was drawn: the names
+;; from the first in the window on, the one that is picked with its colours
+;; the other way round, and the status.
+(defun browser-wrong (browser)
+  (clara.files::render browser)
+  (let ((names (clara.files::browser-names browser)) (top (clara.files::browser-top browser))
+        (columns (clara.files::browser-columns browser)))
+    (wrong-cells (clara.files::browser-surface browser)
+                 (append (loop for r below (clara.files::browser-rows browser)
+                               collect (let* ((name (nth (+ top r) names))
+                                              (text (pad (if name (concatenate 'string " " name) "") columns)))
+                                         (if (and name (= (+ top r) (clara.files::browser-picked browser))) (list text) text)))
+                         (list (list (pad (concatenate 'string " " (clara.files::status browser)) columns)))))))
+
+(defun browser-keys (browser &rest codes)
+  (dolist (code codes)
+    (clara.files::key browser code)))
+
+(check '("/" "/" "/a/" "/clara/") (mapcar #'clara.files::parent '("/" "/clara/" "/a/b/" "/clara/apps/")))
+(new-desk :width 300 :height 220)
+(setq clara.windows::*applications* *defined-applications*)
+(let ((browser (clara.files::open-browser *shelf* :columns 30 :rows 4)))
+  ;; The directories first, in the order of their names whatever the case of
+  ;; their letters, then the files, and before them all the way up.
+  (check (list '(("../" "many/" "sub/" "Zed/" "a.txt" "b.txt") 0) *shelf* (concatenate 'string "Files in " *shelf*)
+               "6 names" 240 80 0 0)               ; and no more, in a row of 30 cells
+         (list (browser-state browser) (clara.files::browser-directory browser)
+               (clara.windows:window-title (clara.files::browser-window browser)) (clara.files::status browser)
+               (clara.draw:surface-width (clara.files::browser-surface browser))
+               (clara.draw:surface-height (clara.files::browser-surface browser))
+               (browser-wrong browser) (wrong-pixels)))
+  ;; The keys that pick another name, which the window follows.
+  (flet ((picked (&rest codes)
+           (apply #'browser-keys browser codes)
+           (list (clara.files::browser-picked browser) (browser-wrong browser) (clara.files::browser-top browser))))
+    (check '(2 0 0) (picked clara.input:+down+ clara.input:+down+))
+    (check '(1 0 0) (picked clara.input:+up+))
+    (check '(0 0 0) (picked clara.input:+up+ clara.input:+up+))
+    (check '(5 0 2) (picked clara.input:+end+))
+    (check '(5 0 2) (picked clara.input:+down+))
+    (check '(2 0 2) (picked clara.input:+page-up+))
+    (check '(0 0 0) (picked clara.input:+page-up+))
+    (check '(3 0 0) (picked clara.input:+page-down+))
+    (check '(5 0 2) (picked clara.input:+page-down+))
+    (check '(0 0 0) (picked clara.input:+home+))
+    (check '(0 0 0) (picked 65 clara.input:+f1+ 27))                         ; and keys that are none of its own
+    ;; Enter goes into the directory that is picked, and Backspace back to
+    ;; the one it is in, with the one it came from picked there.
+    (check '(1 0 0) (picked clara.input:+down+))
+    (browser-keys browser 10)
+    (check (list (concatenate 'string *shelf* "many/") (concatenate 'string "Files in " *shelf* "many/") 13 "../" "f00" 0 0)
+           (list (clara.files::browser-directory browser) (clara.windows:window-title (clara.files::browser-window browser))
+                 (length (clara.files::browser-names browser)) (first (clara.files::browser-names browser))
+                 (second (clara.files::browser-names browser)) (clara.files::browser-picked browser)
+                 (browser-wrong browser)))
+    (check '(12 0 9) (picked clara.input:+end+))
+    (browser-keys browser 8)
+    (check (list *shelf* 1 0) (list (clara.files::browser-directory browser) (clara.files::browser-picked browser)
+                                   (browser-wrong browser)))
+    (browser-keys browser clara.input:+end+ clara.input:+up+ clara.input:+up+ 13)  ; Zed, by a carriage return
+    (check '(("../" "z.txt") 0) (browser-state browser))
+    (browser-keys browser 10)                                                ; the way up is a name like the others,
+    (check (list *shelf* 3) (list (clara.files::browser-directory browser) (clara.files::browser-picked browser)))
+    (browser-keys browser clara.input:+left+)                                ; and so is the arrow to the left
+    (check (list *scratch* "tree/" 0)
+           (list (clara.files::browser-directory browser)
+                 (nth (clara.files::browser-picked browser) (clara.files::browser-names browser)) (browser-wrong browser)))
+    (browser-keys browser 10)
+    ;; A file is opened in the editor, which is launched for it.
+    (browser-keys browser clara.input:+end+ clara.input:+up+ 10)
+    (check (list (concatenate 'string *shelf* "a.txt") (concatenate 'string "Files in " *shelf*)) (titles))
+    (let ((face (clara.windows:window-surface (clara.windows:focused-window))))
+      (check t (eventually (lambda () (zerop (wrong-cells face '("first " "second ") (list (list 0 0 +ink+))))))))
+    (clara.windows:key-typed 17)                                             ; Ctrl-Q, to the editor
+    (check t (eventually (lambda () (= 1 (length (clara.windows:windows))))))
+    ;; Delete asks, and deletes the file when the answer is y; a directory
+    ;; is not deleted.
+    (check '(4 0 1) (picked 127))
+    (check (list (concatenate 'string "delete " *shelf* "a.txt? y deletes it") (concatenate 'string *shelf* "a.txt"))
+           (list (clara.files::status browser) (clara.files::browser-doomed browser)))
+    (browser-keys browser 110)                                               ; n, or any other key
+    (check '(nil t) (list (clara.files::browser-doomed browser) (and (probe-file (concatenate 'string *shelf* "a.txt")) t)))
+    (browser-keys browser 127 121)
+    (check (list '(("../" "many/" "sub/" "Zed/" "b.txt") 4) nil (concatenate 'string "deleted " *shelf* "a.txt") 0)
+           (list (browser-state browser) (probe-file (concatenate 'string *shelf* "a.txt"))
+                 (clara.files::browser-message browser) (browser-wrong browser)))
+    (browser-keys browser 127 89)                                            ; the last of the names goes: the one before is picked
+    (check '(("../" "many/" "sub/" "Zed/") 3) (browser-state browser))
+    (browser-keys browser 127)
+    (check '("a directory is not deleted from here" nil 0)
+           (list (clara.files::browser-message browser) (clara.files::browser-doomed browser) (browser-wrong browser)))
+    ;; Ctrl-R reads the directory again, with the same name picked.
+    (write-scratch "tree/new.txt" "new")
+    (check '(("../" "many/" "sub/" "Zed/") 3) (browser-state browser))
+    (browser-keys browser 18)
+    (check '((("../" "many/" "sub/" "Zed/" "new.txt") 3) 0) (list (browser-state browser) (browser-wrong browser)))
+    ;; A click picks the name it is on, and on the name that is picked
+    ;; opens it; below the names, on the status and with a button that comes
+    ;; up it does nothing.
+    (clara.files::point browser 20 1)
+    (check '(1 0) (list (clara.files::browser-picked browser) (browser-wrong browser)))
+    (clara.files::point browser 60 1)
+    (check 3 (clara.files::browser-picked browser))
+    (clara.files::point browser 20 0)
+    (clara.files::point browser 70 1)
+    (check (list 3 *shelf*) (list (clara.files::browser-picked browser) (clara.files::browser-directory browser)))
+    (clara.files::point browser 60 1)
+    (check (list (concatenate 'string *shelf* "Zed/") '("../" "z.txt")) (list (clara.files::browser-directory browser) (clara.files::browser-names browser)))
+    (clara.files::point browser 40 1)                                        ; two names, and this is the third row
+    (check '(0 0) (list (clara.files::browser-picked browser) (browser-wrong browser)))
+    ;; Closing, by the key and by the box.
+    (browser-keys browser 17)
+    (check t (clara.files::browser-done browser))
+    (setf (clara.files::browser-done browser) nil)
+    (clara.files::happened browser '(:close))
+    (check t (clara.files::browser-done browser))
+    (clara.files::happened browser (list :key clara.input:+down+))
+    (clara.files::happened browser '(:pointer 5 4 1))
+    (check 0 (clara.files::browser-picked browser)))
+  (clara.windows:close-window (clara.files::browser-window browser)))
+;; A name without the slash at its end is a directory's all the same; a
+;; directory with nothing in it has the way up; and where nothing is listed
+;; at all, or the file system fails, that is said.
+(let ((browser (clara.files::open-browser (scratch "tree/sub"))))            ; as large as it is when nothing is said
+  (check (list (scratch "tree/sub/") '("../" "inner.txt") 384 272 "2 names: Enter opens, Backspace goes up" 0)
+         (list (clara.files::browser-directory browser) (clara.files::browser-names browser)
+               (clara.draw:surface-width (clara.files::browser-surface browser))
+               (clara.draw:surface-height (clara.files::browser-surface browser))
+               (clara.files::status browser) (browser-wrong browser)))
+  (clara.windows:close-window (clara.files::browser-window browser)))
+(let ((clara.files::*names* (lambda (place) (declare (ignore place)) nil)))
+  (let ((browser (clara.files::open-browser "/" :columns 30 :rows 2)))
+    (check '((nil 0) "nothing here" 0) (list (browser-state browser) (clara.files::status browser) (browser-wrong browser)))
+    (browser-keys browser 10 127 clara.input:+down+ 8)
+    (clara.files::point browser 5 1)
+    (check '((nil 0) "/" nil) (list (browser-state browser) (clara.files::browser-directory browser) (clara.files::browser-message browser)))
+    (clara.windows:close-window (clara.files::browser-window browser))))
+(let ((clara.files::*names* (lambda (place) (error "the disk of ~A does not answer" place))))
+  (let ((browser (clara.files::open-browser "/" :columns 40 :rows 2)))
+    (check '("the disk of / does not answer" 0) (list (clara.files::status browser) (browser-wrong browser)))
+    (clara.windows:close-window (clara.files::browser-window browser))))
+
+;; The application, as the launcher runs it, and the two together: a file
+;; that is picked in the browser's window opens in a window of the editor's.
+(let* ((thread (clara.windows:launch "files" *shelf* :columns 30 :rows 4))
+       (window (clara.windows:focused-window))
+       (face (clara.windows:window-surface window)))
+  (check t (eventually (lambda () (zerop (wrong-cells face (list (list (pad " ../" 30)) " many/ " " sub/ " " Zed/ "))))))
+  (dotimes (i 4)
+    (clara.windows:key-typed clara.input:+down+))
+  (check t (eventually (lambda () (zerop (wrong-cells face (list " many/ " " sub/ " " Zed/ " (list (pad " new.txt" 30))))))))
+  (clara.windows:key-typed 10)
+  (check t (eventually (lambda () (equal (titles) (list (concatenate 'string *shelf* "new.txt") (concatenate 'string "Files in " *shelf*))))))
+  (check 0 (wrong-pixels))
+  (clara.windows:key-typed (+ clara.input:+alt+ 9))                          ; back to the browser's window, by the keyboard
+  (multiple-value-bind (x y) (clara.windows:window-position window)
+    (click (+ x 235) (- y 10)))
+  (check t (eventually (lambda () (not (clara:thread-alive-p thread)))))
+  (check (list (concatenate 'string *shelf* "new.txt")) (titles))
+  ;; Unloaded, the editor is stopped where it runs, and has no function
+  ;; until its file is loaded again. Its package stays here, where the
+  ;; tests loaded the file and not the launcher, whose file is one of
+  ;; ClaraOS's own volume: so the tests give it its function back.
+  (clara.windows:unload-application "Editor")
+  (check '(nil t nil) (list (titles) (packagep (find-package "CLARA.EDITOR"))
+                            (clara.windows::application-function (clara.windows::find-application "Editor")))))
+(clara.windows:define-application "Editor" #'clara.editor:edit)
+(clara.windows:stop)
+(setq clara.files::*names* #'clara.files::names-in)
+(sb-ext:delete-directory *scratch* :recursive t)
+(check nil (probe-file *scratch*))
+
 
 ;;; The stand-ins themselves, as far as what is written for ClaraOS will
 ;;; lean on them: threads, a lock, an event, as the kernel's own self-test

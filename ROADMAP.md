@@ -287,8 +287,41 @@ The world:
   `make test` types into a window on QEMU's keyboard, moves, launches and
   closes with QEMU's mouse, saves the world there, and starts again in the
   window manager, whose screen is the picture on the website.
-- [ ] **M13 applications.** A text editor and a file browser as the first
-  two Lisp applications, loaded and unloaded while the system runs.
+- [x] **M13 applications** (2026-11-18, version 0.0.18). A text editor
+  (lisp/editor.lisp) and a file browser (lisp/files.lisp), the first two
+  applications after the listener. Neither is part of the world that the
+  kernel loads: each is a file on the boot volume that the launcher lists
+  by a name, loads when it is first picked, in the thread that is to run
+  it, and unloads again when asked, which stops it wherever it runs and
+  deletes the packages that its file made; the next launch loads the file
+  as it is by then. Any file can be installed that way, and an application
+  is launched with arguments, which is how the browser opens a file in the
+  editor. The editor keeps a text as its lines around the cursor's, reads
+  and writes files whole through the language, moves by the arrows, Home,
+  End and the page keys and by a click, cuts lines and puts them back, and
+  evaluates its text as LOAD would, in a thread that Ctrl-C stops. The
+  browser lists a directory, goes into directories and back, opens files
+  and deletes them. Both draw a window of cells a row at a time, and only
+  the rows that changed. What they stand on is new as well: the keys that
+  type no character, the arrows and the function keys among them, reach
+  whoever has the keyboard, as codes past the last that a character can
+  have, and Alt with a key adds to its code; a window can keep what happens
+  to it, keys, buttons and its close box, for its program to take in a
+  thread of its own (`next-event`); a window can be given another title;
+  Alt and Tab brings each window to the top in turn. The language has
+  `destructuring-bind`, `delete-package`, `list-all-packages` and
+  `char-code-limit`, and LOAD finds a file of `\clara` by its whole name
+  on a machine that has no disk to read it from. The boot that has the
+  collector run at every safe point does its work before the world is
+  loaded, where a collection is short, when a file on its volume asks for
+  it. The host tests hold every cell of both windows against a rule of
+  their own, and the editor against a second editor that is written there
+  the slow way, over 700 keys as they come; every machine of `make test`
+  types a file into the editor on QEMU's keyboard, places the cursor with
+  its mouse, saves, evaluates, opens that file from the browser, unloads
+  the editor, installs an application from a file that it wrote, and ends
+  its second boot with the editor and the browser on the screen, which is
+  the picture on the website.
 
 Later, in no order: a compiler written in Lisp; virtio-net and TCP/IP;
 outline fonts; sound; CLOS; a USB keyboard and mouse, which is what UTM
@@ -819,37 +852,192 @@ Infrastructure, for sessions with budget left over:
   loop by RETURN lost all but the first, in the evaluator since M6b, where
   SBCL keeps them: the function that says which window the pointer is on
   gives two.
+  From M13: the two sessions from the disk image that macOS makes, with
+  4 GiB and four processors, and the first on x86_64 with 128 MiB,
+  `-cpu max` and four processors; a machine whose file system was taken
+  away at the prompt, with `(clara:provide-files)`, where the editor and
+  the browser are loaded from the files that the handoff read, and the
+  browser says that nothing is there; how long things take, in the
+  hundredths of a second that the machine counts: under Apple's hypervisor
+  one to load the editor's file and open its window, and four to read
+  boot.lisp, 1100 lines, and show it; emulated on the same Mac, six and 43;
+  the boot with a collection at every safe point, 23 s on the Mac while
+  its collections went through the whole world and 15 s since they are
+  made before the world is loaded; the manual's new chapter, as a browser
+  shows it; the whole of `make test` in an Ubuntu container, with clang 18,
+  QEMU 8.2 and SBCL 2.2.9. And the code broken on purpose, 131 ways.
+  lisp/editor.lisp, by the host tests, 48 ways: a character that leaves the
+  cursor where it was; a new line that is not counted, that is not
+  indented, that is indented past the cursor; a line up that keeps the
+  column whatever the line; the arrows that stop at the end of a line, or
+  come out at the wrong end of the next; Backspace and Delete that join
+  nothing, that leave the cursor at the start, that take the wrong
+  character; Ctrl-K that always begins afresh, that always adds, that
+  empties what it kept when there is nothing to take; a text put back
+  without its new lines; a place past the end of a line; a file read
+  without the line that ends it, with the cursor left where it was, with
+  the old title; a text saved with its last line whatever that holds, and
+  one that stays marked as changed; the line of an error counted from a
+  comment, an error that does not move the cursor, forms that Ctrl-C does
+  not stop, forms read in the package of whoever asks; rows that are not
+  copied when the text moves, or copied the wrong way, or that keep their
+  old place in what was drawn; a cursor that stays on the screen; a window
+  that does not follow the cursor down, or along a line; rows drawn from
+  their first column whatever is in sight; a status in the colours of the
+  text, without the cursor of a question, without the place; Escape that
+  gives nothing up, Enter that takes no answer for one; a text thrown away
+  at the first asking, a refusal that is never taken back, or taken back
+  after another key; a tab of eight spaces wherever it is, a page a row
+  too long, Ctrl-S that asks for no name; a click that counts rows by the
+  width of a cell, a button that comes up taken for a click, a click on the
+  status row; a close box that closes whatever the text; an editor that a
+  file it cannot read takes down. Two got through at first, and the tests
+  have what catches each since: forms read in the package of whoever asks,
+  which under SBCL is the same package unless the text says IN-PACKAGE, as
+  the test's text now does; and Enter with no answer, which saved under no
+  name and said so, where the test had only looked at the text.
+  lisp/files.lisp, by the host tests, 27 ways: directories and files in one
+  order, or in the order they came; a way up from the top; names with the
+  directory before them; a directory above that is always the top; going up
+  that picks the first name, a list that keeps its place; a title that
+  stays; a file gone into like a directory, an editor launched without the
+  name; a status that always has the keys; a name that is picked and looks
+  like the others, a row that is drawn once and never again; a list that
+  does not follow the pick, up or down, and a pick past the last name; any
+  key that deletes, a list that is not read again after, a directory asked
+  about like a file; Ctrl-R that loses the pick; a page a name too long, an
+  arrow to the left that does nothing; a click that opens at once, one
+  below the names, a button that comes up; a name without its slash that
+  is no directory's; a directory that fails and takes the browser down.
+  All were noticed. lisp/windows.lisp, by the host tests, 28 ways: a close
+  box told once and for all; what happens kept without a limit, the newest
+  first, never waited for, asked of a window that keeps nothing; a window
+  of events without its box, a button told where it is on the screen; a
+  title that the screen does not show, or that is anything; Alt and Tab
+  that bring the second window up, that go to the window as well, that the
+  screen does not show; an application launched without its arguments; a
+  file loaded at every launch, or twice by two that launch at once; the
+  packages of a file not noted, or forgotten when the file failed; a file
+  that defines nothing and is not said; unloading that keeps the function,
+  the threads or the packages, or does not wait for the threads; an
+  application of the world's unloaded; one that is removed and stays in
+  the list, a list that stays open while it changes; installing that takes
+  the function away; a name found only as it is spelt; threads that are
+  not noted. Two got through at first: the file that defines nothing, where
+  the thread failed all the same, in other words, and the window that
+  keeps nothing, which failed in the lock it does not have; the tests hold
+  the words of both refusals since. The keys, by the host tests, 11 ways:
+  up and down the other way round, Home for End, an Escape that types
+  nothing, F11 for F12, two keys with one code, a key's code that a
+  character could have; Alt that changes nothing, that stays down, the
+  right Alt that is none; a line that takes every code for a character; the
+  applications not installed. All were noticed. The substrate, by booting,
+  17 ways: a deleted package that is still found, one that another uses and
+  one of the system's deleted, no package listed; a list within a list not
+  taken apart, &WHOLE that is nothing, a special variable that stays bound,
+  a body that does not see the variables, one value where there are
+  several; a whole name that is no name of a boot file, the directory's
+  name in small letters only, any seven characters taken for it; a limit
+  of the codes that is the highest code; and for the boot that collects at
+  every safe point: a file that asks in vain, collections that are asked
+  for and not made, boot.lisp not loaded again, the texts not evaluated
+  again. One got through at first, boot.lisp not loaded again, since the
+  line of the report counted the collections of both together; it counts
+  them apart now, and the boot test wants thousands of the one and tens of
+  thousands of the other. Trying these found two mistakes that no case was
+  looking for. The boot test handed its patterns for the boot report to
+  awk in a way that takes a backslash for awk's own, so a pattern with
+  `\{5,\}` in it could never have matched: the patterns come from the
+  environment now. And that boot runs the kernel that is on its disk, the
+  one the first session of the machine was booted with: a kernel is tried
+  there only after a first session of its own.
 
 Shortcuts and loose ends, under the milestone that settles each one. A
 session reads its own group before it starts, and whatever it leaves open
 is added here in the same change.
 
-M13:
+No milestone yet, to be picked up when they start to matter:
 
-- The boot with a collection at every safe point takes 331 s on CI of the
-  600 that it is given, and took 227 s before the window manager was in
-  the world: each of its collections goes through the whole heap. An
-  editor and a file browser are more world again. Before they go in, that
-  session has to get cheaper, by collecting at every tenth safe point, or
-  by not loading boot.lisp a second time under it, or its limit longer.
-- Keys that type no character reach nobody: the arrows, Home and End, the
-  function keys, Alt. An editor needs the arrows, and the window manager
-  has no key of its own: nothing on the keyboard brings another window to
-  the top, opens the launcher's list or closes a window, which the pointer
-  does, or a function at a prompt.
-- An application is a function that is defined in the world, by a file
-  that was loaded or at a prompt, and the launcher lists what is defined.
-  Nothing loads an application from its file when it is picked, and
-  nothing takes one out of the list again.
-- A window's program is told of a button of the pointer that goes down or
-  comes up on its inside, and not of the pointer moving there, nor of the
-  wheel. A window is the size it was opened with.
+- Applications. An application that fails, in its file as it is loaded or
+  later, says so on the console, which is the serial port while the windows
+  have the screen: its window goes, or never comes, and nothing on the
+  screen says why. The launcher loads a file in the thread of the
+  application, and LAUNCH waits for the window, so a click on a name in the
+  list holds the pointer still for as long as the file takes to load, a
+  hundredth of a second under a hypervisor and some tenths where the
+  machine is emulated. The packages of an application are the ones that
+  were not there before its file was loaded: a file that another thread
+  loads at that moment is counted with it, and a file that adds to a
+  package that was there leaves that behind when it is unloaded. Unloading
+  deletes packages and nothing else: a function that the file defined in
+  COMMON-LISP-USER stays, and so does whatever of the application something
+  else still holds, a thread that it started for one. An application is
+  installed with the whole name of its file, `/clara/editor.lisp`, and on a
+  machine without a disk that has a driver the file is the one that the
+  handoff read, as it was at boot. There is no list of what an application
+  needs: a file that leans on another has to load it. The windows that an
+  application had open do not come back with a saved world, though whether
+  its file was loaded does. Nothing but the pointer opens the launcher's
+  list, moves a window or closes one; Alt and Tab is the window manager's
+  one key.
+- The editor. A text is strings in the heap, one to the line, and a
+  character that is typed makes a new string of its line: a line of many
+  thousands of characters is slow to type in, and a file of many megabytes
+  does not fit. There is no undo, no search, nothing is marked, and what is
+  cut is one piece of text that each window keeps for itself. A file is
+  read and written as its lines: one that does not end in a new line has
+  one after it was saved, and whether its lines ended in a carriage return
+  as well is kept only because the carriage return stays in the line, where
+  it shows as a box, as a tab does. A name is typed whole, with nothing to
+  complete it, and nothing says that a file is open in another window. The
+  forms of Ctrl-E are read from a copy of the text and evaluated in a thread
+  of their own, which the editor looks at every 20 ms; what they print goes
+  to the console, and while they run every key but Ctrl-C is dropped. The
+  line of an error is the line where the form begins, found by passing over
+  blanks and comments of the one kind, `;`. The window is the size it was
+  opened with, and a line longer than the window is wide moves all rows
+  sideways. Left to the keys that the keyboard has: there is no way to the
+  start or the end of the text but by pages.
+- The file browser. It shows names, and neither sizes nor dates: the
+  language's DIRECTORY gives names and nothing else, and the browser asks
+  the language. It reads a directory when it comes to it and when it is
+  told to, and does not notice what is written meanwhile. Every file opens
+  in the editor, which refuses what is no text. It makes no directories and
+  deletes none, as nothing in the system does yet, and renames and copies
+  nothing. It lists the volume that names are looked up on, and no other.
+- Keys. A key that types no character is a code from CHAR-CODE-LIMIT on,
+  and whoever is handed codes has to pass over the ones it does not know:
+  the console does, for a line, and so do the two applications. The
+  function keys and Insert are handed on and nothing uses them. Ctrl and
+  Shift change nothing about an arrow. The keypad's keys are their digits
+  whatever Num Lock says. At a prompt a line is still edited with Backspace
+  alone, on the console and in a window.
+- Windows that keep what happens to them (`:events`) hold up to 1024
+  things, and what happens past that is dropped without a word. Such a
+  window always has a close box. A program is told of a button that goes
+  down or comes up on its inside, and not of the pointer moving there, nor
+  of the wheel. A window is the size it was opened with.
 - A terminal keeps no memory of what it shows: text that has moved off its
   top is gone, nothing can be marked or copied, and its window cannot be
-  drawn again in another size. A line that is typed there is edited with
-  Backspace alone, as on the console.
-
-No milestone yet, to be picked up when they start to matter:
+  drawn again in another size.
+- The boot that has a collection at every safe point does its work before
+  the world is loaded, when its volume has a file `\clara\stress`: boot.lisp
+  again and the evaluator's texts again, in a heap of 270 KiB. What it does
+  at the prompt afterwards, a few forms and a line on the keyboard, still
+  goes through the whole world at every collection, and so does a session
+  that somebody types by hand with `(cl::%collect-every 1)`. The files of
+  the world, the console and the drivers and the windows, are never
+  evaluated under it but for what those few forms touch.
+- The host tests of the two applications. The editor and the browser are
+  tested under SBCL on the host's own files, in a directory under /tmp that
+  the run makes and deletes: OPEN, PROBE-FILE and DELETE-FILE are SBCL's
+  there, and DIRECTORY, which gives pathnames under SBCL, is replaced by a
+  function of the tests' (`clara.files::*names*`). So the one line of the
+  browser that asks the language is tested by the boots alone, and so is
+  everything that lisp/boot.lisp does between an application and the file
+  system. An application that the launcher loads from its file is tested
+  there with files that the tests write; the editor and the browser
+  themselves are loaded by the tests, as the other files of lisp/ are.
 
 - Windows. The windows that were open when a world was saved do not come
   back: the window manager starts with one listener, whatever was open.
@@ -877,9 +1065,14 @@ No milestone yet, to be picked up when they start to matter:
   starts without the window manager, as one from before 0.0.16 starts
   without what draws, and its console and its driver for the keyboard are
   the older ones as well: whether the files of lisp/, loaded at its
-  prompt, bring the window manager in has not been tried. Nor has the
-  window manager been tried in UTM, where the keyboard and the tablet of
-  virtio have to be added by hand.
+  prompt, bring the window manager in has not been tried. A world that was
+  saved before 0.0.18 has the window manager of its day, whose launcher
+  knows the listener and nothing of applications in files: the editor and
+  the browser are on its volume and not in its list. Nor has the window
+  manager been tried in UTM, where the keyboard and the tablet of virtio
+  have to be added by hand, and neither have the editor and the browser:
+  whether Alt and Tab and the arrows arrive there as they do from QEMU's
+  monitor is for a person at a keyboard to say.
 
 - Drawing. A surface is one thread's at a time: what drawing is kept to
   and what was drawn on are the surface's own, and nothing locks them, so
@@ -1215,12 +1408,14 @@ No milestone yet, to be picked up when they start to matter:
   nearly the same kernel, of the ten that the boot test gives it. With the
   window manager in the world (0.0.17) it is 19 s on the Mac, two and a
   half minutes in the container, and 331 s on CI, where the kernel before
-  took 227 s. It grows
-  with the world, since each of those collections goes through the whole
-  heap, so it wants a cheaper session or a longer limit before the world is
-  half as large again; a text in the kernel's self-test that goes round a
-  thousand times costs seconds there, since every call of a function in Lisp
-  is a safe point, FORMAT's among them.
+  took 227 s. It grew
+  with the world, since each of those collections went through the whole
+  heap. Since 0.0.18 the kernel makes them before the world is loaded,
+  34 000 of them in a heap of 270 KiB, when the boot volume asks for it,
+  and that boot is 15 s on the Mac, 100 s in the container and 145 s on
+  CI, whatever is added to the world; a text in the kernel's self-test that goes round a
+  thousand times still costs seconds there, since every call of a function
+  in Lisp is a safe point, FORMAT's among them.
 - lisp/font.lisp and kernel/font.c hold the same glyphs, one for each
   console, from the one generator.
 

@@ -32,9 +32,9 @@ starting one, say what it will take, and let Julio choose.
 Build with `make` (Homebrew's llvm and lld under /opt/homebrew/opt when they
 are there, otherwise clang and lld-link from the PATH; `LLVM=` and `LLD=`
 name other directories). `make test` runs the host tests of the Lisp
-files under SBCL (`make host-test`, five seconds), then boots both
-architectures headless under QEMU, nine boots in about a minute and a
-half, types a session at each kernel, and saves what each screen shows to
+files under SBCL (`make host-test`, ten seconds), then boots both
+architectures headless under QEMU, nine boots in about two minutes,
+types a session at each kernel, and saves what each screen shows to
 build/screen-<name>.png; look at those images when a change touches the
 display. `make run-aarch64` and `make run-x86_64` open a QEMU window with
 serial on the terminal; `make image` produces the UTM disk.
@@ -202,7 +202,10 @@ Rules:
   the collector and the evaluator, which `(cl::%self-test)` at its prompt
   makes up for.
 - LOAD is Lisp since boot.lisp defines it, over two functions in C:
-  `%load`, the boot files, and `%load-text`, a text with a name. A text
+  `%load`, the boot files, and `%load-text`, a text with a name. `%load`
+  takes a name with `/clara/` before it as well, since those are the files
+  of that directory: an application's file is found on a machine with no
+  disk to read. A text
   of the evaluator's self-test must not reach the file system (PROBE-FILE,
   DIRECTORY, OPEN with a name that could be there): the texts run again
   with a collection at every safe point, and one lookup would take
@@ -213,10 +216,21 @@ Rules:
   the first boot is typed tools/session.txt, which ends by saving the world,
   and the second, named with `-resumed` at its end, starts from that image
   and is typed tools/resumed.txt. Then AArch64 once more for
-  tools/stress.txt (aarch64-stress), a session that has the collector run at
-  every safe point of the evaluator while boot.lisp loads again and the
-  evaluator's self-test is repeated; its disk has an image with a byte
-  changed, which it has to refuse. Before that one, two boots for the user
+  the collector at every safe point of the evaluator (aarch64-stress). Its
+  disk is the one that the first AArch64 session left, with two things on it
+  for that boot: the saved world with a byte changed, which the kernel has
+  to refuse, and a file `\clara\stress`, which tools/session.txt writes and
+  which makes the kernel load boot.lisp again and repeat the evaluator's
+  self-test with a collection at every safe point, in `new_world`, before
+  the rest of the world is in the heap: a collection goes through 270 KiB
+  there and through everything later, so that is where a new text of the
+  self-test costs least. tools/stress.txt then types a few forms with the
+  collector still at it, one of them on the keyboard. Both lines of the
+  boot report are asked for with `EXPECT=`, whose patterns have `;;`
+  between them. That boot runs the kernel that is on its disk, which is
+  the one the first AArch64 session booted: to try a change there by
+  hand, run `tools/boottest.sh aarch64` first and give the stress boot
+  `DISK=build/boot-aarch64.img`. Before that one, two boots for the user
   manual, named manual and manual-again: what the manual shows of the prompt
   is typed at them. The serial port of each is QEMU's standard input and
   output: the log is what the kernel printed, and a FIFO feeds it what the
@@ -255,7 +269,8 @@ Rules:
   in the order of `world` in lisp.c (the console, draw, pci, virtio,
   input, disk, fat, the listener, windows, terminal), and
   lisp/host/tests.lisp loads the same files: a new one goes into both, and what its package exports goes into
-  a list of names in the manual, or `make site` stops. What `lisp_main`
+  a list of names in the manual, or `make site` stops. A file that is an
+  application is not in `world`, and the launcher loads it (below). What `lisp_main`
   starts of a file that a world may be without, a world that an older
   kernel saved, it looks for first, as it does for CLARA.DRAW; and a
   function in C that the files call goes on taking the arguments it took,
@@ -329,6 +344,58 @@ Rules:
   the session first runs the pointer into the corner; and a line that is
   waited for must be the only one of its text, which is why those lines
   are told apart by a word in a list.
+- Keys (lisp/input.lisp). What a keyboard hands on is a code: a
+  character's, or for a key that types none a code from `char-code-limit`
+  on (`clara.input:+up+` and its like, `+f1+` and the eleven after it), and
+  with Alt held `clara.input:+alt+` more. Whoever takes codes passes over
+  the ones it does not know, and never hands one to `code-char` without
+  looking: `clara.console:read-edited-line` does that for every prompt.
+  The window manager keeps one for itself, Alt and Tab, in `key-typed`. A
+  session sends such keys by QEMU's monitor, `^M sendkey up`, `^M sendkey
+  alt-tab`, `^M sendkey ctrl-s`.
+- A window that is opened with `:events t` keeps what it is told, and its
+  program takes it with `clara.windows:next-event`, in its own thread:
+  `(:key code)`, `(:pointer x y buttons)`, `(:close)`. That is how an
+  application is written: a loop that waits, changes what it holds, and
+  draws. The close box is told once until the program has taken it.
+- Applications in files (lisp/editor.lisp, lisp/files.lisp). They are in
+  lisp/, so the build puts them on the boot volume, and they are not in
+  `world` of lisp.c: the last lines of lisp/terminal.lisp install them
+  (`clara.windows:install-application`), and the launcher loads the file
+  when the application is launched and has no function. The file's last
+  form is its `define-application`, under the same name. What the file's
+  package exports goes into a list of the manual like any other file's,
+  and lisp/host/tests.lisp loads the file itself, next to the others,
+  which is why an application has a function there without the launcher.
+  `unload-application` stops the threads and deletes the packages that
+  were new after the load; a file that puts its definitions somewhere
+  else leaves them behind. One application starts another by its name,
+  `(clara.windows:launch "Editor" name)`, and holds none of its symbols:
+  the package may not be there when the file is read.
+- An application is written so that the tests can drive it without its
+  thread: `open-editor` makes the window and the state, `key`, `point` and
+  `happened` change the state, `render` draws, and `run` is the loop that
+  the launcher's thread sits in. The same in lisp/files.lisp. A window of
+  cells is drawn a row at a time, by `shown`, the strings that were drawn
+  last: whatever changes what a row shows has to make the string another,
+  or set the row's place to NIL, and what moves pixels moves `shown` with
+  them (`scroll`). In the tests, `wrong-cells` holds every cell of such a
+  window against the rows it should show, `editor-wrong` and
+  `browser-wrong` say which rows those are, and `ref-key` is a second
+  editor, kept as a plain list of lines: a key that the editor learns is
+  taught to `ref-key` in the same change, and to the walk of random keys
+  below it. Under SBCL the files are the host's, in a directory that the
+  tests make under /tmp and delete (`scratch`, `write-scratch`), and the
+  one function that lists a directory is replaced by `host-names`
+  (`clara.files::*names*`): SBCL's DIRECTORY gives pathnames.
+- What an application does with a file it does with the language: OPEN,
+  READ-LINE, PROBE-FILE, DIRECTORY, DELETE-FILE. So it only ever sees what
+  lisp/boot.lisp makes of the file system, on ClaraOS, and that side is
+  tested by the boots: tools/session.txt types a file into the editor,
+  saves it and reads it back at the serial port. A session waits for the
+  editor through the screen: `cursor-at` (defined there) looks for the
+  cursor's bar at a cell of the focused window's surface. What is typed
+  between two waits stays under 64 events of the keyboard.
 - The Lisp runtime is kernel/lisp/, and lisp.h is its interface: the
   comment at its top says what a Lisp value is. In C a value is a `lisp`,
   one tagged word. Look at the tag (`lisp_is_cons`, `lisp_is_symbol`,
@@ -400,6 +467,12 @@ Rules:
   of a type that lisp/boot.lisp defines, with a slot or with NULL for
   none. A full stack or heap is a STORAGE-CONDITION, which no handler
   for errors takes.
+- A package can be deleted (`delete-package`): it leaves the list that
+  names are looked up in, and its symbols and what they hold go when
+  nothing points to them any more. The five that the substrate holds in
+  `lisp_roots` are refused, and so is one that another package uses. An
+  object of a deleted package is still a package, so whatever has one in a
+  variable, a thread whose `*package*` it is, goes on as before.
 - A new special form is a function `sf_name(args, env)` in eval.c and a
   row in `specials`: how many subforms it takes, and whether it passes on
   the values of a form inside it. A new function in C is a `PRIMITIVE` in

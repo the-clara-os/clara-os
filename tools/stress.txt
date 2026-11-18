@@ -1,11 +1,9 @@
 > (cl::%collect-every 1)
 0
-> (load "boot.lisp")
-T
-> (plusp (cl::%self-test))
-T
 > (car 5)
 error: CAR wants a list, and 5 is not one
+> (destructuring-bind (first (second) &rest others) (list 1 (list 2) 3) (list first second others))
+(1 2 (3))
 ^K
 > (+ 40 2)
 42

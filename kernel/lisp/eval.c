@@ -118,7 +118,7 @@ struct lisp_evaluator {
 static const struct boot_file *g_files;
 static struct {
     lisp lambda, declare, special, optional, rest, body, key, allow_other_keys, aux, whole, environment;
-    lisp execute, eval, allow, no_error, condition;
+    lisp execute, eval, allow, no_error, condition, destructuring_bind;
 } S; /* symbols the evaluator knows by sight: all in COMMON-LISP or KEYWORD, so the packages hold them */
 
 static lisp eval_car(lisp cell, lisp env);
@@ -1274,6 +1274,34 @@ out:
     return value;
 }
 
+/* (destructuring-bind lambda-list form body...): the list that the form
+ * gives is taken apart the way the arguments of a macro are, lists within
+ * it included, and the body sees the variables of the lambda list. */
+static lisp sf_destructuring_bind(lisp args, lisp env)
+{
+    lisp *base = g_sp, value, body;
+    unsigned bound = g_bound, argc = 0;
+
+    *g_sp++ = env; /* base[0]: the environment of the body, once the variables have a frame on top of it */
+    value = eval_car(cdr(args), env);
+    if (g_unwind.to || !lisp_push(value)) /* base[1]: the list itself, which a variable after &REST or a dot takes the rest of */
+        goto out;
+    for (lisp v = value; lisp_is_cons(v); v = lisp_as_cons(v)->cdr, argc++)
+        if (!lisp_push(lisp_as_cons(v)->car))
+            goto out;
+    bind(S.destructuring_bind, car(args), argc, base + 2, base[1], base, 1, base[1]);
+    value = LISP_NIL;
+    if (!g_unwind.to) {
+        body = declarations(cdr(cdr(args)));
+        if (!g_unwind.to)
+            value = progn(body, *base);
+    }
+out:
+    unbind(bound);
+    g_sp = base;
+    return value;
+}
+
 /* There is no compiler, so the one time that counts is :EXECUTE, or EVAL
  * as it was once called. */
 static lisp sf_eval_when(lisp args, lisp env)
@@ -1552,6 +1580,7 @@ static const struct special {
     { "MULTIPLE-VALUE-CALL", sf_multiple_value_call, 1, LISP_MANY, 1 },
     { "MULTIPLE-VALUE-PROG1", sf_multiple_value_prog1, 1, LISP_MANY, 1 },
     { "MULTIPLE-VALUE-BIND", sf_multiple_value_bind, 2, LISP_MANY, 1 },
+    { "DESTRUCTURING-BIND", sf_destructuring_bind, 2, LISP_MANY, 1 },
     { "EVAL-WHEN", sf_eval_when, 1, LISP_MANY, 1 },
     { "LOCALLY", sf_locally, 0, LISP_MANY, 1 },
     { "THE", sf_the, 2, 2, 1 },
@@ -1738,19 +1767,40 @@ static uint32_t fold(uint32_t c)
     return c >= 'a' && c <= 'z' ? c - ('a' - 'A') : c;
 }
 
+/* Did the handoff read a file of that name from \clara? */
+int lisp_boot_file(const char *name)
+{
+    for (const struct boot_file *f = g_files; f; f = f->next) {
+        uint64_t i = 0;
+
+        while (name[i] && fold((uint8_t)name[i]) == fold((uint8_t)f->name[i]))
+            i++;
+        if (!name[i] && !f->name[i])
+            return 1;
+    }
+    return 0;
+}
+
 lisp lisp_load(lisp name)
 {
     const struct boot_file *f = g_files;
     const struct lisp_string *s = lisp_as_string(name);
     lisp *base = g_sp;
-    uint64_t i;
+    uint64_t i, skip;
 
     if (!lisp_is(name, LISP_STRING))
         return lisp_fail("LOAD wants the name of a file, in a string, and ~S is not one", name);
+    /* The files that the handoff read are those of \clara, so a name that says so is one of them too. */
+    for (skip = 0; skip < 7 && skip < lisp_length(s->header) && fold(s->chars[skip]) == fold((uint8_t)"/clara/"[skip]); skip++)
+        ;
+    if (skip < 7)
+        skip = 0;
     for (; f; f = f->next) {
-        for (i = 0; i < lisp_length(s->header) && f->name[i] && fold(s->chars[i]) == fold((uint8_t)f->name[i]); i++)
+        for (i = 0; skip + i < lisp_length(s->header) && f->name[i] &&
+                    fold(s->chars[skip + i]) == fold((uint8_t)f->name[i]);
+             i++)
             ;
-        if (i == lisp_length(s->header) && !f->name[i])
+        if (skip + i == lisp_length(s->header) && !f->name[i])
             break;
     }
     if (!f)
@@ -1910,6 +1960,7 @@ void lisp_eval_init(const struct boot_file *files)
     S.aux = lisp_symbol_in(cl, "&AUX", 1);
     S.whole = lisp_symbol_in(cl, "&WHOLE", 1);
     S.environment = lisp_symbol_in(cl, "&ENVIRONMENT", 1);
+    S.destructuring_bind = lisp_symbol_in(cl, "DESTRUCTURING-BIND", 1);
     S.execute = lisp_symbol_in(lisp_roots.keyword, "EXECUTE", 1);
     S.allow = lisp_symbol_in(lisp_roots.keyword, "ALLOW-OTHER-KEYS", 1);
     S.no_error = lisp_symbol_in(lisp_roots.keyword, "NO-ERROR", 1);

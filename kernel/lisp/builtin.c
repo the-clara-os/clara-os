@@ -899,6 +899,45 @@ PRIMITIVE(p_find_symbol)
     return find_symbol(argc, argv, 0);
 }
 
+/* The package is one no longer: no name finds it, and what was defined in
+ * it goes with the last thing that holds one of its symbols, a function
+ * that is still running for one. T, or NIL for a package that was deleted
+ * before. The five that the substrate holds itself stay, and so does a
+ * package that another one uses. */
+PRIMITIVE(p_delete_package)
+{
+    lisp package = package_of(argv[0]);
+
+    if (!package)
+        return NIL;
+    if (package == lisp_roots.keyword || package == lisp_roots.common_lisp || package == lisp_roots.user ||
+        package == lisp_roots.clara || package == lisp_roots.unsafe)
+        return lisp_fail("the package ~A is one that the system cannot do without, and is not deleted",
+                         lisp_as_package(package)->name);
+    for (lisp all = lisp_roots.packages; all != NIL; all = lisp_as_cons(all)->cdr)
+        for (lisp uses = lisp_as_package(lisp_as_cons(all)->car)->uses; uses != NIL; uses = lisp_as_cons(uses)->cdr)
+            if (lisp_as_cons(uses)->car == package)
+                return lisp_fail("the package ~A is used by the package ~A, and is not deleted before that one",
+                                 lisp_as_package(package)->name, lisp_as_package(lisp_as_cons(all)->car)->name);
+    for (lisp *link = &lisp_roots.packages; *link != NIL; link = &lisp_as_cons(*link)->cdr)
+        if (lisp_as_cons(*link)->car == package) {
+            *link = lisp_as_cons(*link)->cdr;
+            return T;
+        }
+    return NIL;
+}
+
+/* Every package there is, the oldest first, in a list of the caller's own. */
+PRIMITIVE(p_list_all_packages)
+{
+    lisp list = NIL;
+
+    (void)argv;
+    for (lisp all = lisp_roots.packages; all != NIL; all = lisp_as_cons(all)->cdr)
+        list = lisp_cons(lisp_as_cons(all)->car, list);
+    return list;
+}
+
 PRIMITIVE(p_export) /* a symbol or a list of them, and the package */
 {
     lisp package = argc > 1 ? package_of(argv[1]) : lisp_current_package(), symbols = argv[0];
@@ -1553,6 +1592,8 @@ const struct lisp_primitive lisp_primitives[] = {
     { "GENSYM", p_gensym, 0, 0 },
     { "FIND-PACKAGE", p_find_package, 1, 1 },
     { "PACKAGE-NAME", p_package_name, 1, 1 },
+    { "DELETE-PACKAGE", p_delete_package, 1, 1 },
+    { "LIST-ALL-PACKAGES", p_list_all_packages, 0, 0 },
     { "%MAKE-PACKAGE", p_make_package, 3, 3 },
     { "INTERN", p_intern, 1, 2 },
     { "FIND-SYMBOL", p_find_symbol, 1, 2 },

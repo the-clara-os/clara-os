@@ -26,7 +26,7 @@
           member assoc remove-if remove-if-not remove find-if find position
           every some reduce sort getf get
           zerop plusp minusp evenp oddp abs max min expt
-          char= char< concatenate make-array macroexpand
+          char= char< char-code-limit concatenate make-array macroexpand
           define-condition make-condition ignore-errors
           condition warning serious-condition storage-condition
           simple-condition simple-error simple-warning
@@ -375,6 +375,11 @@
       (setq result (* result base)))))
 
 ;;; Characters, strings and vectors
+
+;; One more than the highest code that a character has: Unicode ends at
+;; #x10FFFF. What a keyboard hands on for a key that types no character is
+;; a code from here on (lisp/input.lisp).
+(defconstant char-code-limit #x110000)
 
 (defun char= (a b) (= (char-code a) (char-code b)))
 (defun char< (a b) (< (char-code a) (char-code b)))

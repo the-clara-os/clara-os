@@ -65,7 +65,7 @@ td:first-child { white-space: nowrap; }
 </header>
 
 <main class="frame">
-  <p class="lede">How to build ClaraOS, start it, and work at its prompt.</p>
+  <p class="lede">How to build ClaraOS, start it, and work at its prompt and in its windows.</p>
   <p>This manual is for version {{version}}. ClaraOS starts in a virtual machine, tests itself as it comes up, and ends at a prompt where what you type is Common Lisp: it is read, evaluated, and what it gives is printed. There is no shell and there are no commands apart from that. Listing a directory, writing a file and saving the whole system are Lisp forms like any other.</p>
   <p>What the manual shows of the prompt was typed at a running kernel: the tests that every change has to pass type each of these sessions again and compare the answers. <a href="./">The front page</a> says what ClaraOS is for and how far it has come.</p>
 
@@ -79,6 +79,7 @@ td:first-child { white-space: nowrap; }
     <li><a href="#threads">Threads</a></li>
     <li><a href="#drawing">Drawing</a></li>
     <li><a href="#windows">Windows</a></li>
+    <li><a href="#applications">Applications</a></li>
     <li><a href="#machine">Looking at the machine</a></li>
     <li><a href="#trouble">When something goes wrong</a></li>
     <li><a href="#names">Everything that is defined</a></li>
@@ -257,8 +258,12 @@ error: 7 divided by 2 is not an integer, and there are no ratios yet
 &gt; (let ((v (vector 1 2 3))) (setf (aref v 1) 'x) v)
 #(1 X 3)
 &gt; (reduce #'+ (remove-if #'oddp '(1 2 3 4 5 6)))
-12</pre>
-    <p>A number is an integer of 63 bits, between -4611686018427387904 and 4611686018427387903. A result outside that is an error and not a wrong number, and so is a division that does not come out even: there are no larger integers, no fractions and no decimal numbers yet. A character is a Unicode code point, and a string holds any of them.</p>
+12
+&gt; (destructuring-bind (first second &amp;rest others) (list 1 2 3 4 5 6) (list first second others))
+(1 2 (3 4 5 6))
+&gt; (destructuring-bind (name (x y) &amp;key (colour 'red)) '(dot (3 4)) (list name x y colour))
+(DOT 3 4 RED)</pre>
+    <p>A number is an integer of 63 bits, between -4611686018427387904 and 4611686018427387903. A result outside that is an error and not a wrong number, and so is a division that does not come out even: there are no larger integers, no fractions and no decimal numbers yet. A character is a Unicode code point, and a string holds any of them. <code>destructuring-bind</code> takes a list apart into variables, by a list of parameters like a macro's: lists within the list, and <code>&amp;optional</code>, <code>&amp;rest</code> and <code>&amp;key</code>.</p>
 
     <h3 id="structures">Structures and packages</h3>
 <pre class="session">&gt; (defstruct point x (y 0))
@@ -303,8 +308,8 @@ error: the stack is full: the forms are nested too deep, or a function calls its
       <li>The functions on sequences, <code>mapcar</code>, <code>find</code>, <code>remove-if</code>, <code>sort</code> and the others, take lists. <code>length</code>, <code>subseq</code> and <code>concatenate</code> take strings as well. Of their keyword arguments there is <code>:test</code>, with <code>:key</code> for <code>member</code>, <code>assoc</code> and <code>sort</code>, and <code>:initial-value</code> for <code>reduce</code>.</li>
       <li><code>defstruct</code> takes a name and slots, and none of its options.</li>
       <li>Conditions are handled by <code>handler-case</code>. There is no <code>handler-bind</code>, no restart and no debugger.</li>
-      <li>There are no hash tables, no classes and generic functions, no <code>typep</code>, and no <code>destructuring-bind</code>.</li>
-      <li>A package can be made, used when it is made, and exported from. Nothing is imported or shadowed afterwards.</li>
+      <li>There are no hash tables, no classes and generic functions, and no <code>typep</code>.</li>
+      <li>A package can be made, used when it is made, exported from, and deleted when no other uses it. Nothing is imported or shadowed afterwards.</li>
       <li><code>eq</code> and <code>eql</code> are the same function. Letters change case as far as ASCII has them: <code>(string-upcase "é")</code> is <code>"é"</code>.</li>
       <li>A function can call itself some three thousand calls deep. Past that it is the error above, and not the end of the machine.</li>
       <li><code>(declare (special ...))</code> and <code>&amp;environment</code> are refused, and so are the reader's <code>#.</code>, <code>#S</code> and <code>#P</code>.</li>
@@ -320,12 +325,12 @@ error: the stack is full: the forms are nested too deep, or a function calls its
 <pre class="session">&gt; (directory "/*")
 ("/clara/" "/EFI/")
 &gt; (directory "/clara/*.lisp")
-("/clara/boot.lisp" "/clara/console.lisp" "/clara/disk.lisp" "/clara/draw.lisp" "/clara/fat.lisp" "/clara/font.lisp" "/clara/input.lisp" "/clara/listener.lisp" "/clara/pci.lisp" "/clara/self-test.lisp" "/clara/terminal.lisp" "/clara/virtio.lisp" "/clara/windows.lisp")
+("/clara/boot.lisp" "/clara/console.lisp" "/clara/disk.lisp" "/clara/draw.lisp" "/clara/editor.lisp" "/clara/fat.lisp" "/clara/files.lisp" "/clara/font.lisp" "/clara/input.lisp" "/clara/listener.lisp" "/clara/pci.lisp" "/clara/self-test.lisp" "/clara/terminal.lisp" "/clara/virtio.lisp" "/clara/windows.lisp")
 &gt; (probe-file "/CLARA/Boot.Lisp")
 "/CLARA/boot.lisp"
 &gt; (probe-file "/clara/nothing.lisp")
 NIL</pre>
-    <p><code>directory</code> takes a pattern, in which <code>*</code> stands for any characters in the last part of the name, and gives the names that fit, a directory's with a slash at its end. <code>probe-file</code> gives the name of a file as the disk spells it, or <code>NIL</code> when there is none. The files in <code>/clara</code> are the system's own Lisp: the language's part that is written in Lisp, the console, the drivers and the file system. <code>/EFI</code> holds the kernels.</p>
+    <p><code>directory</code> takes a pattern, in which <code>*</code> stands for any characters in the last part of the name, and gives the names that fit, a directory's with a slash at its end. <code>probe-file</code> gives the name of a file as the disk spells it, or <code>NIL</code> when there is none. The files in <code>/clara</code> are the system's own Lisp: the language's part that is written in Lisp, the console, the drivers, the file system and the window manager, and two that are not loaded until they are wanted, the <a href="#applications">applications</a> <code>editor.lisp</code> and <code>files.lisp</code>. <code>/EFI</code> holds the kernels.</p>
 
     <h3 id="reading">Reading and loading</h3>
 <pre class="session">&gt; (with-open-file (in "/clara/listener.lisp") (list (read-line in) (read-line in)))
@@ -558,6 +563,7 @@ T
       <tr><td>The title of a window</td><td>is where to take hold of it: press the button there, move, and let go.</td></tr>
       <tr><td>The <code>x</code> at the end of the title</td><td>closes the window, and ends the program in it.</td></tr>
       <tr><td><code>Applications</code></td><td>lists the applications there are. A click on a name starts one, and a click anywhere else puts the list away.</td></tr>
+      <tr><td><kbd>Alt</kbd> and <kbd>Tab</kbd></td><td>brings the lowest window to the top, and so each window in its turn.</td></tr>
     </table>
     <p>A Listener window is a prompt like the first one, with the same <a href="#keys">keys</a>, except that <kbd>Ctrl-D</kbd> closes the window and <kbd>Ctrl-C</kbd> stops what that window is evaluating. Every listener is in the one world: what is defined in a window is defined at the serial port and in the next window. Each has a thread of its own, so one can compute while you type in another, and each is in a package of its own choosing.</p>
     <p>It needs a keyboard and a pointer that the system has drivers for. <code>make run-aarch64</code> gives the machine both; in <a href="#utm">UTM</a> they are the two devices that are added by hand. With a keyboard alone, the Listener window still takes what is typed, and the functions below do what the pointer would.</p>
@@ -607,6 +613,28 @@ T
       <li><code>:close</code> is called when the <code>x</code> in the title is clicked, and a window that was given none has no <code>x</code>. It is for the function to see that the window is closed, by the thread that opened it.</li>
     </ul>
     <p>The three are called in the thread of the keyboard or of the mouse, not in the window's own. They should note what they were told, or signal an event, and leave the drawing to the thread that the window belongs to.</p>
+    <p>A window that is opened with <code>:events t</code> does that by itself: it keeps what happens to it, and its program asks for the next thing when it is ready for it, in its own thread, where it can draw.</p>
+<pre class="session">&gt; (defvar *heard* (clara.windows:open-window "Heard" 160 40 :events t))
+*HEARD*
+&gt; (clara.windows:key-typed 97)
+97
+&gt; (= (clara.windows:key-typed clara.input:+up+) (+ char-code-limit 1))
+T
+&gt; (clara.windows:next-event *heard*)
+(:KEY 97)
+&gt; (equal (clara.windows:next-event *heard*) (list :key clara.input:+up+))
+T
+&gt; (clara.windows:next-event *heard* 100)
+NIL
+&gt; (clara.windows:rename-window *heard* "Heard it")
+"Heard it"
+&gt; (clara.windows:close-window *heard*)
+NIL</pre>
+    <ul>
+      <li><code>clara.windows:next-event</code> gives what happened next, and waits when nothing has: for as long as it takes, or for so many milliseconds, after which it gives <code>NIL</code>. <code>(:key 97)</code> is a key, <code>(:pointer 12 30 1)</code> a button that went down or came up, with the place on the inside and the buttons, and <code>(:close)</code> a click on the <code>x</code>, which such a window always has.</li>
+      <li>A key is the code of the character it types. The keys that type none have codes too, past the last that a character can have, which is <code>char-code-limit</code>: <code>clara.input:+up+</code>, <code>+down+</code>, <code>+left+</code>, <code>+right+</code>, <code>+home+</code>, <code>+end+</code>, <code>+page-up+</code>, <code>+page-down+</code>, <code>+insert+</code>, and <code>+f1+</code> for the first of the twelve function keys, with the others after it. Escape is 27, Delete 127, and a key that is typed with <kbd>Alt</kbd> held has <code>clara.input:+alt+</code> added to its code.</li>
+      <li><code>clara.windows:rename-window</code> gives a window another title.</li>
+    </ul>
 
     <h3 id="terminals">Text in a window</h3>
     <p>A terminal is a window with a stream: what is written to the stream is drawn in the window, in rows that move up when the last one is full, and what is typed in the window comes back from the stream a line at a time. The package is <code>CLARA.TERMINAL</code>.</p>
@@ -620,7 +648,7 @@ NIL
 NIL</pre>
     <p><code>clara.terminal:open-terminal</code> takes a title and gives a terminal of 80 columns and 24 rows unless <code>:columns</code> and <code>:rows</code> say otherwise; <code>:x</code>, <code>:y</code> and <code>:close</code> are the window's. <code>clara.terminal:terminal-stream</code> is its stream, for <code>format</code>, <code>write-line</code> and <code>read-line</code>, and <code>clara.terminal:terminal-window</code> its window. <code>clara.terminal:clear</code> makes every row blank.</p>
 
-    <h3 id="applications">Applications</h3>
+    <h3 id="defining-one">An application</h3>
     <p>An application is a name and a function. <code>clara.windows:launch</code> calls the function in a thread of its own and comes back with that thread once the application has its window. When the function is done, or its thread is stopped, the windows that the thread opened are closed for it.</p>
 <pre class="session">&gt; (clara.windows:define-application "Hello"
     (lambda ()
@@ -629,10 +657,10 @@ NIL</pre>
         (sleep 2))))
 "Hello"
 &gt; (clara.windows:applications)
-("Listener" "Hello")
+("Listener" "Editor" "Files" "Hello")
 &gt; (clara:join-thread (clara.windows:launch "Hello"))
 NIL</pre>
-    <p>The window is there for two seconds, and goes with its application. From now on <code>Hello</code> is in the list under <code>Applications</code>, below <code>Listener</code>, which is <code>clara.terminal:listener</code>, the first application and the one that is launched when the window manager starts.</p>
+    <p>The window is there for two seconds, and goes with its application. From now on <code>Hello</code> is in the list under <code>Applications</code>, below the three that come with the system. <code>Listener</code> is <code>clara.terminal:listener</code>, the first application and the one that is launched when the window manager starts; <code>Editor</code> and <code>Files</code> are the subject of <a href="#applications">the next chapter</a>.</p>
 
     <h3 id="desk">Starting in it</h3>
     <p>A <a href="#image">world that is saved</a> while the window manager runs starts in it: the screen goes from the boot report straight to the windows.</p>
@@ -643,11 +671,120 @@ NIL</pre>
 <pre class="session again">&gt; (list (clara.windows:running-p) (mapcar #'clara.windows:window-title (clara.windows:windows)))
 (T ("Listener"))
 &gt; (clara.windows:applications)
-("Listener" "Hello")
+("Listener" "Editor" "Files" "Hello")
 &gt; (clara.windows:stop)
 T</pre>
     <p>What is defined comes back, the applications among it. The windows that were open do not: a window is pixels and a thread, and an image has neither, so the window manager starts with one Listener, as it does the first time. <code>clara.windows:stop</code> ends the applications and gives the screen back to the console, cleared; a world that is saved after that starts at the console again.</p>
-    <p>A window is the size it was opened with. Nothing on the keyboard moves between windows or opens the list of applications, which the pointer does, and the pointer has one shape.</p>
+    <p>A window is the size it was opened with. <kbd>Alt</kbd> and <kbd>Tab</kbd> is the one key that is the window manager's own: nothing on the keyboard opens the list of applications, moves a window or closes one, which the pointer does, and the pointer has one shape.</p>
+  </section>
+
+  <section id="applications">
+    <h2>{{spleen:Applications}}</h2>
+    <p>Two applications come with the system besides the Listener: an editor for text, and a browser for the files of the disk. Each is a file of Lisp on the boot volume, <code>/clara/editor.lisp</code> and <code>/clara/files.lisp</code>, which the system does not load as it starts. The file is loaded the first time its application is picked from <code>Applications</code>, or launched from a prompt, and the application can be unloaded again while everything else goes on.</p>
+
+    <h3 id="editor">The editor</h3>
+    <p><code>Editor</code> in the list opens a window with no text in it yet. From a prompt, the editor is launched with the name of a file, and the window has the file's name for its title:</p>
+<pre class="session">&gt; (find-package "CLARA.EDITOR")
+NIL
+&gt; (clara.windows:launch "Editor" "/hello.lisp")
+#&lt;THREAD "Editor"&gt;
+&gt; (list (package-name (find-package "CLARA.EDITOR"))
+        (clara.windows:window-title (clara.windows:focused-window)))
+("CLARA.EDITOR" "/hello.lisp")</pre>
+    <p>After the name, <code>:columns</code> and <code>:rows</code> say how large the text's part of the window is, in characters, and <code>:x</code> and <code>:y</code> where the window goes: <code>(clara.windows:launch "Editor" "/hello.lisp" :columns 60 :rows 20)</code>. Without them it is 80 by 24, or what the screen has room for.</p>
+    <p>The window shows the text, with a bar under the place where what is typed goes in, and below the text a row that says which file this is, whether the text has changed since it was read or saved, and the line and the column of the cursor. That row is also where the editor says what it did, and where it asks for the name of a file.</p>
+    <table class="wrap">
+      <tr><td>A character</td><td>goes in at the cursor.</td></tr>
+      <tr><td><kbd>Enter</kbd></td><td>begins a new line, as far in as the line it comes from.</td></tr>
+      <tr><td><kbd>Backspace</kbd>, <kbd>Delete</kbd></td><td>take out the character before the cursor, and the one at it. At the start and at the end of a line they join two lines.</td></tr>
+      <tr><td><kbd>Tab</kbd></td><td>spaces, up to the next column that is a multiple of eight.</td></tr>
+      <tr><td>The arrows</td><td>move the cursor by a character and by a line.</td></tr>
+      <tr><td><kbd>Home</kbd>, <kbd>End</kbd></td><td>the start and the end of the line.</td></tr>
+      <tr><td><kbd>Page Up</kbd>, <kbd>Page Down</kbd></td><td>a window's worth of lines up or down.</td></tr>
+      <tr><td>A click</td><td>puts the cursor where the pointer is.</td></tr>
+      <tr><td><kbd>Ctrl-S</kbd></td><td>saves the text in its file. A text that has no file yet is asked for a name.</td></tr>
+      <tr><td><kbd>Ctrl-O</kbd></td><td>asks for the name of another file, and the text becomes that of the file.</td></tr>
+      <tr><td><kbd>Ctrl-K</kbd></td><td>cuts from the cursor to the end of the line, and at the end of a line the end itself. Typed several times in a row, it cuts as many lines.</td></tr>
+      <tr><td><kbd>Ctrl-Y</kbd></td><td>puts back what <kbd>Ctrl-K</kbd> cut last, at the cursor, as often as it is typed.</td></tr>
+      <tr><td><kbd>Ctrl-E</kbd></td><td>evaluates the text, form by form, as <code>load</code> would: what it defines is defined, in every window. The row says how many forms there were, or what went wrong and in which line, where the cursor goes. <kbd>Ctrl-C</kbd> stops forms that do not end.</td></tr>
+      <tr><td><kbd>Ctrl-Q</kbd>, the <code>x</code> in the title</td><td>close the window.</td></tr>
+    </table>
+    <p>While the row asks for a name, what is typed is the name: <kbd>Enter</kbd> hands it over, <kbd>Backspace</kbd> takes a character of it back, and <kbd>Escape</kbd> gives the question up. A name is a whole one, from the top of the volume, like <code>/clara/notes.txt</code>. A file that is not there yet is a new one, which the first <kbd>Ctrl-S</kbd> makes.</p>
+    <p>A text that has changed is not thrown away at the first asking. <kbd>Ctrl-O</kbd>, <kbd>Ctrl-Q</kbd> and the <code>x</code> say that the text is not saved, and do what they were asked when the same key comes again right after.</p>
+    <p>What to know about the editor as it is now:</p>
+    <ul>
+      <li>A file is its lines. It is saved with a new line after each, so a file that did not end in one has one afterwards. The line with nothing in it after the last is where the text ends.</li>
+      <li>A character that the screen's font does not have shows as a box, a tab among them, and is kept as it is.</li>
+      <li>There is no undo, nothing is searched for, and nothing can be marked: <kbd>Ctrl-K</kbd> and <kbd>Ctrl-Y</kbd> are how text is moved.</li>
+      <li>What the forms of <kbd>Ctrl-E</kbd> print goes to the console, which is the serial port while the windows are on the screen. They are read in the package <code>COMMON-LISP-USER</code> unless the text says <code>in-package</code>.</li>
+      <li>Each editor window is a thread of its own with its own text. Two that have the same file open know nothing of each other.</li>
+    </ul>
+
+    <h3 id="browser">Files</h3>
+    <p><code>Files</code> in the list opens a window on the top of the volume. From a prompt it can be told where to begin:</p>
+<pre class="session">&gt; (clara.windows:launch "Files" "/clara/")
+#&lt;THREAD "Files"&gt;
+&gt; (clara.windows:window-title (clara.windows:focused-window))
+"Files in /clara/"</pre>
+    <p><code>:columns</code>, <code>:rows</code>, <code>:x</code> and <code>:y</code> after the name do for this window what they do for the editor's; it is 48 by 16 without them.</p>
+    <p>The window lists what the directory holds: the directories first, each with a slash at its end, then the files, and above them all <code>../</code>, the way to the directory that this one is in. One name is picked, and shows the other way round.</p>
+    <table class="wrap">
+      <tr><td>The arrows up and down, <kbd>Page Up</kbd>, <kbd>Page Down</kbd>, <kbd>Home</kbd>, <kbd>End</kbd></td><td>pick another name.</td></tr>
+      <tr><td><kbd>Enter</kbd></td><td>goes into the directory that is picked, or opens the file that is picked in a new window of the editor.</td></tr>
+      <tr><td><kbd>Backspace</kbd>, the arrow to the left</td><td>go to the directory that this one is in.</td></tr>
+      <tr><td>A click</td><td>picks the name it is on, and on the name that is picked does what <kbd>Enter</kbd> does.</td></tr>
+      <tr><td><kbd>Delete</kbd></td><td>asks whether the file that is picked is to be deleted, and <kbd>y</kbd> deletes it. Any other key does not.</td></tr>
+      <tr><td><kbd>Ctrl-R</kbd></td><td>reads the directory again: the window does not notice by itself what was written since.</td></tr>
+      <tr><td><kbd>Ctrl-Q</kbd>, the <code>x</code> in the title</td><td>close the window.</td></tr>
+    </table>
+    <p>Every file opens in the editor, also one that is no text, which the editor says it cannot read. Directories are not made or deleted here, as they are not <a href="#writing">anywhere in the system</a> yet, and the window shows names and no sizes or dates.</p>
+
+    <h3 id="installed">Applications in files</h3>
+    <p>The launcher knows the editor and the browser by a name and the name of a file. <code>clara.windows:install-application</code> says so for any file, and the file itself says <code>clara.windows:define-application</code> for the function, under the same name, as its last form. Here is such a file, written from the prompt, a line of it to the string, so that this page can be tried as it stands; the editor is the place to write one.</p>
+<pre class="session">&gt; (defvar *greeting*
+    '("(defpackage \"GREETING\" (:use \"COMMON-LISP\"))"
+      "(in-package \"GREETING\")"
+      "(defun greet (&amp;optional (words \"Hello\"))"
+      "  (let* ((window (clara.windows:open-window"
+      "                  \"Greeting\" 200 48 :events t))"
+      "         (inside (clara.windows:window-surface window)))"
+      "    (clara.draw:draw-text inside 16 16 words"
+      "                          (clara.draw:color 255 184 108))"
+      "    (clara.windows:show window)"
+      "    (loop"
+      "      (when (equal (clara.windows:next-event window)"
+      "                   '(:close))"
+      "        (return)))))"
+      "(clara.windows:define-application \"Greeting\" #'greet)"))
+*GREETING*
+&gt; (with-open-file (out "/clara/greeting.lisp" :direction :output)
+    (dolist (line *greeting*) (write-line line out)))
+NIL
+&gt; (clara.windows:install-application "Greeting" "/clara/greeting.lisp")
+"Greeting"
+&gt; (list (clara.windows:applications) (find-package "GREETING"))
+(("Listener" "Editor" "Files" "Hello" "Greeting") NIL)
+&gt; (clara.windows:launch "Greeting" "Good morning")
+#&lt;THREAD "Greeting"&gt;
+&gt; (list (package-name (find-package "GREETING"))
+        (clara.windows:window-title (clara.windows:focused-window)))
+("GREETING" "Greeting")</pre>
+    <p><code>Greeting</code> was in the list at once, and nothing of it was in the world until it was launched: the file was loaded then, in the application's own thread, and its function called with what <code>launch</code> was given after the name. The window says <code>Good morning</code> and stays until its <code>x</code> is clicked. A second launch does not load the file again.</p>
+<pre class="session">&gt; (clara.windows:unload-application "Greeting")
+"Greeting"
+&gt; (list (find-package "GREETING") (clara.windows:applications))
+(NIL ("Listener" "Editor" "Files" "Hello" "Greeting"))
+&gt; (clara.windows:remove-application "Greeting")
+"Greeting"
+&gt; (clara.windows:applications)
+("Listener" "Editor" "Files" "Hello")</pre>
+    <ul>
+      <li><code>clara.windows:unload-application</code> stops the application wherever it runs, which closes its windows, and deletes the packages that its file made: what the file defined is gone from the world, and the memory it took comes back. The application stays in the list, and the next launch loads the file as it is by then. That is how to try a change to an application: save the file, unload, launch.</li>
+      <li><code>clara.windows:remove-application</code> does the same and takes the name out of the list. It is also what takes out an application that was defined at a prompt, like <code>Hello</code>.</li>
+      <li>An application that fails, in its file or later, ends with its windows closed. The reason is said on the console, as for any thread: <code>error in #&lt;THREAD "Greeting"&gt;:</code> and what went wrong.</li>
+      <li>The editor and the browser are unloaded and launched again the same way, and <code>/clara/editor.lisp</code> can be changed in the editor.</li>
+      <li>What an application is installed as is part of the world, and is saved with it. Whether its file has been loaded is too: a world that is saved after the editor was used starts with the editor in it.</li>
+    </ul>
   </section>
 
   <section id="machine">
@@ -702,6 +839,8 @@ error: nothing is mapped at #x0</pre>
       <tr><td>A picture that was shown has text over it, or is no longer where it was put.</td><td>The console writes on the same screen, and moves everything on it up with every new line: <a href="#showing">Showing what has changed</a>. Show the picture again.</td></tr>
       <tr><td><code>error: this surface is of a machine that was switched off</code></td><td>The surface was made before the world was saved, and its pixels were not saved with it. Make a new one and draw on that: <a href="#surfaces">Memory</a>.</td></tr>
       <tr><td>A file that was written is gone after <code>make</code>.</td><td>Under QEMU the disk is made again whenever a build changed something. Keep what matters outside <code>build/</code>, by way of <a href="#outside">the host</a>.</td></tr>
+      <tr><td>A window is gone that nobody closed, or an application's window never comes.</td><td>The application failed, and its thread ended. The serial port has the reason, in a line that begins with <code>error in #&lt;THREAD</code>. When the reason is in the application's file, mend the file and launch it again: <a href="#installed">Applications in files</a>.</td></tr>
+      <tr><td>The arrow keys do nothing at a prompt.</td><td>A line at a prompt is edited with <kbd>Backspace</kbd> alone. The arrows are for the <a href="#editor">editor</a> and the <a href="#browser">browser</a>.</td></tr>
       <tr><td><code>lisp: clara.image is not resumed</code> in the report.</td><td>A saved world could not be used, and the reason follows on the same line: <a href="#refused">An image that is not taken</a>.</td></tr>
       <tr><td>A report that begins with <code>exception:</code> or <code>panic:</code>, and a machine that stands still.</td><td>The kernel, or a driver, has failed, and has stopped the machine where it was. The report says what happened in words, where, and what was in every register. Start the machine again. What was saved or written to a file before is there. Then please <a href="https://github.com/the-clara-os/clara-os/issues">say what you did</a>, with the report: that is a bug in ClaraOS.</td></tr>
     </table>
@@ -719,7 +858,7 @@ error: nothing is mapped at #x0</pre>
     <p class="names"><code>quote</code> <code>if</code> <code>when</code> <code>unless</code> <code>cond</code> <code>case</code> <code>ecase</code> <code>otherwise</code> <code>and</code> <code>or</code> <code>not</code> <code>progn</code> <code>prog1</code> <code>let</code> <code>let*</code> <code>setq</code> <code>psetq</code> <code>setf</code> <code>incf</code> <code>decf</code> <code>push</code> <code>pop</code> <code>block</code> <code>return</code> <code>return-from</code> <code>tagbody</code> <code>go</code> <code>catch</code> <code>throw</code> <code>unwind-protect</code> <code>do</code> <code>do*</code> <code>dolist</code> <code>dotimes</code> <code>loop</code> <code>flet</code> <code>labels</code> <code>macrolet</code> <code>locally</code> <code>the</code> <code>eval-when</code></p>
 
     <h3>Functions and values</h3>
-    <p class="names"><code>funcall</code> <code>apply</code> <code>identity</code> <code>functionp</code> <code>fboundp</code> <code>symbol-function</code> <code>eval</code> <code>macroexpand</code> <code>macroexpand-1</code> <code>values</code> <code>values-list</code> <code>multiple-value-bind</code> <code>multiple-value-call</code> <code>multiple-value-list</code> <code>multiple-value-prog1</code> <code>multiple-value-setq</code> <code>nth-value</code></p>
+    <p class="names"><code>funcall</code> <code>apply</code> <code>identity</code> <code>functionp</code> <code>fboundp</code> <code>symbol-function</code> <code>eval</code> <code>macroexpand</code> <code>macroexpand-1</code> <code>values</code> <code>values-list</code> <code>multiple-value-bind</code> <code>destructuring-bind</code> <code>multiple-value-call</code> <code>multiple-value-list</code> <code>multiple-value-prog1</code> <code>multiple-value-setq</code> <code>nth-value</code></p>
 
     <h3>Numbers</h3>
     <p class="names"><code>+</code> <code>-</code> <code>*</code> <code>/</code> <code>1+</code> <code>1-</code> <code>=</code> <code>/=</code> <code>&lt;</code> <code>&lt;=</code> <code>&gt;</code> <code>&gt;=</code> <code>floor</code> <code>truncate</code> <code>mod</code> <code>rem</code> <code>abs</code> <code>max</code> <code>min</code> <code>expt</code> <code>evenp</code> <code>oddp</code> <code>zerop</code> <code>plusp</code> <code>minusp</code> <code>integerp</code> <code>numberp</code> <code>ash</code> <code>logand</code> <code>logior</code> <code>logxor</code> <code>lognot</code></p>
@@ -728,10 +867,10 @@ error: nothing is mapped at #x0</pre>
     <p class="names"><code>cons</code> <code>car</code> <code>cdr</code> <code>caar</code> <code>cadr</code> <code>cdar</code> <code>cddr</code> <code>caddr</code> <code>cdddr</code> <code>cadddr</code> <code>first</code> <code>second</code> <code>third</code> <code>fourth</code> <code>rest</code> <code>last</code> <code>nth</code> <code>nthcdr</code> <code>list</code> <code>list*</code> <code>append</code> <code>reverse</code> <code>nreverse</code> <code>copy-list</code> <code>length</code> <code>endp</code> <code>null</code> <code>consp</code> <code>atom</code> <code>listp</code> <code>rplaca</code> <code>rplacd</code> <code>member</code> <code>assoc</code> <code>getf</code> <code>mapcar</code> <code>mapc</code> <code>mapcan</code> <code>reduce</code> <code>remove</code> <code>remove-if</code> <code>remove-if-not</code> <code>find</code> <code>find-if</code> <code>position</code> <code>every</code> <code>some</code> <code>sort</code> <code>eq</code> <code>eql</code> <code>equal</code></p>
 
     <h3>Characters, strings and vectors</h3>
-    <p class="names"><code>char</code> <code>schar</code> <code>char-code</code> <code>code-char</code> <code>char=</code> <code>char&lt;</code> <code>char-upcase</code> <code>char-downcase</code> <code>characterp</code> <code>string</code> <code>string=</code> <code>string-equal</code> <code>string-lessp</code> <code>string-upcase</code> <code>string-downcase</code> <code>stringp</code> <code>concatenate</code> <code>subseq</code> <code>vector</code> <code>make-array</code> <code>aref</code> <code>svref</code> <code>vectorp</code></p>
+    <p class="names"><code>char</code> <code>schar</code> <code>char-code</code> <code>code-char</code> <code>char=</code> <code>char&lt;</code> <code>char-upcase</code> <code>char-downcase</code> <code>char-code-limit</code> <code>characterp</code> <code>string</code> <code>string=</code> <code>string-equal</code> <code>string-lessp</code> <code>string-upcase</code> <code>string-downcase</code> <code>stringp</code> <code>concatenate</code> <code>subseq</code> <code>vector</code> <code>make-array</code> <code>aref</code> <code>svref</code> <code>vectorp</code></p>
 
     <h3>Symbols and packages</h3>
-    <p class="names"><code>t</code> <code>nil</code> <code>symbol-name</code> <code>symbol-package</code> <code>symbol-value</code> <code>symbol-plist</code> <code>get</code> <code>set</code> <code>boundp</code> <code>symbolp</code> <code>keywordp</code> <code>make-symbol</code> <code>gensym</code> <code>*gensym-counter*</code> <code>intern</code> <code>find-symbol</code> <code>export</code> <code>find-package</code> <code>package-name</code> <code>packagep</code> <code>make-package</code> <code>in-package</code> <code>*package*</code></p>
+    <p class="names"><code>t</code> <code>nil</code> <code>symbol-name</code> <code>symbol-package</code> <code>symbol-value</code> <code>symbol-plist</code> <code>get</code> <code>set</code> <code>boundp</code> <code>symbolp</code> <code>keywordp</code> <code>make-symbol</code> <code>gensym</code> <code>*gensym-counter*</code> <code>intern</code> <code>find-symbol</code> <code>export</code> <code>find-package</code> <code>package-name</code> <code>packagep</code> <code>make-package</code> <code>delete-package</code> <code>list-all-packages</code> <code>in-package</code> <code>*package*</code></p>
 
     <h3>Conditions</h3>
     <p class="names"><code>error</code> <code>warn</code> <code>signal</code> <code>handler-case</code> <code>ignore-errors</code> <code>make-condition</code> <code>condition</code> <code>serious-condition</code> <code>warning</code> <code>storage-condition</code> <code>simple-condition</code> <code>simple-error</code> <code>simple-warning</code> <code>simple-condition-format-control</code> <code>simple-condition-format-arguments</code> <code>type-error</code> <code>type-error-datum</code> <code>type-error-expected-type</code> <code>program-error</code> <code>control-error</code> <code>cell-error</code> <code>cell-error-name</code> <code>unbound-variable</code> <code>undefined-function</code> <code>arithmetic-error</code> <code>division-by-zero</code> <code>stream-error</code> <code>end-of-file</code> <code>parse-error</code> <code>reader-error</code></p>
@@ -757,8 +896,13 @@ error: nothing is mapped at #x0</pre>
 
     <h3>The packages CLARA.WINDOWS and CLARA.TERMINAL</h3>
     <p><a href="#windows">Windows</a> says what each of these is for. <code>clara.windows:resume</code> is what the system calls as it starts, for a world that was saved with the window manager running.</p>
-    <p class="names" data-package="CLARA.WINDOWS"><code>clara.windows:start</code> <code>clara.windows:stop</code> <code>clara.windows:running-p</code> <code>clara.windows:resume</code> <code>clara.windows:open-window</code> <code>clara.windows:close-window</code> <code>clara.windows:show</code> <code>clara.windows:window-p</code> <code>clara.windows:window-title</code> <code>clara.windows:window-surface</code> <code>clara.windows:window-position</code> <code>clara.windows:move-window</code> <code>clara.windows:raise-window</code> <code>clara.windows:windows</code> <code>clara.windows:focused-window</code> <code>clara.windows:define-application</code> <code>clara.windows:applications</code> <code>clara.windows:launch</code> <code>clara.windows:key-typed</code> <code>clara.windows:pointer-moved</code></p>
+    <p class="names" data-package="CLARA.WINDOWS"><code>clara.windows:start</code> <code>clara.windows:stop</code> <code>clara.windows:running-p</code> <code>clara.windows:resume</code> <code>clara.windows:open-window</code> <code>clara.windows:close-window</code> <code>clara.windows:show</code> <code>clara.windows:window-p</code> <code>clara.windows:window-title</code> <code>clara.windows:window-surface</code> <code>clara.windows:window-position</code> <code>clara.windows:move-window</code> <code>clara.windows:raise-window</code> <code>clara.windows:rename-window</code> <code>clara.windows:next-event</code> <code>clara.windows:windows</code> <code>clara.windows:focused-window</code> <code>clara.windows:define-application</code> <code>clara.windows:install-application</code> <code>clara.windows:unload-application</code> <code>clara.windows:remove-application</code> <code>clara.windows:applications</code> <code>clara.windows:launch</code> <code>clara.windows:key-typed</code> <code>clara.windows:pointer-moved</code></p>
     <p class="names" data-package="CLARA.TERMINAL"><code>clara.terminal:open-terminal</code> <code>clara.terminal:terminal-p</code> <code>clara.terminal:terminal-stream</code> <code>clara.terminal:terminal-window</code> <code>clara.terminal:clear</code> <code>clara.terminal:listener</code></p>
+
+    <h3>The packages CLARA.EDITOR and CLARA.FILES</h3>
+    <p>The two <a href="#applications">applications</a> that are files. Each package is there once its application has been launched, and gone again when it is unloaded; the one name of each is the function that <code>clara.windows:launch</code> calls.</p>
+    <p class="names" data-package="CLARA.EDITOR"><code>clara.editor:edit</code></p>
+    <p class="names" data-package="CLARA.FILES"><code>clara.files:browse</code></p>
 
     <h3>The console, the drivers and the file system</h3>
     <p>Each of these is a file of Lisp in <code>/clara</code> with a package of its own, and these are the names that it lets the others use. Most are for the system itself: <a href="#machine">Looking at the machine</a> has the ones that tell something at the prompt. A function named <code>start</code> is what the system calls as it starts, and is not for calling again.</p>
@@ -766,7 +910,7 @@ error: nothing is mapped at #x0</pre>
     <p class="names" data-package="CLARA.FONT"><code>clara.font:+width+</code> <code>clara.font:+height+</code> <code>clara.font:+first+</code> <code>clara.font:+last+</code> <code>clara.font:*glyphs*</code></p>
     <p class="names" data-package="CLARA.PCI"><code>clara.pci:start</code> <code>clara.pci:devices</code> <code>clara.pci:device-p</code> <code>clara.pci:device-bus</code> <code>clara.pci:device-slot</code> <code>clara.pci:device-part</code> <code>clara.pci:device-vendor</code> <code>clara.pci:device-id</code> <code>clara.pci:device-kind</code> <code>clara.pci:device-revision</code> <code>clara.pci:location</code> <code>clara.pci:description</code> <code>clara.pci:hex</code> <code>clara.pci:config-8</code> <code>clara.pci:config-16</code> <code>clara.pci:config-32</code> <code>clara.pci:capabilities</code> <code>clara.pci:base-address</code> <code>clara.pci:map-registers</code> <code>clara.pci:enable</code> <code>clara.pci:message-interrupt</code></p>
     <p class="names" data-package="CLARA.VIRTIO"><code>clara.virtio:device-type</code> <code>clara.virtio:open-device</code> <code>clara.virtio:start-device</code> <code>clara.virtio:device-p</code> <code>clara.virtio:device-pci</code> <code>clara.virtio:device-event</code> <code>clara.virtio:device-features</code> <code>clara.virtio:register-8</code> <code>clara.virtio:register-16</code> <code>clara.virtio:register-32</code> <code>clara.virtio:open-queue</code> <code>clara.virtio:queue-p</code> <code>clara.virtio:queue-size</code> <code>clara.virtio:queue-add</code> <code>clara.virtio:queue-notify</code> <code>clara.virtio:queue-take</code></p>
-    <p class="names" data-package="CLARA.INPUT"><code>clara.input:start</code> <code>clara.input:devices</code> <code>clara.input:pointer</code> <code>clara.input:pointer-changed</code> <code>clara.input:set-pointer-limits</code> <code>clara.input:key-character</code> <code>clara.input:send-keys-to</code> <code>clara.input:send-pointer-to</code> <code>clara.input:*repeat-delay*</code> <code>clara.input:*repeat-interval*</code></p>
+    <p class="names" data-package="CLARA.INPUT"><code>clara.input:start</code> <code>clara.input:devices</code> <code>clara.input:pointer</code> <code>clara.input:pointer-changed</code> <code>clara.input:set-pointer-limits</code> <code>clara.input:key-character</code> <code>clara.input:send-keys-to</code> <code>clara.input:send-pointer-to</code> <code>clara.input:*repeat-delay*</code> <code>clara.input:*repeat-interval*</code> <code>clara.input:+up+</code> <code>clara.input:+down+</code> <code>clara.input:+left+</code> <code>clara.input:+right+</code> <code>clara.input:+home+</code> <code>clara.input:+end+</code> <code>clara.input:+page-up+</code> <code>clara.input:+page-down+</code> <code>clara.input:+insert+</code> <code>clara.input:+f1+</code> <code>clara.input:+alt+</code></p>
     <p class="names" data-package="CLARA.DISK"><code>clara.disk:start</code> <code>clara.disk:disks</code> <code>clara.disk:disk-p</code> <code>clara.disk:disk-name</code> <code>clara.disk:disk-sectors</code> <code>clara.disk:disk-read-only</code> <code>clara.disk:read-sectors</code> <code>clara.disk:write-sectors</code> <code>clara.disk:*patience*</code></p>
     <p class="names" data-package="CLARA.FAT"><code>clara.fat:start</code> <code>clara.fat:volumes</code> <code>clara.fat:*volume*</code> <code>clara.fat:volume-p</code> <code>clara.fat:volume-disk</code> <code>clara.fat:volume-kind</code> <code>clara.fat:volume-first</code> <code>clara.fat:entries</code> <code>clara.fat:entry-p</code> <code>clara.fat:entry-name</code> <code>clara.fat:entry-short</code> <code>clara.fat:entry-directory-p</code> <code>clara.fat:entry-size</code> <code>clara.fat:names</code> <code>clara.fat:file-text</code> <code>clara.fat:read-file</code> <code>clara.fat:write-file</code> <code>clara.fat:remove-file</code></p>
     <p class="names" data-package="CLARA.LISTENER"><code>clara.listener:run</code> <code>clara.listener:answer</code> <code>clara.listener:read-and-answer</code> <code>clara.listener:answer-lines</code></p>

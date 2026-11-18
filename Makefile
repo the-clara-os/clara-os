@@ -81,15 +81,18 @@ host-test:
 # defined (tools/resumed.txt). After every boot the host's own checker of
 # FAT volumes looks at the disk. Then the user manual: what it shows of
 # the prompt (site/manual.html) is typed at a machine, which saves its
-# world, and at the same machine started again. Then AArch64 once more for
-# tools/stress.txt, a session in which the collector runs at every safe
-# point of the evaluator while boot.lisp is loaded again and the
-# evaluator's self-test is repeated: whatever the evaluator fails to hold
-# on to is gone at its next call. That takes three minutes where AArch64
-# is emulated, on CI, and more as the world grows, so it is given ten. Its
-# disk is the one with the saved world,
-# with one byte of it changed: the kernel has to say so, and start from the
-# files.
+# world, and at the same machine started again. Then AArch64 once more,
+# with the collector at every safe point of the evaluator: whatever the
+# evaluator fails to hold on to is gone at its next call. Its disk is the
+# one that the first session of that machine left, which has two things on
+# it for this boot. The saved world, with one byte of it changed: the
+# kernel has to say so, and start from the files. And a file \clara\stress,
+# which asks the kernel to load boot.lisp again and to repeat the
+# evaluator's self-test with such a collection, before the rest of the
+# world is in the heap for every collection to go through. tools/stress.txt
+# then has the collector do the same for a few forms at the prompt, one of
+# them typed on the keyboard. Where AArch64 is emulated, on CI, that boot
+# takes minutes, so it is given ten.
 RESUME := SESSION=tools/resumed.txt EXPECT='^lisp: the heap is an image'
 test: all host-test
 	tools/boottest.sh x86_64
@@ -104,7 +107,7 @@ test: all host-test
 	NAME=manual-again DISK=$(BUILD)/boot-manual.img SESSION=$(BUILD)/manual-again.txt \
 		EXPECT='^lisp: the heap is an image' tools/boottest.sh aarch64 -machine gic-version=3
 	NAME=aarch64-stress SESSION=tools/stress.txt TIMEOUT=600 DISK=$(BUILD)/boot-aarch64.img SPOIL=1 \
-		EXPECT='^lisp: clara.image is not resumed: it is not what was saved' \
+		EXPECT='^lisp: clara.image is not resumed: it is not what was saved;;^lisp: a collection at every safe point: boot.lisp once more in [0-9]\{4,\}, [0-9]* texts once more in [0-9]\{5,\}' \
 		tools/boottest.sh aarch64 -machine gic-version=3
 
 image: all

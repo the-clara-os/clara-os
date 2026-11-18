@@ -5,8 +5,10 @@
 ;;;; They lie over one another, the one on top has the focus, which is
 ;;;; where the keys go, and the pointer picks one, moves one by its title
 ;;;; and closes one by the box in it. Along the top of the screen is the
-;;;; launcher: a bar whose button lists the applications that are defined,
-;;;; and starts the one that is picked, in a thread of its own.
+;;;; launcher: a bar whose button lists the applications there are, and
+;;;; starts the one that is picked, in a thread of its own. An application
+;;;; is defined in the world, or it is a file that is loaded when it is
+;;;; first picked, and can be unloaded again.
 ;;;;
 ;;;; Nothing here draws on the screen. What the screen is to show is put
 ;;;; together on a surface of the same size, out of sight: the desk, the
@@ -37,8 +39,9 @@
   (:use "COMMON-LISP")
   (:export "START" "STOP" "RESUME" "RUNNING-P"
            "OPEN-WINDOW" "CLOSE-WINDOW" "SHOW" "WINDOW-P" "WINDOW-TITLE" "WINDOW-SURFACE" "WINDOW-POSITION"
-           "MOVE-WINDOW" "RAISE-WINDOW" "WINDOWS" "FOCUSED-WINDOW"
-           "DEFINE-APPLICATION" "APPLICATIONS" "LAUNCH"
+           "MOVE-WINDOW" "RAISE-WINDOW" "RENAME-WINDOW" "NEXT-EVENT" "WINDOWS" "FOCUSED-WINDOW"
+           "DEFINE-APPLICATION" "INSTALL-APPLICATION" "UNLOAD-APPLICATION" "REMOVE-APPLICATION"
+           "APPLICATIONS" "LAUNCH"
            "KEY-TYPED" "POINTER-MOVED"))
 (in-package "CLARA.WINDOWS")
 
@@ -53,7 +56,10 @@
   close    ; a function of no arguments, called when the close box is clicked; without one there is no box
   thread   ; the thread that opened it, whose it is to draw on and to close
   open     ; it is on the screen
-  closing) ; its close box was clicked, and CLOSE called
+  closing  ; its close box was clicked, and CLOSE called
+  events   ; of a window that keeps what happens to it for NEXT-EVENT: what did and was not taken yet, the oldest first,
+  events-lock
+  happened) ;   and the event that says there is some
 
 ;;; The layout, in pixels. A frame is a line around the inside and a band
 ;;; above it: 21 rows from the top of the frame to the inside, with the
@@ -63,6 +69,7 @@
 (defconstant +button+ 112)  ; the bar's button, at its left-hand end, is this wide
 (defconstant +band+ 21)     ; from the top of a window's frame to its inside
 (defconstant +box+ 16)      ; the close box is this wide, and as high as the band
+(defconstant +events-limit+ 1024) ; what happens to a window and waits to be taken; what happens past that is dropped
 
 (defvar *lock* (clara:make-lock "windows"))
 (defvar *running* nil)      ; the window manager has the screen; in a world that was saved: it had
@@ -70,7 +77,8 @@
 (defvar *windows* nil)      ; the windows on the screen, the topmost first: that one has the focus
 (defvar *made* nil)         ; every window that was opened and not closed, on the screen or not
 (defvar *dirty* nil)        ; rectangles of the screen that are to be put together again, none over another
-(defvar *applications* nil) ; (name . function), in the order they were defined
+(defvar *applications* nil) ; the applications there are, in the order of the launcher's list
+(defvar *loading* (clara:make-lock "applications")) ; the file of one application is loaded at a time
 (defvar *launched* nil)     ; the threads that LAUNCH made
 (defvar *launching* nil)    ; in the thread of an application: the event that LAUNCH waits for, until its window is open
 (defvar *opened* 0)         ; how many windows were opened, for where the next one goes
@@ -172,7 +180,7 @@
 (defun menu-width ()
   (let ((width +button+))
     (dolist (application *applications* width)
-      (setq width (max width (+ 16 (clara.draw:text-width (car application))))))))
+      (setq width (max width (+ 16 (clara.draw:text-width (application-name application))))))))
 
 (defun menu-damaged ()
   (damaged 0 +bar+ (menu-width) (+ +bar+ (* +item+ (length *applications*)))))
@@ -182,7 +190,7 @@
     (clara.draw:fill-rectangle *back* 0 +bar+ width height *paper*)
     (clara.draw:draw-rectangle *back* 0 +bar+ width height *ink*)
     (dolist (application *applications*)
-      (clara.draw:draw-text *back* 8 (+ y 2) (car application) *ink*)
+      (clara.draw:draw-text *back* 8 (+ y 2) (application-name application) *ink*)
       (setq y (+ y +item+)))))
 
 (defun paint-pointer ()
@@ -278,8 +286,9 @@
 ;; that goes down or up on its inside, and for a click on its close box,
 ;; which it has when CLOSE is given. They are called in the thread of the
 ;; keyboard or of the mouse, so they hand on what they are told and do not
-;; draw.
-(defun open-window (title width height &key x y key pointer close)
+;; draw. With EVENTS the window has the three for itself, and keeps what
+;; they are told until its program asks: NEXT-EVENT.
+(defun open-window (title width height &key x y key pointer close events)
   (unless (stringp title)
     (error "the title of a window is a string, and ~S is not one" title))
   (unless (and (integerp width) (>= width 24))
@@ -288,6 +297,12 @@
          (window (make-window :title title :surface surface :width width :height height
                               :key key :pointer pointer :close close :thread (clara:current-thread)))
          (opened nil))
+    (when events
+      (setf (window-events-lock window) (clara:make-lock "events")
+            (window-happened window) (clara:make-event "events")
+            (window-key window) (lambda (code) (post window (list :key code)))
+            (window-pointer window) (lambda (x y buttons) (post window (list :pointer x y buttons)))
+            (window-close window) (lambda () (post window (list :close)))))
     (unwind-protect
          (clara:with-lock-held (*lock*)
            (unless *running*
@@ -352,6 +367,55 @@
         (settle)))
     shown))
 
+;;; What happens to a window, for a program that waits for it
+;;;
+;;; A window that was opened with EVENTS keeps what it is told, in the order
+;;; in which it was: (:KEY code) for what was typed while it had the focus,
+;;; a character's code or the code of a key that types none
+;;; (lisp/input.lisp); (:POINTER x y buttons) for a button that went down or
+;;; up on its inside, with the place there; and (:CLOSE) for a click on its
+;;; close box. Its program takes them one at a time, in a thread of its own,
+;;; where it can draw.
+
+(defun post (window event)
+  (clara:with-lock-held ((window-events-lock window))
+    (when (< (length (window-events window)) +events-limit+)
+      (setf (window-events window) (append (window-events window) (list event)))))
+  (clara:signal-event (window-happened window)))
+
+;; The next thing that happened to WINDOW, waited for when nothing has: for
+;; so many milliseconds, after which it is NIL, or for as long as it takes.
+(defun next-event (window &optional milliseconds)
+  (unless (and (window-p window) (window-happened window))
+    (error "~S is not a window that keeps what happens to it: OPEN-WINDOW with :EVENTS makes one" window))
+  (loop
+    (let ((event (clara:with-lock-held ((window-events-lock window))
+                   (let ((event (car (window-events window))))
+                     (setf (window-events window) (cdr (window-events window)))
+                     event))))
+      (when event
+        ;; The box has been heard, and the next click on it is told again.
+        (when (eq (car event) :close)
+          (clara:with-lock-held (*lock*)
+            (setf (window-closing window) nil)))
+        (return event)))
+    (unless (clara:wait-event (window-happened window) milliseconds)
+      (return nil))))
+
+;; The window has another title from now on.
+(defun rename-window (window title)
+  (unless (window-p window)
+    (error "~S is not a window" window))
+  (unless (stringp title)
+    (error "the title of a window is a string, and ~S is not one" title))
+  (clara:with-lock-held (*lock*)
+    (setf (window-title window) title)
+    (when (and *running* (window-open window))
+      (damaged (1- (window-x window)) (- (window-y window) +band+)
+               (+ (window-x window) (window-width window) 1) (window-y window))
+      (settle)))
+  title)
+
 ;; Where the inside's upper left corner is on the screen: two values.
 (defun window-position (window)
   (values (window-x window) (window-y window)))
@@ -383,12 +447,19 @@
 
 ;;; The keyboard and the pointer
 
-;; From the driver of a keyboard: the character with this code was typed.
-;; It is for the window that has the focus.
+;; From the driver of a keyboard: the character with this code was typed,
+;; or the key with it. It is for the window that has the focus, but for
+;; one, which is the window manager's own: Tab with Alt held brings the
+;; lowest window to the top, and so each of them in turn.
 (defun key-typed (code)
-  (let ((window (focused-window)))
-    (when (and window (window-key window))
-      (funcall (window-key window) code)))
+  (if (= code (+ clara.input:+alt+ 9))
+      (clara:with-lock-held (*lock*)
+        (when (and *running* (cdr *windows*))
+          (raise (car (last *windows*)))
+          (settle)))
+      (let ((window (focused-window)))
+        (when (and window (window-key window))
+          (funcall (window-key window) code))))
   code)
 
 ;; The topmost window that the place is on, and which part of it: :INSIDE,
@@ -421,7 +492,7 @@
            (menu-damaged)
            (setq *menu* nil)
            (and application
-                (let ((name (car application)))
+                (let ((name (application-name application)))
                   (lambda () (launch name))))))
         ((< y +bar+)
          (when (and (< x +button+) *applications*)
@@ -487,50 +558,149 @@
 ;;; in a new thread, where it opens its window and does whatever it does
 ;;; until it returns or is stopped; whatever windows the thread has open
 ;;; then are closed, by that thread, on its way out.
+;;;
+;;; The function is defined in the world, by whatever was loaded into it or
+;;; typed at a prompt, or it is in a file that nobody has loaded yet: an
+;;; application that is installed is a name and the name of a file, and the
+;;; file is loaded when the application is first launched, in the thread
+;;; that is to run it. The file defines the application, under the same
+;;; name. Unloading it stops it and deletes the packages that the file made,
+;;; so that the next launch loads the file as it is by then.
+
+(defstruct application
+  name      ; a string, for the launcher's list
+  function  ; what running it calls; NIL while its file is still to be loaded
+  file      ; the name of the file that defines it, or NIL for one that the world defined
+  packages  ; the packages that loading the file made
+  threads)  ; the threads that it was launched in
+
+(defun find-application (name)
+  (find-if (lambda (application) (string-equal name (application-name application))) *applications*))
+
+(defun the-application (name)
+  (or (find-application name)
+      (error "there is no application ~S: the ones that there are are ~S" name (applications))))
+
+;; The launcher's list is about to change, and is shut first. The lock is held.
+(defun shut-menu ()
+  (when (and *running* *menu*)
+    (menu-damaged)
+    (setq *menu* nil)
+    (settle)))
 
 (defun define-application (name function)
   (unless (stringp name)
     (error "the name of an application is a string, and ~S is not one" name))
   (clara:with-lock-held (*lock*)
-    (when (and *running* *menu*)
-      (menu-damaged)
-      (setq *menu* nil)
-      (settle))
-    (let ((defined (assoc name *applications* :test #'string-equal)))
+    (shut-menu)
+    (let ((defined (find-application name)))
       (if defined
-          (setf (cdr defined) function)
-          (setq *applications* (append *applications* (list (cons name function)))))))
+          (setf (application-function defined) function)
+          (setq *applications* (append *applications* (list (make-application :name name :function function)))))))
+  name)
+
+;; There is an application of that name in that file: the launcher lists it
+;; from now on, and the file is loaded when it is launched and has no
+;; function yet. The file is to say (DEFINE-APPLICATION name function).
+(defun install-application (name file)
+  (unless (and (stringp name) (stringp file))
+    (error "an application is installed by its name and the name of its file, two strings, and not ~S and ~S" name file))
+  (clara:with-lock-held (*lock*)
+    (shut-menu)
+    (let ((defined (find-application name)))
+      (if defined
+          (setf (application-file defined) file)
+          (setq *applications* (append *applications* (list (make-application :name name :file file)))))))
   name)
 
 ;; The names of the applications, in the order of the launcher's list.
 (defun applications ()
-  (mapcar #'car *applications*))
+  (mapcar #'application-name *applications*))
 
-(defun run-application (function ready)
+;; The function of an application, its file loaded first when that is still
+;; to be done. The packages that are there after the file and were not
+;; before are the application's, also when the file failed halfway.
+(defun loaded-function (application)
+  (clara:with-lock-held (*loading*)
+    (unless (application-function application)
+      (let ((before (list-all-packages)))
+        (unwind-protect (load (application-file application))
+          (setf (application-packages application)
+                (append (remove-if (lambda (package) (member package before)) (list-all-packages))
+                        (application-packages application)))))
+      (unless (application-function application)
+        (error "the file ~A was loaded, and it defined no application ~S" (application-file application)
+               (application-name application))))
+    (application-function application)))
+
+(defun run-application (application arguments ready)
   (let ((*launching* ready))
-    (unwind-protect (funcall function)
+    (unwind-protect (apply (loaded-function application) arguments)
       (when *launching*
         (clara:signal-event *launching*))
       (dolist (window (clara:with-lock-held (*lock*) (copy-list *made*)))
         (when (eq (window-thread window) (clara:current-thread))
           (close-window window))))))
 
-;; Start the application of that name, and wait until its window is open,
-;; or until it is done without having opened one. What comes back is its
-;; thread: stopping that closes its windows.
-(defun launch (name)
-  (let ((application (assoc name *applications* :test #'string-equal)))
-    (unless application
-      (error "there is no application ~S to launch: the ones that are defined are ~S" name (applications)))
+;; Start the application of that name, with ARGUMENTS for its function, and
+;; wait until its window is open, or until it is done without having opened
+;; one. What comes back is its thread: stopping that closes its windows.
+(defun launch (name &rest arguments)
+  (let ((application (the-application name)))
     (unless *running*
-      (error "there is no window manager to launch ~A with: (clara.windows:start) starts it" (car application)))
-    (let* ((ready (clara:make-event (car application)))
-           (function (cdr application))
-           (thread (clara:make-thread (lambda () (run-application function ready)) :name (car application))))
+      (error "there is no window manager to launch ~A with: (clara.windows:start) starts it"
+             (application-name application)))
+    (let* ((ready (clara:make-event (application-name application)))
+           (thread (clara:make-thread (lambda () (run-application application arguments ready))
+                                      :name (application-name application))))
       (clara:with-lock-held (*lock*)
-        (setq *launched* (cons thread (remove-if-not #'clara:thread-alive-p *launched*))))
+        (setq *launched* (cons thread (remove-if-not #'clara:thread-alive-p *launched*)))
+        (setf (application-threads application)
+              (cons thread (remove-if-not #'clara:thread-alive-p (application-threads application)))))
       (clara:wait-event ready)
       thread)))
+
+;; The application is stopped wherever it runs, and this waits until it has:
+;; its windows are closed by then. What its file defined is forgotten with
+;; the packages that the file made, which are deleted.
+(defun forget (application)
+  (let ((threads nil) (packages nil))
+    (clara:with-lock-held (*loading*)
+      (clara:with-lock-held (*lock*)
+        (setq threads (application-threads application)
+              packages (application-packages application))
+        (setf (application-threads application) nil
+              (application-packages application) nil)
+        (when (application-file application)
+          (setf (application-function application) nil)))
+      (dolist (thread threads)
+        (unless (eq thread (clara:current-thread))
+          (clara:destroy-thread thread)))
+      (dolist (thread threads)
+        (unless (eq thread (clara:current-thread))
+          (ignore-errors (clara:join-thread thread))))
+      (dolist (package packages)
+        (delete-package package)))))
+
+;; An application that was installed is stopped and forgotten, and stays in
+;; the launcher's list: the next launch loads its file again, as the file
+;; is then.
+(defun unload-application (name)
+  (let ((application (the-application name)))
+    (unless (application-file application)
+      (error "the application ~A was defined in the world and has no file to load again: REMOVE-APPLICATION takes it out"
+             (application-name application)))
+    (forget application)
+    (application-name application)))
+
+;; The application is stopped and leaves the launcher's list.
+(defun remove-application (name)
+  (let ((application (the-application name)))
+    (forget application)
+    (clara:with-lock-held (*lock*)
+      (shut-menu)
+      (setq *applications* (remove application *applications*)))
+    (application-name application)))
 
 ;;; Starting and stopping
 
@@ -573,7 +743,7 @@
           (clara.input:send-keys-to #'key-typed)
           (clara.input:send-pointer-to #'pointer-moved))))
     (when (and started *applications*)
-      (launch (car (car *applications*))))
+      (launch (application-name (car *applications*))))
     (running-p)))
 
 ;; The window manager lets go of the screen, the keyboard and the pointer,

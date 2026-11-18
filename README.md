@@ -55,7 +55,11 @@ on it, each a surface that its program draws on, with the focus, the keys
 and the pointer going to the one that is picked, a launcher along the top,
 and a listener in a window (lisp/terminal.lisp), which is the same world
 as the prompt on the serial port. A world that is saved while it runs
-boots straight into it. The same Lisp files load
+boots straight into it. Two applications come with it, a text editor
+(lisp/editor.lisp) and a file browser (lisp/files.lisp): each is a file on
+the boot volume that the launcher loads when it is first picked, and
+unloads again when asked, and `(clara.windows:launch "Editor" "/notes.txt")`
+opens a file from a prompt. The same Lisp files load
 under SBCL on the host, where they are tested against a machine that is
 made up for the purpose.
 [ROADMAP.md](ROADMAP.md) has what comes next, [DESIGN.md](DESIGN.md) the
@@ -103,7 +107,8 @@ Layout:
     kernel/arch/     one directory per architecture: the only assembly and the only MMIO addresses
     kernel/lisp/     the Lisp runtime: objects and the heap, symbols and packages, the reader, the printer
     lisp/            Lisp sources: the language's own part, the console, drawing, the drivers, the file system, the listener,
-                     the window manager and the terminal in a window;
+                     the window manager and the terminal in a window, which the kernel loads as it starts, and
+                     the two applications, editor.lisp and files.lisp, which the launcher loads when they are picked;
                      the build copies them to the ESP's \clara directory, read at boot
     fonts/           the console font, Spleen 8x16, which tools/bdf2c.py turns into kernel/font.c
     site/            the website: the front page and the user manual (manual.html), filled in from the

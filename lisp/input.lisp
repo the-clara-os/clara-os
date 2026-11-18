@@ -22,12 +22,14 @@
 ;;;; The codes are Linux's (include/uapi/linux/input-event-codes.h), and a
 ;;;; key's code is the key and not the character on it: which character a
 ;;;; key types is decided here, for a keyboard that is laid out as in the
-;;;; United States.
+;;;; United States. A key that types no character, an arrow for one, is
+;;;; handed on all the same, as a code that no character has.
 
 (defpackage "CLARA.INPUT"
   (:use "COMMON-LISP")
   (:export "START" "DEVICES" "POINTER" "POINTER-CHANGED" "SET-POINTER-LIMITS" "KEY-CHARACTER"
-           "SEND-KEYS-TO" "SEND-POINTER-TO" "*REPEAT-DELAY*" "*REPEAT-INTERVAL*"))
+           "SEND-KEYS-TO" "SEND-POINTER-TO" "*REPEAT-DELAY*" "*REPEAT-INTERVAL*"
+           "+UP+" "+DOWN+" "+LEFT+" "+RIGHT+" "+HOME+" "+END+" "+PAGE-UP+" "+PAGE-DOWN+" "+INSERT+" "+F1+" "+ALT+"))
 (in-package "CLARA.INPUT")
 
 ;;; Keys
@@ -36,15 +38,34 @@
 ;;; with it; a space is a key that types nothing by itself. The numbers of
 ;;; the keypad's keys begin at 71.
 
+;;; A key that types no character has a code as well, for whoever can use
+;;; it, an editor or the window manager: one from CHAR-CODE-LIMIT on, which
+;;; is past the last code that a character can have. And a key that is
+;;; typed while Alt is held has +ALT+ added to its code, whatever it is.
+
+(defconstant +up+ (+ char-code-limit 1))
+(defconstant +down+ (+ char-code-limit 2))
+(defconstant +left+ (+ char-code-limit 3))
+(defconstant +right+ (+ char-code-limit 4))
+(defconstant +home+ (+ char-code-limit 5))
+(defconstant +end+ (+ char-code-limit 6))
+(defconstant +page-up+ (+ char-code-limit 7))
+(defconstant +page-down+ (+ char-code-limit 8))
+(defconstant +insert+ (+ char-code-limit 9))
+(defconstant +f1+ (+ char-code-limit 32)) ; and the eleven function keys after it follow, F12 being 11 more
+(defconstant +alt+ #x200000)
+
 (defvar *plain*   "  1234567890-=  qwertyuiop[]  asdfghjkl;'` \\zxcvbnm,./ *  ")
 (defvar *shifted* "  !@#$%^&*()_+  QWERTYUIOP{}  ASDFGHJKL:\"~ |ZXCVBNM<>? *  ")
 (defvar *keypad* "789-456+1230.")
 
-;; The code of the character that a key types, or NIL for a key that types
-;; none. Enter is a new line and Backspace takes a character back, as on
-;; the serial port; Caps Lock turns the letters round and nothing else,
-;; and Ctrl with a letter is the control character of that letter, so that
-;; Ctrl-C is 3 here as it is there.
+;; The code of the character that a key types, the code of a key that
+;; types none and has one of its own, or NIL for any other key. Enter is a
+;; new line and Backspace takes a character back, as on the serial port;
+;; Escape and Delete are the characters that ASCII has for them; Caps Lock
+;; turns the letters round and nothing else, and Ctrl with a letter is the
+;; control character of that letter, so that Ctrl-C is 3 here as it is
+;; there.
 (defun key-character (key shift control caps)
   (cond ((= key 28) 10)
         ((= key 96) 10)
@@ -53,6 +74,18 @@
         ((= key 15) 9)
         ((= key 57) 32)
         ((= key 98) 47)
+        ((= key 1) 27)
+        ((= key 103) +up+)
+        ((= key 108) +down+)
+        ((= key 105) +left+)
+        ((= key 106) +right+)
+        ((= key 102) +home+)
+        ((= key 107) +end+)
+        ((= key 104) +page-up+)
+        ((= key 109) +page-down+)
+        ((= key 110) +insert+)
+        ((<= 59 key 68) (+ +f1+ (- key 59)))
+        ((<= 87 key 88) (+ +f1+ 10 (- key 87)))
         ((<= 71 key 83) (char-code (char *keypad* (- key 71))))
         ((< 1 key 57)
          (let* ((plain (char-code (char *plain* key)))
@@ -137,8 +170,9 @@
   device queue
   name
   kind              ; in words, for the boot report
-  (shift 0)         ; which Shift and Ctrl keys are down: bit 0 the left one, bit 1 the right
+  (shift 0)         ; which Shift, Ctrl and Alt keys are down: bit 0 the left one, bit 1 the right
   (control 0)
+  (alt 0)
   caps              ; Caps Lock is on
   held              ; the key that is down and types a character, the last of them
   repeating         ; it has been down long enough to type again and again
@@ -161,6 +195,10 @@
            (let ((bit (if (= key 29) 1 2)))
              (setf (input-control input)
                    (if down (logior (input-control input) bit) (logand (input-control input) (- 3 bit))))))
+          ((or (= key 56) (= key 100))
+           (let ((bit (if (= key 56) 1 2)))
+             (setf (input-alt input)
+                   (if down (logior (input-alt input) bit) (logand (input-alt input) (- 3 bit))))))
           ((= key 58)
            (when (= value 1)
              (setf (input-caps input) (not (input-caps input)))))
@@ -176,6 +214,8 @@
 (defun type-key (input key)
   (let ((code (key-character key (/= 0 (input-shift input)) (/= 0 (input-control input)) (input-caps input))))
     (when code
+      (when (/= 0 (input-alt input))
+        (setq code (+ code +alt+)))
       (if *keys-to*
           (deliver *keys-to* code)
           (clara.console:key-typed code)))))

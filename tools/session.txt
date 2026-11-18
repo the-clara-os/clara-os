@@ -13,6 +13,8 @@ UNLESS-ZERO
 > (macroexpand-1 '(unless-zero x (/ 100 x)))
 (IF (= X 0) NIL (PROGN (/ 100 X)))
 T
+> (destructuring-bind (first second &rest others) (list 1 2 3 4 5 6) (list first second others))
+(1 2 (3 4 5 6))
 > (let ((counter (let ((n 0)) (lambda () (incf n))))) ; a closure
     (list (funcall counter) (funcall counter)
           #| and it keeps count |# (funcall counter)))
@@ -212,6 +214,8 @@ error: there is no file /notes.txt
 NIL
 > (list (load "/clara/kept.lisp") *from-a-file*)
 (T "written by ClaraOS")
+> (with-open-file (out "/clara/stress" :direction :output) (write-line "a collection at every safe point" out))
+"a collection at every safe point"
 > (with-open-file (out "/EFI/BOOT" :direction :output :if-exists :supersede) (write-line "never" out))
 error: /EFI/BOOT is a directory, and not a file
 > (defvar *canvas* (clara.draw:allocate-surface 200 120))
@@ -261,7 +265,7 @@ OK
 > (defun k () (clara:signal-event *seen*) 'k)
 K
 > (list (clara.windows:running-p) (clara.windows:applications) (clara.windows:start) (clara.windows:start))
-(NIL ("Listener") T T)
+(NIL ("Listener" "Editor" "Files") T T)
 > (list (clara.windows:stop) (clara.windows:running-p)                 ; and the console has the screen again, cleared
         (= (clara.draw:pixel (clara.draw:screen) 700 300) (clara.draw:color 30 27 46)) (clara.windows:start))
 (T NIL T T)
@@ -329,6 +333,93 @@ OK
 ((560 440) ("A picture" "Listener") T)
 > (list (clara.windows:close-window *window*) (length (clara.windows:windows)))
 (NIL 1)
+> (list (find-package "CLARA.EDITOR") (clara:thread-alive-p (clara.windows:launch "Editor" "/poem.txt" :x 96 :y 120)))
+(NIL T)
+> (list (package-name (find-package "CLARA.EDITOR")) (mapcar #'clara.windows:window-title (clara.windows:windows)))
+("CLARA.EDITOR" ("/poem.txt" "Listener"))
+> (defun cursor-at (column row)
+    (until (= (clara.draw:pixel (clara.windows:window-surface (clara.windows:focused-window)) (* 8 column) (+ 15 (* 16 row)))
+              (clara.draw:color 232 227 244))))
+CURSOR-AT
+> (cursor-at 0 2)
+^T roses
+^T are red
+OK
+> (cursor-at 4 0)
+^M sendkey up
+^M sendkey up
+^M sendkey r
+^M sendkey e
+^M sendkey d
+^M sendkey spc
+OK
+> (pointer-at 124 144 0)
+^M mouse_move -572 68
+OK
+> (list 'placed (pointer-at 124 144 1) (cursor-at 3 1))
+^M mouse_button 1
+(PLACED OK OK)
+> (list 'let-go (pointer-at 124 144 0))
+^M mouse_button 0
+(LET-GO OK)
+> (until (probe-file "/poem.txt"))
+^M sendkey ctrl-s
+OK
+> (with-open-file (in "/poem.txt") (list (read-line in) (read-line in) (read-line in nil 'end)))
+("red roses" "are red" END)
+> (list 'another (clara:thread-alive-p (clara.windows:launch "Editor")) (fboundp 'hi))
+(ANOTHER T NIL)
+> (list 'begun (cursor-at 0 1))
+^T (defun hi
+(BEGUN OK)
+> (list 'ended (cursor-at 0 2))
+^T () 'there)
+(ENDED OK)
+> (until (fboundp 'hi))
+^M sendkey ctrl-e
+OK
+> (hi)
+THERE
+> (clara:thread-alive-p (clara.windows:launch "Files"))
+T
+> (until (equal (mapcar #'clara.windows:window-title (clara.windows:windows))
+                '("/poem.txt" "Files in /" "Editor" "/poem.txt" "Listener")))
+^M sendkey end
+^M sendkey ret
+OK
+> (list (clara.windows:unload-application "Editor") (find-package "CLARA.EDITOR")
+        (mapcar #'clara.windows:window-title (clara.windows:windows)))
+("Editor" NIL ("Files in /" "Listener"))
+> (until (equal (mapcar #'clara.windows:window-title (clara.windows:windows)) '("Listener" "Files in /")))
+^M sendkey alt-tab
+OK
+> (list 'files-closed (until (= (length (clara.windows:windows)) 1)))
+^M sendkey alt-tab
+^M sendkey ctrl-q
+(FILES-CLOSED OK)
+> (with-open-file (out "/clara/hello.lisp" :direction :output)
+    (write-line ";;;; hello.lisp: an application" out)
+    (write-line "(defpackage \"HELLO\" (:use \"COMMON-LISP\"))" out)
+    (write-line "(in-package \"HELLO\")" out)
+    (terpri out)
+    (write-line "(defun hello (&optional (words \"Hello\"))" out)
+    (write-line "  (let ((window (clara.windows:open-window" out)
+    (write-line "                 words 160 48 :events t)))" out)
+    (write-line "    (loop" out)
+    (write-line "      (when (equal (clara.windows:next-event window)" out)
+    (write-line "                   '(:close))" out)
+    (write-line "        (return)))))" out)
+    (terpri out)
+    (write-line "(clara.windows:define-application \"Hello\" #'hello)" out))
+"(clara.windows:define-application \"Hello\" #'hello)"
+> (list (clara.windows:install-application "Hello" "/clara/hello.lisp") (clara.windows:applications) (find-package "HELLO"))
+("Hello" ("Listener" "Editor" "Files" "Hello") NIL)
+> (list (clara:thread-alive-p (clara.windows:launch "Hello" "Hello, world")) (package-name (find-package "HELLO"))
+        (clara.windows:window-title (clara.windows:focused-window)))
+(T "HELLO" "Hello, world")
+> (list (clara.windows:remove-application "Hello") (find-package "HELLO") (clara.windows:applications)
+        (length (clara.windows:windows)))
+("Hello" NIL ("Listener" "Editor" "Files") 1)
 > (defpackage "PLAY" (:use "COMMON-LISP") (:export "BALL"))
 #<PACKAGE "PLAY">
 > (in-package "PLAY")
