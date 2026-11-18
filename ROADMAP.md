@@ -202,8 +202,33 @@ Devices and storage:
   and reads back; the host tests put disks and volumes of their own
   making, of every kind and layout, in front of the two drivers, and a
   disk there looks at how it is asked.
-- [ ] **M10 images.** Save the heap to disk and boot by resuming it; the
-  substrate loads the image instead of the sources.
+- [x] **M10 images** (2026-11-17, version 0.0.14). The FAT file system is
+  written as well as read (lisp/fat.lisp): a file goes whole into clusters
+  that are free, the table chains them in every copy that a volume keeps of
+  it, and an entry in a directory names the file, by a short name or, where
+  that will not do, by a long one with a short one to stand in for it. A
+  file takes the place of another, a directory grows when it is full, and a
+  file can be deleted. The language writes files (lisp/boot.lisp): `open`
+  for output, with `:if-exists`; `with-open-file`, which makes the file when
+  its body ends and not when it fails; and `delete-file`. The world is saved
+  (`clara:save-image`, kernel/lisp/image.c): the heap as it is at one
+  moment, with what the substrate holds of it, goes into
+  `\clara\clara.image` on the boot volume, and a machine that finds that
+  file as it starts takes it for its heap and loads no Lisp. The console,
+  the drivers and the listener start afresh, in a world where everything
+  that was defined is defined. Threads do not come back, a lock that was
+  held is free, and a special variable has the value it had outside every
+  binding. An image outlives its kernel: the functions in C are found again
+  by their names. One that is not whole, that comes from the other
+  architecture, or that this kernel cannot run is refused, with the reason,
+  and the world is made from the files. `string-upcase` and its kin, and a
+  function that takes any number of arguments takes more than 255. The
+  machines of `make test` boot from disks of their own, which
+  tools/mkdisk.py makes, one of each kind of FAT, and each boots a second
+  time from what its first boot saved; the host's own checker of FAT volumes
+  looks at every disk that a kernel has written to, and the host tests at
+  every volume with a checker of their own, also after a disk that stopped
+  at each request of a write in turn.
 
 The world:
 
@@ -499,61 +524,122 @@ Infrastructure, for sessions with budget left over:
   found a mistake of their own on the way: the page frames of the machine
   that lisp/host/ makes up were handed out without a lock, to threads
   that, unlike those of ClaraOS, run at the same time.
+  From M10: the two sessions on the disk image that macOS makes, a GUID
+  partition table and a volume of the kind 32, with 4 GiB and four
+  processors, and afterwards macOS's own driver reading the files that
+  ClaraOS wrote there, the image of 1.6 MiB among them; a third boot, from
+  the disk of a second, of a world that a saved world saved; the second
+  session on x86_64 with 128 MiB, `-cpu max` and four processors; the image
+  of AArch64 given to x86_64, which is refused by the machine it names; an
+  image given to a kernel with a row put into the middle of its table of
+  functions, which starts from it with every function in its place and the
+  new one there, and that kernel's image given to the one without the row,
+  which refuses it by the name of the function and passes the whole first
+  session in a world made from the files; an image given to a kernel whose
+  number for the layout of objects is another; half an image, a text under
+  the image's name, and an empty file, each refused and each followed by a
+  world from the files; how long a world of 1.5 MiB takes to save, two
+  ticks; fsck.fat 4.2 on new and on used volumes of the three kinds, which
+  found that tools/mkdisk.py named a volume in the first sector and not in
+  the directory of the root; the whole of `make test` in an Ubuntu
+  container, with QEMU 8.2, SBCL 2.2.9 and fsck.fat. And the code broken on
+  purpose, 88 ways. The file system and the console, by the host tests, 59
+  ways: the table written to one copy only, or eight sectors of it past its
+  end; 12 bits with odd and even the wrong way round; the upper four bits of
+  32 lost; a mark for a last cluster that is none; a search for free
+  clusters that does not go round; a file without the mark at its end;
+  clusters that are given back and stay marked; free clusters counted the
+  other way, never, or into a sector that only sits where the count would;
+  clusters and the sectors of a directory a step from where they are; a
+  number that is taken, taken again; small letters without a long name; the
+  halves of a character and of a first cluster the wrong way round; a size a
+  byte short; an entry that is a directory's; a long name without its end,
+  filled with zeroes, numbered upwards, without the mark on its last part,
+  with the checksum of another name or one turned the other way, with an end
+  it does not need; one free entry taken for as many as are wanted; deleted
+  entries never used again; a place past the end of a directory; a directory
+  that no longer ends, that grows into a cluster as it was left, whose new
+  cluster is not chained or keeps its page frames; an entry changed or
+  deleted in the wrong place; clusters kept by a file that went, that was
+  replaced, or that never got its entry; the entry written before the table;
+  a last sector not written; a table that is not taken to the disk, or
+  thrown away unwritten; any name let through; no lock; a directory written
+  over, deleted, or stood in for by a file; one cluster more or fewer than a
+  volume has; the place of an entry taken for an address; a console that
+  keeps the screen of the machine before. Five got through at first. One was
+  a look that could never find anything, at whether a name that is a short
+  name in capitals is taken, and is gone. One still gets through and does no
+  harm: the table written before the file's bytes, since what has to come
+  last is the entry. Three were the tests': the cluster a directory grew
+  into was left full of bytes that pass for names of volumes, which a
+  directory is read past; no file was deleted while the disk looked at who
+  held the lock; and nothing started a console in a world that had known a
+  screen. The substrate and boot.lisp, by booting twice, 29 ways: an image
+  with the bindings of the thread that saves; a checksum that is not looked
+  at; threads left running, locks left held, and the queues of a lock and of
+  an event and the address of a thread left in an image, each of which the
+  second session runs into; roots that are not brought back; a heap that
+  comes back a word short, an image without its last page, and one that says
+  it is longer than it is; the substrate's own forms read in the package the
+  world was left in; a world that came as an image made again from the
+  files; an image never looked for; more than 255 arguments refused; the
+  functions in C put over what a world made of their names; GENSYM that does
+  not count, STRING-UPCASE that makes small letters, UTF-8 of four bytes
+  that begins like three, STRING-BYTES that counts characters; CLOSE that
+  makes no file, a file made although the body that wrote it failed,
+  `:append` that forgets what was there, a file written over without a word,
+  DELETE-FILE that deletes nothing, the strings of a list joined one on top
+  of the other, a text a byte short, a file opened for `:io`, SAVE-IMAGE
+  that saves nothing. One got through at first, the heap that came back a
+  word short, because the checksum was taken of the file: it is taken of the
+  heap now, after the copy. And three of them showed a mistake that no case
+  was looking for: an image that was refused after its heap had been copied
+  left the page frames where they were, and the world made from the files
+  then failed the heap's own test; they are given back, and the machine of
+  `make test` that boots from a damaged image goes that way every time. The
+  first real session found two more that the host tests could not, both
+  older than this milestone: a function that takes any number of arguments
+  refused more than 255, and so a string stream that had been written to 300
+  times could not be read. The strings of a stream are joined by a function
+  in C now, which takes them as a list, however many there are.
 
 Shortcuts and loose ends, under the milestone that settles each one. A
 session reads its own group before it starts, and whatever it leaves open
 is added here in the same change.
 
-M10:
+M12:
 
-- Nothing writes a file. `clara.disk:write-sectors` writes sectors, which
-  the session does to a disk of its own, and the file system only reads.
-  An image that the boot handoff is to find is a file on the ESP, so M10
-  has to make one: find clusters that are free, chain them in every copy
-  of the table, and write an entry into a directory, under a name of
-  eight characters and three if it is to do without a long one. The boot
-  volume of `make test` is a directory of the host's that QEMU shows as a
-  disk, and writing to that is asking for trouble: a test that writes
-  files wants a real image for its disk, which tools/mkimage.sh makes on
-  macOS only.
-- A file reaches Lisp as text, in one string, or as page frames
-  (`clara.fat:read-file`), which is what an image wants to be loaded
-  from. Nothing copies the other way, a string or the words of an object
-  into memory, and there is still no vector of bytes: CLARA.UNSAFE got
-  the one function that M9 needed, `memory-string`.
-- The boot handoff still reads every file of `\clara` into loader-data
-  memory, and there they stay: the Lisp world begins with them before any
-  driver runs, LOAD comes back to them for a name that no file system
-  has, and on a machine whose disk has no driver here they are all there
-  is. Their pages were to go to `pmm_free` once there were files on a
-  disk, and did not, for that last reason: an image takes their place.
-  They are found by name, whatever the case of the letters; a character
-  outside ASCII in a name becomes `?`, so two names can collide;
-  subdirectories are not read, and names that start with a dot are
-  skipped.
-- A thread, a lock and an event each hold an address in the kernel's own
-  memory in one of their words, and `lisp_roots` holds the events of the
-  interrupts: a saved heap has to come back without the first and with
-  the second put right. Which thread reads from the console, and whether
-  Ctrl-C stops it, are C variables.
-- The kernel image runs wherever the firmware loaded it, so the address of
-  a C function changes with the machine and the build. A saved heap has to
-  name the substrate's functions by index or by name, never by address.
-  It is by index now: a function object holds its place in
-  `lisp_primitives` or in the evaluator's table of special forms, so a
-  row put in the middle of either makes an older image call the wrong
-  function. By name would not.
-- The kernel panics when `\clara` has no boot.lisp, font.lisp,
-  console.lisp or listener.lisp, or when loading one of them fails, there
-  being no Lisp world without them. An image takes their place.
-- GENSYM counts in a C variable, which an image would not bring back.
-- A heap that is saved has free blocks in it, in lists that are C
-  pointers and C variables (heap.c). After loading, a sweep puts the
-  lists together again; when the next collection is due is in C
-  variables as well.
+- What a world starts with is three lines of C, the same for a world that
+  was loaded from the files and for one that came as an image: the console,
+  the drivers and the file system, and the listener (kernel/lisp/lisp.c). An
+  image that is to boot straight into a window manager has to say so itself:
+  a function of its own that the substrate calls in place of the listener.
 
 No milestone yet, to be picked up when they start to matter:
 
+- Images. One file is looked for, `\clara\clara.image` on the volume that
+  the firmware booted from, and SAVE-IMAGE writes where names are looked up,
+  the first volume of the first disk: the two are the same volume as long as
+  the boot disk is first on the bus. The firmware reads the image whole
+  before the kernel starts, and the kernel copies it into the heap: for a
+  moment the machine holds it twice, and a boot takes as long as the reading
+  does. An image is as long as the heap, the free blocks in it included,
+  since nothing moves: 1.5 MiB where 750 KiB are in use. Whether an image is
+  one that this kernel can run is a number in image.c, raised by hand when
+  lisp.h changes what an object is in memory; nothing notices when that is
+  forgotten. An image from the other architecture is refused although most
+  of a world would run there. A world that was saved in a state that does
+  not start, with CAR redefined for one, starts like that at every boot
+  until the file is deleted from outside, in the firmware's shell or on the
+  host: there is no key to hold that says "from the files". The files of
+  `\clara` are read at every boot and stay in memory, also when the world
+  came from an image, for the boot at which an image is refused and for
+  LOAD; without them and without an image the kernel panics, there being no
+  world to start. An event comes back with the count it had. What a driver
+  held when the world was saved, page frames and the registers of its
+  device, is forgotten and not given back, which is right for another boot
+  and means that a START called a second time in one boot still leaves the
+  first one's behind.
 - Disks. The block device of virtio is the one disk with a driver: UTM's
   drive has to be on its VirtIO interface, and with NVMe or USB the
   machine boots and sees no disk. One request is under way on a disk at a
@@ -574,7 +660,7 @@ No milestone yet, to be picked up when they start to matter:
   look at the bit by which a device says that it has to be started
   afresh. A device from before version 1 is refused, and so is one that
   insists on what was not asked for.
-- Files. FAT is the one file system, and it is read, not written. Names
+- Files. FAT is the one file system. Names
   are looked up on the first volume that START found, in the order of the
   disks on the PCI bus: the kernel does not know which disk it was booted
   from, and with the boot disk first on the bus, as QEMU and UTM have it,
@@ -593,29 +679,57 @@ No milestone yet, to be picked up when they start to matter:
   names; a table of partitions of the newer kind is taken as it is, its
   checksums unread and its second copy unused; partitions inside an
   extended partition of the old kind are not looked for. What a volume
-  says of its free clusters and of whether it was left in order is not
-  read.
+  says of whether it was left in order is not read.
+- Writing files. A file is written whole, from page frames that hold all of
+  it: there is no writing at the end of a file or in its middle, and a file
+  that takes the place of another needs room for both until its entry has
+  changed. Directories are found and not made, and nothing is renamed or
+  moved. There is no clock, so every file is of the first of January 1980. A
+  volume is not marked as in use while it is written to, so nothing tells
+  whoever mounts it next that a write was cut short; what is left then is
+  clusters that belong to no file, for a program that mends volumes to give
+  back. A free cluster is looked for from where the last search ended, an
+  entry of the table at a time, and of the table eight sectors are held and
+  written back to every copy when the next eight are wanted. The count of
+  free clusters that a volume of the kind 32 keeps is kept in step when it
+  is there, and not looked at. A short name is made of the letters of ASCII;
+  any other letter becomes a `_` in it, and a name in small letters that
+  would fit a short name gets a long one, where other systems set two bits.
 - Files in the language. A name is a string: there are no pathnames, and
   where SBCL gives one, from PROBE-FILE and DIRECTORY, there is a string
-  here. OPEN opens for reading and takes `:direction :input` or nothing;
-  the stream it gives has the whole file, read when it was opened, and
-  gives it a line at a time. The errors of files are plain ERRORs, there
+  here. OPEN opens for reading or for writing, and not for both; a stream
+  to read from has the whole file, read when it was opened, and gives it
+  a line at a time, and a stream to write to keeps what it is given, in
+  memory, until CLOSE makes the file of it. A file is text, UTF-8: there
+  is no `:element-type`, and bytes are written by a driver, from page
+  frames. `:if-exists` knows `:error`, `:supersede`, `:append` and NIL,
+  and `:if-does-not-exist` `:error`, `:create` and NIL. There is no
+  RENAME-FILE, FILE-LENGTH, FILE-WRITE-DATE or
+  ENSURE-DIRECTORIES-EXIST. The errors of files are plain ERRORs, there
   being no FILE-ERROR. DIRECTORY knows `*`, and in the last part of its
   pattern only. PROBE-FILE gives the last part of a name as the disk has
   it and the directories as they were asked for. LOAD looks on the disk
   first: a file in the root of the volume with the name of a boot file
   takes its place. SORT takes lists, and STRING-EQUAL and STRING-LESSP two
   strings and no keywords.
-- The disks of `make test`. The boot volume is QEMU's view of build/esp,
-  a volume of the kind 16 behind a table of partitions of the old kind,
-  the same on all four machines; the kinds 12 and 32 and the GUID
-  partition table are the host tests' to read, on volumes that the tests
-  lay out themselves, and by hand on volumes that macOS made. The second
-  disk is build/scratch-<name>.img, a mebibyte of zeroes that
-  tools/boottest.sh makes anew for every boot, and the only disk a
-  session writes to. A session cannot show all of a directory: on the
-  image that macOS makes there are `._` files beside the others, and the
-  session has to pass there too.
+- The disks of `make test`. A machine boots from build/boot-<name>.img,
+  which tools/mkdisk.py makes of build/esp for every first boot: a volume of
+  the kind 32 behind a GUID partition table for x86_64, one of the kind 16
+  behind a table of partitions of old for AArch64, and one of the kind 12
+  that is the whole disk for AArch64 with GIC version 2. A second boot gets
+  a copy of the disk that the first one left. They take 12 to 36 MiB each,
+  some 170 MiB of build/ after a run. tools/mkdisk.py is this repository's
+  own reading of the format, like lisp/fat.lisp: what keeps the two honest
+  is the firmware, which boots from the one and reads what the other wrote,
+  the host's checker, fsck_msdos on macOS and fsck.fat on Linux, and by hand
+  the image that macOS makes, which `make image` still needs macOS for. The
+  second disk is build/scratch-<name>.img, a mebibyte of zeroes that
+  tools/boottest.sh makes anew for every boot, for sectors that are
+  nobody's. A session cannot show all of a directory: on the image that
+  macOS makes there are `._` files beside the others, and the session has to
+  pass there too. `make run-*` boots from build/disk-<arch>.img, which is
+  made again when build/esp has something newer: a world that was saved
+  there starts again at the next run, and is gone after the next build.
 - The evaluator's self-test must not come near the file system, since
   its texts are evaluated again from the prompt with a collection at
   every safe point, where finding one file is thousands of calls. So
@@ -707,7 +821,8 @@ No milestone yet, to be picked up when they start to matter:
   kernel/thread.c are still there and run in the thread self-test at
   every boot; nothing else calls them. They can go, or stay for what
   does not evaluate.
-- A stream takes strings and gives lines, a file's as well. There is no
+- A stream takes strings and gives lines, a file's as well, and a file
+  that is written is strings until it is closed. There is no
   `read-char`, no `read` from a stream, no `with-input-from-string`, no
   `*error-output*` or `*terminal-io*`, and `write-string` takes no
   `:start` and `:end`. Everything that prints makes a string first, and
@@ -728,8 +843,11 @@ No milestone yet, to be picked up when they start to matter:
   rest). What is simply not there: hash tables, which DESIGN.md counts in
   the first subset; `(defun (setf f) ...)`, `macro-function`,
   `symbol-macrolet`, `progv`; `typep`, `typecase`, `check-type`; `elt`,
-  `coerce`, and the functions on strings beyond `string=`,
-  `string-equal`, `string-lessp` and `subseq`.
+  `coerce`, `destructuring-bind`, and the functions on strings beyond
+  `string=`, `string-equal`, `string-lessp`, `string-upcase`,
+  `string-downcase` and `subseq`; those two and `char-upcase` and
+  `char-downcase` know the letters of ASCII, and take no `:start` and
+  `:end`.
   FORMAT knows `~A ~S ~D ~%` and `~~`. The functions on sequences take
   lists only, SUBSEQ strings as well, and of their keyword arguments
   `:test`, with `:key` for MEMBER and ASSOC and `:initial-value` for
@@ -777,11 +895,14 @@ No milestone yet, to be picked up when they start to matter:
   the console and the listener have no self-test at boot but the
   session.
 - CI has SBCL 2.6.0, the Mac 2.6.10, and the Ubuntu 24.04 container that
-  stands in for CI on the Mac 2.2.9. The stress boot, a collection at
-  every safe point, takes 8 s on the Mac and a minute on CI, where
-  AArch64 is emulated; a text in the kernel's self-test that goes
-  round a thousand times costs seconds there, since every call of a
-  function in Lisp is a safe point, FORMAT's among them.
+  stands in for CI on the Mac 2.2.9. The stress boot, a collection at every
+  safe point, takes 18 s on the Mac, two minutes there when AArch64 is
+  emulated, and three to four on CI, 185 s on one run and 257 s on the next,
+  of the ten that the boot test gives it; it grows with the world, since
+  each of those collections goes through the whole heap; a text in the
+  kernel's self-test that goes round a thousand times costs seconds there,
+  since every call of a function in Lisp is a safe point, FORMAT's among
+  them.
 - lisp/font.lisp and kernel/font.c hold the same glyphs, one for each
   console, from the one generator.
 
@@ -916,7 +1037,7 @@ No milestone yet, to be picked up when they start to matter:
   machine describes how its devices' interrupt lines are wired.
 - QEMU's hvf has no GIC version 2, which is why `make test` boots AArch64
   a second time, emulated.
-- None of M4 to M9 has been booted in UTM itself. UTM runs AArch64
+- None of M4 to M10 has been booted in UTM itself. UTM runs AArch64
   under hvf with GIC version 3, four processors and 4 GiB, and that was
   checked with Homebrew's QEMU 11 from the disk image; UTM brings QEMU
   10.0 and a display device of its own. Whether its machine takes
@@ -928,7 +1049,7 @@ No milestone yet, to be picked up when they start to matter:
   `-device virtio-tablet-pci` among the machine's QEMU arguments
   (README.md). Without them, and without a serial device, there is
   nowhere to type. Its drive has to be on the VirtIO interface for the
-  kernel to see a disk.
+  kernel to see a disk, and to save a world on it.
 - The screen has glyphs for ASCII only (kernel/font.c). A character
   outside it takes one cell, with the font's sign for a glyph it does not
   have.
@@ -943,15 +1064,18 @@ No milestone yet, to be picked up when they start to matter:
   firmware's console, which the specification no longer promises will work
   by then.
 - CI covers Ubuntu only, with clang 18 and QEMU 8.2 where the Mac has
-  clang 23 and QEMU 11. Nothing builds or boots on macOS except by hand.
+  clang 23 and QEMU 11, and fsck.fat for the checker of volumes where the
+  Mac has fsck_msdos. Nothing builds or boots on macOS except by hand.
   The boot with a collection at every safe point is emulated there, and
-  is the longest of the four.
+  is the longest of the seven.
 - `make image` needs macOS (hdiutil), so CI neither builds nor boots the
   disk image that UTM gets.
-- site/boot.png, on the website, is a screenshot of version 0.0.13, to be
-  replaced by hand when the boot report has changed enough to matter:
-  build/screen-aarch64.png after `make test` is the same picture of the
-  current kernel.
+- site/boot.png, on the website, is a screenshot of version 0.0.14, to be
+  replaced by hand when what the screen shows has changed enough to
+  matter: build/screen-aarch64-resumed.png after `make test` is the same
+  picture of the current kernel, the end of the session that a world
+  which was saved answers. The website's caption takes the version from
+  this entry (site/build.py), so the two are changed together, here.
 - Where the logo, site/sun.png, came from and under what license is not
   recorded.
 - www.claraos.org has no DNS record; only the bare domain reaches the

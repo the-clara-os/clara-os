@@ -10,6 +10,10 @@ repository, so that the site cannot fall behind it:
       CLARA_VERSION in kernel/kernel.h
   {{done}} {{total}} {{latest}} {{roadmap}}
       from the milestone list in ROADMAP.md
+  {{screenshot}}
+      the version that site/boot.png is a picture of, which ROADMAP.md
+      records where it says when to replace it: the picture is replaced
+      by hand, and its caption is not
   {{spleen:some text}}
       the text drawn with the console's font, fonts/spleen-8x16.bdf, one
       inline SVG per word
@@ -111,8 +115,13 @@ def main():
     if not version:
         sys.exit("site/build.py: could not find CLARA_VERSION in kernel/kernel.h")
 
+    screenshot = re.search(r"site/boot\.png, on the website, is a screenshot of version ([\d.]+)", read("ROADMAP.md"))
+    if not screenshot:
+        sys.exit("site/build.py: ROADMAP.md no longer says which version site/boot.png is a screenshot of")
+
     values = {
         "version": version.group(1),
+        "screenshot": screenshot.group(1),
         "done": str(len(done)),
         "total": str(len(items)),
         "latest": f"{done[-1][0]}, {done[-1][1]}",

@@ -15,8 +15,8 @@
  * the collector marks in, and a length in the other 48 bits, the characters
  * of a string or the items of a vector. With a header on everything the
  * heap can be walked from one end to the other, which is what the
- * collector's sweep does and the saved image (M10) will do; the price is a
- * third word in every cons.
+ * collector's sweep does, and what is done with a heap that was saved
+ * (image.c); the price is a third word in every cons.
  *
  * NIL is the symbol at the very start of the heap, so its word is a
  * constant, and the empty list is that same word. */
@@ -106,7 +106,7 @@ enum lisp_function_kind {
 struct lisp_function {
     lisp header;
     lisp name; /* a symbol, or NIL for a LAMBDA */
-    lisp code; /* a fixnum for the two kinds in C, never an address: an image has to outlive the kernel that saved it (M10) */
+    lisp code; /* a fixnum for the two kinds in C, never an address: an image has to outlive the kernel that saved it */
     lisp env;  /* the environment a closure or a macro was made in (eval.c) */
 };
 
@@ -303,8 +303,8 @@ enum lisp_interrupt {
 
 /* What the substrate itself holds on to in the Lisp world. The collector
  * starts from here, and from what the evaluator keeps (eval.c): every
- * word of this is a Lisp value. A saved image has to bring these back
- * (M10). */
+ * word of this is a Lisp value. An image is these and the heap
+ * (image.c). */
 struct lisp_roots {
     lisp t, quote, function;
     lisp quasiquote, unquote, splice; /* what the reader makes of ` , and ,@ */
@@ -339,6 +339,8 @@ void     lisp_reach(lisp x);                               /* from the collector
 int      lisp_heap_safe_point(void);                       /* collect if it is time; 0 when the heap is full even so */
 void     lisp_collect_if_full(void);                       /* collect, if the last time left the heap full */
 uint64_t lisp_collect_every(uint64_t n);                   /* at every nth safe point; 0: when it is time. What it was */
+int      lisp_heap_restore(const void *from, uint64_t bytes); /* for an image: an empty heap becomes a copy of those bytes */
+void     lisp_heap_empty(void);                            /* and empty again */
 lisp     lisp_cons(lisp car, lisp cdr);
 lisp     lisp_make_string(const uint32_t *chars, uint64_t length); /* chars may be NULL, to fill it in later */
 lisp     lisp_make_vector(uint64_t length);                /* of fixnum zeroes */
@@ -464,6 +466,11 @@ void lisp_evaluator_new(struct lisp_evaluator *e);      /* in that much memory: 
 void lisp_evaluator_out(struct lisp_evaluator *e);      /* the running thread's state goes into e, and its bindings with it */
 void lisp_evaluator_in(const struct lisp_evaluator *e); /* and comes back */
 void lisp_evaluator_reach(const struct lisp_evaluator *e); /* for the collector: what a thread that is not running holds */
+void lisp_bindings_out(void);                           /* the running thread's bindings are undone: a variable is what it
+                                                           is outside them */
+void lisp_bindings_in(void);                            /* and done again */
+int  lisp_function_rebind(lisp function);               /* for an image: a function in C gets its place in this kernel's
+                                                           table, by its name; 0 when no row has that name */
 
 /* thread.c: the threads of the Lisp world. One of them at a time has the
  * runtime, and it gives it up only at a safe point or to wait. */
@@ -476,6 +483,10 @@ void lisp_interrupt(enum lisp_interrupt source);        /* from its handler: the
 
 /* unsafe.c: the package CLARA.UNSAFE */
 void lisp_unsafe_init(const struct framebuffer *fb);    /* the screen, for a driver in Lisp to draw on */
+
+/* image.c: the heap as a file, and a file as the heap */
+int  lisp_image_load(const struct boot_file *file);     /* 1: the heap and the roots are what that file holds. 0: they
+                                                           are as they were, and the boot report says why */
 
 /* builtin.c: the functions written in C */
 #define LISP_MANY 255 /* for max: any number of arguments */
@@ -533,12 +544,15 @@ LISP_PRIMITIVE(lisp_p_map_memory);
 LISP_PRIMITIVE(lisp_p_pci_configuration);
 LISP_PRIMITIVE(lisp_p_keyboard_break);
 LISP_PRIMITIVE(lisp_p_memory_string);
+LISP_PRIMITIVE(lisp_p_string_bytes);
+LISP_PRIMITIVE(lisp_p_string_memory);
+LISP_PRIMITIVE(lisp_p_heap_image);
 extern const struct lisp_primitive lisp_primitives[];
 extern const unsigned lisp_primitive_count;
 
 /* lisp.c */
-void lisp_init(const struct boot_info *bi);
+void lisp_init(struct boot_info *bi); /* the world: an image of it, if the boot volume had one, and otherwise empty */
 void lisp_selftest(void);
-void lisp_run(void); /* load boot.lisp, check the evaluator, load the console and the listener, and listen until the
-                        input ends */
+void lisp_run(void); /* unless the world is an image's, load boot.lisp, check the evaluator, and load the console, the
+                        drivers and the listener; then start them, and listen until the input ends */
 unsigned lisp_eval_texts(void); /* the evaluator's part of the self-test, again: how many texts it evaluated */

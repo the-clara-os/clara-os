@@ -1,10 +1,11 @@
 ;;;; fat.lisp: files
 ;;;;
-;;;; The FAT file system, as far as reading it goes: the one the firmware
-;;;; boots from, so the volume this kernel came from is the first whose
-;;;; files it can see. The numbers are those of Microsoft's "FAT: General
-;;;; Overview of On-Disk Format" (version 1.03, 2000), and for the tables
-;;;; of partitions those of the UEFI specification 2.10, chapter 5.
+;;;; The FAT file system: the one the firmware boots from, so the volume
+;;;; this kernel came from is the first whose files it can see, and the
+;;;; first it can leave a file on for the firmware to find. The numbers
+;;;; are those of Microsoft's "FAT: General Overview of On-Disk Format"
+;;;; (version 1.03, 2000), and for the tables of partitions those of the
+;;;; UEFI specification 2.10, chapter 5.
 ;;;;
 ;;;; A disk is cut into partitions, by a table in its first sector or by
 ;;;; one of the newer kind behind it, or it is one volume from end to end.
@@ -26,14 +27,24 @@
 ;;;; slash before each, as in "/clara/boot.lisp". The case of a letter
 ;;;; makes no difference. START finds the volumes on the disks and tells
 ;;;; the language where its files are from then on (CLARA:PROVIDE-FILES),
-;;;; which is what OPEN, LOAD, PROBE-FILE and DIRECTORY go by. Nothing here
-;;;; writes to a disk.
+;;;; which is what OPEN, LOAD, PROBE-FILE, DIRECTORY and DELETE-FILE go by.
+;;;;
+;;;; A file is written whole: its bytes go into clusters that the table
+;;;; has as free, the table then chains those in every copy that the
+;;;; volume keeps of it, and last an entry in the file's directory says
+;;;; where the file begins and how long it is. In that order, so that a
+;;;; machine which stops halfway leaves a volume with clusters that belong
+;;;; to nobody, and never an entry that leads to what is not there. A file
+;;;; that was there before under the name keeps its entry, and its old
+;;;; clusters are free once the entry has the new ones. There is no clock
+;;;; here, so every file is of the first day that the format has a date
+;;;; for. Directories are found, and not made.
 
 (defpackage "CLARA.FAT"
   (:use "COMMON-LISP")
   (:export "START" "VOLUMES" "*VOLUME*" "VOLUME-P" "VOLUME-DISK" "VOLUME-KIND" "VOLUME-FIRST"
            "ENTRIES" "ENTRY-P" "ENTRY-NAME" "ENTRY-SHORT" "ENTRY-DIRECTORY-P" "ENTRY-SIZE"
-           "NAMES" "FILE-TEXT" "READ-FILE"))
+           "NAMES" "FILE-TEXT" "READ-FILE" "WRITE-FILE" "REMOVE-FILE"))
 (in-package "CLARA.FAT")
 
 (defstruct volume
@@ -41,22 +52,29 @@
   first            ; the sector of the disk that the volume begins at
   kind             ; how many bits an entry of its table has: 12, 16 or 32
   cluster-sectors  ; how many sectors a cluster is
-  table            ; the sector of the disk that the table begins at
+  table            ; the sector of the disk that the table begins at: the copy of it that is read,
+  table-sectors    ;   how many sectors one copy is,
+  copies           ;   and where each copy begins that a change has to reach, this one among them
   root             ; where the directory of the root begins, and how many sectors it is:
   root-sectors     ;   on the kinds 12 and 16 it is no file, and lies before the clusters
   root-cluster     ; on the kind 32 it is a file like any other, and this is its first cluster
   data             ; the sector of the disk at which cluster 2 begins: there is no cluster 0 or 1
   clusters         ; how many clusters there are
+  information      ; on the kind 32, the sector that says how many clusters are free, or NIL
   lock             ; for the page frame below, which every look at the table goes through
   cache            ; a page frame with eight sectors of the table in it,
-  cached)          ;   from this sector of the table on, or NIL
+  cached           ;   from this sector of the table on, or NIL;
+  changed          ;   they have been written to, and the disk has not
+  (next 2))        ; the cluster at which the next search for a free one begins
 
 (defstruct entry
   name             ; its name: the long one, when it has one
   short            ; its name of eight characters and three
   directory-p
   size             ; of a file, in bytes
-  cluster)         ; its first cluster, or 0 when it has none
+  cluster          ; its first cluster, or 0 when it has none
+  at               ; where in its directory the entry is, in bytes from the directory's first,
+  first)           ;   and where the first of the entries is that spell its long name out
 
 (defvar *volumes* nil) ; the volumes that START found, in the order of their disks
 (defvar *volume* nil)  ; the one that names are looked up on
@@ -104,6 +122,7 @@
 ;;   22 how many sectors one table has, or 0 and then at 36, in 32 bits
 ;;   40 on the kind 32: bit 7 says that one table only is kept, the one in the bits 0 to 3
 ;;   44 on the kind 32: the first cluster of the directory of the root
+;;   48 on the kind 32: the sector that says how many clusters are free
 ;;  510 #x55 and #xaa
 ;; Which kind it is follows from how many clusters there are, and from
 ;; nothing else (page 14 of the overview).
@@ -130,11 +149,21 @@
                (kind (cond ((< clusters 4085) 12)
                            ((< clusters 65525) 16)
                            (t 32)))
-               (flags (if (= kind 32) (le (+ boot 40) 2) 0)))
+               (flags (if (= kind 32) (le (+ boot 40) 2) 0))
+               (information (if (= kind 32) (le (+ boot 48) 2) 0))
+               (table (+ first reserved
+                         (if (zerop (logand flags 128)) 0 (* (logand flags 15) table-sectors))))
+               (copies nil))
+          (if (zerop (logand flags 128))
+              (dotimes (i tables)
+                (setq copies (cons (+ first reserved (* i table-sectors)) copies)))
+              (setq copies (list table)))
           (when (or (= kind 32) (> root-sectors 0))
             (make-volume :disk disk :first first :kind kind :cluster-sectors cluster-sectors
-                         :table (+ first reserved
-                                   (if (zerop (logand flags 128)) 0 (* (logand flags 15) table-sectors)))
+                         :table table
+                         :table-sectors table-sectors
+                         :copies (reverse copies)
+                         :information (if (< 0 information reserved) (+ first information) nil)
                          :root (+ first reserved (* tables table-sectors))
                          :root-sectors root-sectors
                          :root-cluster (if (= kind 32) (le (+ boot 44) 4) 0)
@@ -200,12 +229,25 @@
 
 ;;; The table
 
+;; What is held of the table goes to the disk if it has been written to:
+;; to every copy that the volume keeps. Only sectors of the table go: the
+;; eight that are held can reach past its end, into what comes after it.
+(defun flush-table (volume)
+  (when (volume-changed volume)
+    (let ((cached (volume-cached volume)))
+      (dolist (copy (volume-copies volume))
+        (clara.disk:write-sectors (volume-disk volume) (+ copy cached)
+                                  (min 8 (- (volume-table-sectors volume) cached))
+                                  (volume-cache volume)))
+      (setf (volume-changed volume) nil))))
+
 ;; The address in memory of the byte of the table at an offset, with the
 ;; rest of its sector and all of the next behind it: an entry of 12 bits
 ;; can lie across the end of a sector.
 (defun table-address (volume offset)
   (let ((sector (floor offset 512)) (cached (volume-cached volume)))
     (unless (and cached (<= cached sector) (< (1+ sector) (+ cached 8)))
+      (flush-table volume)
       (let ((first (+ (volume-table volume) sector)))
         (setf (volume-cached volume) nil)
         (clara.disk:read-sectors (volume-disk volume) first
@@ -214,22 +256,65 @@
         (setf (volume-cached volume) sector)))
     (+ (volume-cache volume) (- offset (* 512 (volume-cached volume))))))
 
+;; BODY changes the table. When it is over, what is held of the table is on
+;; the disk; and when it does not get that far, nothing is held any more,
+;; so that the next look at the table is a look at the disk.
+(defun call-with-table (volume function)
+  (let ((whole nil))
+    (unwind-protect
+         (multiple-value-prog1 (funcall function)
+           (flush-table volume)
+           (setq whole t))
+      (unless whole
+        (setf (volume-cached volume) nil
+              (volume-changed volume) nil)))))
+
+(defmacro with-table ((volume) &body body)
+  `(call-with-table ,volume (lambda () ,@body)))
+
 (defun cluster-p (volume cluster)
   (and (>= cluster 2) (< cluster (+ 2 (volume-clusters volume)))))
 
+;; What the table has for a cluster. Two entries of 12 bits share three
+;; bytes: the one with the even number has the lower 12 bits of the 16 at
+;; its place, the odd one the upper. Of an entry of 32 bits the upper four
+;; mean nothing.
+(defun table-entry (volume cluster)
+  (case (volume-kind volume)
+    (12 (let ((pair (le (table-address volume (+ cluster (floor cluster 2))) 2)))
+          (if (oddp cluster) (ash pair -4) (logand pair #xfff))))
+    (16 (clara.unsafe:memory-16 (table-address volume (* 2 cluster))))
+    (t (logand (clara.unsafe:memory-32 (table-address volume (* 4 cluster))) #xfffffff))))
+
+;; The same, written: in memory, for FLUSH-TABLE to take to the disk. The
+;; other half of a pair of 12 bits stays as it is, and so do the upper four
+;; bits of 32.
+(defun set-table-entry (volume cluster value)
+  (case (volume-kind volume)
+    (12 (let* ((at (table-address volume (+ cluster (floor cluster 2))))
+               (pair (le at 2))
+               (new (if (oddp cluster)
+                        (logior (logand pair #xf) (ash value 4))
+                        (logior (logand pair #xf000) value))))
+          (setf (clara.unsafe:memory-8 at) (logand new 255)
+                (clara.unsafe:memory-8 (1+ at)) (ash new -8))))
+    (16 (setf (clara.unsafe:memory-16 (table-address volume (* 2 cluster))) value))
+    (t (let ((at (table-address volume (* 4 cluster))))
+         (setf (clara.unsafe:memory-32 at)
+               (logior (logand (clara.unsafe:memory-32 at) #xf0000000) value)))))
+  (setf (volume-changed volume) t)
+  value)
+
+;; What the table has for the last cluster of a file: the highest number
+;; of its kind, and the seven below it mean the same.
+(defun last-mark (volume)
+  (case (volume-kind volume) (12 #xfff) (16 #xffff) (t #xfffffff)))
+
 ;; The cluster that comes after a cluster in its file, or NIL when it is
-;; the last. Two entries of 12 bits share three bytes: the one with the
-;; even number has the lower 12 bits of the 16 at its place, the odd one
-;; the upper. Of an entry of 32 bits the upper four mean nothing. The
-;; highest eight numbers of each kind mark the last cluster of a file.
+;; the last.
 (defun next-cluster (volume cluster)
-  (let* ((kind (volume-kind volume))
-         (next (case kind
-                 (12 (let ((pair (le (table-address volume (+ cluster (floor cluster 2))) 2)))
-                       (if (oddp cluster) (ash pair -4) (logand pair #xfff))))
-                 (16 (clara.unsafe:memory-16 (table-address volume (* 2 cluster))))
-                 (t (logand (clara.unsafe:memory-32 (table-address volume (* 4 cluster))) #xfffffff)))))
-    (cond ((>= next (case kind (12 #xff8) (16 #xfff8) (t #xffffff8))) nil)
+  (let ((next (table-entry volume cluster)))
+    (cond ((>= next (- (last-mark volume) 7)) nil)
           ((cluster-p volume next) next)
           (t (error "the table of the volume has ~D after the cluster ~D, and there is no such cluster"
                     next cluster)))))
@@ -250,10 +335,69 @@
         (return)))
     (reverse clusters)))
 
+;; Every cluster of the file that begins in FIRST, or none for 0, which is
+;; what an empty file begins in.
+(defun file-clusters (volume first)
+  (if (= first 0)
+      nil
+      (let ((clusters (chain volume first (1+ (volume-clusters volume)))))
+        (when (> (length clusters) (volume-clusters volume))
+          (error "a file has more clusters than the volume: its table leads round in a ring"))
+        clusters)))
+
+;; COUNT clusters that belong to no file, which the table says with a zero:
+;; from where the last search ended on, and once round the volume at most.
+;; Nothing is written here.
+(defun free-clusters (volume count)
+  (let ((found nil) (wanted count) (cluster (volume-next volume)) (looked 0))
+    (unless (cluster-p volume cluster)
+      (setq cluster 2))
+    (loop
+      (when (= wanted 0)
+        (return))
+      (when (= looked (volume-clusters volume))
+        (error "the volume is full: ~D clusters are wanted, and ~D are free" count (- count wanted)))
+      (when (zerop (table-entry volume cluster))
+        (setq found (cons cluster found)
+              wanted (1- wanted)))
+      (setq looked (1+ looked)
+            cluster (if (cluster-p volume (1+ cluster)) (1+ cluster) 2)))
+    (setf (volume-next volume) cluster)
+    (reverse found)))
+
+;; The clusters become one file's: each has the next after it in the table,
+;; and the last the mark of a last one. And the other way: they are nobody's
+;; again.
+(defun link-clusters (volume clusters)
+  (do ((rest clusters (cdr rest)))
+      ((null rest))
+    (set-table-entry volume (car rest) (if (cdr rest) (cadr rest) (last-mark volume)))))
+
+(defun unlink-clusters (volume clusters)
+  (dolist (cluster clusters)
+    (set-table-entry volume cluster 0)))
+
+;; On the kind 32 a sector near the first says how many clusters are free
+;; and where to look for one, for whoever would rather not count: "RRaA" at
+;; its beginning and "rrAa" at 484 say that it is that sector, the count is
+;; at 488 and the place at 492. A count of all ones means that nobody
+;; knows, and stays. CHANGE is how many more clusters are free than were.
+(defun note-free (volume change)
+  (let ((sector (volume-information volume)))
+    (when (and sector (/= change 0))
+      (with-sectors (memory (volume-disk volume) sector 1)
+        (let ((free (clara.unsafe:memory-32 (+ memory 488))))
+          (when (and (= (clara.unsafe:memory-32 memory) #x41615252)
+                     (= (clara.unsafe:memory-32 (+ memory 484)) #x61417272)
+                     (<= 0 (+ free change) (volume-clusters volume)))
+            (setf (clara.unsafe:memory-32 (+ memory 488)) (+ free change)
+                  (clara.unsafe:memory-32 (+ memory 492)) (volume-next volume))
+            (clara.disk:write-sectors (volume-disk volume) sector 1 memory)))))))
+
 ;; The first SECTORS sectors of a chain of clusters, read into the memory
-;; at ADDRESS. Clusters that lie side by side on the disk are read with
-;; one request, up to a mebibyte at a time.
-(defun read-clusters (volume clusters sectors address)
+;; at ADDRESS, or written from it, by FUNCTION. Clusters that lie side by
+;; side on the disk go with one request, up to a mebibyte at a time.
+(defun transfer-clusters (function volume clusters sectors address)
   (let ((each (volume-cluster-sectors volume)))
     (loop
       (when (or (null clusters) (<= sectors 0))
@@ -266,11 +410,17 @@
           (setq run (1+ run)
                 clusters (cdr clusters)))
         (let ((count (min sectors (* run each))))
-          (clara.disk:read-sectors (volume-disk volume)
-                                   (+ (volume-data volume) (* (- first 2) each))
-                                   count address)
+          (funcall function (volume-disk volume)
+                   (+ (volume-data volume) (* (- first 2) each))
+                   count address)
           (setq sectors (- sectors count)
                 address (+ address (* 512 count))))))))
+
+(defun read-clusters (volume clusters sectors address)
+  (transfer-clusters #'clara.disk:read-sectors volume clusters sectors address))
+
+(defun write-clusters (volume clusters sectors address)
+  (transfer-clusters #'clara.disk:write-sectors volume clusters sectors address))
 
 ;;; Directories
 
@@ -353,9 +503,10 @@
 ;; first; at 13 the checksum; and the characters. A long name that is not
 ;; whole, or was made for another short name, is left out, and the entry
 ;; goes by its short name. The entries "." and "..", which a directory has
-;; for itself and for the one it is in, are left out.
+;; for itself and for the one it is in, are left out. Each entry knows its
+;; place in the directory, for whoever changes it or takes it out.
 (defun parse-directory (volume memory bytes)
-  (let ((entries nil) (long nil) (sum nil) (next nil))
+  (let ((entries nil) (long nil) (sum nil) (next nil) (began nil))
     (do ((at memory (+ at 32)))
         ((>= at (+ memory bytes)))
       (let ((first (clara.unsafe:memory-8 at))
@@ -367,7 +518,7 @@
               ((= (logand what #x3f) #x0f)
                (let ((place (logand first #x3f)) (check (clara.unsafe:memory-8 (+ at 13))))
                  (cond ((and (/= 0 (logand first #x40)) (> place 0))
-                        (setq long (name-part at) sum check next (1- place)))
+                        (setq long (name-part at) sum check next (1- place) began at))
                        ((and next (> place 0) (= place next) (= check sum))
                         (setq long (append (name-part at) long) next (1- place)))
                        (t
@@ -375,13 +526,14 @@
               ((/= 0 (logand what 8))
                (setq long nil next nil))
               (t
-               (let ((short (short-name at)))
+               (let ((short (short-name at))
+                     (whole (and long (eql next 0) (= sum (checksum at)))))
                  (unless (or (string= short ".") (string= short ".."))
                    (setq entries
-                         (cons (make-entry :name (if (and long (eql next 0) (= sum (checksum at)))
-                                                     (long-name long)
-                                                     short)
+                         (cons (make-entry :name (if whole (long-name long) short)
                                            :short short
+                                           :at (- at memory)
+                                           :first (- (if whole began at) memory)
                                            :directory-p (/= 0 (logand what 16))
                                            :size (le (+ at 28) 4)
                                            :cluster (+ (clara.unsafe:memory-16 (+ at 26))
@@ -392,13 +544,15 @@
                (setq long nil next nil)))))
     (reverse entries)))
 
-;; The entries of the directory that begins in a cluster, or of the root
-;; for the cluster 0, in the order they have on the disk. A directory is
-;; 65536 entries at most, which is two mebibytes.
-(defun read-directory (volume cluster)
+;; FUNCTION, called with what the directory holds that begins in a
+;; cluster, or the root's for the cluster 0: the address of its bytes in
+;; memory, how many there are, and the clusters it lies in, in order, or
+;; NIL for a directory of the root that is no file. A directory is 65536
+;; entries at most, which is two mebibytes.
+(defun call-with-directory (volume cluster function)
   (if (and (= cluster 0) (/= (volume-kind volume) 32))
       (with-sectors (memory (volume-disk volume) (volume-root volume) (volume-root-sectors volume))
-        (parse-directory volume memory (* 512 (volume-root-sectors volume))))
+        (funcall function memory (* 512 (volume-root-sectors volume)) nil))
       (let* ((each (volume-cluster-sectors volume))
              (most (1+ (floor 4096 each)))
              (clusters (chain volume (if (= cluster 0) (volume-root-cluster volume) cluster) most))
@@ -410,8 +564,283 @@
                (when (= (length clusters) most)
                  (error "a directory is longer than a directory can be: the table of the volume leads round in a ring"))
                (read-clusters volume clusters sectors memory)
-               (parse-directory volume memory (* 512 sectors)))
+               (funcall function memory (* 512 sectors) clusters))
           (clara.unsafe:free-memory memory pages)))))
+
+;; The entries of a directory, in the order they have on the disk.
+(defun read-directory (volume cluster)
+  (call-with-directory volume cluster
+                       (lambda (memory bytes clusters)
+                         (declare (ignore clusters))
+                         (parse-directory volume memory bytes))))
+
+;; The bytes of a directory from START up to END have been changed in
+;; memory, and the sectors that hold them go to the disk.
+(defun write-directory (volume clusters memory start end)
+  (let ((each (volume-cluster-sectors volume)))
+    (do ((index (floor start 512) (1+ index)))
+        ((> index (floor (1- end) 512)))
+      (clara.disk:write-sectors (volume-disk volume)
+                                (if clusters
+                                    (+ (volume-data volume)
+                                       (* (- (nth (floor index each) clusters) 2) each)
+                                       (mod index each))
+                                    (+ (volume-root volume) index))
+                                1 (+ memory (* 512 index))))))
+
+;;; Entries that are made
+;;;
+;;; A name that is eight characters and three, in capitals and digits and
+;;; a few marks, is its own short name, and needs one entry. Any other name
+;;; gets a short name that stands in for it, made of what is left of its
+;;; characters when the rest are dropped, and is spelt out as it is in the
+;;; entries before that one.
+
+(defun in-string-p (character string)
+  (dotimes (i (length string) nil)
+    (when (char= character (char string i))
+      (return t))))
+
+(defun short-character-p (character)
+  (let ((code (char-code character)))
+    (or (<= 65 code 90) (<= 48 code 57) (in-string-p character "$%'-_@~`!(){}^#&"))))
+
+;; What a short name keeps of a text: its first MOST characters that are
+;; neither a space nor a dot, in capitals, with a _ for each that a short
+;; name cannot have.
+(defun short-characters (text most)
+  (let ((short ""))
+    (dotimes (i (length text) short)
+      (let ((character (char-upcase (char text i))))
+        (unless (or (>= (length short) most) (char= character #\Space) (char= character #\.))
+          (setq short (concatenate 'string short
+                                   (string (if (short-character-p character) character #\_)))))))))
+
+;; A name, and what it has after its last dot; a dot that begins a name is
+;; part of the name.
+(defun name-and-extension (name)
+  (let ((dot nil))
+    (dotimes (i (length name))
+      (when (char= (char name i) #\.)
+        (setq dot i)))
+    (if (and dot (> dot 0))
+        (values (subseq name 0 dot) (subseq name (1+ dot)))
+        (values name ""))))
+
+(defun padded (text length)
+  (loop
+    (when (>= (length text) length)
+      (return text))
+    (setq text (concatenate 'string text " "))))
+
+;; The 11 characters of the short name that a name is, when it is one: as
+;; it stands, or with EITHER in letters of either case; NIL when it is not.
+(defun plain-short (name either)
+  (multiple-value-bind (base extension) (name-and-extension name)
+    (let ((short-base (short-characters base 8)) (short-extension (short-characters extension 3)))
+      (when (and (<= 1 (length base) 8)
+                 (<= (length extension) 3)
+                 (if either (string-equal base short-base) (string= base short-base))
+                 (if either (string-equal extension short-extension) (string= extension short-extension)))
+        (concatenate 'string (padded short-base 8) (padded short-extension 3))))))
+
+;; The short name for a name: itself in capitals, when that is a short
+;; name, which no entry can have then, or the name would be that entry's
+;; (FIND-IN); or else the first of its characters, a ~ and a number, which
+;; goes up until no entry of the directory has that name. TAKEN is the
+;; short names that are there.
+(defun short-for (name taken)
+  (let ((plain (plain-short name t)))
+    (if plain
+        plain
+        (multiple-value-bind (base extension) (name-and-extension name)
+          (let ((base (short-characters base 8)) (extension (short-characters extension 3)) (number 1))
+            (when (= (length base) 0)
+              (setq base "_"))
+            (loop
+              (let* ((tail (format nil "~~~D" number))
+                     (short (concatenate 'string
+                                         (padded (concatenate 'string
+                                                              (subseq base 0 (min (length base) (- 8 (length tail))))
+                                                              tail)
+                                                 8)
+                                         (padded extension 3))))
+                (unless (member short taken :test #'string=)
+                  (return short))
+                (setq number (1+ number)))))))))
+
+;; The short names that the entries of a directory have, as their 11
+;; characters each.
+(defun short-names (memory bytes)
+  (let ((names nil))
+    (do ((at memory (+ at 32)))
+        ((>= at (+ memory bytes)) names)
+      (let ((first (clara.unsafe:memory-8 at)))
+        (cond ((= first 0)
+               (return names))
+              ((and (/= first #xe5) (/= (logand (clara.unsafe:memory-8 (+ at 11)) #x3f) #x0f))
+               (let ((name ""))
+                 (dotimes (i 11)
+                   (setq name (concatenate 'string name (string (code-char (clara.unsafe:memory-8 (+ at i)))))))
+                 (setq names (cons name names)))))))))
+
+;; A name as its characters in UTF-16: one beyond the first 65536 is two.
+(defun utf-16 (name)
+  (let ((units nil))
+    (dotimes (i (length name) (reverse units))
+      (let ((code (char-code (char name i))))
+        (if (< code #x10000)
+            (setq units (cons code units))
+            (setq units (cons (+ #xdc00 (logand (- code #x10000) #x3ff))
+                              (cons (+ #xd800 (ash (- code #x10000) -10)) units))))))))
+
+;; A name that a file can have here: what the format rules out is ruled
+;; out, and so is what other systems cannot say.
+(defun check-name (name)
+  (let ((length (length name)))
+    (when (or (= length 0) (> length 255) (string= name ".") (string= name "..")
+              (char= (char name (1- length)) #\Space) (char= (char name (1- length)) #\.))
+      (error "~S cannot be the name of a file" name))
+    (dotimes (i length name)
+      (let ((character (char name i)))
+        (when (or (< (char-code character) 32) (in-string-p character "\"*:<>?\\|"))
+          (error "~S cannot be the name of a file: it has ~S in it" name character))))))
+
+(defun clear-entry (at)
+  (clara.unsafe:fill-memory-32 at 8 0))
+
+;; The entry of a file, at an address: its short name, that it is a file
+;; which nothing has put away since it was written (bit 5), the three days
+;; of its making, its writing and its last reading, all of them the first
+;; of January 1980, its first cluster in two halves, and its size.
+(defun put-entry (at short cluster size)
+  (clear-entry at)
+  (dotimes (i 11)
+    (setf (clara.unsafe:memory-8 (+ at i)) (char-code (char short i))))
+  (setf (clara.unsafe:memory-8 (+ at 11)) #x20
+        (clara.unsafe:memory-16 (+ at 16)) #x21
+        (clara.unsafe:memory-16 (+ at 18)) #x21
+        (clara.unsafe:memory-16 (+ at 24)) #x21
+        (clara.unsafe:memory-16 (+ at 20)) (ash cluster -16)
+        (clara.unsafe:memory-16 (+ at 26)) (logand cluster #xffff)
+        (clara.unsafe:memory-32 (+ at 28)) size))
+
+;; One of the entries that spell a long name out: the NUMBERth 13 of its
+;; characters, counted from 1, with bit 6 in the number of the last, and
+;; the checksum of the short name it belongs to. A name that ends inside
+;; an entry ends with a zero, and what is left of the entry is all ones.
+(defun put-name-entry (at number last units sum)
+  (clear-entry at)
+  (setf (clara.unsafe:memory-8 at) (+ number (if last #x40 0))
+        (clara.unsafe:memory-8 (+ at 11)) #x0f
+        (clara.unsafe:memory-8 (+ at 13)) sum)
+  (let ((rest (nthcdr (* 13 (1- number)) units)) (ended nil))
+    (dolist (place *name-places*)
+      (let ((unit (cond (rest (car rest))
+                        (ended #xffff)
+                        (t (setq ended t) 0))))
+        (setq rest (cdr rest))
+        (setf (clara.unsafe:memory-8 (+ at place)) (logand unit 255)
+              (clara.unsafe:memory-8 (+ at place 1)) (ash unit -8))))))
+
+;; Where COUNT entries side by side are free in a directory: how far from
+;; its beginning, or NIL when there is no such place; and whether the place
+;; runs into the end of the directory. An entry that was deleted is free,
+;; and from the first one that begins with a zero on they all are.
+(defun free-entries (memory bytes count)
+  (let ((run 0) (start 0))
+    (do ((offset 0 (+ offset 32)))
+        ((>= offset bytes) nil)
+      (let ((first (clara.unsafe:memory-8 (+ memory offset))))
+        (cond ((= first 0)
+               (when (= run 0)
+                 (setq start offset))
+               (return (if (<= (+ start (* 32 count)) bytes) (values start t) nil)))
+              ((= first #xe5)
+               (when (= run 0)
+                 (setq start offset))
+               (setq run (1+ run))
+               (when (= run count)
+                 (return (values start nil))))
+              (t
+               (setq run 0)))))))
+
+;; A directory that is full gets one more cluster, all zeroes, at its end.
+;; On the kinds 12 and 16 the directory of the root is no file, and is as
+;; long as it was made.
+(defun grow-directory (volume directory)
+  (when (and (= (entry-cluster directory) 0) (/= (volume-kind volume) 32))
+    (error "the directory of the root is full: it has ~D entries, and on a volume of this kind no more"
+           (* 16 (volume-root-sectors volume))))
+  (let* ((each (volume-cluster-sectors volume))
+         (clusters (file-clusters volume (if (= (entry-cluster directory) 0)
+                                             (volume-root-cluster volume)
+                                             (entry-cluster directory))))
+         (new (car (free-clusters volume 1)))
+         (pages (page-frames (* 512 each)))
+         (memory (clara.unsafe:allocate-memory pages)))
+    (when (> (* 16 each (1+ (length clusters))) 65536)
+      (clara.unsafe:free-memory memory pages)
+      (error "a directory holds 65536 entries, and this one is full"))
+    (unwind-protect
+         (clara.disk:write-sectors (volume-disk volume) (+ (volume-data volume) (* (- new 2) each)) each memory)
+      (clara.unsafe:free-memory memory pages))
+    (set-table-entry volume new (last-mark volume))
+    (set-table-entry volume (car (last clusters)) new)
+    (flush-table volume)
+    (note-free volume -1)))
+
+;; A new entry in a directory, for the file NAME of SIZE bytes that begins
+;; in CLUSTER: where a deleted one was, or after the last, in a directory
+;; that grows when it has to.
+(defun add-entry (volume directory name cluster size)
+  (loop
+    (when (call-with-directory
+           volume (entry-cluster directory)
+           (lambda (memory bytes clusters)
+             (let* ((short (or (plain-short name nil) (short-for name (short-names memory bytes))))
+                    (units (if (plain-short name nil) nil (utf-16 name)))
+                    (long (floor (+ (length units) 12) 13)))
+               (multiple-value-bind (start open) (free-entries memory bytes (1+ long))
+                 (when start
+                   (let ((at (+ memory start)) (end (+ start (* 32 (1+ long)))) (sum 0))
+                     (dotimes (i 11)
+                       (setq sum (logand (+ (ash (logand sum 1) 7) (ash sum -1) (char-code (char short i))) 255)))
+                     (dotimes (i long)
+                       (put-name-entry (+ at (* 32 i)) (- long i) (= i 0) units sum))
+                     (put-entry (+ at (* 32 long)) short cluster size)
+                     ;; The entry after the last one in use begins with a zero, and has to still.
+                     (when (and open (< end bytes))
+                       (setf (clara.unsafe:memory-8 (+ memory end)) 0)
+                       (setq end (1+ end)))
+                     (write-directory volume clusters memory start end)
+                     t))))))
+      (return))
+    (grow-directory volume directory)))
+
+;; The entry of a file gets another first cluster and another size.
+(defun change-entry (volume directory entry cluster size)
+  (call-with-directory
+   volume (entry-cluster directory)
+   (lambda (memory bytes clusters)
+     (declare (ignore bytes))
+     (let ((at (+ memory (entry-at entry))))
+       (setf (clara.unsafe:memory-16 (+ at 20)) (ash cluster -16)
+             (clara.unsafe:memory-16 (+ at 26)) (logand cluster #xffff)
+             (clara.unsafe:memory-32 (+ at 28)) size)
+       (write-directory volume clusters memory (entry-at entry) (+ (entry-at entry) 32))))))
+
+;; An entry is deleted, and with it the ones that spell its long name out:
+;; each begins with #xe5 from now on.
+(defun remove-entry (volume directory entry)
+  (call-with-directory
+   volume (entry-cluster directory)
+   (lambda (memory bytes clusters)
+     (declare (ignore bytes))
+     (do ((offset (entry-first entry) (+ offset 32)))
+         ((> offset (entry-at entry)))
+       (setf (clara.unsafe:memory-8 (+ memory offset)) #xe5))
+     (write-directory volume clusters memory (entry-first entry) (+ (entry-at entry) 32)))))
 
 ;;; Names
 
@@ -427,20 +856,27 @@
         (setq start (1+ i))))
     (reverse parts)))
 
-;; The entry of a name, found by way of its directories from the root on,
-;; or NIL when there is none. A name fits an entry when it is its long
-;; name or its short one, in letters of either case. The root has no entry
-;; on the disk, and gets one here.
-(defun find-entry (volume name)
+;; The entry in a directory that a part of a name fits: by its long name
+;; or by its short one, in letters of either case.
+(defun find-in (volume directory part)
+  (find-if (lambda (other)
+             (or (string-equal part (entry-name other)) (string-equal part (entry-short other))))
+           (read-directory volume (entry-cluster directory))))
+
+;; The entry that the parts of a name lead to, by way of its directories
+;; from the root on, or NIL when there is none. The root has no entry on
+;; the disk, and gets one here.
+(defun find-parts (volume parts)
   (let ((entry (make-entry :name "" :short "" :directory-p t :size 0 :cluster 0)))
-    (dolist (part (name-parts name) entry)
+    (dolist (part parts entry)
       (unless (entry-directory-p entry)
         (return nil))
-      (setq entry (find-if (lambda (other)
-                             (or (string-equal part (entry-name other)) (string-equal part (entry-short other))))
-                           (read-directory volume (entry-cluster entry))))
+      (setq entry (find-in volume entry part))
       (unless entry
         (return nil)))))
+
+(defun find-entry (volume name)
+  (find-parts volume (name-parts name)))
 
 (defun the-volume ()
   (or *volume*
@@ -514,6 +950,73 @@
              (error "the file ~A is not text: what it holds is not UTF-8" name)))
       (clara.unsafe:free-memory memory pages))))
 
+;; The directory that a name puts its file in, as the entry of it, and
+;; the file's own name: what the name has after its last slash.
+(defun place-of (volume name)
+  (let* ((parts (name-parts name))
+         (own (car (last parts)))
+         (directory (and own (find-parts volume (reverse (cdr (reverse parts)))))))
+    (unless own
+      (error "~S is not the name of a file" name))
+    (unless (and directory (entry-directory-p directory))
+      (error "there is no directory for a file ~A to be in" name))
+    (values directory own)))
+
+;; A file of that name, made of the SIZE bytes of memory at ADDRESS, which
+;; is page frames: in place of the file that was there under the name, or
+;; as a new one. The name is returned. An entry has 32 bits for the size
+;; of its file.
+(defun write-file (name address size)
+  (let ((volume (the-volume)))
+    (unless (and (integerp size) (<= 0 size #xffffffff))
+      (error "a file is 4294967295 bytes at most, and not ~S" size))
+    (clara:with-lock-held ((volume-lock volume))
+      (multiple-value-bind (directory own) (place-of volume name)
+        (check-name own)
+        (let ((old (find-in volume directory own)))
+          (when (and old (entry-directory-p old))
+            (error "~A is a directory, and not a file" name))
+          (with-table (volume)
+            (let* ((each (* 512 (volume-cluster-sectors volume)))
+                   (gone (if old (file-clusters volume (entry-cluster old)) nil))
+                   (clusters (free-clusters volume (floor (+ size each -1) each)))
+                   (first (if clusters (car clusters) 0))
+                   (entered nil))
+              (write-clusters volume clusters (floor (+ size 511) 512) address)
+              (link-clusters volume clusters)
+              (flush-table volume)
+              ;; Without its entry the file is clusters that nobody will ever read: they are given back.
+              (unwind-protect
+                   (progn
+                     (if old
+                         (change-entry volume directory old first size)
+                         (add-entry volume directory own first size))
+                     (setq entered t))
+                (unless entered
+                  (unlink-clusters volume clusters)
+                  (flush-table volume)))
+              (unlink-clusters volume gone)
+              (note-free volume (- (length gone) (length clusters))))))))
+    name))
+
+;; The file of that name is no more: its entry is deleted, and its clusters
+;; are free.
+(defun remove-file (name)
+  (let ((volume (the-volume)))
+    (clara:with-lock-held ((volume-lock volume))
+      (multiple-value-bind (directory own) (place-of volume name)
+        (let ((entry (find-in volume directory own)))
+          (cond ((null entry)
+                 (error "there is no file ~A" name))
+                ((entry-directory-p entry)
+                 (error "~A is a directory, and not a file" name)))
+          (with-table (volume)
+            (let ((clusters (file-clusters volume (entry-cluster entry))))
+              (remove-entry volume directory entry)
+              (unlink-clusters volume clusters)
+              (note-free volume (length clusters)))))))
+    name))
+
 ;;; Starting
 
 (defun size (sectors)
@@ -541,7 +1044,7 @@
         (format t "files: the disk ~A could not be looked at: ~A~%" (clara.disk:disk-name disk) condition))))
   (cond (*volumes*
          (setq *volume* (car *volumes*))
-         (clara:provide-files :text #'file-text :names #'names)
+         (clara:provide-files :text #'file-text :names #'names :write #'write-file :delete #'remove-file)
          (when (cdr *volumes*)
            (format t "files: names are looked up on the first of these volumes~%")))
         (t

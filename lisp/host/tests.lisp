@@ -447,6 +447,26 @@
   (clara.console:stop)
   (check '(2 0) (clara.host:given-screen)))
 
+;; A console that starts in a world which was saved knows nothing of the
+;; screen, the cursor and the keys that it had when the world was saved:
+;; that was another machine, and this one has no screen.
+(clara.host:reset-machine)
+(let ((*standard-output* *standard-output*) (*standard-input* *standard-input*))
+  (setq *sent* nil
+        clara.console::*screen* #x7fff0000
+        clara.console::*cursor* #x7fff0100
+        clara.console::*reading* t
+        clara.console::*keys* (list 97)
+        clara.console::*after-return* t)
+  (clara.host:set-serial-device :pl011 #x9000000)
+  (attach-pl011 #x9000000)
+  (clara.console:start)
+  (check '(nil nil nil nil nil)
+         (list clara.console::*screen* clara.console::*cursor* clara.console::*reading* clara.console::*keys*
+               clara.console::*after-return*))
+  (format t "still here~%")
+  (check "still here" (string-right-trim '(#\Return #\Newline) (text-of (sent)))))
+
 ;;; A PCI bus that is made up: a configuration space with some devices in
 ;;; it, and among them virtio devices, keyboards and pointers and further
 ;;; down disks, that do what such a device does with its registers and its
@@ -1243,8 +1263,9 @@
 
 ;;; Volumes that are made up: FAT of the three kinds, laid out here by the
 ;;; specification and not by lisp/fat.lisp, with what a directory can hold
-;;; that a reader has to get right. The boots read a volume that QEMU makes
-;;; up, and the image that macOS makes: three more witnesses.
+;;; that a reader has to get right. The boots read the volumes that
+;;; tools/mkdisk.py makes, and by hand the image that macOS makes: more
+;;; witnesses.
 
 (defun octets (text)
   (if (stringp text)
@@ -1425,9 +1446,10 @@
 ;; clusters it has, which is what makes it the kind it is, and the rest
 ;; says how its files lie: from which cluster on, how far apart, in which
 ;; direction, with which mark at their end; and ROOT where the directory of
-;; the root begins on the kind 32.
+;; the root begins on the kind 32, which with INFORMATION has the sector
+;; that says how many of its clusters are free.
 (defun make-fat-volume (kind tree &key (cluster-sectors 1) clusters (from 2) (stride 1) backwards (end #xfffffff)
-                                    (root 2))
+                                    (root 2) information)
   (let* ((clusters (or clusters (ecase kind (12 3000) (16 5000) (32 66000))))
          (reserved (if (= kind 32) 32 1))
          (root-entries (ecase kind (12 224) (16 512) (32 0)))
@@ -1463,6 +1485,14 @@
         (progn
           (setf (fat-next fat) from)
           (replace bytes (fat-directory fat tree) :start1 (* 512 (+ reserved (* 2 table-sectors))))))
+    (when (and information (= kind 32))
+      (setf (le bytes 48 2) 1
+            (le bytes 512 4) #x41615252
+            (le bytes (+ 512 484) 4) #x61417272
+            (le bytes (+ 512 488) 4) (loop for cluster from 2 below (+ clusters 2)
+                                           count (zerop (le bytes (+ (* 512 reserved) (* 4 cluster)) 4)))
+            (le bytes (+ 512 492) 4) #xffffffff
+            (le bytes (+ 512 508) 4) #xaa550000))
     fat))
 
 ;; A disk with volumes on it. TABLE is :NONE for a disk that is one volume
@@ -1767,6 +1797,531 @@
 (said-by #'clara.disk:start)
 (check (format nil "files: no volume, so LOAD finds what was read as the machine started and nothing else~%")
        (said-by #'clara.fat:start))
+
+;;; Writing. What the file system has written is looked at here without the
+;;; file system, the way a program that mends volumes looks at one: every
+;;; directory from the root down, every file by the clusters that the table
+;;; gives it. INSPECT-VOLUME gives the files it found, each as its name
+;;; with its directories and its bytes, and everything that is out of
+;;; order: a cluster in two files or in none, a file that is not as long as
+;;; its entry says, a long name that is not whole, two entries of one name,
+;;; copies of the table that differ, a count of free clusters that is wrong.
+
+(defun inspect-volume (bytes)
+  (let* ((cluster-sectors (aref bytes 13))
+         (reserved (le bytes 14 2))
+         (tables (aref bytes 16))
+         (sectors (if (zerop (le bytes 19 2)) (le bytes 32 4) (le bytes 19 2)))
+         (table-sectors (if (zerop (le bytes 22 2)) (le bytes 36 4) (le bytes 22 2)))
+         (root-sectors (ceiling (* 32 (le bytes 17 2)) 512))
+         (data (+ reserved (* tables table-sectors) root-sectors))
+         (clusters (floor (- sectors data) cluster-sectors))
+         (kind (cond ((< clusters 4085) 12) ((< clusters 65525) 16) (t 32)))
+         (flags (if (= kind 32) (le bytes 40 2) 0))
+         (active (if (logbitp 7 flags) (logand flags 15) 0))
+         (each (* 512 cluster-sectors))
+         (owner (make-array (+ clusters 2) :initial-element nil))
+         (files nil)
+         (problems nil))
+    (labels ((problem (control &rest arguments)
+               (push (apply #'format nil control arguments) problems))
+             (entry (cluster)
+               (let ((base (* 512 (+ reserved (* active table-sectors)))))
+                 (ecase kind
+                   (12 (let ((pair (le bytes (+ base cluster (floor cluster 2)) 2)))
+                         (if (oddp cluster) (ash pair -4) (logand pair #xfff))))
+                   (16 (le bytes (+ base (* 2 cluster)) 2))
+                   (32 (logand (le bytes (+ base (* 4 cluster)) 4) #xfffffff)))))
+             ;; The clusters of whatever begins in FIRST, each of them its own from here on.
+             (clusters-of (first name)
+               (let ((found nil) (cluster first))
+                 (loop
+                   (unless (< 1 cluster (+ clusters 2))
+                     (problem "~A leads to the cluster ~D, and there is no such cluster" name cluster)
+                     (return))
+                   (when (aref owner cluster)
+                     (problem "the cluster ~D is in ~A and in ~A" cluster (aref owner cluster) name)
+                     (return))
+                   (setf (aref owner cluster) name)
+                   (push cluster found)
+                   (let ((next (entry cluster)))
+                     (cond ((>= next (ecase kind (12 #xff8) (16 #xfff8) (32 #xffffff8)))
+                            (return))
+                           ((zerop next)
+                            (problem "~A goes on in the cluster ~D, which the table has as free" name cluster)
+                            (return))
+                           (t (setq cluster next)))))
+                 (nreverse found)))
+             (bytes-of (found)
+               (let ((all (make-array (* each (length found)) :element-type '(unsigned-byte 8))))
+                 (loop for cluster in found
+                       for at from 0 by each
+                       do (replace all bytes :start1 at :start2 (* 512 (+ data (* (- cluster 2) cluster-sectors)))
+                                             :end2 (* 512 (+ data (* (- cluster 1) cluster-sectors)))))
+                 all))
+             (short-of (record)
+               (flet ((part (start length lower)
+                        (let ((text (string-right-trim " " (map 'string #'code-char (subseq record start (+ start length))))))
+                          (if lower (string-downcase text) text))))
+                 (let ((name (part 0 8 (logbitp 3 (aref record 12)))) (extension (part 8 3 (logbitp 4 (aref record 12)))))
+                   (if (string= extension "") name (format nil "~A.~A" name extension)))))
+             ;; The name that the entries before a short one spell out, when they are in order.
+             (long-of (parts record path)
+               (let ((units nil) (count (length parts)) (sum (short-checksum (subseq record 0 11))))
+                 (loop for part in parts
+                       for number downfrom count
+                       do (unless (and (= (logand (aref part 0) #x3f) number)
+                                       (eq (logbitp 6 (aref part 0)) (= number count))
+                                       (= (aref part 13) sum))
+                            (problem "the long name before ~A in ~A is not in order" (short-of record) path)
+                            (return-from long-of nil))
+                          (setq units (append (loop for place in '(1 3 5 7 9 14 16 18 20 22 24 28 30)
+                                                    collect (le part place 2))
+                                              units)))
+                 (let* ((end (or (position 0 units) (length units)))
+                        (rest (subseq units (min (length units) (1+ end)))))
+                   (unless (and (every (lambda (unit) (= unit #xffff)) rest) (> (+ end 13) (length units)))
+                     (problem "the long name before ~A in ~A does not end as one does" (short-of record) path))
+                   (sb-ext:octets-to-string
+                    (coerce (loop for unit in (subseq units 0 end) collect (ldb (byte 8 0) unit) collect (ldb (byte 8 8) unit))
+                            '(vector (unsigned-byte 8)))
+                    :external-format :utf-16le))))
+             (walk (records path)
+               (let ((parts nil) (ended nil) (names nil) (shorts nil))
+                 (loop for at from 0 below (length records) by 32
+                       for record = (subseq records at (+ at 32))
+                       for first = (aref record 0)
+                       for what = (aref record 11)
+                       do (cond (ended
+                                 (unless (zerop first)
+                                   (problem "~A has an entry after the one that ends it" path)
+                                   (return)))
+                                ((zerop first)
+                                 (when parts
+                                   (problem "~A ends in the middle of a long name" path))
+                                 (setq ended t))
+                                ((= first #xe5)
+                                 (when parts
+                                   (problem "a long name in ~A belongs to an entry that was deleted" path))
+                                 (setq parts nil))
+                                ((= (logand what #x3f) #x0f)
+                                 (push record parts))
+                                ((logbitp 3 what)
+                                 (setq parts nil))
+                                ((member (short-of record) '("." "..") :test #'string=))
+                                (t
+                                 (let* ((short (short-of record))
+                                        (name (or (and parts (long-of (reverse parts) record path)) short))
+                                        (whole (format nil "~A/~A" path name))
+                                        (cluster (+ (le record 26 2) (if (= kind 32) (ash (le record 20 2) 16) 0)))
+                                        (size (le record 28 4)))
+                                   (setq parts nil)
+                                   (when (or (member name names :test #'string-equal)
+                                             (member (subseq record 0 11) shorts :test #'equalp))
+                                     (problem "~A has two entries of the name ~A, or of its short name" path name))
+                                   (push name names)
+                                   (push (subseq record 0 11) shorts)
+                                   (cond ((logbitp 4 what)
+                                          (walk (bytes-of (clusters-of cluster whole)) whole))
+                                         ((zerop size)
+                                          (unless (zerop cluster)
+                                            (problem "~A is empty, and begins in the cluster ~D" whole cluster))
+                                          (push (cons whole (octets "")) files))
+                                         (t
+                                          (let ((found (clusters-of cluster whole)))
+                                            (unless (= (length found) (ceiling size each))
+                                              (problem "~A is ~D bytes, and has ~D clusters of ~D" whole size (length found) each))
+                                            (push (cons whole (subseq (bytes-of found) 0 (min size (* each (length found)))))
+                                                  files)))))))))))
+      (if (= kind 32)
+          (walk (bytes-of (clusters-of (le bytes 44 4) "/")) "")
+          (walk (subseq bytes (* 512 (- data root-sectors)) (* 512 data)) ""))
+      (let ((lost (loop for cluster from 2 below (+ clusters 2)
+                        count (and (not (aref owner cluster)) (not (zerop (entry cluster)))))))
+        (unless (zerop lost)
+          (problem "~D clusters are in no file, and not free" lost)))
+      (unless (logbitp 7 flags)
+        (loop for copy from 1 below tables
+              do (unless (equalp (subseq bytes (* 512 reserved) (* 512 (+ reserved table-sectors)))
+                                 (subseq bytes (* 512 (+ reserved (* copy table-sectors)))
+                                         (* 512 (+ reserved (* (1+ copy) table-sectors)))))
+                   (problem "the copies of the table differ"))))
+      (when (and (= kind 32) (< 0 (le bytes 48 2) reserved))
+        (let ((at (* 512 (le bytes 48 2)))
+              (free (loop for cluster from 2 below (+ clusters 2) count (zerop (entry cluster)))))
+          (when (and (= (le bytes at 4) #x41615252) (/= (le bytes (+ at 488) 4) #xffffffff)
+                     (/= (le bytes (+ at 488) 4) free))
+            (problem "~D clusters are free, and the volume says ~D" free (le bytes (+ at 488) 4))))))
+    (values (sort files #'string< :key #'car) (nreverse problems))))
+
+;; The files of a tree as INSPECT-VOLUME gives them.
+(defun tree-files (tree &optional (path ""))
+  (loop for (name contents) in tree
+        for whole = (format nil "~A/~A" path name)
+        append (cond ((member contents '(:label :deleted)) nil)
+                     ((listp contents) (tree-files contents whole))
+                     (t (list (cons whole (octets contents)))))))
+
+;; A file of that text, by way of page frames, as lisp/boot.lisp makes one.
+(defun put-text (name text)
+  (let* ((bytes (clara.unsafe:string-bytes text))
+         (pages (max 1 (ceiling bytes 4096)))
+         (memory (clara.unsafe:allocate-memory pages)))
+    (unwind-protect
+         (progn
+           (clara.unsafe:string-memory text memory)
+           (clara.fat:write-file name memory bytes))
+      (clara.unsafe:free-memory memory pages))))
+
+(defun short-of-file (directory name)
+  (let ((entry (find name (clara.fat:entries directory) :key #'clara.fat:entry-name :test #'string=)))
+    (and entry (clara.fat:entry-short entry))))
+
+(defvar *clean-tree*
+  `(("EFI" (("BOOT" (("BOOTX64.EFI" ,*binary*)))))
+    ("clara" (("boot.lisp" ,*long-text*)
+              ("self-test.lisp" "(car 'not-a-list)")
+              ("gone.lisp" :deleted)
+              ("gone as well, with a long name.lisp" :deleted)
+              ("readme.txt" "small letters, by two bits" :small t)
+              ("EMPTY" "")
+              ("deep" (("deeper" (("deepest.txt" "at the bottom")))))))
+    ("notes.txt" "at the root")))
+
+(defvar *new-text*    ; some 33 KiB, and nothing like *LONG-TEXT*
+  (with-output-to-string (text)
+    (dotimes (i 900)
+      (format text "~D: ~A λ🙂~%" i (make-string (mod (* 11 i) 53) :initial-element (code-char (+ 97 (mod i 26))))))))
+
+;; Volumes of every kind, on disks of every kind, with files that were
+;; there in one piece, in pieces and back to front: files are added in
+;; every directory, under names of every sort, put in the place of others,
+;; made longer, shorter and empty, and taken away. After each round the
+;; volume has to be in order and hold exactly what it should, to whoever
+;; looks at its bytes and to the file system alike, also when that has
+;; started afresh.
+(dolist (how '((12 :none 0) (12 :old 63 :clusters 1500 :stride 3 :from 330 :end #xffffff8)
+               (12 :new 40 :cluster-sectors 4 :clusters 1600 :backwards t)
+               (16 :none 0 :stride 2 :backwards t) (16 :old 2048 :cluster-sectors 4 :from 2040)
+               (16 :none 0 :cluster-sectors 16 :clusters 4200 :stride 2)
+               (32 :none 0 :from 65500 :information t)
+               (32 :new 2048 :stride 4 :backwards t :end #xffffff8 :root 9 :from 12 :information t)))
+  (destructuring-bind (kind table first &rest options) how
+    (let* ((fat (apply #'make-fat-volume kind *clean-tree* options))
+           (disk (make-disk table (cons first (fat-bytes fat))))
+           (expected (tree-files *clean-tree*)))
+      (flet ((have (name contents)
+               (setq expected (remove name expected :key #'car :test #'string-equal))
+               (when contents
+                 (push (cons name (octets contents)) expected)))
+             (in-order (what)
+               (multiple-value-bind (files problems) (inspect-volume (subseq disk (* 512 first)))
+                 (incf *checks*)
+                 (when problems
+                   (failed "a FAT~D volume ~A is out of order: ~{~A~^; ~}" kind what problems))
+                 (incf *checks*)
+                 (unless (equalp files (sort (copy-list expected) #'string< :key #'car))
+                   (failed "a FAT~D volume ~A does not hold what it should: it has ~S"
+                           kind what (mapcar (lambda (file) (list (car file) (length (cdr file)))) files))))))
+        (start-files disk)
+        (let ((pages (clara.host:allocated-pages)))
+          (in-order "before anything is written")
+          ;; New files: a name that is its own short name, one that is in small letters, long ones.
+          (check "/NEW.TXT" (put-text "/NEW.TXT" "a short name, as it stands"))
+          (have "/NEW.TXT" "a short name, as it stands")
+          (put-text "/clara/small.txt" "small letters")
+          (have "/clara/small.txt" "small letters")
+          (put-text "clara/thirteen.chrs" "13")
+          (have "/clara/thirteen.chrs" "13")
+          (put-text "/clara/twenty-six characters, yes" "26")
+          (have "/clara/twenty-six characters, yes" "26")
+          (put-text "/clara/a longer name, with λ and 🙂 in it.text" *new-text*)
+          (have "/clara/a longer name, with λ and 🙂 in it.text" *new-text*)
+          (put-text "/clara/deep/deeper/.hidden" "a dot first")
+          (have "/clara/deep/deeper/.hidden" "a dot first")
+          (put-text "/clara/nothing.txt" "")
+          (have "/clara/nothing.txt" "")
+          (in-order "with new files")
+          (check '("NEW.TXT" "SMALL.TXT" "THIRTE~1.CHR" "TWENTY~1" "ALONGE~1.TEX" "HIDDEN~1" "NOTHING.TXT")
+                 (list (short-of-file "/" "NEW.TXT") (short-of-file "/clara" "small.txt")
+                       (short-of-file "/clara" "thirteen.chrs") (short-of-file "/clara" "twenty-six characters, yes")
+                       (short-of-file "/clara" "a longer name, with λ and 🙂 in it.text")
+                       (short-of-file "/clara/deep/deeper" ".hidden") (short-of-file "/clara" "nothing.txt")))
+          ;; Short names that are taken: the next number.
+          (put-text "/clara/boot.lisp2" "two")
+          (put-text "/clara/boot.lisp3" "three")
+          (have "/clara/boot.lisp2" "two")
+          (have "/clara/boot.lisp3" "three")
+          (check '("BOOT~1.LIS" "BOOT~2.LIS" "BOOT~3.LIS")
+                 (mapcar (lambda (name) (short-of-file "/clara" name)) '("boot.lisp" "boot.lisp2" "boot.lisp3")))
+          ;; A file in the place of another: longer, shorter, empty, and something again.
+          (put-text "/CLARA/BOOT.LISP" *new-text*)
+          (have "/clara/boot.lisp" *new-text*)
+          (in-order "with a longer file in the place of another")
+          (put-text "/clara/boot.lisp" "short now")
+          (have "/clara/boot.lisp" "short now")
+          (put-text "/clara/boot~3.lis" "by its short name")
+          (have "/clara/boot.lisp3" "by its short name")
+          (in-order "with a shorter file in the place of another")
+          (put-text "/clara/boot.lisp" "")
+          (have "/clara/boot.lisp" "")
+          (put-text "/clara/EMPTY" *long-text*)
+          (have "/clara/EMPTY" *long-text*)
+          (put-text "/notes.txt" "at the root, again")
+          (have "/notes.txt" "at the root, again")
+          (in-order "with an empty file in the place of another")
+          ;; More files than a directory has room for: it grows.
+          (dotimes (i 45)
+            (put-text (format nil "/clara/deep/file number ~D.data" i) (format nil "~D" i))
+            (have (format nil "/clara/deep/file number ~D.data" i) (format nil "~D" i)))
+          (in-order "with a directory that has grown")
+          ;; Files are taken away, and others take their places.
+          (dolist (name '("/clara/deep/file number 7.data" "/clara/deep/FILE NUMBER 8.DATA" "/clara/deep/filenu~1.dat"
+                          "/clara/a longer name, with λ and 🙂 in it.text" "/NEW.TXT" "/clara/nothing.txt"
+                          "/clara/self-test.lisp"))
+            (check name (clara.fat:remove-file name)))
+          (dolist (name '("/clara/deep/file number 7.data" "/clara/deep/file number 8.data" "/clara/deep/file number 0.data"
+                          "/clara/a longer name, with λ and 🙂 in it.text" "/NEW.TXT" "/clara/nothing.txt"
+                          "/clara/self-test.lisp"))
+            (have name nil))
+          (in-order "with files taken away")
+          (put-text "/clara/deep/in the place of one that went.data" *long-text*)
+          (have "/clara/deep/in the place of one that went.data" *long-text*)
+          (put-text "/clara/x" "x")
+          (have "/clara/x" "x")
+          (in-order "with files where others were")
+          ;; The file system reads what it wrote, and so does one that has only just started.
+          (dotimes (again 2)
+            (check t (every (lambda (file)
+                              (let ((text (ignore-errors (sb-ext:octets-to-string (cdr file) :external-format :utf-8))))
+                                (or (string= (car file) "/EFI/BOOT/BOOTX64.EFI") (equal text (text-of-file (car file))))))
+                            expected))
+            (check (sort (loop for (name) in expected
+                               when (and (> (length name) 12) (string= "/clara/deep/" name :end2 12)
+                                         (not (find #\/ name :start 12)))
+                                 collect (subseq name 12))
+                         #'string-lessp)
+                   (remove "deeper/" (clara.fat:names "/clara/deep") :test #'string=))
+            (check pages (clara.host:allocated-pages))
+            (start-files disk))
+          (in-order "after it was read"))))))
+
+;; What cannot be written, and what is left when it could not be.
+(let* ((fat (make-fat-volume 12 *clean-tree* :clusters 400))
+       (disk (fat-bytes fat))
+       (expected (tree-files *clean-tree*)))
+  (start-files disk)
+  (let ((pages (clara.host:allocated-pages)))
+    (flet ((untouched (what)
+             (multiple-value-bind (files problems) (inspect-volume disk)
+               (incf *checks*)
+               (unless (and (null problems) (equalp files (sort (copy-list expected) #'string< :key #'car)))
+                 (failed "a volume is not what it was ~A: ~{~A~^; ~}" what problems)))))
+      (dolist (name (list "" "/" "/clara/" "/clara/bad:name" "/clara/ends in a dot." "/clara/ends in a space "
+                          "/clara/.." "/clara/a*b" (format nil "/clara/a~Cb" (code-char 7))
+                          (concatenate 'string "/clara/" (make-string 256 :initial-element #\n))
+                          "/nowhere/file.txt" "/notes.txt/file.txt" "/clara" "/clara/deep"))
+        (check-condition error (put-text name "never written")))
+      (check-condition error (clara.fat:write-file 'notes.txt 0 0))
+      (check-condition error (clara.fat:write-file "/clara/too long.bin" 0 4294967296))
+      (check-condition error (clara.fat:write-file "/clara/no length.bin" 0 -1))
+      (dolist (name '("/nothing.txt" "/clara" "/" "" "/nowhere/file.txt"))
+        (check-condition error (clara.fat:remove-file name)))
+      (untouched "after names that are none")
+      ;; More than the volume has room for: 400 clusters of 512 bytes, some of them taken.
+      (check '(:error "the volume is full: 391 clusters are wanted, and 337 are free")
+             (handler-case (put-text "/big.txt" (make-string 200000 :initial-element #\b))
+               (error (condition) (list :error (princ-to-string condition)))))
+      (untouched "after a file that it had no room for")
+      ;; The directory of the root on this kind is 224 entries and no more: the 5 that are in use,
+      ;; and 54 files that take 4 each, three of them for the name.
+      (dotimes (i 54)
+        (put-text (format nil "/a name of some length, ~D.txt" i) "x")
+        (push (cons (format nil "/a name of some length, ~D.txt" i) (octets "x")) expected))
+      (check '(:error "the directory of the root is full: it has 224 entries, and on a volume of this kind no more")
+             (handler-case (put-text "/one too many for the root, yes.txt" "y")
+               (error (condition) (list :error (princ-to-string condition)))))
+      (untouched "after a file that its directory had no room for")
+      (put-text "/FITS" "one entry is left")
+      (push (cons "/FITS" (octets "one entry is left")) expected)
+      (untouched "with a full directory")
+      ;; The entries of a file that is taken away are there for the next one: four go, and four come.
+      (clara.fat:remove-file "/a name of some length, 7.txt")
+      (put-text "/a name of that length, 77.txt" "in its place")
+      (setq expected (cons (cons "/a name of that length, 77.txt" (octets "in its place"))
+                           (remove "/a name of some length, 7.txt" expected :key #'car :test #'string=)))
+      (untouched "with a file where another was, in a directory that is full")
+      ;; And the volume to its last cluster: a file that takes every one that is free, and no more.
+      (let* ((free (count-if #'zerop (loop for cluster from 2 below 402
+                                           collect (logand (ash (le disk (+ 512 cluster (floor cluster 2)) 2)
+                                                                (if (oddp cluster) -4 0))
+                                                           #xfff))))
+             (all (make-string (* 512 free) :initial-element #\a)))
+        (put-text "/clara/all of it.txt" all)
+        (push (cons "/clara/all of it.txt" (octets all)) expected)
+        (untouched "that is full to its last cluster")
+        (check '(:error "the volume is full: 1 clusters are wanted, and 0 are free")
+               (handler-case (put-text "/clara/one more.txt" "x")
+                 (error (condition) (list :error (princ-to-string condition)))))
+        (clara.fat:remove-file "/clara/all of it.txt")
+        (pop expected)
+        (untouched "after the file that filled it went"))
+      ;; A disk that fails in the middle: what is held of the table is dropped, and reading goes on.
+      (setf (vdev-answer *disk*) 1)
+      (check-condition error (put-text "/clara/lost.txt" "never arrives"))
+      (check-condition error (clara.fat:remove-file "/notes.txt"))
+      (setf (vdev-answer *disk*) 0)
+      (check "at the root" (text-of-file "/notes.txt"))
+      (untouched "after a disk that failed")
+      (check pages (clara.host:allocated-pages)))))
+(let ((disk (fat-bytes (make-fat-volume 16 *clean-tree*))))
+  (start-files disk :read-only t)
+  (check '(:error "the disk 00:03.0 cannot be written")
+         (handler-case (put-text "/clara/new.txt" "never written")
+           (error (condition) (list :error (princ-to-string condition)))))
+  (check "at the root" (text-of-file "/notes.txt"))
+  (check nil (nth-value 1 (inspect-volume disk))))
+
+;; An entry of 12 bits that lies across the end of a sector, and of what is
+;; held of the table: files are written into the clusters around it, and
+;; the file that was there before is still what it was.
+(let* ((far (make-string 1500 :initial-element #\f))
+       (disk (fat-bytes (make-fat-volume 12 `(("far.txt" ,far :from 2729))))))
+  (start-files disk)
+  (dolist (from '(2720 340 2730 1364 2046))
+    (setf (clara.fat::volume-next clara.fat:*volume*) from)
+    (put-text (format nil "/from ~D.txt" from) (make-string 5000 :initial-element (code-char (+ 97 (mod from 26))))))
+  (multiple-value-bind (files problems) (inspect-volume disk)
+    (check nil problems)
+    (check '("/far.txt" "/from 1364.txt" "/from 2046.txt" "/from 2720.txt" "/from 2730.txt" "/from 340.txt")
+           (mapcar #'car files))
+    (check t (equalp (octets far) (cdr (first files))))))
+
+;; A volume of the kind 32 that keeps one of its tables only, and not the
+;; first: the first is left as it is.
+(let* ((fat (make-fat-volume 32 `(("mirror.txt" "kept in one table")) :stride 2))
+       (bytes (fat-bytes fat)))
+  (fill bytes #xff :start (* 512 32) :end (* 512 (+ 32 (fat-table-sectors fat))))
+  (setf (le bytes 40 2) #x81
+        (le bytes 48 2) 3)       ; where the count of free clusters would be, and is not: the sector is empty
+  (start-files bytes)
+  (put-text "/second.txt" *long-text*)
+  (clara.fat:remove-file "/mirror.txt")
+  (check t (every (lambda (byte) (= byte #xff)) (subseq bytes (* 512 32) (* 512 (+ 32 (fat-table-sectors fat))))))
+  (check t (every #'zerop (subseq bytes (* 512 3) (* 512 4))))
+  ;; The cluster that MIRROR.TXT was in is free, and the four bits that mean nothing are what they were.
+  (check #xa0000000 (le bytes (+ (* 512 (+ 32 (fat-table-sectors fat))) (* 4 3)) 4))
+  (multiple-value-bind (files problems) (inspect-volume bytes)
+    (check nil problems)
+    (check t (equalp files (list (cons "/second.txt" (octets *long-text*)))))))
+
+;; A directory whose bytes after its last entry are not all zeroes, as a
+;; volume may have them that others have written to: the entry that ends
+;; it is one that begins with a zero, and there still is one after a file
+;; has been added. And a directory that grows into a cluster which a file
+;; has left behind is given a cluster of zeroes.
+(let* ((fat (make-fat-volume 16 `(("deep" (("first.txt" "1"))) ("one.txt" "1")) :from 100))
+       (disk (fat-bytes fat))
+       (root (* 512 (- (fat-data fat) (fat-root-sectors fat)))))
+  (fill disk #x41 :start (+ root (* 32 5)) :end (+ root (* 32 9))) ; after the four entries in use, and one that ends them
+  (start-files disk)
+  (put-text "/two.txt" "2")                                         ; two entries, where the end was and after it
+  (check '(0 #x41) (list (aref disk (+ root (* 32 6))) (aref disk (+ root (* 32 6) 1))))
+  (check '("deep/" "one.txt" "two.txt") (clara.fat:names "/"))
+  (setf (clara.fat::volume-next clara.fat:*volume*) 2)
+  (put-text "/full of letters.txt" (make-string 40000 :initial-element #\a)) ; which as entries would be files
+  (clara.fat:remove-file "/full of letters.txt")
+  (setf (clara.fat::volume-next clara.fat:*volume*) 2)
+  (dotimes (i 20)
+    (put-text (format nil "/deep/a file in a directory that grows, ~D.txt" i) "x"))
+  (check 21 (length (clara.fat:names "/deep")))
+  (fill disk 0 :start (+ root (* 32 6)) :end (+ root (* 32 9)))    ; what this test put there itself
+  (check nil (nth-value 1 (inspect-volume disk))))
+
+;; A disk that stops in the middle of a file being written, at every
+;; request it could stop at: from that request on nothing reaches it. What
+;; it is left with may have clusters that belong to no file, and copies of
+;; its table that differ, which is what a program that mends volumes puts
+;; right; every file that was there is still what it was; and the file
+;; that was being written is there whole or not at all, or what it was
+;; before.
+(dolist (how `(("/clara/a new file, with a long name.text" ,*new-text* nil)
+               ("/clara/boot.lisp" ,*new-text* ,*long-text*)
+               ("/clara/deep/deeper/deepest.txt" "" "at the bottom")))
+  (destructuring-bind (name text before) how
+    (let ((request 0) (stopped t))
+      (loop while stopped
+            do (incf request)
+               (let* ((disk (fat-bytes (make-fat-volume 16 *clean-tree* :cluster-sectors 2 :stride 3)))
+                      (count 0))
+                 (start-files disk)
+                 (setf (vdev-watch *disk*)
+                       (lambda ()
+                         (when (= (incf count) request)
+                           (setf (vdev-answer *disk*) 1))))
+                 (setq stopped (not (ignore-errors (put-text name text) t)))
+                 (multiple-value-bind (files problems) (inspect-volume disk)
+                   (let ((others (remove name files :key #'car :test #'string-equal))
+                         (file (cdr (assoc name files :test #'string-equal))))
+                     (incf *checks*)
+                     (unless (and (every (lambda (problem)
+                                           (or (search "are in no file, and not free" problem)
+                                               (search "the copies of the table differ" problem)))
+                                         problems)
+                                  (equalp others (sort (remove name (tree-files *clean-tree*) :key #'car :test #'string-equal)
+                                                       #'string< :key #'car))
+                                  (cond (stopped (or (and (null file) (null before))
+                                                     (and before (equalp file (octets before)))
+                                                     (equalp file (octets text))))
+                                        (t (and (null problems) (equalp file (octets text))))))
+                       (failed "a disk that stopped at request ~D of writing ~A is left out of order: ~{~A~^; ~}"
+                               request name (or problems (list "its files are not what they were"))))))))
+      (check t (> request 8)))))
+
+;; The table is changed with the lock of the volume in hand, like every
+;; look at it; and two threads that write at the same time leave a volume
+;; that is in order, with all that each of them wrote.
+(let ((disk (fat-bytes (make-fat-volume 16 *clean-tree* :cluster-sectors 2))))
+  (start-files disk :delay 0.0005)
+  (setf (vdev-watch *disk*)
+        (lambda ()
+          (unless (sb-thread:mutex-owner (clara.fat::volume-lock clara.fat:*volume*))
+            (failed "the file system asked its disk for something without the lock of the volume"))))
+  (mapc #'clara:join-thread
+        (mapcar (lambda (who)
+                  (clara:make-thread (lambda ()
+                                       (dotimes (i 6)
+                                         (put-text (format nil "/clara/~A writes ~D.txt" who i)
+                                                   (make-string (* 700 (1+ i)) :initial-element (char who 0))))
+                                       (put-text (format nil "/clara/~A and gone.txt" who) "soon gone")
+                                       (clara.fat:remove-file (format nil "/clara/~A and gone.txt" who)))))
+                '("one" "two")))
+  (multiple-value-bind (files problems) (inspect-volume disk)
+    (check nil problems)
+    (check 12 (count-if (lambda (file) (search " writes " (car file))) files))
+    (check t (every (lambda (file)
+                      (or (not (search " writes " (car file)))
+                          (every (lambda (byte) (= byte (char-code (char (car file) 7)))) (cdr file))))
+                    files))))
+
+;; The image of the heap goes into a file like any other bytes, and what it
+;; was in is given back.
+(let ((disk (fat-bytes (make-fat-volume 16 *clean-tree*)))
+      (image (coerce (loop for i below 70001 collect (mod (* 13 i) 256)) '(vector (unsigned-byte 8)))))
+  (start-files disk)
+  (clara.host:set-heap-image image)
+  (let ((pages (clara.host:allocated-pages)))
+    (check "/clara/clara.image" (clara:save-image))
+    (check "/clara/world.image" (clara:save-image "/clara/world.image"))
+    (check pages (clara.host:allocated-pages)))
+  (multiple-value-bind (files problems) (inspect-volume disk)
+    (check nil problems)
+    (check '(t t) (list (equalp image (cdr (assoc "/clara/clara.image" files :test #'string=)))
+                        (equalp image (cdr (assoc "/clara/world.image" files :test #'string=)))))))
+(new-bus)
+(said-by #'clara.disk:start)
+(said-by #'clara.fat:start)
+(check-condition error (clara:save-image))
 
 ;;; The listener, on strings.
 

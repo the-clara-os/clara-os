@@ -397,10 +397,25 @@ static void exchange(struct binding *b)
  * e, and its bindings are undone, the newest first, so that the symbols
  * hold what they held before this thread bound them. The thread is at a
  * safe point. */
-void lisp_evaluator_out(struct lisp_evaluator *e)
+/* Every binding of the running thread is undone, the newest first, and
+ * done again, the oldest first: for a thread that makes way and comes
+ * back, and for an image, which is to hold what a variable is outside
+ * every binding (image.c). */
+void lisp_bindings_out(void)
 {
     for (unsigned i = g_bound; i--;)
         exchange(&g_bindings[i]);
+}
+
+void lisp_bindings_in(void)
+{
+    for (unsigned i = 0; i < g_bound; i++)
+        exchange(&g_bindings[i]);
+}
+
+void lisp_evaluator_out(struct lisp_evaluator *e)
+{
+    lisp_bindings_out();
     e->sp = g_sp;
     e->bound = g_bound;
     e->handlers = g_handlers;
@@ -425,8 +440,7 @@ void lisp_evaluator_in(const struct lisp_evaluator *e)
     g_c_limit = e->c_limit;
     g_primitive = e->primitive;
     lisp_values = e->values;
-    for (unsigned i = 0; i < g_bound; i++)
-        exchange(&g_bindings[i]);
+    lisp_bindings_in();
 }
 
 /* What a thread holds: the value stack as far as it is in use, the special
@@ -1646,7 +1660,7 @@ lisp lisp_apply(lisp f, unsigned argc, lisp *argv)
     switch (lisp_function_kind(f)) {
     case LISP_PRIMITIVE:
         p = &lisp_primitives[lisp_fixnum_value(lisp_as_function(f)->code)];
-        if (argc < p->min || argc > p->max)
+        if (argc < p->min || (argc > p->max && p->max != LISP_MANY))
             return wrong_count(p, argc);
         lisp_values.count = 1;
         g_primitive = p;
@@ -1801,10 +1815,75 @@ int lisp_call(lisp function, unsigned argc, const lisp *argv)
     return top_level(LISP_NIL, function, argc, argv);
 }
 
+/* The package that the name of a function in C is in: COMMON-LISP, unless
+ * the name says another first, which is then taken off it. */
+static lisp home_of(const char **name)
+{
+    if (!memcmp(*name, "CLARA:", 6)) {
+        *name += 6;
+        return lisp_roots.clara;
+    }
+    if (!memcmp(*name, "CLARA.UNSAFE:", 13)) {
+        *name += 13;
+        return lisp_roots.unsafe;
+    }
+    return lisp_roots.common_lisp;
+}
+
+static int named(lisp symbol, const char *name)
+{
+    const struct lisp_string *s = lisp_as_string(lisp_as_symbol(symbol)->name);
+    uint64_t length = strlen(name);
+
+    if (lisp_length(s->header) != length)
+        return 0;
+    for (uint64_t i = 0; i < length; i++)
+        if (s->chars[i] != (uint8_t)name[i])
+            return 0;
+    return 1;
+}
+
+/* For an image (image.c). A special form and a function in C are in the
+ * heap as their place in a table, and the image may come from a kernel
+ * whose tables had other rows. What stays is the name, so the function
+ * gets its place by that: the symbol it was made for is the one that a
+ * row of this kernel's table names. Says 0 when no row does. */
+int lisp_function_rebind(lisp function)
+{
+    struct lisp_function *f = lisp_as_function(function);
+    lisp package;
+
+    if (lisp_function_kind(function) != LISP_SPECIAL_OPERATOR && lisp_function_kind(function) != LISP_PRIMITIVE)
+        return 1;
+    if (!lisp_is_symbol(f->name) || !lisp_is(lisp_as_symbol(f->name)->name, LISP_STRING))
+        return 0;
+    package = lisp_as_symbol(f->name)->package;
+    if (lisp_function_kind(function) == LISP_SPECIAL_OPERATOR) {
+        for (unsigned i = 0; i < sizeof specials / sizeof specials[0]; i++)
+            if (package == lisp_roots.common_lisp && named(f->name, specials[i].name)) {
+                f->code = lisp_fixnum(i);
+                return 1;
+            }
+        return 0;
+    }
+    for (unsigned i = 0; i < lisp_primitive_count; i++) {
+        const char *name = lisp_primitives[i].name;
+
+        if (package == home_of(&name) && named(f->name, name)) {
+            f->code = lisp_fixnum(i);
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /* The symbols of the special forms and of the functions in C, each with
  * its function. The names are the language's own, external in
  * COMMON-LISP, apart from the ones that begin with a %, which are the
- * substrate's and stay internal there. */
+ * substrate's and stay internal there. In a world that is an image's the
+ * symbols are there already, and so are their functions: a symbol gets
+ * one here only when it has none, which is what a kernel with a new
+ * function finds in the image of an older one. */
 void lisp_eval_init(const struct boot_file *files)
 {
     lisp cl = lisp_roots.common_lisp, symbol;
@@ -1826,22 +1905,16 @@ void lisp_eval_init(const struct boot_file *files)
     S.condition = lisp_symbol_in(cl, "%CONDITION", 0);
     for (unsigned i = 0; i < sizeof specials / sizeof specials[0]; i++) {
         symbol = lisp_symbol_in(cl, specials[i].name, specials[i].fn != sf_quasiquote);
-        lisp_as_symbol(symbol)->function = make_function(LISP_SPECIAL_OPERATOR, symbol, lisp_fixnum(i), LISP_NIL);
+        if (lisp_as_symbol(symbol)->function == LISP_UNBOUND)
+            lisp_as_symbol(symbol)->function = make_function(LISP_SPECIAL_OPERATOR, symbol, lisp_fixnum(i), LISP_NIL);
     }
     for (unsigned i = 0; i < lisp_primitive_count; i++) {
-        /* A name is in COMMON-LISP unless it names another package first. */
         const char *name = lisp_primitives[i].name;
-        lisp package = cl;
+        lisp package = home_of(&name);
 
-        if (!memcmp(name, "CLARA:", 6)) {
-            package = lisp_roots.clara;
-            name += 6;
-        } else if (!memcmp(name, "CLARA.UNSAFE:", 13)) {
-            package = lisp_roots.unsafe;
-            name += 13;
-        }
         symbol = lisp_symbol_in(package, name, name[0] != '%');
-        lisp_as_symbol(symbol)->function = make_function(LISP_PRIMITIVE, symbol, lisp_fixnum(i), LISP_NIL);
+        if (lisp_as_symbol(symbol)->function == LISP_UNBOUND)
+            lisp_as_symbol(symbol)->function = make_function(LISP_PRIMITIVE, symbol, lisp_fixnum(i), LISP_NIL);
     }
     S.lambda = lisp_symbol_in(cl, "LAMBDA", 1);
     S.eval = lisp_symbol_in(cl, "EVAL", 1);

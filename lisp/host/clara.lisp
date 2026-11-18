@@ -23,7 +23,7 @@
            "JOIN-THREAD" "DESTROY-THREAD" "THREAD-YIELD"
            "MAKE-LOCK" "ACQUIRE-LOCK" "RELEASE-LOCK" "WITH-LOCK-HELD"
            "MAKE-EVENT" "SIGNAL-EVENT" "WAIT-EVENT"
-           "MAKE-STREAM" "KEYBOARD-INTERRUPT" "PROVIDE-FILES"))
+           "MAKE-STREAM" "KEYBOARD-INTERRUPT" "PROVIDE-FILES" "SAVE-IMAGE"))
 
 (defpackage "CLARA.UNSAFE"
   (:use "COMMON-LISP")
@@ -32,7 +32,8 @@
            "PORT-8" "PORT-16" "PORT-32"
            "INTERRUPT-EVENT" "FRAMEBUFFER" "SERIAL-DEVICE" "SERIAL-BYTE" "SERIAL-BREAK"
            "TAKE-SCREEN" "GIVE-SCREEN"
-           "MAP-MEMORY" "PCI-CONFIGURATION" "MESSAGE-INTERRUPT" "KEYBOARD-BREAK" "MEMORY-STRING"))
+           "MAP-MEMORY" "PCI-CONFIGURATION" "MESSAGE-INTERRUPT" "KEYBOARD-BREAK" "MEMORY-STRING"
+           "STRING-BYTES" "STRING-MEMORY" "HEAP-IMAGE"))
 
 (defpackage "CLARA.HOST"
   (:use "COMMON-LISP")
@@ -40,7 +41,7 @@
            "SET-FRAMEBUFFER" "SET-SERIAL-DEVICE" "SET-SCREEN-CURSOR" "GIVEN-SCREEN"
            "TYPE-BYTES" "RAISE-INTERRUPT" "SERIAL-BREAK-P"
            "SET-PCI-CONFIGURATION" "SEND-MESSAGE" "MESSAGE-INTERRUPTS" "KEYBOARD-BREAKS"
-           "ALLOCATED-PAGES" "PROVIDED-FILES"))
+           "ALLOCATED-PAGES" "PROVIDED-FILES" "SET-HEAP-IMAGE"))
 
 ;;; CLARA: threads
 
@@ -187,15 +188,27 @@
 
 ;;; CLARA: where files come from
 ;;;
-;;; On ClaraOS a file system hands OPEN, LOAD, PROBE-FILE and DIRECTORY its
-;;; two functions with this. SBCL has files of its own behind those, so
-;;; here the two are kept for a test to call.
+;;; On ClaraOS a file system hands OPEN, LOAD, PROBE-FILE, DIRECTORY and
+;;; DELETE-FILE its functions with this. SBCL has files of its own behind
+;;; those, so here the functions are kept for a test to call.
 
 (defvar *files* nil)
 
-(defun provide-files (&key text names)
-  (setq *files* (if (and text names) (list text names)))
+(defun provide-files (&key text names write delete)
+  (setq *files* (if (and text names) (list text names write delete)))
   nil)
+
+;; SAVE-IMAGE as lisp/boot.lisp has it: the heap goes into a file, by way
+;; of the file system that is there. The heap of this machine is whatever a
+;; test says it is (CLARA.HOST:SET-HEAP-IMAGE).
+(defun save-image (&optional (name "/clara/clara.image"))
+  (let ((write (third *files*)))
+    (unless write
+      (error "the file ~A cannot be written: no disk has a file system that is known here" name))
+    (multiple-value-bind (memory bytes pages) (clara.unsafe:heap-image)
+      (unwind-protect (funcall write name memory bytes)
+        (clara.unsafe:free-memory memory pages)))
+    name))
 
 ;;; CLARA.HOST: the machine that is not there
 
@@ -222,6 +235,8 @@
 (defvar *typed-lock* (sb-thread:make-mutex :name "typed"))
 (defvar *interrupts* nil)    ; (source . event)
 (defvar *serial-break* t)
+(defvar *heap-image*         ; the bytes that HEAP-IMAGE gives for the heap
+  (coerce (loop for i below 9000 collect (mod (* 7 i) 251)) '(vector (unsigned-byte 8))))
 
 ;; A machine with empty memory, no devices, no screen, and nothing typed.
 (defun reset-machine ()
@@ -286,9 +301,13 @@
 (defun allocated-pages ()
   (count 1 *pages*))
 
-;; What CLARA:PROVIDE-FILES was given last: the two functions, or NIL.
+;; What CLARA:PROVIDE-FILES was given last: the functions, or NIL.
 (defun provided-files ()
   clara::*files*)
+
+;; What the heap of this machine is, to whoever saves it.
+(defun set-heap-image (bytes)
+  (setq *heap-image* (coerce bytes '(vector (unsigned-byte 8)))))
 
 ;; A device writes DATA to ADDRESS: the interrupt that MESSAGE-INTERRUPT
 ;; handed out with those two is raised. A message that nobody asked for is
@@ -483,3 +502,24 @@
                                                                   :external-format :utf-8)
       (error ()
         (error "the ~D bytes at #x~(~X~) are not text: they are not UTF-8" bytes address)))))
+
+;; The other way: how many bytes the text of a string is as UTF-8, and the
+;; text written out at an address.
+(defun string-bytes (string)
+  (length (sb-ext:string-to-octets string :external-format :utf-8)))
+
+(defun string-memory (string address)
+  (let* ((octets (sb-ext:string-to-octets string :external-format :utf-8))
+         (index (clara.host::memory-index address (length octets))))
+    (replace clara.host::*memory* octets :start1 index)
+    (length octets)))
+
+;; The heap, as an image of it in page frames that the caller gives back:
+;; their address, how many bytes of them the image is, and how many page
+;; frames there are.
+(defun heap-image ()
+  (let* ((image clara.host::*heap-image*)
+         (pages (max 1 (ceiling (length image) 4096)))
+         (memory (allocate-memory pages)))
+    (replace clara.host::*memory* image :start1 (clara.host::memory-index memory (length image)))
+    (values memory (length image) pages)))

@@ -270,6 +270,7 @@ lisp lisp_symbol_in(lisp package, const char *name, int external)
 void lisp_symbols_init(void)
 {
     struct lisp_symbol *nil = lisp_alloc(LISP_SYMBOL, 0);
+    lisp gensym;
 
     if (((lisp)(uintptr_t)nil | LISP_TAG_SYMBOL) != LISP_NIL)
         panic("lisp: NIL has to be the first object in the heap, and it is at %p", (void *)nil);
@@ -303,6 +304,11 @@ void lisp_symbols_init(void)
         lisp_cons(lisp_symbol_in(lisp_roots.keyword, "CLARA", 1),
                   lisp_cons(lisp_symbol_in(lisp_roots.keyword, arch_feature, 1), LISP_NIL));
     lisp_symbol_flag(lisp_roots.features, LISP_SPECIAL);
+    /* What GENSYM counts with: a variable, so that it is in the heap, and a
+     * world that is saved goes on counting where it was. */
+    gensym = lisp_symbol_in(lisp_roots.common_lisp, "*GENSYM-COUNTER*", 1);
+    lisp_as_symbol(gensym)->value = lisp_fixnum(1);
+    lisp_symbol_flag(gensym, LISP_SPECIAL);
     /* Common Lisp gives no names to what a backquote is read as, so these
      * are the substrate's own, and stay internal. */
     lisp_roots.quasiquote = lisp_symbol_in(lisp_roots.common_lisp, "QUASIQUOTE", 0);

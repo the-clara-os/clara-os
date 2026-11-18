@@ -5,7 +5,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define CLARA_VERSION "0.0.13"
+#define CLARA_VERSION "0.0.14"
 
 #define PAGE_SHIFT 12
 #define PAGE_SIZE  (1ULL << PAGE_SHIFT)

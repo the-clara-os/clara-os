@@ -50,8 +50,9 @@ void kmain(struct boot_info *bi)
     else
         kprintf("framebuffer: none\n");
 
-    /* The rest is Lisp: boot.lisp from the boot volume, and then whatever
-     * is typed on the serial port, until that ends. */
+    /* The rest is Lisp: the world, made from the files of the boot volume
+     * or come whole as an image of one that was saved there, and then
+     * whatever is typed, until that ends. */
     lisp_run();
     kprintf("clara: nothing more to do, halting\n");
     arch_halt();

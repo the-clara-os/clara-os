@@ -546,6 +546,82 @@ PRIMITIVE(p_string_append)
     return string;
 }
 
+/* (%join strings): the strings of a list as one string. What a program
+ * has written to a string stream, or to a file, is a list of the strings
+ * it wrote, which can be more of them than a function can be given as
+ * arguments: the evaluator's stack would have to hold them all. */
+PRIMITIVE(p_join)
+{
+    uint64_t length = 0, at = 0;
+    lisp string, list;
+
+    for (list = argv[0]; lisp_is_cons(list); list = lisp_as_cons(list)->cdr) {
+        if (!lisp_is(lisp_as_cons(list)->car, LISP_STRING))
+            return lisp_wants("a list of strings", argv[0]);
+        length += lisp_length(lisp_as_string(lisp_as_cons(list)->car)->header);
+    }
+    if (list != NIL)
+        return lisp_wants("a list of strings", argv[0]);
+    if (!lisp_heap_room(1 + (length + 1) / 2))
+        return no_room();
+    string = lisp_make_string(NULL, length);
+    for (list = argv[0]; lisp_is_cons(list); list = lisp_as_cons(list)->cdr) {
+        const struct lisp_string *s = lisp_as_string(lisp_as_cons(list)->car);
+
+        memcpy(lisp_as_string(string)->chars + at, s->chars, lisp_length(s->header) * sizeof s->chars[0]);
+        at += lisp_length(s->header);
+    }
+    return string;
+}
+
+/* Letters in capitals, or in small letters: the letters of ASCII, like
+ * everything here that looks at the case of one. A character alone, and a
+ * new string of what a string, a symbol or a character stands for. */
+static uint32_t lower(uint32_t c)
+{
+    return c >= 'A' && c <= 'Z' ? c + ('a' - 'A') : c;
+}
+
+static lisp recased(lisp x, uint32_t (*recase)(uint32_t))
+{
+    lisp from = string_of(x), string;
+    uint64_t length;
+
+    if (!from)
+        return NIL;
+    length = lisp_length(lisp_as_string(from)->header);
+    if (!lisp_heap_room(1 + (length + 1) / 2))
+        return no_room();
+    string = lisp_make_string(lisp_as_string(from)->chars, length);
+    for (uint64_t i = 0; i < length; i++)
+        lisp_as_string(string)->chars[i] = recase(lisp_as_string(string)->chars[i]);
+    return string;
+}
+
+PRIMITIVE(p_string_upcase)
+{
+    return recased(argv[0], upper);
+}
+
+PRIMITIVE(p_string_downcase)
+{
+    return recased(argv[0], lower);
+}
+
+PRIMITIVE(p_char_upcase)
+{
+    if (!lisp_is_character(argv[0]))
+        return lisp_wants("a character", argv[0]);
+    return lisp_character(upper(lisp_character_code(argv[0])));
+}
+
+PRIMITIVE(p_char_downcase)
+{
+    if (!lisp_is_character(argv[0]))
+        return lisp_wants("a character", argv[0]);
+    return lisp_character(lower(lisp_character_code(argv[0])));
+}
+
 /* Is index a place in something that long? Says 0 after failing. */
 static int index_in(lisp index, uint64_t length, uint64_t *i)
 {
@@ -715,20 +791,26 @@ PRIMITIVE(p_make_symbol)
 }
 
 /* A symbol in no package, with a name that says which one it is: G and a
- * number that goes up. */
+ * number that goes up. The number is the value of *GENSYM-COUNTER*, as
+ * Common Lisp has it: in the heap, so a world that is saved goes on
+ * counting where it was (image.c). */
 PRIMITIVE(p_gensym)
 {
-    static uint64_t counter;
+    struct lisp_symbol *counter = lisp_as_symbol(lisp_symbol_in(lisp_roots.common_lisp, "*GENSYM-COUNTER*", 1));
     uint32_t name[24];
     char digits[20];
     unsigned length = 0, n = 0;
 
     (void)argv;
+    if (!lisp_is_fixnum(counter->value) || lisp_fixnum_value(counter->value) < 0 ||
+        lisp_fixnum_value(counter->value) == LISP_FIXNUM_MAX)
+        return lisp_fail("*GENSYM-COUNTER* is ~S, and GENSYM counts with an integer that is not negative", counter->value);
     name[length++] = 'G';
-    for (uint64_t c = ++counter; c; c /= 10)
+    for (uint64_t c = (uint64_t)lisp_fixnum_value(counter->value); c || !n; c /= 10)
         digits[n++] = (char)('0' + c % 10);
     while (n)
         name[length++] = (uint8_t)digits[--n];
+    counter->value += lisp_fixnum(1);
     return lisp_make_symbol(name, length);
 }
 
@@ -1430,7 +1512,12 @@ const struct lisp_primitive lisp_primitives[] = {
     { "STRING=", p_string_same, 2, 2 },
     { "STRING-EQUAL", p_string_equal, 2, 2 },
     { "STRING-LESSP", p_string_lessp, 2, 2 },
+    { "STRING-UPCASE", p_string_upcase, 1, 1 },
+    { "STRING-DOWNCASE", p_string_downcase, 1, 1 },
+    { "CHAR-UPCASE", p_char_upcase, 1, 1 },
+    { "CHAR-DOWNCASE", p_char_downcase, 1, 1 },
     { "%STRING-APPEND", p_string_append, 0, LISP_MANY },
+    { "%JOIN", p_join, 1, 1 },
     { "CHAR", p_char, 2, 2 },
     { "SCHAR", p_char, 2, 2 },
     { "%SET-CHAR", p_set_char, 3, 3 },
@@ -1531,6 +1618,9 @@ const struct lisp_primitive lisp_primitives[] = {
     { "CLARA.UNSAFE:PCI-CONFIGURATION", lisp_p_pci_configuration, 0, 0 },
     { "CLARA.UNSAFE:KEYBOARD-BREAK", lisp_p_keyboard_break, 0, 0 },
     { "CLARA.UNSAFE:MEMORY-STRING", lisp_p_memory_string, 2, 2 },
+    { "CLARA.UNSAFE:STRING-BYTES", lisp_p_string_bytes, 1, 1 },
+    { "CLARA.UNSAFE:STRING-MEMORY", lisp_p_string_memory, 2, 2 },
+    { "CLARA.UNSAFE:HEAP-IMAGE", lisp_p_heap_image, 0, 0 },
     { "CLARA.UNSAFE:FRAMEBUFFER", lisp_p_framebuffer, 0, 0 },
     { "CLARA.UNSAFE:SERIAL-DEVICE", lisp_p_serial_device, 0, 0 },
     { "CLARA.UNSAFE:SERIAL-BYTE", lisp_p_serial_byte, 0, 0 },

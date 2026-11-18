@@ -468,3 +468,68 @@ LISP_PRIMITIVE(lisp_p_memory_string)
                             argv[1]);
     return lisp_string_from_utf8((const void *)(uintptr_t)addr, bytes);
 }
+
+/* The other way. A string holds code points, and what a disk holds of a
+ * text is UTF-8: (string-bytes string) is how many bytes the text takes
+ * there, and (string-memory string address) writes them out from that
+ * address on, into memory that the caller has that much of, and says how
+ * many they were. */
+static unsigned utf8(uint32_t c, uint8_t bytes[4])
+{
+    if (c < 0x80) {
+        bytes[0] = (uint8_t)c;
+        return 1;
+    }
+    if (c < 0x800) {
+        bytes[0] = (uint8_t)(0xc0 | c >> 6);
+        bytes[1] = (uint8_t)(0x80 | (c & 0x3f));
+        return 2;
+    }
+    if (c < 0x10000) {
+        bytes[0] = (uint8_t)(0xe0 | c >> 12);
+        bytes[1] = (uint8_t)(0x80 | (c >> 6 & 0x3f));
+        bytes[2] = (uint8_t)(0x80 | (c & 0x3f));
+        return 3;
+    }
+    bytes[0] = (uint8_t)(0xf0 | c >> 18);
+    bytes[1] = (uint8_t)(0x80 | (c >> 12 & 0x3f));
+    bytes[2] = (uint8_t)(0x80 | (c >> 6 & 0x3f));
+    bytes[3] = (uint8_t)(0x80 | (c & 0x3f));
+    return 4;
+}
+
+static uint64_t utf8_bytes(const struct lisp_string *s)
+{
+    uint8_t bytes[4];
+    uint64_t total = 0;
+
+    for (uint64_t i = 0; i < lisp_length(s->header); i++)
+        total += utf8(s->chars[i], bytes);
+    return total;
+}
+
+LISP_PRIMITIVE(lisp_p_string_bytes)
+{
+    (void)argc;
+    if (!lisp_is(argv[0], LISP_STRING))
+        return lisp_wants("a string", argv[0]);
+    return lisp_fixnum((int64_t)utf8_bytes(lisp_as_string(argv[0])));
+}
+
+LISP_PRIMITIVE(lisp_p_string_memory)
+{
+    const struct lisp_string *s = lisp_as_string(argv[0]);
+    uint64_t addr, total;
+    uint8_t *at;
+
+    (void)argc;
+    if (!lisp_is(argv[0], LISP_STRING))
+        return lisp_wants("a string", argv[0]);
+    total = utf8_bytes(s);
+    if (!number(argv[1], &addr) || !mapped(addr, total))
+        return NIL;
+    at = (uint8_t *)(uintptr_t)addr;
+    for (uint64_t i = 0; i < lisp_length(s->header); i++)
+        at += utf8(s->chars[i], at);
+    return lisp_fixnum((int64_t)total);
+}
