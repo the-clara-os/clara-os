@@ -42,12 +42,13 @@ manager, and the applications are Lisp programs loaded into that world.
   interpreter written in C. A compiler, to bytecode or native code, is
   written in Lisp once the world can host it; the interpreter stays as the
   bootstrap and the fallback.
-- **The image is the system.** Booting means loading a saved heap image from
-  disk and resuming it with the window manager running. Until images exist,
-  the boot handoff reads Lisp source files from the ESP through the UEFI
-  file protocol before ExitBootServices, so no disk driver is needed early:
-  every file in the ESP's `\clara` directory, which the build fills from
-  lisp/.
+- **The image is the system.** Booting means taking a saved heap image for
+  the heap and starting the world that is in it, with the window manager
+  running once there is one ("Images", below). The boot handoff reads every
+  file in the ESP's `\clara` directory through the UEFI file protocol
+  before ExitBootServices, so no disk driver is needed to start: the image
+  when there is one, and the Lisp sources that the build puts there from
+  lisp/, which a machine without an image makes its world from.
 - **Threads are substrate threads.** A Lisp thread is a kernel thread with a
   Lisp-visible dynamic-binding stack. The garbage collector runs while no
   other Lisp thread does; precise, non-moving mark-sweep first, something
@@ -77,9 +78,11 @@ manager, and the applications are Lisp programs loaded into that world.
   itself does so during the boot and panics when a check fails, so a boot
   that reaches its last line has passed. The boot test also types at the
   kernel over the serial port, and what comes back has to be the session
-  in tools/session.txt, to the byte. Lisp code is also tested on the host
-  under SBCL, where a test can look at what a boot cannot: `make test`
-  runs lisp/host/tests.lisp before it boots anything.
+  in tools/session.txt, to the byte. A machine boots from a disk that is
+  made for it, writes to it, and boots a second time from what it left
+  there. Lisp code is also tested on the host under SBCL, where a test can
+  look at what a boot cannot: `make test` runs lisp/host/tests.lisp before
+  it boots anything.
 - C11, freestanding, no libc, `-Wall -Wextra -Werror`. The targets are LLP64,
   so `long` is 32 bits: the kernel uses the stdint types and never `long`.
 
@@ -544,13 +547,25 @@ architectures (kernel/vm.c).
   system looks at what was read where it lies, a byte or a word at an
   address, as the other drivers look at their devices' memory, and Lisp
   gets what a file holds in one piece: its text as a string, or the page
-  frames themselves for whoever can use those. There is no vector of
-  bytes yet for anything between the two.
+  frames themselves for whoever can use those. The other way is the same:
+  a text is written out into page frames, and those become a file. There
+  is no vector of bytes yet for anything between the two.
 - The first file system is FAT, because that is what the firmware boots
   from: the volume that the kernel came from is there to be read without
   another format having to be made up, on the tests' machines and in UTM
-  alike. It is read and not written. Writing it comes with the first
-  thing that has to be kept, the image of M10.
+  alike. And it is there to be written to, which is what an image needs:
+  a file that the firmware finds at the next boot.
+- A file is written whole, and in an order: its bytes into clusters that
+  are free, then the table that makes those clusters a file, in every
+  copy of it, and last the entry in a directory that says where the file
+  begins and how long it is. A machine that stops at any moment of that
+  leaves clusters that belong to nobody, which a program that mends
+  volumes gives back, and never a name that leads to what is not a file.
+  A file that takes the place of another keeps the other's entry, and the
+  other is whole until that entry changes. Nothing is written in the
+  middle of a file, and what a program writes to a stream is kept until
+  the stream is closed. There is no clock, so a file has no date but the
+  first that the format knows.
 - Volumes are found by looking: a disk that is one volume from its first
   sector on, the partitions of a table in that sector, the partitions of
   a GUID partition table. Which of the three kinds of FAT a volume is
@@ -562,24 +577,98 @@ architectures (kernel/vm.c).
   they are for, a name that means the same on every file system, is
   nothing this system needs while it has one. Letters match whatever
   their case, as FAT has it.
-- The language's own functions for files, OPEN, LOAD, PROBE-FILE and
-  DIRECTORY, are in lisp/boot.lisp and know nothing of disks. A file
-  system is two functions that it hands over when it has started
-  (`clara:provide-files`): one that gives the text of the file of a
-  name, and one that gives the names in a directory. That is the shape a
+- The language's own functions for files, OPEN, LOAD, PROBE-FILE,
+  DIRECTORY and DELETE-FILE, are in lisp/boot.lisp and know nothing of
+  disks. A file system is four functions that it hands over when it has
+  started (`clara:provide-files`): one that gives the text of the file of
+  a name, one that gives the names in a directory, one that makes a file
+  of bytes in memory, and one that deletes a file. That is the shape a
   stream has, for the same reason: generic functions wait for CLOS. A
-  program written with those four runs under SBCL on the host's files.
+  program written with those five runs under SBCL on the host's files.
 - LOAD takes a file from the disk when the file system has one of that
   name, and otherwise from the files that the boot handoff read. Those
   stay: the world is loaded from them before there is any driver, and a
-  machine whose disk has no driver here still starts. An image will
-  take their place.
+  machine whose disk has no driver here still starts. An image takes
+  their place as what a world is made of, and they are read all the same,
+  for the boot at which an image is refused.
 - The disk driver and the file system are tested three times over. Under
   SBCL, on disks that the tests make up, which look at how they are
   asked, and on volumes that the tests lay out by the specification, of
-  every kind, in pieces and back to front; by booting, on the volume
-  that QEMU makes of a directory, which is a second opinion on the
-  format; and by hand on volumes that macOS made, which is a third.
+  every kind, in pieces and back to front; a volume that was written to
+  is looked at there by a checker of the tests' own, which reads its
+  bytes without the file system, also after a disk that stopped at each
+  request of a write in turn. By booting, on disks that tools/mkdisk.py
+  makes, of the three kinds: the firmware reads what the kernel wrote,
+  since it boots from it again, and after every boot the host's own
+  program for mending FAT volumes has to find nothing to mend, which is a
+  second opinion and a third. And by hand on volumes that macOS made,
+  where its own driver reads the files back.
+
+## Images (decided in M10, 2026-11-17)
+
+- A world is saved by writing its heap out. Everything that is defined is
+  an object in the heap, the heap is at the same addresses on every
+  machine and every boot, and nothing in it is an address of the kernel's
+  own: so the file is the heap word for word, with the substrate's hold
+  on it, `lisp_roots`, and a few words that say what it is
+  (kernel/lisp/image.c). Nothing is moved and nothing translated, on the
+  way out or on the way in.
+- An image is made at one moment: by a function in C that comes to no
+  safe point, so that no other thread has the runtime while the heap is
+  copied into page frames. Writing those to a file is Lisp's part, by way
+  of the file system, like any other file (`clara:save-image`). The file
+  is `\clara\clara.image` on the boot volume, and the boot handoff reads
+  it with the other files there, before the kernel has a driver for
+  anything.
+- The machine is not in the image. A thread is a stack of calls in the
+  kernel's code, which lies somewhere else at every boot and in every
+  build, so no thread comes back, the one that saved included: saving is
+  not a place that a world wakes up in. It begins again where a new world
+  does, with the console, the drivers and the file system started afresh
+  and the listener at its prompt; what a driver knew of its device was
+  true of another boot. So the same lines of C start a world that was
+  loaded from the files and one that came as an image. The alternative, a
+  world that goes on in the middle of what it was doing, needs the
+  evaluator's own state in the heap, which an interpreter that calls
+  itself in C does not have.
+- What comes back of the threads, the locks and the events is the
+  objects, without what they were to the substrate: a thread that ran was
+  stopped when its machine was, a lock is free, and nobody waits for
+  anything.
+- A special variable comes back with the value it has outside every
+  binding. Its value is in the symbol, and what is there while a thread
+  runs is that thread's view: so for as long as the heap is copied the
+  bindings of the thread that saves are undone, as they are whenever a
+  thread makes way for another.
+- An image outlives the kernel that saved it. A function in C is in the
+  heap as its place in a table, and a kernel with other rows in its
+  tables gives each such function its place again by its name; what the
+  newer kernel has more of is added to the world. What an older world
+  has in Lisp stays as it was saved: a newer boot.lisp is loaded into it
+  by whoever wants it.
+- An image is refused, with the reason in the boot report, and the world
+  is made from the files as on a machine without one: when the file is
+  not whole, by its length or by its checksum, which is taken of the heap
+  where it lies after the copy; when it was saved on the other
+  architecture, since what is defined in a world depends on the machine;
+  when its objects are not laid out as this kernel has them, which is a
+  number in image.c that a change to lisp.h has to raise; and when it has
+  a function in C that this kernel has not. The files are read at every
+  boot for that reason, and stay in memory as before.
+- A world that came as an image is not tested by the kernel. The tests
+  of the reader, the collector and the evaluator are for a world that
+  this boot has made, and somebody else's world is not the place to try
+  what a new one has to be like. The first thing done in it is a
+  collection: that frees what the threads held that are gone, and finds
+  the free blocks of the heap, which are in no list in a file.
+- Images are tested by booting twice. Each machine of `make test` ends
+  its first session by saving the world to the disk it booted from, with
+  a lock held, a thread waiting and names read in a package that uses no
+  other; the second boot starts from a copy of that disk, has to say that
+  its heap is an image, and answers for what the first one defined
+  (tools/resumed.txt), the evaluator's whole self-test among it. One more
+  machine boots from such a disk with a byte of the image changed, and
+  has to refuse it.
 
 ## Conventions
 

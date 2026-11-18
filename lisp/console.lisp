@@ -348,8 +348,16 @@
   (setq *stream* (clara:make-stream :write-string #'write-text :read-line #'read-text-line)))
 
 ;; Take the machine's console over from the substrate: from here on,
-;; *STANDARD-OUTPUT* and *STANDARD-INPUT* are this file's.
+;; *STANDARD-OUTPUT* and *STANDARD-INPUT* are this file's. What this file
+;; knew of a screen, of a cursor on it and of keys that were typed is
+;; forgotten first: in a world that was saved and has started again, that
+;; was another machine's.
 (defun start ()
+  (setq *screen* nil
+        *cursor* nil
+        *reading* nil
+        *keys* nil
+        *after-return* nil)
   (multiple-value-bind (kind base) (clara.unsafe:serial-device)
     (use-serial kind base))
   (setq *typed* (clara.unsafe:interrupt-event :serial))

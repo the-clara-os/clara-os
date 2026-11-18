@@ -1,10 +1,16 @@
 #!/bin/sh
-# Boot the built ESP directory under QEMU with EDK2 firmware.
+# Boot the built ESP directory under QEMU with EDK2 firmware, from a disk
+# that is made of it.
 # usage: tools/run.sh <x86_64|aarch64> [extra qemu args...]
 # env:   SERIAL=mon:stdio|stdio|file:path   MEM=512M   NO_HVF=1 (force TCG on aarch64)
 #        (mon:stdio, the default, hands Ctrl-C to the kernel, which stops a
 #        computation with it; Ctrl-A X leaves QEMU. With stdio, Ctrl-C ends QEMU.)
-#        DISK=build/claraos.img (boot the raw image instead of the ESP directory)
+#        DISK=build/claraos.img (boot that raw image, and write to it, instead of
+#        build/disk-<arch>.img, the disk that tools/mkdisk.py makes of the ESP
+#        directory. That one is made again whenever the directory has something
+#        newer, a kernel or a Lisp file, and is kept until then, with whatever
+#        the kernel wrote to it: a world that was saved starts again at the next
+#        run, and is gone after the next build.)
 #        INPUT="-device virtio-keyboard-pci ..." (the keyboard and the pointers the
 #        machine gets; the default is a virtio keyboard, mouse and tablet, and
 #        INPUT= gives a machine with none of them)
@@ -38,9 +44,12 @@ firmware() {
 }
 
 if [ -n "${DISK:-}" ]; then
-    esp_file=$DISK
+    disk=$DISK
 else
-    esp_file=fat:rw:$esp
+    disk=build/disk-$arch.img
+    if [ ! -f "$disk" ] || [ -n "$(find "$esp" -newer "$disk" -print | head -1)" ]; then
+        python3 -I tools/mkdisk.py "$esp" "$disk"
+    fi
 fi
 
 case "$arch" in
@@ -50,7 +59,7 @@ x86_64)
     exec qemu-system-x86_64 -machine q35 -m "$mem" \
         -drive if=pflash,format=raw,readonly=on,file="$code" \
         -drive if=pflash,format=raw,file="$vars" \
-        -drive if=none,id=esp,format=raw,file="$esp_file" -device virtio-blk-pci,drive=esp,bootindex=0 $input \
+        -drive if=none,id=esp,format=raw,file="$disk" -device virtio-blk-pci,drive=esp,bootindex=0 $input \
         -serial "$serial" -no-reboot "$@"
     ;;
 aarch64)
@@ -66,7 +75,7 @@ aarch64)
     exec qemu-system-aarch64 -machine virt -accel "$accel" -cpu "$cpu" -m "$mem" \
         -drive if=pflash,format=raw,readonly=on,file="$code" \
         -drive if=pflash,format=raw,file="$vars" \
-        -drive if=none,id=esp,format=raw,file="$esp_file" -device virtio-blk-pci,drive=esp,bootindex=0 $input \
+        -drive if=none,id=esp,format=raw,file="$disk" -device virtio-blk-pci,drive=esp,bootindex=0 $input \
         -device ramfb -serial "$serial" -no-reboot "$@"
     ;;
 *)

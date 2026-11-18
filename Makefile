@@ -1,7 +1,11 @@
-# ClaraOS build. Needs clang, lld and qemu with EDK2 firmware, and SBCL
-# for the tests of the Lisp files on the host.
+# ClaraOS build. Needs clang, lld and qemu with EDK2 firmware, SBCL for the
+# tests of the Lisp files on the host, Python for the disks that the
+# machines boot from, and the host's checker of FAT volumes for what a
+# kernel has written to one: macOS has it, fsck_msdos, and elsewhere it is
+# fsck.fat of the dosfstools.
 #   macOS:  brew install llvm lld qemu sbcl
 #   Ubuntu: apt install clang lld make qemu-system-x86 qemu-system-arm ovmf qemu-efi-aarch64 netcat-openbsd sbcl
+#           python3 dosfstools
 # Homebrew keeps llvm and lld out of the PATH, so they are looked for where it
 # puts them; anywhere else clang and lld-link come from the PATH. LLVM= and
 # LLD= name other directories.
@@ -67,17 +71,34 @@ host-test:
 
 # Then the boots. AArch64 boots twice, once for each version of its interrupt controller:
 # version 3 as UTM runs it, accelerated where the host can, and version 2
-# emulated, because QEMU's hvf has no version 2. Then once more for
+# emulated, because QEMU's hvf has no version 2. Each of the three machines
+# boots from a disk of its own kind, a volume of 32 bits behind a GUID
+# partition table, one of 16 behind a table of partitions of old, and one
+# of 12 that is the whole disk, and each boots twice: the session of the
+# first boot writes files to the volume and ends by saving the world there
+# (tools/session.txt), and the second boot, from a copy of that disk, has
+# to find the image, start from it, and answer for what the first one
+# defined (tools/resumed.txt). After every boot the host's own checker of
+# FAT volumes looks at the disk. Then AArch64 once more for
 # tools/stress.txt, a session in which the collector runs at every safe
 # point of the evaluator while boot.lisp is loaded again and the
 # evaluator's self-test is repeated: whatever the evaluator fails to hold
 # on to is gone at its next call. That takes the best part of a minute
-# where AArch64 is emulated.
+# where AArch64 is emulated. Its disk is the one with the saved world,
+# with one byte of it changed: the kernel has to say so, and start from the
+# files.
+RESUME := SESSION=tools/resumed.txt EXPECT='^lisp: the heap is an image'
 test: all host-test
 	tools/boottest.sh x86_64
-	tools/boottest.sh aarch64 -machine gic-version=3
-	NAME=aarch64-gic2 NO_HVF=1 tools/boottest.sh aarch64 -machine gic-version=2
-	NAME=aarch64-stress SESSION=tools/stress.txt TIMEOUT=300 tools/boottest.sh aarch64 -machine gic-version=3
+	NAME=x86_64-resumed DISK=$(BUILD)/boot-x86_64.img $(RESUME) tools/boottest.sh x86_64
+	MKDISK="--fat 16 --table mbr" tools/boottest.sh aarch64 -machine gic-version=3
+	NAME=aarch64-resumed DISK=$(BUILD)/boot-aarch64.img $(RESUME) tools/boottest.sh aarch64 -machine gic-version=3
+	NAME=aarch64-gic2 NO_HVF=1 MKDISK="--fat 12 --table none" tools/boottest.sh aarch64 -machine gic-version=2
+	NAME=aarch64-gic2-resumed NO_HVF=1 DISK=$(BUILD)/boot-aarch64-gic2.img $(RESUME) \
+		tools/boottest.sh aarch64 -machine gic-version=2
+	NAME=aarch64-stress SESSION=tools/stress.txt TIMEOUT=300 DISK=$(BUILD)/boot-aarch64.img SPOIL=1 \
+		EXPECT='^lisp: clara.image is not resumed: it is not what was saved' \
+		tools/boottest.sh aarch64 -machine gic-version=3
 
 image: all
 	tools/mkimage.sh

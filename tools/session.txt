@@ -183,9 +183,57 @@ error: /EFI is a directory, and not a file
 (2048 793162)
 > (handler-case (clara.disk:read-sectors (car (last (clara.disk:disks))) 2047 2 0) (error () 'no-such-sectors))
 NO-SUCH-SECTORS
+> (with-open-file (out "/notes.txt" :direction :output) (format out "one~%two λ~%") 'written)
+WRITTEN
+> (with-open-file (in "/notes.txt") (list (read-line in) (read-line in) (read-line in nil 'end)))
+("one" "two λ" END)
+> (with-open-file (out "/notes.txt" :direction :output) (write-line "never" out))
+error: OPEN: there is a file /notes.txt already, and :IF-EXISTS does not say :SUPERSEDE or :APPEND
+> (with-open-file (out "/notes.txt" :direction :output :if-exists :append) (write-line "three" out))
+"three"
+> (with-open-file (out "/notes.txt" :direction :output :if-exists nil) (if out (write-line "never" out) 'no-stream))
+NO-STREAM
+> (with-open-file (out "/clara/a file with a long name.text" :direction :output :if-exists :supersede)
+    (dotimes (i 300) (format out "line ~D of 300~%" i)))
+NIL
+> (list (probe-file "/CLARA/A File With A Long Name.TEXT") (length (clara.fat:file-text "/clara/afilew~1.tex")))
+("/CLARA/a file with a long name.text" 4690)
+> (handler-case (with-open-file (out "/clara/unfinished.txt" :direction :output) (write-line "begun" out) (car 5))
+    (error () (probe-file "/clara/unfinished.txt")))
+NIL
+> (with-open-file (in "/notes.txt") (list (read-line in) (read-line in) (read-line in) (read-line in nil 'end)))
+("one" "two λ" "three" END)
+> (list (delete-file "/notes.txt") (probe-file "/notes.txt") (directory "/*.txt"))
+(T NIL NIL)
+> (delete-file "/notes.txt")
+error: there is no file /notes.txt
+> (with-open-file (out "/clara/kept.lisp" :direction :output)
+    (format out "(defvar *from-a-file* ~S)~%" "written by ClaraOS"))
+NIL
+> (list (load "/clara/kept.lisp") *from-a-file*)
+(T "written by ClaraOS")
+> (with-open-file (out "/EFI/BOOT" :direction :output :if-exists :supersede) (write-line "never" out))
+error: /EFI/BOOT is a directory, and not a file
 > (defpackage "PLAY" (:use "COMMON-LISP") (:export "BALL"))
 #<PACKAGE "PLAY">
 > (in-package "PLAY")
 #<PACKAGE "PLAY">
 > (list 'ball 'bat (symbol-package 'bat) 'cl-user::fact)
 (BALL BAT #<PACKAGE "PLAY"> COMMON-LISP-USER::FACT)
+> (in-package "COMMON-LISP-USER")
+#<PACKAGE "COMMON-LISP-USER">
+> (defvar *held* (clara:make-lock "held"))
+*HELD*
+> (defvar *bell* (clara:make-event "bell"))
+*BELL*
+> (defvar *waiter* (clara:make-thread (lambda () (clara:wait-event *bell*)) :name "waiter"))
+*WAITER*
+> (defpackage "BARE" (:use))
+#<PACKAGE "BARE">
+> (in-package "BARE")
+#<PACKAGE "BARE">
+> (clara:with-lock-held (cl-user::*held*)
+    (clara:make-thread (cl:lambda () (clara:with-lock-held (cl-user::*held*) 'in-line)) :name "in line")
+    (clara:thread-yield)
+    (cl:let ((cl-user::*depth* 5)) (cl:list (clara:save-image) (cl-user::depth))))
+("/clara/clara.image" 5)

@@ -87,6 +87,51 @@ void lisp_heap_init(void)
     g_low = pmm_free_frames() / 16 * PAGE_SIZE;
 }
 
+/* For an image (image.c): the heap, which is empty, becomes a copy of the
+ * bytes that a heap was when it was saved. Says 0 when it is not empty, or
+ * when the machine has not the memory for that and for going on. What
+ * comes back has been neither marked nor swept: the free blocks of the heap
+ * that was saved are in no list until the next collection finds them, and
+ * until then whatever is made goes after the last object. */
+int lisp_heap_restore(const void *from, uint64_t bytes)
+{
+    if (g_next != VM_HEAP_BASE || bytes % sizeof(lisp) || bytes > VM_HEAP_SIZE ||
+        pmm_free_frames() < KEEP + bytes / PAGE_SIZE + g_low / PAGE_SIZE)
+        return 0;
+    while (g_end - VM_HEAP_BASE < bytes) {
+        uint64_t frame = pmm_alloc(1);
+
+        if (!frame)
+            return 0;
+        vm_map(g_end, frame, 1, VM_WRITE);
+        g_end += PAGE_SIZE;
+    }
+    memcpy((void *)(uintptr_t)VM_HEAP_BASE, from, bytes);
+    g_next = VM_HEAP_BASE + bytes;
+    return 1;
+}
+
+/* And empty again, for an image that could not be used after all: the
+ * next object is the first, and the page frames go back to the kernel, so
+ * that the heap begins the way it does on a machine without an image. */
+void lisp_heap_empty(void)
+{
+    g_next = VM_HEAP_BASE;
+    while (g_end > VM_HEAP_BASE) {
+        uint64_t frame;
+
+        g_end -= PAGE_SIZE;
+        frame = vm_lookup(g_end);
+        vm_unmap(g_end, 1);
+        pmm_free(frame, 1);
+    }
+    memset(g_bin, 0, sizeof g_bin);
+    g_bins = 0;
+    g_large = NULL;
+    g_free_words = g_large_words = 0;
+    g_since = 0;
+}
+
 /* How many words the object under this header takes, the header included,
  * or 0 when it is no header at all. The one place that knows, for making
  * objects and for walking past them. */

@@ -32,10 +32,10 @@ starting one, say what it will take, and let Julio choose.
 Build with `make` (Homebrew's llvm and lld under /opt/homebrew/opt when they
 are there, otherwise clang and lld-link from the PATH; `LLVM=` and `LLD=`
 name other directories). `make test` runs the host tests of the Lisp
-files under SBCL (`make host-test`, a second), then boots both
-architectures headless under QEMU in about half a minute, types a session
-at each kernel, and saves what each screen shows to
-build/screen-<arch>.png; look at those images when a change touches the
+files under SBCL (`make host-test`, four seconds), then boots both
+architectures headless under QEMU, seven boots in about a minute and a
+half, types a session at each kernel, and saves what each screen shows to
+build/screen-<name>.png; look at those images when a change touches the
 display. `make run-aarch64` and `make run-x86_64` open a QEMU window with
 serial on the terminal; `make image` produces the UTM disk.
 
@@ -123,7 +123,13 @@ Rules:
   (`INPUT=` for none, `INPUT="-device ..."` for others), and its boot
   volume as a virtio disk with `bootindex=0`, which is what the firmware
   boots from whatever build/vars-<arch>.fd remembers. A boot that ends at
-  the firmware's `Shell>` means the firmware did not find that disk.
+  the firmware's `Shell>` means the firmware did not find that disk. The
+  disk is a file that tools/mkdisk.py makes of build/esp, a FAT volume of
+  any of the three kinds behind either table of partitions or none
+  (`--fat`, `--table`): build/disk-<arch>.img for `make run-*`, made again
+  when build/esp has something newer and kept until then with whatever
+  the kernel wrote to it, a saved world among it; and for a boot of the
+  tests build/boot-<name>.img, new every time.
 - Disks and files. lisp/disk.lisp is the driver for virtio's disks:
   sectors of 512 bytes, into and out of page frames, one request at a
   time. lisp/fat.lisp reads FAT volumes on them, and hands the language
@@ -140,27 +146,69 @@ Rules:
   front, or wrong in the ways its options say, and `make-disk` puts
   volumes behind a table of partitions. A new case of what a disk can
   hold is a row or an option there. `clara.host:allocated-pages` before
-  and after says whether page frames were kept. The boot volume of the
-  boots is a directory that QEMU shows as a disk: read it, and never
-  write a sector to it. The disk to write to is the last one,
+  and after says whether page frames were kept. The boot volume of a
+  boot is a real disk, and the session writes files to it; the disk for
+  writing sectors that are nobody's is the last one,
   build/scratch-<name>.img, which tools/boottest.sh makes anew for every
-  boot. `DISK=build/claraos.img tools/boottest.sh <arch>` boots the
-  image that `make image` makes, a GUID partition table and a volume of
-  the kind 32, and the session has to pass there as well: macOS puts
-  `._` files beside the others, so a session shows a file or a pattern,
-  not a whole directory.
+  boot. `DISK=file tools/boottest.sh <arch>` boots a copy of that disk,
+  so the file itself is never written to: `DISK=build/claraos.img` is
+  the image that `make image` makes, a GUID partition table and a volume
+  of the kind 32, and both sessions have to pass there as well: macOS
+  puts `._` files beside the others, so a session shows a file or a
+  pattern, not a whole directory.
+- Writing files (lisp/fat.lisp). A file is written in an order that a
+  machine can stop in at any moment: its bytes into free clusters, then
+  the table, in every copy, then the entry in its directory, and only
+  then are the clusters of the file that was there before given back.
+  Whatever changes the table does it inside `with-table`, which takes
+  what is held of the table to the disk at the end and lets go of it when
+  something fails, and with the volume's lock. After every boot
+  tools/boottest.sh has the host's own checker look at the volume
+  (fsck_msdos on the Mac, fsck.fat on Linux), and the host tests have
+  `inspect-volume`, which reads a volume's bytes without the file system
+  and says what is out of order: a new way of writing gets a round there,
+  and the test of a disk that stops at each request in turn says whether
+  the order still holds. What a test puts on a volume as dirt must not
+  look like the name of a volume, bit 3 of the byte at 11: a directory is
+  read past those.
+- Images (kernel/lisp/image.c, `clara:save-image` in lisp/boot.lisp). A
+  world that was saved comes back as its heap and nothing else, so
+  whatever a file in lisp/ knows of the machine it learns in its START,
+  never in a DEFVAR's first value, which is evaluated once, in the world
+  that is saved: START forgets what it knew, does not give back what it
+  held, since that was another boot's, and is called at every boot,
+  image or not. A change to what an object is in memory, to the tags, to
+  `enum lisp_type`, to a struct of lisp.h or to `lisp_roots`, raises
+  `FORMAT` in image.c in the same change, or an older image is taken for
+  a heap that it is not. A row can go anywhere in `lisp_primitives` and
+  in the table of special forms: an image finds its functions in C by
+  their names, so it is a name that must not change, and a function that
+  is taken out makes older images refused. A new word in an object that
+  holds an address of the kernel's is cleared in `settle`. To try an
+  image by hand: `tools/boottest.sh <arch>`, then
+  `NAME=<arch>-resumed DISK=build/boot-<arch>.img SESSION=tools/resumed.txt tools/boottest.sh <arch>`;
+  `SPOIL=1` changes a byte of the image first, and `EXPECT=` is a line
+  that the boot report has to have. The boot report says
+  `lisp: the heap is an image` or `lisp: clara.image is not resumed:`
+  and why; a world that came as an image skips the tests of the reader,
+  the collector and the evaluator, which `(cl::%self-test)` at its prompt
+  makes up for.
 - LOAD is Lisp since boot.lisp defines it, over two functions in C:
   `%load`, the boot files, and `%load-text`, a text with a name. A text
   of the evaluator's self-test must not reach the file system (PROBE-FILE,
   DIRECTORY, OPEN with a name that could be there): the texts run again
   with a collection at every safe point, and one lookup would take
   minutes on CI.
-- `make test` boots four times: x86_64, AArch64 with GIC version 3,
-  AArch64 emulated with GIC version 2, whose files in build/ are named
-  aarch64-gic2, and AArch64 once more for tools/stress.txt (aarch64-stress),
-  a session that has the collector run at every safe point of the
-  evaluator while boot.lisp loads again and the evaluator's self-test is
-  repeated. The serial port of each is QEMU's standard input and
+- `make test` boots seven times. Three machines, x86_64, AArch64 with
+  GIC version 3, and AArch64 emulated with GIC version 2, whose files in
+  build/ are named aarch64-gic2, each from a disk of another kind, and
+  each twice: the first boot is typed tools/session.txt, which ends by
+  saving the world, and the second, named with `-resumed` at its end,
+  starts from that image and is typed tools/resumed.txt. Then AArch64
+  once more for tools/stress.txt (aarch64-stress), a session that has the
+  collector run at every safe point of the evaluator while boot.lisp
+  loads again and the evaluator's self-test is repeated; its disk has an
+  image with a byte changed, which it has to refuse. The serial port of each is QEMU's standard input and
   output: the log is what the kernel printed, and a FIFO feeds it what
   the session types. QEMU's hvf has no version 2, and UTM uses version 3.
   tools/boottest.sh passes any further arguments on to QEMU, which is how
@@ -175,7 +223,8 @@ Rules:
   A register added to the frame is switched with the rest; a register
   left out of it is shared by all threads.
 - lisp/*.lisp is copied to the ESP's \clara directory, and the handoff
-  (kernel/boot.c) reads every file there into a `struct boot_file`. The
+  (kernel/boot.c) reads every file there into a `struct boot_file`, the
+  image too when there is one. Unless the world is an image's, the
   kernel loads boot.lisp itself and panics when that fails, with the file
   and the line. Any other file is loaded by `(load "name.lisp")`, from
   boot.lisp or from the prompt.
@@ -349,7 +398,11 @@ Rules:
   Shift, and a session does not end with a `^M`. What a machine answered is in
   build/session-<name>.txt, and `SESSION=file tools/boottest.sh <arch>`
   types another session. A boot that panics or faults fails at once,
-  without waiting for the timeout.
+  without waiting for the timeout. tools/resumed.txt is the session for
+  a world that came back: what the first session defined has to be
+  there, and what it left in the way, a lock that was held, a thread that
+  waited, a package that uses no other, has to be out of it. Whatever a
+  session of the first boot adds to the world can be asked for there.
 - Whatever a session leaves open goes into ROADMAP.md in the same change,
   under the milestone that settles it: a shortcut, a provisional decision,
   a limit, a check that was only run by hand. Saying it in the summary at
@@ -368,9 +421,15 @@ Rules:
   without warnings under both compilers, and a boot check must not depend
   on how fast the machine is. The tools `make test` needs are installed in
   the workflow's first step and listed at the top of the Makefile; a new
-  one goes into both in the same change. The serial logs and screenshots of
+  one goes into both in the same change. fsck.fat there is stricter than
+  the Mac's fsck_msdos, so a change to tools/mkdisk.py or to how
+  lisp/fat.lisp writes is tried in the container below before it is
+  pushed. The serial logs and screenshots of
   a run are in its artifact, boot-reports.
 - To see a change the way CI will before pushing it, with Docker running:
   an ubuntu:24.04 container with the packages from the workflow, a copy of
-  the tree without build/, and `make test` in it. build/ itself must not be
+  the tree without build/, and `make test` in it. In zsh a pattern that
+  matches no file ends the whole command line before it runs: a line
+  that begins with `rm build/*x*` and goes on to `make test` and a `grep`
+  of its log then shows the log of the run before. build/ itself must not be
   shared with the container: the objects in it come from another compiler.

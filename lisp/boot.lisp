@@ -41,7 +41,7 @@
           prin1 princ print format finish-output force-output
           make-string-output-stream get-output-stream-string with-output-to-string
           make-string-input-stream read-line read-from-string
-          open close with-open-file probe-file directory))
+          open close with-open-file probe-file directory delete-file))
 
 ;;; Control
 
@@ -685,7 +685,8 @@
   write       ; a function of a string, or NIL for a stream that cannot be written to
   read        ; a function of no arguments, or NIL
   (fresh t)   ; nothing has been written since the last new line
-  parts)      ; of a string stream: what was written, the last first
+  parts       ; of a string stream: what was written, the last first
+  close)      ; a function of no arguments for CLOSE to call, when closing is more than letting go
 
 (defvar *standard-output* (make-%stream :write #'%console-write))
 (defvar *standard-input* (make-%stream))
@@ -760,10 +761,31 @@
             (setf (%stream-parts stream) (cons string (%stream-parts stream)))))
     stream))
 
+;; The strings of a list as one string. They go to %STRING-APPEND as its
+;; arguments, 200 at a time: what a program writes to a stream can be more
+;; strings than the evaluator's stack has room for arguments.
+(defun %join (strings)
+  (loop
+    (when (null (cdr strings))
+      (return (if strings (car strings) "")))
+    (let ((joined nil))
+      (loop
+        (when (null strings)
+          (return))
+        (let ((run nil) (count 0))
+          (loop
+            (when (or (null strings) (= count 200))
+              (return))
+            (setq run (cons (car strings) run)
+                  strings (cdr strings)
+                  count (1+ count)))
+          (setq joined (cons (apply #'%string-append (reverse run)) joined))))
+      (setq strings (reverse joined)))))
+
 (defun get-output-stream-string (stream)
   (let ((parts (reverse (%stream-parts stream))))
     (setf (%stream-parts stream) nil)
-    (apply #'%string-append parts)))
+    (%join parts)))
 
 (defmacro with-output-to-string ((variable) &body body)
   `(let ((,variable (make-string-output-stream)))
@@ -808,25 +830,52 @@
 ;;; to it and then its own name, with a slash before each, as in
 ;;; "/clara/boot.lisp". There are no pathnames. What knows about disks is
 ;;; Lisp that is loaded after this file (lisp/fat.lisp), and it says that
-;;; it is there with CLARA:PROVIDE-FILES, which it gives two functions: one
-;;; for the text of the file of a name, and one for the names of what the
+;;; it is there with CLARA:PROVIDE-FILES, which it gives its functions: one
+;;; for the text of the file of a name; one for the names of what the
 ;;; directory of a name holds, in order, a directory's with a slash at its
-;;; end, or NIL when there is no such directory. Until then, and on a
-;;; machine without a disk that has a driver, there are no files here, and
-;;; LOAD finds the ones that the kernel read from the boot volume as it
-;;; started.
+;;; end, or NIL when there is no such directory; one that makes a file of
+;;; a name out of bytes in memory; and one that deletes the file of a name.
+;;; Until then, and on a machine without a disk that has a driver, there
+;;; are no files here, and LOAD finds the ones that the kernel read from
+;;; the boot volume as it started.
 
-(defvar %files nil) ; the two functions, in a list, once a file system has said that it is there
+(defvar %files nil) ; the four functions, in a list, once a file system has said that it is there
 
-(defun %file-text (name)
+(defun %file-name (name)
   (unless (stringp name)
     (error "the name of a file is a string, and ~S is not one" name))
+  name)
+
+(defun %file-text (name)
   (if %files
-      (funcall (car %files) name)
-      (error "there is no file ~A: no disk has a file system that is known here" name)))
+      (funcall (car %files) (%file-name name))
+      (error "there is no file ~A: no disk has a file system that is known here" (%file-name name))))
 
 (defun %file-names (directory)
   (if %files (funcall (cadr %files) directory)))
+
+;; A file of a name, made of BYTES bytes of memory at ADDRESS, which is
+;; page frames, as a disk wants them.
+(defun %store-file (name address bytes)
+  (let ((store (caddr %files)))
+    (unless store
+      (error "the file ~A cannot be written: ~A" (%file-name name)
+             (if %files
+                 "the file system that is here reads files, and writes none"
+                 "no disk has a file system that is known here")))
+    (funcall store name address bytes)))
+
+;; A file of a name, made of a text: its characters as UTF-8, written out
+;; in page frames that are given back.
+(defun %write-file (name text)
+  (let* ((bytes (clara.unsafe:string-bytes text))
+         (pages (max 1 (floor (+ bytes 4095) 4096)))
+         (memory (clara.unsafe:allocate-memory pages)))
+    (unwind-protect
+         (progn
+           (clara.unsafe:string-memory text memory)
+           (%store-file name memory bytes))
+      (clara.unsafe:free-memory memory pages))))
 
 ;; A name without the slashes at its end, which a directory's may have.
 (defun %plain-name (name)
@@ -884,24 +933,75 @@
                 (setq found (cons (concatenate 'string directory entry) found))))
           (reverse found)))))
 
-;; A file to read from, a line at a time. Nothing writes a file yet.
-(defun open (name &key (direction :input))
-  (unless (eq direction :input)
-    (error "OPEN: a file can be read and not written yet, so there is none to open for ~S" direction))
-  (make-string-input-stream (%file-text name)))
+;; A stream that keeps what is written to it, after TEXT if there is some,
+;; and makes the file of a name out of all of it when it is closed: a file
+;; is written whole.
+(defun %output-file (name text)
+  (let ((stream (make-%stream)))
+    (setf (%stream-parts stream) (if text (list text))
+          (%stream-write stream) (lambda (string)
+                                   (setf (%stream-parts stream) (cons string (%stream-parts stream))))
+          (%stream-close stream) (lambda ()
+                                   (%write-file name (get-output-stream-string stream))))
+    stream))
 
-;; A stream that is closed gives nothing more, and takes nothing.
-(defun close (stream)
+;; A file to read from, a line at a time, or to write to. A file that is
+;; there already is an error unless :IF-EXISTS says what to do about it:
+;; :SUPERSEDE, a new file in its place; :APPEND, what is written goes after
+;; what the file holds; NIL, no stream. A file that is not there is made
+;; when it is opened for writing, and is an error when it is opened for
+;; reading, unless :IF-DOES-NOT-EXIST says NIL, no stream, or for writing
+;; :ERROR.
+(defun open (name &key (direction :input) (if-exists :error)
+                       (if-does-not-exist (if (eq direction :input) :error :create)))
+  (%file-name name)
+  (case direction
+    (:input
+     (if (or (eq if-does-not-exist :error) (probe-file name))
+         (make-string-input-stream (%file-text name))))
+    (:output
+     (let ((there (probe-file name)))
+       (cond ((and there (eq if-exists :error))
+              (error "OPEN: there is a file ~A already, and :IF-EXISTS does not say :SUPERSEDE or :APPEND" name))
+             ((and there (null if-exists)) nil)
+             ((and there (not (eq if-exists :supersede)) (not (eq if-exists :append)))
+              (error "OPEN: :IF-EXISTS can say :ERROR, :SUPERSEDE, :APPEND or NIL, and not ~S" if-exists))
+             ((and (not there) (eq if-does-not-exist :error))
+              (error "there is no file ~A" name))
+             ((and (not there) (null if-does-not-exist)) nil)
+             (t (%output-file name (if (and there (eq if-exists :append)) (%file-text name)))))))
+    (t (error "OPEN: a file is opened for :INPUT or for :OUTPUT, and not for ~S" direction))))
+
+;; A stream that is closed gives nothing more, and takes nothing. A file
+;; that was written to is made now, unless ABORT says that it is not to be.
+(defun close (stream &key abort)
   (unless (%stream-p stream)
     (error "~S is not a stream" stream))
-  (setf (%stream-read stream) nil
-        (%stream-write stream) nil)
+  (let ((close (%stream-close stream)))
+    (setf (%stream-read stream) nil
+          (%stream-write stream) nil
+          (%stream-close stream) nil)
+    (if (and close (not abort))
+        (funcall close)))
   t)
 
+;; The stream is closed whichever way control leaves the body; when that
+;; is not by its end, a file that was being written is not made.
 (defmacro with-open-file ((variable name &rest options) &body body)
-  `(let ((,variable (open ,name ,@options)))
-     (unwind-protect (progn ,@body)
-       (close ,variable))))
+  (let ((whole (gensym)))
+    `(let ((,variable (open ,name ,@options)) (,whole nil))
+       (unwind-protect (multiple-value-prog1 (progn ,@body) (setq ,whole t))
+         (if ,variable (close ,variable :abort (not ,whole)))))))
+
+(defun delete-file (name)
+  (let ((delete (cadddr %files)))
+    (unless delete
+      (error "the file ~A cannot be deleted: ~A" (%file-name name)
+             (if %files
+                 "the file system that is here reads files, and deletes none"
+                 "no disk has a file system that is known here")))
+    (funcall delete name)
+    t))
 
 ;; LOAD: the file of that name when a file system has it, and otherwise the
 ;; one of that name among the files that the kernel read as it started.
@@ -935,13 +1035,14 @@
 ;;; What the substrate offers that Common Lisp has no name for: threads,
 ;;; locks and events, under the names that Bordeaux Threads made usual, a
 ;;; way to make a stream of two functions, a way for a file system to say
-;;; that it is there, and the condition that Ctrl-C is. Their functions are
-;;; in C (kernel/lisp/thread.c), and what is said more easily in Lisp is
-;;; here. Under SBCL, lisp/host/ stands in for all of it.
+;;; that it is there, a way to save the world, and the condition that
+;;; Ctrl-C is. Their functions are in C (kernel/lisp/thread.c), and what is
+;;; said more easily in Lisp is here. Under SBCL, lisp/host/ stands in for
+;;; all of it.
 
 (in-package "CLARA")
 
-(export '(make-thread with-lock-held make-stream keyboard-interrupt provide-files))
+(export '(make-thread with-lock-held make-stream keyboard-interrupt provide-files save-image))
 
 ;; What Ctrl-C on the console is, to the computation it stops and to
 ;; whoever was reading a line.
@@ -953,13 +1054,30 @@
   (cl::make-%stream :write write-string :read read-line))
 
 ;; A file system says that it is there: TEXT gives the text of the file of
-;; a name, and NAMES the names of what the directory of a name holds (the
-;; comment on files, further up, says more). From then on those two are
-;; what OPEN, LOAD, PROBE-FILE and DIRECTORY ask. Without them, there is
-;; no file system any more.
-(defun provide-files (&key text names)
-  (setq cl::%files (if (and text names) (list text names)))
+;; a name, NAMES the names of what the directory of a name holds, WRITE
+;; makes a file of a name out of bytes in memory, and DELETE deletes the
+;; file of a name (the comment on files, further up, says more). From then
+;; on those are what OPEN, LOAD, PROBE-FILE, DIRECTORY and DELETE-FILE ask;
+;; a file system that only reads gives the first two. Without them, there
+;; is no file system any more.
+(defun provide-files (&key text names write delete)
+  (setq cl::%files (if (and text names) (list text names write delete)))
   nil)
+
+;; The world is saved: all that is in the heap goes into a file, and a
+;; machine that finds the file on its boot volume when it starts takes it
+;; for its heap, in place of loading the files of lisp/ again
+;; (kernel/lisp/image.c). What is defined comes back, and what the special
+;; variables hold outside every binding; threads do not, nor what a driver
+;; knew of its device: the world begins again at the listener, with the
+;; drivers started afresh. NAME is where the kernel looks, on the volume
+;; that names are looked up on, which is the boot volume when its disk is
+;; the first.
+(defun save-image (&optional (name "/clara/clara.image"))
+  (multiple-value-bind (memory bytes pages) (clara.unsafe:heap-image)
+    (unwind-protect (cl::%store-file name memory bytes)
+      (clara.unsafe:free-memory memory pages)))
+  name)
 
 ;; The substrate calls this when a thread ends with a condition that
 ;; nothing handled: nobody may ever ask what became of the thread.

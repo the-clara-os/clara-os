@@ -1,0 +1,61 @@
+> (cl:list (cl:package-name cl:*package*) 'play:ball (cl:symbol-package 'play::bat))
+("BARE" PLAY:BALL #<PACKAGE "PLAY">)
+> (cl:in-package "COMMON-LISP-USER")
+#<PACKAGE "COMMON-LISP-USER">
+> (list (fact 10) (mapcar #'fact '(1 2 3)) (unless-zero 4 'not-zero))
+(3628800 (1 2 6) NOT-ZERO)
+> (list (depth) *depth* (let ((*depth* 2)) (depth)))
+(0 0 2)
+> (let ((p (make-point :x 3))) (setf (point-y p) 4) p)
+#S(POINT :X 3 :Y 4)
+> (handler-case (error 'low-fuel :left 3) (low-fuel (c) (fuel-left c)))
+3
+> (list *jobs* *from-a-file* (clara:thread-alive-p *spinner*))
+(6 "written by ClaraOS" NIL)
+> (clara:join-thread *spinner*)
+error: the thread #<THREAD "spinner"> was stopped
+> (list (clara:thread-alive-p *waiter*) (clara:destroy-thread *waiter*) (clara:with-lock-held (*held*) 'free))
+(NIL NIL FREE)
+> (list (clara:wait-event *bell* 0) (eq (clara:signal-event *bell*) *bell*) (clara:wait-event *bell* 0))
+(NIL T T)
+> (list (clara:current-thread) (- (length (clara:all-threads)) *threads*))
+(#<THREAD "listener"> 0)
+> (let ((lock (clara:make-lock)))
+    (mapc #'clara:join-thread
+          (mapcar (lambda (n) (clara:make-thread (lambda () (clara:with-lock-held (lock) (incf *jobs* n)))))
+                  '(1 2 3)))
+    *jobs*)
+12
+> (let ((tick (clara.unsafe:interrupt-event :timer)) (before (get-internal-real-time)))
+    (dotimes (i 5) (clara:wait-event tick))
+    (>= (- (get-internal-real-time) before) 4))
+T
+> (list (probe-file "/clara/CLARA.IMAGE") (probe-file "/notes.txt") (probe-file "/clara/unfinished.txt"))
+("/clara/clara.image" NIL NIL)
+> (with-open-file (in "/clara/a file with a long name.text") (list (read-line in) (read-line in)))
+("line 0 of 300" "line 1 of 300")
+> (list (load "/clara/kept.lisp") (load "/clara/listener.lisp"))
+(T T)
+> (list 'keyboards 'and 'pointers (length (clara.input:devices)))
+(KEYBOARDS AND POINTERS 3)
+^K
+> (+ 40 2)
+42
+> (do () (nil))
+^M sendkey ctrl-c
+error: interrupted from the keyboard
+> (loop)
+^C
+error: interrupted from the keyboard
+> (list (symbolp (gensym)) (string-upcase "it is all here"))
+(T "IT IS ALL HERE")
+> (plusp (cl::%self-test))
+T
+> (with-open-file (out "/clara/second.txt" :direction :output) (write-line "from the world that came back" out))
+"from the world that came back"
+> (defvar *twice* 'saved-again)
+*TWICE*
+> (clara:save-image)
+"/clara/clara.image"
+> (list (with-open-file (in "/clara/second.txt") (read-line in)) (length (directory "/clara/*.image")))
+("from the world that came back" 1)

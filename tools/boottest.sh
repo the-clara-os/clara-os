@@ -1,14 +1,23 @@
 #!/bin/sh
-# Headless boot check: boot one arch under QEMU; when the kernel starts to
-# read, type a session at it, on the serial port and on the keyboard; wait
-# for the kernel's last line; compare what it answered with what the
-# session says it must; then save what the screen shows as a PNG.
+# Headless boot check: boot one arch under QEMU, from a disk made for the
+# purpose; when the kernel starts to read, type a session at it, on the
+# serial port and on the keyboard; wait for the kernel's last line; compare
+# what it answered with what the session says it must; save what the
+# screen shows as a PNG; and have the host look at the volume that the
+# kernel booted from, and wrote to.
 # usage: tools/boottest.sh <x86_64|aarch64> [extra qemu args...]
 #        such as: -smp 4, -cpu max, -machine gic-version=2
 # env:   TIMEOUT=90   MARKER="text to wait for"
 #        SESSION=tools/session.txt (what is typed and what has to come back;
 #                 empty: only Ctrl-D is typed)
 #        NAME=aarch64-gic2 (what the files in build/ are called; default: the arch)
+#        MKDISK="--fat 16 --table mbr" (the kind of disk that is made of the ESP
+#                 directory for the machine to boot from: tools/mkdisk.py)
+#        DISK=build/boot-aarch64.img (boot a copy of that disk instead, with
+#                 whatever is on it: the world that another boot saved, or the
+#                 image that `make image` makes for UTM)
+#        SPOIL=1 (and change a byte of the world that was saved on it first)
+#        EXPECT="pattern" (a line that the boot report has to have)
 #        plus what tools/run.sh reads
 set -eu
 arch=${1:?usage: tools/boottest.sh <arch> [qemu args]}
@@ -25,13 +34,26 @@ orders=build/monitor-$name.in
 typing=build/typing-$name
 heard=build/session-$name.txt
 scratch=build/scratch-$name.img
+boot=build/boot-$name.img
 mkdir -p build
 rm -f "$shot" "$sock" "$keys" "$orders" "$heard" "$typing".* "$scratch"
 : > "$log"
 
-# A second disk, a mebibyte of zeroes, for a session to write to: the boot
-# volume is a directory of the host's that QEMU shows as a disk, and not
-# for writing sectors to. It comes after every other device of the machine.
+# The disk that the machine boots from, and that its kernel writes to: a
+# new one, or a copy of the one that was asked for, so that a disk is only
+# ever written to by the boot it was made for.
+if [ -z "${DISK:-}" ]; then
+    # shellcheck disable=SC2086
+    python3 -I tools/mkdisk.py ${MKDISK:-} build/esp "$boot"
+elif [ ! "$DISK" -ef "$boot" ]; then
+    rm -f "$boot"
+    cp -c "$DISK" "$boot" 2> /dev/null || cp "$DISK" "$boot"
+fi
+[ -z "${SPOIL:-}" ] || python3 -I tools/mkdisk.py --spoil "$boot"
+
+# A second disk, a mebibyte of zeroes, for a session to write sectors to
+# that are nobody's: the boot volume has files on it. It comes after every
+# other device of the machine.
 dd if=/dev/zero of="$scratch" bs=1024 count=1024 2> /dev/null
 
 # A session is a transcript. The lines that begin with a prompt, "> " or
@@ -101,7 +123,7 @@ LC_ALL=C awk -v out="$typing" '
 # would take it for keys pressed at its own console.
 mkfifo "$keys"
 exec 3<> "$keys"
-SERIAL=stdio tools/run.sh "$arch" -display none -monitor "unix:$sock,server=on,wait=off" "$@" \
+DISK="$boot" SERIAL=stdio tools/run.sh "$arch" -display none -monitor "unix:$sock,server=on,wait=off" "$@" \
     -drive "if=none,id=scratch,format=raw,file=$scratch" -device virtio-blk-pci,drive=scratch \
     < "$keys" > "$log" 2> "build/qemu-$name.log" 3>&- &
 pid=$!
@@ -163,6 +185,26 @@ stop_qemu() {
     wait "$pid" 2>/dev/null || true
 }
 
+# The volume that the kernel booted from, and wrote to, as the host's own
+# program for mending FAT volumes sees it: fsck_msdos on macOS, fsck.fat
+# of the dosfstools elsewhere. It is asked to change nothing, and has to
+# find nothing that it would change.
+check_volume() {
+    if [ -x /sbin/fsck_msdos ]; then
+        fsck=/sbin/fsck_msdos
+    else
+        fsck=$(PATH="$PATH:/usr/sbin:/sbin" command -v fsck.fat || true)
+    fi
+    [ -n "$fsck" ] || { volume="its volume was not looked at: the host has no fsck for FAT"; return 0; }
+    python3 -I tools/mkdisk.py --volume "$boot" "build/volume-$name.img"
+    if "$fsck" -n "build/volume-$name.img" > "build/fsck-$name.log" 2>&1; then
+        volume="its volume is in order"
+        rm -f "build/volume-$name.img"
+    else
+        return 1
+    fi
+}
+
 i=0
 while [ "$i" -lt $((timeout * 4)) ]; do
     if grep -q "$marker" "$log"; then
@@ -172,8 +214,17 @@ while [ "$i" -lt $((timeout * 4)) ]; do
             echo "boottest $name: FAILED, the kernel did not answer $session as written (above: -expected, +heard)"
             exit 1
         fi
+        if [ -n "${EXPECT:-}" ] && ! grep -q "$EXPECT" "$log"; then
+            echo "boottest $name: FAILED, the boot report has no line '$EXPECT'"
+            exit 1
+        fi
+        if ! check_volume; then
+            echo "boottest $name: FAILED, the volume that the kernel wrote to is not in order, by $fsck:"
+            cat "build/fsck-$name.log"
+            exit 1
+        fi
         [ -s "$shot" ] && screen="screen saved to $shot" || screen="no screenshot"
-        echo "boottest $name: ok after $((i / 4))s, $screen"
+        echo "boottest $name: ok after $((i / 4))s, $volume, $screen"
         exit 0
     fi
     if [ "$part" -eq 0 ]; then

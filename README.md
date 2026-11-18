@@ -9,7 +9,7 @@ understood from the first instruction up. It is not a Unix and does not try
 to run Linux software. The kernel is its own UEFI application: the firmware
 loads `BOOTX64.EFI` or `BOOTAA64.EFI`, and from `efi_main` on it is ClaraOS.
 
-Status: milestone 9. Both architectures boot under QEMU with EDK2 firmware
+Status: milestone 10. Both architectures boot under QEMU with EDK2 firmware
 (the same firmware and machine types UTM uses), read their boot files from
 the ESP, and take the machine from the firmware. From then on they use
 nothing of the firmware's: they run on their own stack, page tables and
@@ -37,12 +37,16 @@ in Lisp as well: a keyboard, a mouse and a tablet so far, which interrupt
 by message through whatever the machine has for that, the local APIC, a
 GICv2m frame or the GIC's translation service. What is typed on the
 keyboard is read like what arrives on the serial port. A virtio disk has
-its driver too, and on it the FAT file system is read: the volume the
-machine booted from is the first whose files can be listed, read and
-loaded from the prompt, `(directory "/clara/*.lisp")` or
-`(load "/clara/hello.lisp")`. The same Lisp files load under SBCL on the
-host, where they are tested against a machine that is made up for the
-purpose.
+its driver too, and on it the FAT file system is read and written: the
+volume the machine booted from is the first whose files can be listed,
+read, loaded, written and deleted from the prompt,
+`(directory "/clara/*.lisp")`, `(load "/clara/hello.lisp")` or
+`(with-open-file (out "/notes.txt" :direction :output) (write-line "kept" out))`.
+And the world can be saved: `(clara:save-image)` writes the heap to a file
+on the boot volume, and the next boot starts from that file, with
+everything that was defined, and loads no Lisp. The same Lisp files load
+under SBCL on the host, where they are tested against a machine that is
+made up for the purpose.
 [ROADMAP.md](ROADMAP.md) has what comes next, [DESIGN.md](DESIGN.md) the
 ideas and conventions.
 
@@ -56,19 +60,25 @@ toolchain is involved. On macOS the tools come from Homebrew:
 On Ubuntu they come from the distribution. That is also where every pull
 request is built and booted, by [.github/workflows/ci.yml](.github/workflows/ci.yml):
 
-    sudo apt install clang lld make qemu-system-x86 qemu-system-arm ovmf qemu-efi-aarch64 netcat-openbsd sbcl
+    sudo apt install clang lld make qemu-system-x86 qemu-system-arm ovmf qemu-efi-aarch64 netcat-openbsd sbcl \
+        python3 dosfstools
 
 Then, on either:
 
     make              # build/esp: EFI/BOOT/BOOTX64.EFI and BOOTAA64.EFI, and the boot files in clara/
     make test         # test the Lisp files under SBCL (lisp/host/tests.lisp), then
-                      # boot both headless, type tools/session.txt at each kernel and compare its answers,
-                      # wait for the kernel's last line, save build/screen-<arch>.png;
-                      # AArch64 boots twice, once for each version of its interrupt controller,
-                      # and once more with the Lisp collector running at every chance it has
+                      # boot both headless, each from a disk made for it (tools/mkdisk.py),
+                      # type tools/session.txt at each kernel and compare its answers,
+                      # wait for the kernel's last line, save build/screen-<name>.png, and have
+                      # the host's fsck look at the disk; the session ends by saving the world,
+                      # and a second boot from the same disk has to start from it and answer
+                      # tools/resumed.txt; AArch64 does all that twice, once for each version of
+                      # its interrupt controller, and boots once more with the Lisp collector
+                      # running at every chance it has, from a disk whose saved world is damaged
     make run-aarch64  # QEMU window, serial on the terminal: type a form in either; Ctrl-C stops a form
                       # that does not end, Ctrl-D ends the session, Ctrl-A X in the terminal leaves QEMU;
-                      # hvf-accelerated on Apple silicon
+                      # hvf-accelerated on Apple silicon. The disk, build/disk-aarch64.img, is kept from
+                      # one run to the next, with a world that was saved on it, until the next build
     make run-x86_64   # same, emulated (TCG), so the firmware takes a few seconds
     make image        # build/claraos.img, a GPT + FAT32 raw disk for UTM; needs macOS
 
@@ -81,8 +91,10 @@ Layout:
                      the build copies them to the ESP's \clara directory, read at boot
     fonts/           the console font, Spleen 8x16, which tools/bdf2c.py turns into kernel/font.c
     site/            the website: one page, filled in from ROADMAP.md by site/build.py (`make site`)
-    tools/           run.sh (QEMU), boottest.sh (headless check, typed session and screenshot),
-                     session.txt (what the check types and what must come back), mkimage.sh (UTM disk)
+    tools/           run.sh (QEMU), mkdisk.py (the disk a machine boots from), boottest.sh (headless
+                     check, typed session and screenshot), session.txt and resumed.txt (what the check
+                     types and what must come back, at a new world and at one that was saved),
+                     mkimage.sh (UTM disk)
 
 ## Running in UTM
 
@@ -106,6 +118,10 @@ Layout:
    loaded from. Ctrl-C stops a form that does not end, `(loop)` for one,
    and the prompt comes back. Ctrl-D ends it, and the kernel halts with
    `clara: nothing more to do`.
+7. `(clara:save-image)` saves the world on the disk. The next start says
+   `lisp: the heap is an image` in its report, and whatever was defined is
+   there. To start from the Lisp files again, import `build/claraos.img`
+   afresh.
 
 UTM copies the image into the VM bundle, so after a rebuild either import it
 again or replace the copy inside the `.utm` bundle (Show Package Contents,

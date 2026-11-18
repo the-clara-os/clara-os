@@ -1,14 +1,49 @@
 /* The Lisp runtime's beginning, its self-tests, and what the first thread
- * of the Lisp world does: it loads lisp/boot.lisp, and then reads forms
- * from the serial port, evaluates them and prints what they give. */
+ * of the Lisp world does. The world is an image, when the boot volume had
+ * one that this kernel can take (image.c); and otherwise it is made here,
+ * out of the files of lisp/, with the runtime tested on the way. Then the
+ * console, the drivers and the listener are started, which reads forms,
+ * evaluates them and prints what they give. */
 #include "lisp.h"
 
-void lisp_init(const struct boot_info *bi)
+#define IMAGE "clara.image" /* the file of \clara that is a world, saved */
+
+static int g_resumed; /* the world is an image's: it was made on the boot that saved it, and not on this one */
+
+/* The image among the files that the boot handoff read, when there is
+ * one, taken out of their list: it is no file for LOAD to find. Its name
+ * is found in letters of either case, as a file's is. */
+static struct boot_file *take_image(struct boot_info *bi)
 {
+    for (struct boot_file **at = &bi->files; *at; at = &(*at)->next) {
+        struct boot_file *f = *at;
+        size_t i = 0;
+
+        while (f->name[i] && IMAGE[i] && (f->name[i] | 0x20) == IMAGE[i])
+            i++;
+        if (!f->name[i] && !IMAGE[i]) {
+            *at = f->next;
+            return f;
+        }
+    }
+    return NULL;
+}
+
+void lisp_init(struct boot_info *bi)
+{
+    struct boot_file *image = take_image(bi);
+
     lisp_heap_init();
-    lisp_symbols_init();
     kprintf("lisp: objects are tagged 64-bit words, in a heap at %p that begins with NIL\n",
             (void *)(uintptr_t)VM_HEAP_BASE);
+    if (image) {
+        g_resumed = lisp_image_load(image);
+        /* What it held is in the heap by now, or of no use: the page frames it was read into are free. */
+        pmm_free((uint64_t)(uintptr_t)image,
+                 ((uint64_t)(image->data - (const uint8_t *)image) + image->size + PAGE_SIZE - 1) / PAGE_SIZE);
+    }
+    if (!g_resumed)
+        lisp_symbols_init();
     lisp_eval_init(bi->files);
     lisp_unsafe_init(&bi->fb);
 }
@@ -58,6 +93,20 @@ static lisp read_one(const char *text)
 
     if (read_and_print(text, &printed, &form) != LISP_READ_OK)
         panic("lisp self-test: %s was not read", text);
+    return form;
+}
+
+/* A form of the substrate's own, read in COMMON-LISP-USER whatever package
+ * names are read in just now: a world that was saved may have been left in
+ * any. */
+static lisp own_form(const char *text)
+{
+    struct lisp_symbol *package = lisp_as_symbol(lisp_roots.package);
+    lisp current = package->value, form;
+
+    package->value = lisp_roots.user;
+    form = read_one(text);
+    package->value = current;
     return form;
 }
 
@@ -348,6 +397,10 @@ static void heap_selftest(void)
         panic("lisp self-test: a vector of %u items took %llu page frames", ITEMS, frames - pmm_free_frames());
 }
 
+/* The reader and the printer, in a world that this boot has made. One
+ * that came from an image is somebody's, with whatever they made of it,
+ * and is not the place to try what a new world has to be like: the
+ * runtime was tested on the boot that made it. */
 void lisp_selftest(void)
 {
     struct lisp_symbol *package = lisp_as_symbol(lisp_roots.package);
@@ -355,6 +408,9 @@ void lisp_selftest(void)
     struct text printed, again;
     struct lisp_reader r;
     unsigned line = 0, column = 0;
+
+    if (g_resumed)
+        return;
 
     /* The words themselves. */
     if (lisp_fixnum_value(lisp_fixnum(LISP_FIXNUM_MAX)) != LISP_FIXNUM_MAX ||
@@ -749,10 +805,31 @@ static const struct {
     { "(list (multiple-value-list (cl::%split-name \"/clara/boot.lisp\")) (multiple-value-list (cl::%split-name \"boot.lisp\"))"
       " (cl::%plain-name \"/clara//\") (cl::%plain-name \"/\"))",
       "((\"/clara/\" \"boot.lisp\") (\"\" \"boot.lisp\") \"/clara\" \"\")" },
-    { "(open \"/clara/boot.lisp\" :direction :output)",
-      "error: OPEN: a file can be read and not written yet, so there is none to open for :OUTPUT" },
+    { "(open \"/clara/boot.lisp\" :direction :io)",
+      "error: OPEN: a file is opened for :INPUT or for :OUTPUT, and not for :IO" },
     { "(open 'boot)", "error: the name of a file is a string, and BOOT is not one" },
+    { "(delete-file 'boot)", "error: the name of a file is a string, and BOOT is not one" },
     { "(let ((in (make-string-input-stream \"a line\"))) (list (close in) (read-line in nil 'closed)))", "(T CLOSED)" },
+    { "(let ((in (make-string-input-stream \"a line\"))) (list (close in :abort t) (read-line in nil 'closed)))",
+      "(T CLOSED)" },
+    /* more arguments than the 255 that stand for "any number" in the tables, and more strings than a stream
+     * that was written to hands over in one call */
+    { "(let ((numbers nil) (parts nil))"
+      " (dotimes (i 260) (push i numbers) (push \"ab\" parts))"
+      " (list (apply #'+ numbers) (length (apply #'list numbers)) (length (cl::%join parts))))",
+      "(33670 260 520)" },
+    { "(list (cl::%join nil) (cl::%join '(\"one\")) (cl::%join '(\"a\" \"\" \"b\" \"c\")))", "(\"\" \"one\" \"abc\")" },
+    /* letters in capitals and in small letters, as far as ASCII has them */
+    { "(list (string-upcase \"Hello, world!\") (string-downcase \"Hello\") (char-upcase #\\a) (char-downcase #\\A)"
+      " (string-upcase 'abc) (string-downcase #\\Q) (string-upcase \"caf\xc3\xa9\"))",
+      "(\"HELLO, WORLD!\" \"hello\" #\\A #\\a \"ABC\" \"q\" \"CAF\xc3\xa9\")" },
+    { "(mapcar #'string-upcase (list \"Hello\" \"world!\"))", "(\"HELLO\" \"WORLD!\")" },
+    { "(string-upcase 5)", "error: STRING-UPCASE wants a string, a symbol or a character, and 5 is not one" },
+    /* what GENSYM counts with is a variable */
+    { "(let ((*gensym-counter* 41)) (list (symbol-name (gensym)) (symbol-name (gensym)) *gensym-counter*))",
+      "(\"G41\" \"G42\" 43)" },
+    { "(let ((*gensym-counter* 'x)) (gensym))",
+      "error: *GENSYM-COUNTER* is X, and GENSYM counts with an integer that is not negative" },
     /* memory as text */
     { "(let ((page (clara.unsafe:allocate-memory 1)))"
       " (setf (clara.unsafe:memory-32 page) #x21bbce68)"
@@ -760,6 +837,20 @@ static const struct {
       "              (handler-case (clara.unsafe:memory-string page 2) (error () 'not-text)))"
       "   (clara.unsafe:free-memory page 1)))",
       "(\"h\xce\xbb!\" \"\" NOT-TEXT)" },
+    /* and text as memory */
+    { "(let ((page (clara.unsafe:allocate-memory 1)) (text \"h\xce\xbb\xe2\x98\x80\xf0\x9f\x98\x80!\"))"
+      " (prog1 (list (clara.unsafe:string-bytes text) (clara.unsafe:string-memory text page)"
+      "              (clara.unsafe:memory-string page 11) (clara.unsafe:memory-8 (+ page 1)) (clara.unsafe:memory-8 (+ page 10))"
+      "              (clara.unsafe:string-bytes \"\") (clara.unsafe:string-memory \"\" page))"
+      "   (clara.unsafe:free-memory page 1)))",
+      "(11 11 \"h\xce\xbb\xe2\x98\x80\xf0\x9f\x98\x80!\" 206 33 0 0)" },
+    { "(handler-case (clara.unsafe:string-memory \"text\" 0) (error () 'nowhere))", "NOWHERE" },
+    /* the heap as an image of it: how it begins, and that it is whole words in whole page frames */
+    { "(multiple-value-bind (memory bytes pages) (clara.unsafe:heap-image)"
+      " (prog1 (list (clara.unsafe:memory-string memory 8) (mod bytes 8) (- pages (floor (+ bytes 4095) 4096))"
+      "              (> bytes 100000))"
+      "   (clara.unsafe:free-memory memory pages)))",
+      "(\"CLARAIMG\" 0 0 T)" },
     /* conditions */
     { "(handler-case (error \"~A went wrong\" 'this) (error (c) (list 'caught (format nil \"~A\" c))))",
       "(CAUGHT \"THIS went wrong\")" },
@@ -1099,11 +1190,32 @@ unsigned lisp_eval_texts(void)
     return eval_texts(&depth);
 }
 
+/* What the heap holds, once what nobody holds has been collected. In a
+ * heap that is an image's that collection is the first: it frees what the
+ * threads held that ran when the image was saved, and it finds the free
+ * blocks, which were in no list until now. */
+static void heap_report(void)
+{
+    uint64_t count[LISP_TYPES], bytes;
+    struct lisp_heap heap;
+
+    lisp_collect();
+    bytes = lisp_heap_census(count);
+    lisp_heap_state(&heap);
+    kprintf("lisp: %llu KiB of heap in use after %llu collections: %llu conses, %llu symbols, %llu strings,\n",
+            bytes >> 10, heap.collections, count[LISP_CONS], count[LISP_SYMBOL], count[LISP_STRING]);
+    kprintf("lisp:   %llu vectors, %llu packages, %llu functions, %llu structures, %llu conditions,\n",
+            count[LISP_VECTOR], count[LISP_PACKAGE], count[LISP_FUNCTION], count[LISP_STRUCTURE],
+            count[LISP_CONDITION]);
+    kprintf("lisp:   %llu threads, %llu locks and %llu events\n", count[LISP_THREAD], count[LISP_LOCK],
+            count[LISP_EVENT]);
+}
+
 /* The evaluator's self-test, and then what the heap holds once the
  * self-tests' own objects have been collected. */
 static void eval_selftest(void)
 {
-    uint64_t count[LISP_TYPES], bytes, collections, frames;
+    uint64_t collections, frames;
     struct lisp_heap heap;
     struct text printed;
     int64_t depth;
@@ -1132,16 +1244,7 @@ static void eval_selftest(void)
 
     kprintf("lisp: the evaluator passed: %u texts evaluated, and a function called itself %lld deep\n", texts,
             (long long)depth);
-    lisp_collect();
-    bytes = lisp_heap_census(count);
-    lisp_heap_state(&heap);
-    kprintf("lisp: %llu KiB of heap in use after %llu collections: %llu conses, %llu symbols, %llu strings,\n",
-            bytes >> 10, heap.collections, count[LISP_CONS], count[LISP_SYMBOL], count[LISP_STRING]);
-    kprintf("lisp:   %llu vectors, %llu packages, %llu functions, %llu structures, %llu conditions,\n",
-            count[LISP_VECTOR], count[LISP_PACKAGE], count[LISP_FUNCTION], count[LISP_STRUCTURE],
-            count[LISP_CONDITION]);
-    kprintf("lisp:   %llu threads, %llu locks and %llu events\n", count[LISP_THREAD], count[LISP_LOCK],
-            count[LISP_EVENT]);
+    heap_report();
 }
 
 /* The collector. Objects that are held, on the evaluator's stack, with as
@@ -1250,22 +1353,15 @@ static void load(const char *file)
     }
 }
 
-/* What the first thread of the Lisp world does. boot.lisp is the part of
- * the language that is written in Lisp, and the files after it are the
- * beginning of the world: the console, which takes the serial port and
- * the screen over from the substrate; the drivers, which find the devices
- * on the PCI bus, start a thread for each keyboard and mouse, and open
- * the disks; the file system, which finds the volumes on them; and the
- * listener, which reads what is typed, evaluates it and prints what it
- * gives, until the input ends. Should a condition come all the way out of
- * the listener, it is started again and told so. */
-static void lisp_main(void)
+/* A world, made: the collector is tested in the empty heap; boot.lisp is
+ * loaded, the part of the language that is written in Lisp, and the
+ * evaluator tested with it; and then the files that are the beginning of
+ * the world. */
+static void new_world(void)
 {
     static const char *const world[] = { "font.lisp",  "console.lisp", "pci.lisp", "virtio.lisp",
                                          "input.lisp", "disk.lisp",    "fat.lisp", "listener.lisp" };
     uint64_t before[LISP_TYPES], after[LISP_TYPES];
-    lisp listen, condition = LISP_NIL;
-    unsigned told = 0;
 
     collector_selftest();
     lisp_heap_census(before);
@@ -1279,19 +1375,40 @@ static void lisp_main(void)
     lisp_heap_census(before);
     kprintf("lisp: the console, the drivers, the files and the listener are loaded, %llu more functions\n",
             before[LISP_FUNCTION] - after[LISP_FUNCTION]);
-    if (!lisp_evaluate(read_one("(clara.console:start)")))
+}
+
+/* What the first thread of the Lisp world does. The world is made, unless
+ * it came whole, as an image. Then it is started, the same way in both
+ * cases, because what is started is the machine's and no image holds it:
+ * the console, which takes the serial port and the screen over from the
+ * substrate; the drivers, which find the devices on the PCI bus, start a
+ * thread for each keyboard and mouse, and open the disks; the file system,
+ * which finds the volumes on them; and the listener, which reads what is
+ * typed, evaluates it and prints what it gives, until the input ends.
+ * Should a condition come all the way out of the listener, it is started
+ * again and told so. */
+static void lisp_main(void)
+{
+    lisp listen, condition = LISP_NIL;
+    unsigned told = 0;
+
+    if (g_resumed)
+        heap_report();
+    else
+        new_world();
+    if (!lisp_evaluate(own_form("(clara.console:start)")))
         panic("lisp: the console did not start");
     /* A machine without a PCI bus, or without a keyboard or a disk on it,
      * is said and is no reason to stop: there is the serial port, and
      * there are the files that came with the kernel. */
-    if (!lisp_evaluate(read_one("(progn (clara.pci:start) (clara.input:start) (clara.disk:start) (clara.fat:start))")))
+    if (!lisp_evaluate(own_form("(progn (clara.pci:start) (clara.input:start) (clara.disk:start) (clara.fat:start))")))
         panic("lisp: the drivers did not start");
-    listen = read_one("clara.listener:run");
+    listen = own_form("clara.listener:run");
     while (!lisp_call(listen, told, &condition)) {
         condition = lisp_values.value[0];
         told = 1;
     }
-    if (!lisp_evaluate(read_one("(clara.console:stop)")))
+    if (!lisp_evaluate(own_form("(clara.console:stop)")))
         panic("lisp: the console did not stop");
 }
 
