@@ -406,6 +406,15 @@ Upgrades:
   holds also where the world that was saved could be gone on with, its
   objects being laid out as before: the system's own Lisp in it is the
   older system's.
+- [ ] **M15d upgrades over the network.** The newer system is fetched and
+  not carried: the running system asks where ClaraOS is published which
+  version is the newest, fetches it when it is newer than its own, sees
+  that what came is what was published, and hands it to the upgrade of
+  M15a, which then takes a system from a second disk or from the network.
+  Where it is published is perhaps the releases of the repository on
+  GitHub, the kernels and the Lisp files of a version being the files of
+  its release. It waits for two things that are not there: a network,
+  which is under "Later" and is work of its own, and releases.
 
 Later, in no order: code for the processor behind the compiler's first
 pass; virtio-net and TCP/IP; outline fonts; sound; CLOS; a USB keyboard and
@@ -1193,8 +1202,7 @@ M15a, an upgrade in place:
   shares is no way in: of its two kinds one needs a SPICE agent in the
   guest and the other a driver for a virtio-9p device (1af4:1009, which
   0.0.19 lists as a device of a class without a name), and ClaraOS has
-  neither. A newer system over the network waits for a network
-  (virtio-net, under "Later").
+  neither. A newer system over the network is M15d.
 - `make test` needs an older system to upgrade from, and CI has the tree
   of one commit. A second kernel built of the same sources under another
   version is one way; the image checks of M10 were done by hand with a
@@ -1245,6 +1253,45 @@ M15c, a world made again:
   writes. A closure, a thread, a lock, a stream, a surface, and anything
   that points round in a ring are not text, and would be named and left
   behind. Neither way is in the milestone as it is written above.
+
+M15d, upgrades over the network:
+
+- What it stands on. There is no network: no driver for a network device,
+  no addresses, no TCP. "virtio-net and TCP/IP" is under "Later" and has
+  no milestones of its own, and this is the first thing on the roadmap
+  that needs them: a driver for virtio-net, an address by DHCP, a name
+  looked up by DNS, TCP, and HTTP as far as fetching a file goes. The
+  device is there on most machines: QEMU's AArch64 machine has a
+  virtio-net device without being asked (1af4:1000 in the boot report),
+  and so has the machine in UTM, on a network that it shares with the
+  host. QEMU's x86_64 machine has one of Intel's (8086:10d3), so
+  tools/run.sh would give it a virtio one.
+- HTTPS. GitHub sends a request over plain HTTP on to HTTPS, and so does
+  the website, which GitHub serves as well. HTTPS in ClaraOS is the
+  largest piece of all of this: TLS with its exchange of keys and its
+  ciphers, certificates and their chain to a root that is trusted, the
+  time of day to hold them against, which the system does not know (a
+  file that it writes is dated 1980), and under all of it arithmetic on
+  integers of hundreds of bits, where the language has fixnums and nothing
+  larger. The other way is to trust the file and not the road: a release
+  that is signed with a key whose public half is in the system, and
+  checked when it has arrived, by whatever road. That still needs the
+  arithmetic of one kind of signature, and a place that gives the files
+  over plain HTTP, which neither the releases nor the website are. Which
+  of the two it is to be is for the slice to decide, and decides how large
+  the slice is.
+- Releases. The repository has none, and no tags: a version is a number in
+  kernel/kernel.h and a merge. Publishing one is a workflow that builds
+  both kernels and puts them and the Lisp files where they can be fetched,
+  with the version and a sum of every file. Nothing in that needs a
+  network in ClaraOS, so it can come first, and M15a's second disk could
+  then be a file that is fetched on the host and not built there:
+  `make image` needs macOS, and tools/mkdisk.py, which does not, makes a
+  disk of the same kind.
+- What is fetched is what M15a takes from a second disk, behind one
+  function: the files, their version and their sums. A machine that stops
+  while it fetches has changed nothing on its disk. To begin with, the
+  system looks for a newer version when it is asked to, and not by itself.
 
 No milestone yet, to be picked up when they start to matter:
 
