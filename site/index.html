@@ -115,6 +115,7 @@ footer p { max-width: 40rem; }
     <a class="source" href="https://github.com/the-clara-os/clara-os">Read the source</a>
     <a href="https://github.com/the-clara-os/clara-os/blob/main/DESIGN.md">Design</a>
     <a href="https://github.com/the-clara-os/clara-os/blob/main/ROADMAP.md">Roadmap</a>
+    <a href="manual.html">Manual</a>
   </p>
 
   <section id="shape">
@@ -123,7 +124,7 @@ footer p { max-width: 40rem; }
     <p><strong>The world</strong> is Lisp: the console and the REPL, the logic of the drivers, the filesystem, the window manager and every application.</p>
     <p><strong>One address space</strong>, one heap, no user mode. Lisp code cannot forge a pointer, so protection comes from the language and not from page tables. An application that fails is a condition for the window manager to handle.</p>
     <p><strong>The Lisp</strong> is a subset of Common Lisp, chosen so that every file also loads under SBCL on an ordinary computer, where it is written and tested.</p>
-    <p><strong>The image is the system.</strong> Booting will mean loading a saved heap from disk and carrying on where it stopped, with the window manager running.</p>
+    <p><strong>The image is the system.</strong> The whole Lisp world can be saved to the disk, and a machine that finds it there starts from it, with everything that was defined. Once there is a window manager, that is what it will start into.</p>
   </section>
 
   <section id="status">
@@ -140,12 +141,12 @@ footer p { max-width: 40rem; }
   <section id="run">
     <h2>{{spleen:Run it}}</h2>
     <p>On macOS with Homebrew. clang builds both architectures and QEMU boots them, with the same firmware UTM uses.</p>
-<pre><code>brew install llvm lld qemu
+<pre><code>brew install llvm lld qemu sbcl
 git clone https://github.com/the-clara-os/clara-os
 cd clara-os
 make test          <span class="note"># boot both architectures without a window</span>
 make run-aarch64   <span class="note"># a QEMU window, the serial port on your terminal: type a form</span></code></pre>
-    <p>The <a href="https://github.com/the-clara-os/clara-os#running-in-utm">README</a> has the steps for running it in UTM.</p>
+    <p>The <a href="manual.html">user manual</a> has the rest: running it in UTM, working at the prompt, files, saving the world, and what to do when something goes wrong.</p>
   </section>
 </main>
 

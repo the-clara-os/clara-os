@@ -83,6 +83,12 @@ manager, and the applications are Lisp programs loaded into that world.
   there. Lisp code is also tested on the host under SBCL, where a test can
   look at what a boot cannot: `make test` runs lisp/host/tests.lisp before
   it boots anything.
+- The user manual is part of the system, and is held to it
+  (site/manual.html, built by site/build.py). What it shows of the prompt
+  is a session like the others, typed at a kernel by `make test`, and its
+  lists of what is defined are compared with the kernel's tables when the
+  website is built, in both directions. A manual that is only written
+  falls behind in a week; this one stops the build when it does.
 - C11, freestanding, no libc, `-Wall -Wextra -Werror`. The targets are LLP64,
   so `long` is 32 bits: the kernel uses the stdint types and never `long`.
 

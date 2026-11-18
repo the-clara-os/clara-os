@@ -199,20 +199,22 @@ Rules:
   DIRECTORY, OPEN with a name that could be there): the texts run again
   with a collection at every safe point, and one lookup would take
   minutes on CI.
-- `make test` boots seven times. Three machines, x86_64, AArch64 with
-  GIC version 3, and AArch64 emulated with GIC version 2, whose files in
-  build/ are named aarch64-gic2, each from a disk of another kind, and
-  each twice: the first boot is typed tools/session.txt, which ends by
-  saving the world, and the second, named with `-resumed` at its end,
-  starts from that image and is typed tools/resumed.txt. Then AArch64
-  once more for tools/stress.txt (aarch64-stress), a session that has the
-  collector run at every safe point of the evaluator while boot.lisp
-  loads again and the evaluator's self-test is repeated; its disk has an
-  image with a byte changed, which it has to refuse. The serial port of each is QEMU's standard input and
-  output: the log is what the kernel printed, and a FIFO feeds it what
-  the session types. QEMU's hvf has no version 2, and UTM uses version 3.
-  tools/boottest.sh passes any further arguments on to QEMU, which is how
-  to try another machine: `tools/boottest.sh aarch64 -smp 4 -cpu max`.
+- `make test` boots nine times. Three machines, x86_64, AArch64 with GIC
+  version 3, and AArch64 emulated with GIC version 2, whose files in build/
+  are named aarch64-gic2, each from a disk of another kind, and each twice:
+  the first boot is typed tools/session.txt, which ends by saving the world,
+  and the second, named with `-resumed` at its end, starts from that image
+  and is typed tools/resumed.txt. Then AArch64 once more for
+  tools/stress.txt (aarch64-stress), a session that has the collector run at
+  every safe point of the evaluator while boot.lisp loads again and the
+  evaluator's self-test is repeated; its disk has an image with a byte
+  changed, which it has to refuse. Before that one, two boots for the user
+  manual, named manual and manual-again: what the manual shows of the prompt
+  is typed at them. The serial port of each is QEMU's standard input and
+  output: the log is what the kernel printed, and a FIFO feeds it what the
+  session types. QEMU's hvf has no version 2, and UTM uses version 3.
+  tools/boottest.sh passes any further arguments on to QEMU, which is how to
+  try another machine: `tools/boottest.sh aarch64 -smp 4 -cpu max`.
 - Assembly lives in kernel/arch/<arch>/entry.S and nowhere else. On x86_64
   it follows the Microsoft calling convention, like the C around it:
   arguments in rcx and rdx, 32 bytes of home space above the return
@@ -414,6 +416,36 @@ Rules:
   published by .github/workflows/site.yml on every push to main that touches
   them. The page reads the milestone entries of ROADMAP.md, so keep their
   form.
+- The user manual is site/manual.html, the second page of the website
+  (Julio, 2026-11-17: it "should have everything a user needs to operate
+  ClaraOS, from installation to command line operations", and "should be
+  updated constantly as features are introduced"). So a change that gives
+  a user something to type, or something else to see, changes the manual
+  in the same pull request: a new function or macro, a new message, a new
+  key, another way to start the machine, a limit that went or came. Two
+  things see to part of that. `make site` stops when the kernel defines a
+  name that is in none of the manual's lists (the elements of the class
+  "names", at its end), or when a list has a name that nothing defines:
+  put a new name where its subject is, and say what it is for in the
+  chapter that it belongs to, since the list alone only names it. And
+  what the manual shows of the prompt, every `<pre class="session">`, is
+  typed at a kernel by `make test`, with the ones of the class
+  "session again" typed after the machine was started again from the world
+  that the first ones saved: an answer that the kernel no longer gives
+  fails the boot named manual. Such a transcript is in the order of the
+  page, one world from top to bottom; `&lt;`, `&gt;` and `&amp;` are
+  written as in any HTML; a form that goes on has two spaces before its
+  next line; a line that is `<kbd>Ctrl-C</kbd>` and nothing else is the
+  key, after a form that is typed once in the whole manual; and what a
+  machine answers differently from another, its devices, its memory, a
+  time, belongs in a `<pre>` without the class, which nothing types. To
+  try it: `python3 -I site/build.py --sessions build`, then
+  `NAME=manual SESSION=build/manual-first.txt tools/boottest.sh aarch64`
+  and
+  `NAME=manual-again DISK=build/boot-manual.img SESSION=build/manual-again.txt tools/boottest.sh aarch64`.
+  The prose is nobody's to check but the writer's: read the chapter that
+  a change touches, and look at the page as it is built
+  (build/site/manual.html), not only at its source.
 - CI (.github/workflows/ci.yml) runs `make`, `make test` and `make site` on
   Ubuntu for every pull request and every push to main. Ubuntu's clang and
   QEMU are older than Homebrew's, and the runners have no hardware

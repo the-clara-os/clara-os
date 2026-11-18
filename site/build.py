@@ -2,9 +2,11 @@
 """Build the ClaraOS website into a directory.
 
 usage: python3 -I site/build.py [out-dir]      (default: build/site)
+       python3 -I site/build.py --sessions <dir>
 
-The page is site/index.html with its {{...}} marks filled in from the
-repository, so that the site cannot fall behind it:
+The pages are site/index.html and site/manual.html, the user manual, with
+their {{...}} marks filled in from the repository, so that the site cannot
+fall behind it:
 
   {{version}}
       CLARA_VERSION in kernel/kernel.h
@@ -17,6 +19,22 @@ repository, so that the site cannot fall behind it:
   {{spleen:some text}}
       the text drawn with the console's font, fonts/spleen-8x16.bdf, one
       inline SVG per word
+  {{style}}
+      in the manual: the style sheet of site/index.html, which the two
+      pages share
+
+The manual cannot fall behind either, in two ways. Every name that the
+kernel gives a meaning, the special forms and the functions in C
+(kernel/lisp/eval.c, builtin.c, symbol.c) and what lisp/boot.lisp exports,
+has to be in one of the manual's lists of names, the elements of the class
+"names", and nothing else may be in one: a function that is added without
+a word in the manual stops the build, and so does a word about one that is
+gone. And what the manual shows of the prompt is typed at a kernel:
+--sessions writes the manual's transcripts, the <pre> elements of the
+class "session", out as sessions for tools/boottest.sh, manual-first.txt
+for a machine that has just started and manual-again.txt for the same
+machine started again from the world that the first session saved (the
+class "session again"), and `make test` boots both.
 
 Run by `make site` and by .github/workflows/site.yml, which publishes the
 result on GitHub Pages. Only the standard library is used.
@@ -73,6 +91,66 @@ def spleen(text, font):
     return f'<span class="spleen" role="img" aria-label="{html.escape(text, quote=True)}">{"".join(words)}</span>'
 
 
+def defined():
+    """The names that the kernel itself gives a meaning, by package: the
+    special forms, the functions in C whose names do not begin with a %,
+    the symbols that the substrate makes external by hand, and what
+    lisp/boot.lisp exports."""
+    names = {"COMMON-LISP": {"NIL"}, "CLARA": set(), "CLARA.UNSAFE": set()}
+    evaluator, builtins = read("kernel", "lisp", "eval.c"), read("kernel", "lisp", "builtin.c")
+    for name in re.findall(r'^    \{ "([^"]+)"', evaluator + builtins, flags=re.M):
+        package, _, own = name.rpartition(":")
+        if not own.startswith("%") and own != "QUASIQUOTE":
+            names[package or "COMMON-LISP"].add(own)
+    for source in (evaluator, read("kernel", "lisp", "symbol.c")):
+        names["COMMON-LISP"].update(re.findall(r'lisp_symbol_in\((?:cl|lisp_roots\.common_lisp), "([^"]+)", 1\)', source))
+    boot = read("lisp", "boot.lisp")
+    language, _, clara = boot.partition('(in-package "CLARA")')
+    for package, text in (("COMMON-LISP", language), ("CLARA", clara)):
+        exports = re.search(r"\(export '\((.*?)\)\)", text, flags=re.S)
+        if not exports:
+            sys.exit(f"site/build.py: lisp/boot.lisp no longer says what it exports from {package}")
+        names[package].update(word.upper() for word in exports.group(1).split())
+    return names
+
+
+def check_names(manual):
+    """The manual's lists of names against what is defined: stops the build
+    when a name is in one and not in the other."""
+    listed = {}
+    for package, block in re.findall(r'<p class="names"(?: data-package="([^"]+)")?>(.*?)</p>', manual, flags=re.S):
+        package = package or "COMMON-LISP"
+        for name in re.findall(r"<code>(.*?)</code>", block, flags=re.S):
+            name = html.unescape(name).upper()
+            if name.startswith(package + ":"):
+                name = name[len(package) + 1:]
+            listed.setdefault(package, set()).add(name)
+    problems = []
+    for package, names in sorted(defined().items()):
+        missing, gone = names - listed.get(package, set()), listed.get(package, set()) - names
+        if missing:
+            problems.append(f"the manual has no word about {' '.join(sorted(missing))} of {package}")
+        if gone:
+            problems.append(f"the manual lists {' '.join(sorted(gone))} in {package}, and nothing defines that")
+    if problems:
+        sys.exit("site/build.py: site/manual.html is behind the kernel:\n  " + "\n  ".join(problems))
+
+
+def sessions(manual):
+    """What the manual shows of the prompt, as two sessions for
+    tools/boottest.sh: of a machine that has just started, and of the same
+    machine started again. A line that is the key Ctrl-C is the boot
+    test's own line for it."""
+    out = {"first": [], "again": []}
+    for which, block in re.findall(r'<pre class="session( again)?">(.*?)</pre>', manual, flags=re.S):
+        for line in block.strip("\n").split("\n"):
+            if line.strip() == "<kbd>Ctrl-C</kbd>":
+                out["again" if which else "first"].append("^C")
+            else:
+                out["again" if which else "first"].append(html.unescape(re.sub(r"<[^>]+>", "", line)))
+    return out
+
+
 def milestones(roadmap):
     """The milestone list of ROADMAP.md as [(group, [(code, title, version or None), ...]), ...]."""
     groups, lines = [], roadmap.split("\n")
@@ -103,6 +181,16 @@ def roadmap_html(groups):
 
 
 def main():
+    manual = read("site", "manual.html")
+    if sys.argv[1:2] == ["--sessions"] and len(sys.argv) == 3:
+        os.makedirs(sys.argv[2], exist_ok=True)
+        for name, lines in sessions(manual).items():
+            if not lines:
+                sys.exit(f"site/build.py: the manual shows nothing of the prompt for the session {name}")
+            with open(os.path.join(sys.argv[2], f"manual-{name}.txt"), "w", encoding="utf-8") as f:
+                f.write("\n".join(lines) + "\n")
+        return
+    check_names(manual)
     out = sys.argv[1] if len(sys.argv) > 1 else os.path.join(ROOT, "build", "site")
     groups = milestones(read("ROADMAP.md"))
     items = [item for _, group in groups for item in group]
@@ -127,14 +215,15 @@ def main():
         "latest": f"{done[-1][0]}, {done[-1][1]}",
         "roadmap": roadmap_html(groups),
     }
-    page = read("site", "index.html")
-    page = re.sub(r"<!-- The source of the ClaraOS website\..*?-->\n", "", page, count=1, flags=re.S)
-    page = re.sub(r"\{\{(\w+)\}\}", lambda m: values[m.group(1)], page)
-    page = re.sub(r"\{\{spleen:(.*?)\}\}", lambda m: spleen(m.group(1), font), page)
-
+    index = read("site", "index.html")
+    values["style"] = re.search(r"<style>\n(.*?)</style>", index, flags=re.S).group(1)
     os.makedirs(out, exist_ok=True)
-    with open(os.path.join(out, "index.html"), "w", encoding="utf-8") as f:
-        f.write(page)
+    for name, page in (("index.html", index), ("manual.html", manual)):
+        page = re.sub(r"<!-- The source of the ClaraOS .*?-->\n", "", page, count=1, flags=re.S)
+        page = re.sub(r"\{\{(\w+)\}\}", lambda m: values[m.group(1)], page)
+        page = re.sub(r"\{\{spleen:(.*?)\}\}", lambda m: spleen(m.group(1), font), page)
+        with open(os.path.join(out, name), "w", encoding="utf-8") as f:
+            f.write(page)
     for name in ("sun.png", "boot.png"):
         shutil.copyfile(os.path.join(SITE, name), os.path.join(out, name))
     print(f"wrote {out}: version {values['version']}, {values['done']} of {values['total']} milestones done")

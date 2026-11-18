@@ -272,15 +272,18 @@ def old_table(sectors, kind):
 
 
 def guid_table(disk, sectors):
-    """The GUID partition table of a disk with one partition, the system
-    partition that the firmware boots from: the table and its copy at the
-    end of the disk, each with its checksums."""
-    system = bytes.fromhex("28732ac11ff8d211ba4b00a0c93ec93b")  # C12A7328-F81F-11D2-BA4B-00A0C93EC93B
+    """The GUID partition table of a disk with one partition: the table and
+    its copy at the end of the disk, each with its checksums. The partition
+    is of the kind for plain data, as on the disk that macOS makes for UTM,
+    and not of the kind that is kept for the firmware: the firmware starts
+    from a FAT volume of either, and the host opens the first like any
+    other disk, which is how files get to a machine and back."""
+    data = bytes.fromhex("a2a0d0ebe5b9334487c068b6b72699c7")  # EBD0A0A2-B9E5-4433-87C0-68B6B72699C7
     entries = bytearray(128 * 128)
-    entries[0:16] = system
+    entries[0:16] = data
     entries[16:32] = bytes.fromhex("c1a4a05c1a4a0540a05c1a4a05c1a4a0")
     struct.pack_into("<QQQ", entries, 32, FIRST, FIRST + sectors - 1, 0)
-    entries[56:56 + 20] = "EFI System".encode("utf-16-le")
+    entries[56:56 + 14] = "ClaraOS".encode("utf-16-le")
     total = len(disk) // SECTOR
 
     def header(own, other, table):

@@ -258,6 +258,20 @@ Infrastructure, done:
   a version no longer has to belong to a milestone. The ruleset on main
   has required the check, `build-and-boot`, since the workflow was merged.
 
+- **User manual** (2026-11-17, version 0.0.15). The website has a second
+  page, site/manual.html: how to build ClaraOS, start it under QEMU and in
+  UTM, work at its prompt, use the language as far as it goes, read and
+  write files, save the world, run threads, look at the machine, and what to
+  do when something goes wrong, with every name that the system defines at
+  its end, by subject. It is held to the kernel: site/build.py stops when
+  the kernel defines a name that the manual lists nowhere, or the manual
+  lists one that is gone, and `make test` types what the manual shows of the
+  prompt at a kernel, before and after the machine is started again from the
+  world it saved, two more boots. tools/mkdisk.py makes its partition of the
+  kind for plain data, as macOS does for the UTM disk, so that the host
+  opens a machine's disk like any other and files can be carried to it and
+  back.
+
 Infrastructure, for sessions with budget left over:
 
 - Read the UART base from ACPI (SPCR or DBG2) instead of assuming
@@ -616,6 +630,18 @@ M12:
   a function of its own that the substrate calls in place of the listener.
 
 No milestone yet, to be picked up when they start to matter:
+
+- The user manual. What is checked is its transcripts and its lists of
+  names. Its prose is not: a sentence that was true when it was written
+  stays until somebody reads it again. Three things in it are shown and not
+  typed, since a machine answers them in its own way: the boot report, the
+  line that says a heap is an image, and the reasons for which an image is
+  refused, which are the kernel's words copied by hand. The names of the
+  drivers' packages, as `clara.pci:devices`, are in a table that nothing
+  compares with the files. The transcripts are typed at AArch64 only. The
+  steps for UTM are as they were worked out from its source, and have not
+  been followed in UTM itself. The page is one long page, without a search
+  and without a place of its own for each function.
 
 - Images. One file is looked for, `\clara\clara.image` on the volume that
   the firmware booted from, and SAVE-IMAGE writes where names are looked up,
