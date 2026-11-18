@@ -7,11 +7,14 @@
 # arrives (tools/boottest.sh), AArch64 twice, once for each version of its
 # interrupt controller. The session ends by saving the world to the disk,
 # and each machine boots a second time, from that disk, into the world it
-# saved (tools/resumed.txt); fsck.fat looks at every disk afterwards. The
+# saved (tools/resumed.txt); fsck.fat looks at every disk afterwards. What
+# the user manual shows of the prompt (site/manual.html) is typed at one
+# more machine, before and after it is started again. The
 # runners have no hardware acceleration for QEMU, so every machine is
 # emulated. The website
 # is built as well: it reads ROADMAP.md, and stops building when a
-# milestone entry loses its form.
+# milestone entry loses its form, or when the kernel defines a name that
+# the user manual says nothing about.
 
 name: CI
 

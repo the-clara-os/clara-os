@@ -258,6 +258,20 @@ Infrastructure, done:
   a version no longer has to belong to a milestone. The ruleset on main
   has required the check, `build-and-boot`, since the workflow was merged.
 
+- **User manual** (2026-11-17, version 0.0.15). The website has a second
+  page, site/manual.html: how to build ClaraOS, start it under QEMU and in
+  UTM, work at its prompt, use the language as far as it goes, read and
+  write files, save the world, run threads, look at the machine, and what to
+  do when something goes wrong, with every name that the system defines at
+  its end, by subject. It is held to the kernel: site/build.py stops when
+  the kernel defines a name that the manual lists nowhere, or the manual
+  lists one that is gone, and `make test` types what the manual shows of the
+  prompt at a kernel, before and after the machine is started again from the
+  world it saved, two more boots. tools/mkdisk.py makes its partition of the
+  kind for plain data, as macOS does for the UTM disk, so that the host
+  opens a machine's disk like any other and files can be carried to it and
+  back.
+
 Infrastructure, for sessions with budget left over:
 
 - Read the UART base from ACPI (SPCR or DBG2) instead of assuming
@@ -617,6 +631,18 @@ M12:
 
 No milestone yet, to be picked up when they start to matter:
 
+- The user manual. What is checked is its transcripts and its lists of
+  names. Its prose is not: a sentence that was true when it was written
+  stays until somebody reads it again. Three things in it are shown and not
+  typed, since a machine answers them in its own way: the boot report, the
+  line that says a heap is an image, and the reasons for which an image is
+  refused, which are the kernel's words copied by hand. The names of the
+  drivers' packages, as `clara.pci:devices`, are in a table that nothing
+  compares with the files. The transcripts are typed at AArch64 only. The
+  steps for UTM are as they were worked out from its source, and have not
+  been followed in UTM itself. The page is one long page, without a search
+  and without a place of its own for each function.
+
 - Images. One file is looked for, `\clara\clara.image` on the volume that
   the firmware booted from, and SAVE-IMAGE writes where names are looked up,
   the first volume of the first disk: the two are the same volume as long as
@@ -897,12 +923,13 @@ No milestone yet, to be picked up when they start to matter:
 - CI has SBCL 2.6.0, the Mac 2.6.10, and the Ubuntu 24.04 container that
   stands in for CI on the Mac 2.2.9. The stress boot, a collection at every
   safe point, takes 18 s on the Mac, two minutes there when AArch64 is
-  emulated, and three to four on CI, 185 s on one run and 257 s on the next,
-  of the ten that the boot test gives it; it grows with the world, since
-  each of those collections goes through the whole heap; a text in the
-  kernel's self-test that goes round a thousand times costs seconds there,
-  since every call of a function in Lisp is a safe point, FORMAT's among
-  them.
+  emulated, and between two and five on CI, 132 s to 294 s on four runs of
+  nearly the same kernel, of the ten that the boot test gives it. It grows
+  with the world, since each of those collections goes through the whole
+  heap, so it wants a cheaper session or a longer limit before the world is
+  half as large again; a text in the kernel's self-test that goes round a
+  thousand times costs seconds there, since every call of a function in Lisp
+  is a safe point, FORMAT's among them.
 - lisp/font.lisp and kernel/font.c hold the same glyphs, one for each
   console, from the one generator.
 

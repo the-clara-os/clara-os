@@ -1,0 +1,570 @@
+<!doctype html>
+<!-- The source of the ClaraOS user manual. site/build.py fills in the {{...}}
+     marks, as it does for index.html, and holds the manual against the
+     kernel: every name that the kernel defines has to be in one of the
+     lists of the class "names", and nothing else may be. What is shown of
+     the prompt, the <pre> elements of the class "session", is typed at a
+     kernel by `make test` and has to come back as written here; the ones
+     of the class "session again" are typed after the machine has been
+     started again from the world that the first ones saved. A line that is
+     <kbd>Ctrl-C</kbd> and nothing else is the key. Whatever a change to the
+     system gives a user to type, or to see, gets its words here in the
+     same change. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ClaraOS user manual</title>
+<meta name="description" content="How to build ClaraOS, start it under QEMU or in UTM, and work at its prompt: the Lisp that is there, files, saving the world, threads, and what to do when something goes wrong.">
+<meta property="og:title" content="ClaraOS user manual">
+<meta property="og:description" content="How to build ClaraOS, start it, and work at its prompt.">
+<meta property="og:url" content="https://claraos.org/manual.html">
+<meta property="og:image" content="https://claraos.org/sun.png">
+<link rel="canonical" href="https://claraos.org/manual.html">
+<link rel="icon" href="sun.png">
+<style>
+{{style}}
+/* The manual: the same page with a lower sky, and what a book needs. */
+.screen .frame { padding-bottom: 2.6rem; }
+.screen a { text-decoration: none; }
+.ours { margin-top: 22px; }
+@media (min-width: 62rem) {
+  .screen .frame { padding-bottom: 2.6rem; }
+  .ours { max-width: none; margin-top: 26px; }
+}
+main { padding-top: 2.5rem; }
+section { margin-top: 4.2rem; scroll-margin-top: 1rem; }
+h3 { margin: 2.6rem 0 .7rem; font-size: 1.2rem; line-height: 1.3; scroll-margin-top: 1rem; }
+ul, ol { max-width: 36rem; margin: 0 0 1.1rem; padding-left: 1.4rem; }
+li { margin: .3rem 0; }
+.toc { max-width: 46rem; margin: 1.6rem 0 0; padding: 0; list-style: none; columns: 2 15rem; column-gap: 3rem; }
+.toc li { margin: 0; padding: .16rem 0; break-inside: avoid; }
+code, kbd { font: .88em ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+p code, li code, td code, dd code { padding: .06em .28em; background: color-mix(in srgb, var(--text) 9%, transparent); }
+kbd { padding: 0 .32em; border: 1px solid currentColor; border-radius: 3px; white-space: nowrap; }
+pre code { font: inherit; }
+pre kbd { font-size: 1em; opacity: .7; }
+table { max-width: 46rem; margin: 1.5rem 0; border-collapse: collapse; font-size: .97rem; }
+th, td { padding: .42rem 1.3rem .42rem 0; text-align: left; vertical-align: top; border-bottom: 1px solid color-mix(in srgb, var(--text) 16%, transparent); }
+th { font-weight: 600; }
+td:first-child { white-space: nowrap; }
+.wrap td:first-child { white-space: normal; }
+.names { max-width: 46rem; line-height: 1.95; }
+.names code { margin-right: .28em; white-space: nowrap; }
+.aside { color: var(--muted); }
+</style>
+</head>
+<body>
+
+<header class="screen">
+  <div class="frame">
+    <p class="boot"><a href="./">{{spleen:ClaraOS {{version}} on aarch64: the machine is ours}}</a></p>
+    <h1 class="ours">{{spleen:User manual}}</h1>
+  </div>
+</header>
+
+<main class="frame">
+  <p class="lede">How to build ClaraOS, start it, and work at its prompt.</p>
+  <p>This manual is for version {{version}}. ClaraOS starts in a virtual machine, tests itself as it comes up, and ends at a prompt where what you type is Common Lisp: it is read, evaluated, and what it gives is printed. There is no shell and there are no commands apart from that. Listing a directory, writing a file and saving the whole system are Lisp forms like any other.</p>
+  <p>What the manual shows of the prompt was typed at a running kernel: the tests that every change has to pass type each of these sessions again and compare the answers. <a href="./">The front page</a> says what ClaraOS is for and how far it has come.</p>
+
+  <ol class="toc">
+    <li><a href="#build">Getting it</a></li>
+    <li><a href="#start">Starting it</a></li>
+    <li><a href="#prompt">The prompt</a></li>
+    <li><a href="#language">The language</a></li>
+    <li><a href="#files">Files</a></li>
+    <li><a href="#image">Saving the world</a></li>
+    <li><a href="#threads">Threads</a></li>
+    <li><a href="#machine">Looking at the machine</a></li>
+    <li><a href="#trouble">When something goes wrong</a></li>
+    <li><a href="#names">Everything that is defined</a></li>
+  </ol>
+
+  <section id="build">
+    <h2>{{spleen:Getting it}}</h2>
+    <p>ClaraOS is built from its source, on macOS or on Linux. There is nothing to download but the repository, and nothing is installed on your computer: the result is a directory of files, and a disk image made of them, for a virtual machine to start from.</p>
+    <p>On macOS the tools come from Homebrew:</p>
+<pre><code>brew install llvm lld qemu sbcl</code></pre>
+    <p>On Ubuntu they come from the distribution:</p>
+<pre><code>sudo apt install clang lld make qemu-system-x86 qemu-system-arm ovmf \
+    qemu-efi-aarch64 netcat-openbsd sbcl python3 dosfstools</code></pre>
+    <p>Then, on either:</p>
+<pre><code>git clone https://github.com/the-clara-os/clara-os
+cd clara-os
+make               <span class="note"># both kernels, and the Lisp files beside them</span>
+make test          <span class="note"># if you like: start every machine and check its answers</span></code></pre>
+    <p><code>make</code> takes a few seconds and leaves everything in <code>build/</code>. Building and running need clang, QEMU and Python 3, which macOS has with Apple's developer tools. SBCL and the rest of the list are for <code>make test</code>.</p>
+  </section>
+
+  <section id="start">
+    <h2>{{spleen:Starting it}}</h2>
+
+    <h3 id="qemu">Under QEMU</h3>
+<pre><code>make run-aarch64   <span class="note"># virtualized on Apple silicon: it starts at once</span>
+make run-x86_64    <span class="note"># emulated: the firmware takes a few seconds first</span></code></pre>
+    <p>A window opens, which is the machine's screen, and the terminal you started it from becomes its serial port. Both show the same report as the machine comes up, and both end at the prompt. You can type in either: in the window on the machine's keyboard, in the terminal on its serial port.</p>
+    <table>
+      <tr><td><kbd>Ctrl-A</kbd> <kbd>X</kbd></td><td>in the terminal: leave QEMU, whatever the machine is doing</td></tr>
+      <tr><td><kbd>Ctrl-A</kbd> <kbd>C</kbd></td><td>in the terminal: QEMU's own monitor, and back</td></tr>
+      <tr><td><code>MEM=1G make run-aarch64</code></td><td>a machine with that much memory, where it has 512 MiB otherwise</td></tr>
+    </table>
+    <p>The machine starts from a disk image, <code>build/disk-aarch64.img</code> or <code>build/disk-x86_64.img</code>, which is made of the files in <code>build/esp</code> the first time and kept from one run to the next. Files that you write are on it the next time, and so is a <a href="#image">world that you saved</a>. After the next <code>make</code> that changed something, the disk is made again and both are gone.</p>
+
+    <h3 id="utm">In UTM</h3>
+    <ol>
+      <li><code>make image</code>, on macOS. It makes <code>build/claraos.img</code>, a disk with both kernels on it.</li>
+      <li>In UTM: New, then Virtualize on Apple silicon (the machine is AArch64) or Emulate (x86_64), operating system Other. Skip the ISO. Leave "UEFI Boot" checked. 512 MiB of memory is plenty.</li>
+      <li>Remove the drive that UTM made. Then Drives, Import, <code>build/claraos.img</code>, with the interface <strong>VirtIO</strong>: that is the disk ClaraOS has a driver for. With any other interface the machine still starts, and has no files.</li>
+      <li>Add a Serial device, mode "Built-in Terminal". The system talks there as well as on the screen, and you can type there.</li>
+      <li>For typing in the screen's own window, add a keyboard that ClaraOS has a driver for. UTM gives a machine USB devices, which it does not have one for. Under QEMU, Arguments, add two: <code>-device virtio-keyboard-pci</code> and <code>-device virtio-tablet-pci</code>.</li>
+      <li>Start.</li>
+    </ol>
+    <p>UTM copies the disk into the virtual machine. To put a newer ClaraOS there, or to go back to a system that nothing was saved on, import <code>build/claraos.img</code> again in place of the drive.</p>
+
+    <h3 id="needs">What it needs of a machine</h3>
+    <table class="wrap">
+      <tr><td>A processor</td><td>x86_64 or AArch64. One is used, however many the machine has.</td></tr>
+      <tr><td>Firmware</td><td>UEFI. The kernel is the program that the firmware starts: there is no boot loader between them.</td></tr>
+      <tr><td>Memory</td><td>128 MiB is enough to start and to work. It is given 512 MiB unless you say otherwise.</td></tr>
+      <tr><td>A disk</td><td>A virtio disk with a FAT volume, of 12, 16 or 32 bits, behind either kind of table of partitions or without one. The volume it starts from is the one whose files it sees.</td></tr>
+      <tr><td>A place to type</td><td>A serial port, a virtio keyboard, or both.</td></tr>
+      <tr><td>A screen</td><td>The one the firmware sets up, if there is one. Without it everything is on the serial port.</td></tr>
+    </table>
+    <p>It has no use yet for a network, for sound, for USB or for a clock.</p>
+
+    <h3 id="report">What it says as it starts</h3>
+    <p>The kernel reports what it finds and tests each part of itself before it uses it. On AArch64 under QEMU the report begins and ends like this:</p>
+<pre><code>ClaraOS: taking the machine from the firmware
+
+ClaraOS {{version}} on aarch64: the machine is ours
+exceptions: a vector table of our own at EL1, its handlers on a stack of their own
+memory map: 33 regions
+<span class="note">...</span>
+threads: self-test passed, 55 switches: by the timer, by choice, on a lock, asleep, woken, stopped
+lisp: objects are tagged 64-bit words, in a heap at 0x0000400000000000 that begins with NIL
+<span class="note">...</span>
+pci: 7 devices, by the configuration space at #x4010000000
+<span class="note">...</span>
+input: 00:03.0 is a keyboard, QEMU Virtio Keyboard
+disk: 00:02.0 has 72081 sectors of 512 bytes, 35 MiB
+files: a FAT32 volume of 33 MiB on the disk 00:02.0, from its sector 2048 on
+clara: reading the serial port and the keyboard: a form is evaluated, Ctrl-C stops it, Ctrl-D ends
+&gt; </code></pre>
+    <p>The lines that begin with <code>pci:</code>, <code>input:</code>, <code>disk:</code> and <code>files:</code> say what the machine has: its devices, the keyboards and pointers among them, its disks, and the volume that names of files are looked up on. A line that begins with <code>panic:</code> or <code>exception:</code> means the kernel has stopped. <a href="#trouble">When something goes wrong</a> has more about those.</p>
+
+    <h3 id="stop">Stopping it</h3>
+    <p><kbd>Ctrl-D</kbd> at the prompt ends the session. The kernel says <code>clara: nothing more to do, halting</code> and the machine stands still. Then close the window, or stop the virtual machine. Nothing is lost by stopping at any other moment either: a file is on the disk from the moment the form that wrote it has answered.</p>
+  </section>
+
+  <section id="prompt">
+    <h2>{{spleen:The prompt}}</h2>
+    <p>The prompt is <code>&gt;</code> and a space. What you type after it is a form of Common Lisp. When the line holds a whole form, the form is evaluated and its value is printed, in the way it would have to be typed to mean the same thing. Then the prompt comes back.</p>
+<pre class="session">&gt; (+ 1 2)
+3
+&gt; (list 1 "two" 'three #\4)
+(1 "two" THREE #\4)
+&gt; (floor 17 5)
+3
+2
+&gt; (values)
+&gt; 'one "two" (+ 1 2)
+ONE
+"two"
+3
+&gt; (list 1 2
+        3)
+(1 2 3)</pre>
+    <p>A form that gives several values has each of them on a line of its own, and one that gives none has nothing. Several forms on a line are answered one after the other. A form that is not finished when the line ends goes on in the next line, after a prompt of two spaces, for as many lines as it takes.</p>
+
+    <h3 id="keys">Keys</h3>
+    <table>
+      <tr><td><kbd>Enter</kbd></td><td>ends the line</td></tr>
+      <tr><td><kbd>Backspace</kbd>, <kbd>Delete</kbd></td><td>takes back the last character of the line</td></tr>
+      <tr><td><kbd>Tab</kbd></td><td>a space</td></tr>
+      <tr><td><kbd>Ctrl-C</kbd></td><td>while you type: gives up the line, and the form it was part of. While a form is evaluated: stops it.</td></tr>
+      <tr><td><kbd>Ctrl-D</kbd></td><td>at the start of a line: ends the session, and the machine halts</td></tr>
+    </table>
+    <p>That is all the editing there is. The arrow keys do nothing, and no line that was typed before can be called back. In a terminal on the serial port, the terminal's own copy and paste do what is missing: many forms can be pasted at once.</p>
+    <p>The keyboard is read as one of the United States, with <kbd>Shift</kbd>, <kbd>Ctrl</kbd> and <kbd>Caps Lock</kbd>, and a key that is held down repeats. What is typed on the serial port can be any character, as UTF-8. The screen shows the characters of ASCII, and a box for any other.</p>
+    <p>The screen holds 100 columns and 37 rows at 800 by 600 pixels, and what scrolls off its top is gone. The terminal on the serial port keeps whatever a terminal keeps.</p>
+
+    <h3 id="errors">Mistakes</h3>
+    <p>A mistake costs a line. The system says what went wrong, in words, and the prompt comes back with everything as it was.</p>
+<pre class="session">&gt; (car 5)
+error: CAR wants a list, and 5 is not one
+&gt; (no-such-function 1 2)
+error: the function NO-SUCH-FUNCTION is not defined
+&gt; (loop)
+<kbd>Ctrl-C</kbd>
+error: interrupted from the keyboard</pre>
+    <p>A form that does not end, like that <code>(loop)</code>, runs until <kbd>Ctrl-C</kbd> stops it. So does one that waits for something that never comes.</p>
+  </section>
+
+  <section id="language">
+    <h2>{{spleen:The language}}</h2>
+    <p>The Lisp is a part of Common Lisp, and not a dialect of its own: what is here means what it means in any Common Lisp, and a program that keeps to this part runs elsewhere as it stands. If you know Common Lisp, read <a href="#differs">where it stops short</a> and go on. If you do not, any introduction to it will do, for as far as this part goes.</p>
+    <p>It is an interpreter. A function is evaluated from its text every time it is called, so it is slow by the standards of a compiled Lisp, and quick enough to drive the machine it runs on: its console, its disks and its file system are written in it.</p>
+
+    <h3 id="defining">Functions, macros and variables</h3>
+<pre class="session">&gt; (defun fact (n) (if (&lt; n 2) 1 (* n (fact (- n 1)))))
+FACT
+&gt; (fact 20)
+2432902008176640000
+&gt; (mapcar #'fact '(1 2 3 4 5))
+(1 2 6 24 120)
+&gt; (defun make-counter () (let ((n 0)) (lambda () (incf n))))
+MAKE-COUNTER
+&gt; (let ((c (make-counter))) (funcall c) (funcall c) (funcall c))
+3
+&gt; (defmacro unless-zero (n &amp;body body) `(if (= ,n 0) nil (progn ,@body)))
+UNLESS-ZERO
+&gt; (macroexpand-1 '(unless-zero x (/ 100 x)))
+(IF (= X 0) NIL (PROGN (/ 100 X)))
+T
+&gt; (defvar *depth* 0)
+*DEPTH*
+&gt; (defun depth () *depth*)
+DEPTH
+&gt; (list (let ((*depth* 1)) (depth)) (depth))
+(1 0)</pre>
+    <p>A function takes its arguments in the ways Common Lisp has: required ones, <code>&amp;optional</code> ones with their defaults, the rest as a list, and by keyword. A macro can take a list apart in its own list of parameters. A variable that <code>defvar</code> or <code>defparameter</code> made is special: binding it with <code>let</code> changes what every function sees until the <code>let</code> is over, as <code>*depth*</code> shows above.</p>
+
+    <h3 id="data">Numbers, text and lists</h3>
+<pre class="session">&gt; (fact 21)
+error: the result is an integer too large for a fixnum, and there are no larger integers yet
+&gt; (/ 7 2)
+error: 7 divided by 2 is not an integer, and there are no ratios yet
+&gt; (floor 7 2)
+3
+1
+&gt; (string-upcase "Hello, world!")
+"HELLO, WORLD!"
+&gt; (format nil "~A and ~S make ~D" "one" "two" 3)
+"one and \"two\" make 3"
+&gt; (concatenate 'string "clara" "." "image")
+"clara.image"
+&gt; (list (char "Clara" 0) (char-code #\C) (code-char 955) (length "four"))
+(#\C 67 #\λ 4)
+&gt; (sort (list "pci" "Boot" "console" "FAT") #'string-lessp)
+("Boot" "console" "FAT" "pci")
+&gt; (let ((v (vector 1 2 3))) (setf (aref v 1) 'x) v)
+#(1 X 3)
+&gt; (reduce #'+ (remove-if #'oddp '(1 2 3 4 5 6)))
+12</pre>
+    <p>A number is an integer of 63 bits, between -4611686018427387904 and 4611686018427387903. A result outside that is an error and not a wrong number, and so is a division that does not come out even: there are no larger integers, no fractions and no decimal numbers yet. A character is a Unicode code point, and a string holds any of them.</p>
+
+    <h3 id="structures">Structures and packages</h3>
+<pre class="session">&gt; (defstruct point x (y 0))
+POINT
+&gt; (let ((p (make-point :x 3))) (setf (point-y p) 4) p)
+#S(POINT :X 3 :Y 4)
+&gt; (defpackage "PLAY" (:use "COMMON-LISP") (:export "BALL"))
+#&lt;PACKAGE "PLAY"&gt;
+&gt; (in-package "PLAY")
+#&lt;PACKAGE "PLAY"&gt;
+&gt; (list 'ball 'bat (symbol-package 'bat) 'cl-user::fact)
+(BALL BAT #&lt;PACKAGE "PLAY"&gt; COMMON-LISP-USER::FACT)
+&gt; (in-package "COMMON-LISP-USER")
+#&lt;PACKAGE "COMMON-LISP-USER"&gt;</pre>
+    <p>Names are read in the package that <code>*package*</code> holds, which is <code>COMMON-LISP-USER</code> when the system starts. What the system adds to Common Lisp is in the package <code>CLARA</code>, and is written with that name before it: <code>clara:make-thread</code>, <code>clara:save-image</code>.</p>
+
+    <h3 id="conditions">Errors that a program handles</h3>
+<pre class="session">&gt; (handler-case (/ 10 0) (division-by-zero () 'no-quotient))
+NO-QUOTIENT
+&gt; (define-condition low-fuel (error) ((left :initarg :left :reader fuel-left)))
+LOW-FUEL
+&gt; (handler-case (error 'low-fuel :left 3) (low-fuel (c) (fuel-left c)))
+3
+&gt; (unwind-protect (car 5) (format t "cleaning up~%"))
+cleaning up
+error: CAR wants a list, and 5 is not one
+&gt; (ignore-errors (car 5))
+NIL
+#&lt;TYPE-ERROR "CAR wants a list, and 5 is not one"&gt;
+&gt; (defun forever (n) (+ 1 (forever n)))
+FOREVER
+&gt; (forever 1)
+error: the stack is full: the forms are nested too deep, or a function calls itself without end</pre>
+    <p>An error is a condition, with a type. <code>handler-case</code> takes the conditions whose type one of its clauses names, and <code>unwind-protect</code> cleans up whichever way its form is left. The system's own errors have Common Lisp's types where a program would want to tell them apart: <code>type-error</code>, <code>division-by-zero</code>, <code>unbound-variable</code>, <code>undefined-function</code> and their kin. A stack or a heap that is full, and <kbd>Ctrl-C</kbd>, are no errors: <code>ignore-errors</code> and a clause for <code>error</code> let them pass, and a clause for <code>serious-condition</code> takes them.</p>
+
+    <h3 id="differs">Where it stops short</h3>
+    <p>What is refused is refused with an error that says so. Nothing is quietly taken for something else, so a program does not mean one thing here and another elsewhere.</p>
+    <ul>
+      <li>Numbers are integers of 63 bits. No larger integers, no ratios, no floating point.</li>
+      <li><code>loop</code> is the plain one, a body that is repeated until a <code>return</code>. Its keywords, <code>for</code> and <code>collect</code> and the rest, are not there. <code>do</code>, <code>dolist</code> and <code>dotimes</code> are.</li>
+      <li><code>format</code> knows <code>~A</code>, <code>~S</code>, <code>~D</code>, <code>~%</code> and <code>~~</code>.</li>
+      <li>The functions on sequences, <code>mapcar</code>, <code>find</code>, <code>remove-if</code>, <code>sort</code> and the others, take lists. <code>length</code>, <code>subseq</code> and <code>concatenate</code> take strings as well. Of their keyword arguments there is <code>:test</code>, with <code>:key</code> for <code>member</code>, <code>assoc</code> and <code>sort</code>, and <code>:initial-value</code> for <code>reduce</code>.</li>
+      <li><code>defstruct</code> takes a name and slots, and none of its options.</li>
+      <li>Conditions are handled by <code>handler-case</code>. There is no <code>handler-bind</code>, no restart and no debugger.</li>
+      <li>There are no hash tables, no classes and generic functions, no <code>typep</code>, and no <code>destructuring-bind</code>.</li>
+      <li>A package can be made, used when it is made, and exported from. Nothing is imported or shadowed afterwards.</li>
+      <li><code>eq</code> and <code>eql</code> are the same function. Letters change case as far as ASCII has them: <code>(string-upcase "é")</code> is <code>"é"</code>.</li>
+      <li>A function can call itself some three thousand calls deep. Past that it is the error above, and not the end of the machine.</li>
+      <li><code>(declare (special ...))</code> and <code>&amp;environment</code> are refused, and so are the reader's <code>#.</code>, <code>#S</code> and <code>#P</code>.</li>
+    </ul>
+    <p><a href="#names">Everything that is defined</a>, at the end of this manual, is the whole list, by subject.</p>
+  </section>
+
+  <section id="files">
+    <h2>{{spleen:Files}}</h2>
+    <p>The system reads and writes the files of the disk it started from. The name of a file is a string: the directories that lead to it and then its own name, with a slash before each, as in <code>"/clara/boot.lisp"</code>. Letters match in either case. There is no current directory: every name starts at the top of the volume.</p>
+
+    <h3 id="listing">What is there</h3>
+<pre class="session">&gt; (directory "/*")
+("/clara/" "/EFI/")
+&gt; (directory "/clara/*.lisp")
+("/clara/boot.lisp" "/clara/console.lisp" "/clara/disk.lisp" "/clara/fat.lisp" "/clara/font.lisp" "/clara/input.lisp" "/clara/listener.lisp" "/clara/pci.lisp" "/clara/self-test.lisp" "/clara/virtio.lisp")
+&gt; (probe-file "/CLARA/Boot.Lisp")
+"/CLARA/boot.lisp"
+&gt; (probe-file "/clara/nothing.lisp")
+NIL</pre>
+    <p><code>directory</code> takes a pattern, in which <code>*</code> stands for any characters in the last part of the name, and gives the names that fit, a directory's with a slash at its end. <code>probe-file</code> gives the name of a file as the disk spells it, or <code>NIL</code> when there is none. The files in <code>/clara</code> are the system's own Lisp: the language's part that is written in Lisp, the console, the drivers and the file system. <code>/EFI</code> holds the kernels.</p>
+
+    <h3 id="reading">Reading and loading</h3>
+<pre class="session">&gt; (with-open-file (in "/clara/listener.lisp") (list (read-line in) (read-line in)))
+(";;;; listener.lisp: read, evaluate, print" ";;;;")
+&gt; (load "/clara/listener.lisp")
+T</pre>
+    <p><code>with-open-file</code> opens a file for the forms inside it and closes it afterwards. <code>read-line</code> gives the next line, and at the end of the file it is an error, or the value you name: <code>(read-line in nil 'done)</code>. <code>load</code> evaluates the forms of a file one after the other, as if they had been typed. When a form in it fails, the error says the file and the line.</p>
+
+    <h3 id="writing">Writing</h3>
+<pre class="session">&gt; (with-open-file (out "/notes.txt" :direction :output)
+    (format out "milk~%eggs~%"))
+NIL
+&gt; (with-open-file (in "/notes.txt") (list (read-line in) (read-line in) (read-line in nil 'no-more)))
+("milk" "eggs" NO-MORE)
+&gt; (with-open-file (out "/notes.txt" :direction :output) (write-line "bread" out))
+error: OPEN: there is a file /notes.txt already, and :IF-EXISTS does not say :SUPERSEDE or :APPEND
+&gt; (with-open-file (out "/notes.txt" :direction :output :if-exists :append) (write-line "bread" out))
+"bread"
+&gt; (with-open-file (out "/hello.lisp" :direction :output)
+    (format out "(defun hello () (format t ~S))~%" "hello from a file~%"))
+NIL
+&gt; (load "/hello.lisp")
+T
+&gt; (hello)
+hello from a file
+NIL
+&gt; (delete-file "/notes.txt")
+T
+&gt; (probe-file "/notes.txt")
+NIL</pre>
+    <p>A file is opened for writing with <code>:direction :output</code>, and whatever prints to a stream prints to it: <code>format</code>, <code>write-line</code>, <code>print</code>. The file is made when <code>with-open-file</code> is over. If the forms inside it fail, no file is made, and one that was there stays as it was.</p>
+    <table class="wrap">
+      <tr><th><code>:if-exists</code></th><th>when there is a file of that name already</th></tr>
+      <tr><td><code>:error</code></td><td>an error, which is what happens when nothing is said</td></tr>
+      <tr><td><code>:supersede</code></td><td>the new file takes its place</td></tr>
+      <tr><td><code>:append</code></td><td>what is written goes after what the file holds</td></tr>
+      <tr><td><code>nil</code></td><td>no stream: <code>open</code> gives <code>NIL</code>, and nothing is written</td></tr>
+    </table>
+    <p>What to know about files as they are now:</p>
+    <ul>
+      <li>A file is text, in UTF-8. It is read whole when it is opened and written whole when it is closed, so it has to fit in memory, which a text does.</li>
+      <li>A name can be 255 characters long and have spaces in it. It cannot have any of <code>" * : &lt; &gt; ? \ |</code> in it, or end in a dot or a space.</li>
+      <li>Directories cannot be made, and a file cannot be renamed or moved. A new file goes into a directory that is there.</li>
+      <li>There is no clock in the system, so every file it writes is dated the first of January 1980.</li>
+      <li>The disk is a FAT volume, which other systems read. On macOS, <code>build/claraos.img</code> opens with a double click, and the files that ClaraOS wrote are in it.</li>
+    </ul>
+  </section>
+
+  <section id="image">
+    <h2>{{spleen:Saving the world}}</h2>
+    <p>Everything that you define lives in the machine's memory, and is gone when the machine stops, unless you save it. <code>clara:save-image</code> writes the whole Lisp world to one file on the disk, as it is at that moment.</p>
+<pre class="session">&gt; (clara:save-image)
+"/clara/clara.image"</pre>
+    <p>The next time the machine starts, it finds that file and takes it for its world, in place of loading the Lisp files. The report says so:</p>
+<pre><code>lisp: the heap is an image: 1542 KiB that ClaraOS {{version}} saved, from clara.image on the boot volume</code></pre>
+    <p>And at the prompt, what was defined is defined:</p>
+<pre class="session again">&gt; (fact 10)
+3628800
+&gt; (hello)
+hello from a file
+NIL
+&gt; (list (depth) (point-x (make-point :x 1)) (unless-zero 2 'two))
+(0 1 TWO)
+&gt; (probe-file "/clara/clara.image")
+"/clara/clara.image"</pre>
+
+    <h3 id="saved">What comes back, and what does not</h3>
+    <ul>
+      <li>Functions, macros, structures, packages and conditions that were defined, and the values of variables, come back. So does the package that names were being read in.</li>
+      <li>A special variable comes back with the value it has outside every <code>let</code>, also when it was saved from inside one.</li>
+      <li>Threads do not come back. The world starts again at the prompt, and does not go on in the middle of what it was doing. A thread that was running is one that has been stopped, and a lock that was held is free.</li>
+      <li>The devices are found again, as at every start. A world can be saved on one machine and started on another that has other devices, or another screen, as long as it is the same kind of processor.</li>
+      <li>Files are on the disk either way, and have nothing to do with the image.</li>
+    </ul>
+    <p>Saving again writes a new image in place of the old one. A world of this size takes a fraction of a second to save.</p>
+
+    <h3 id="unsave">Going back to the files</h3>
+<pre class="session again">&gt; (delete-file "/clara/clara.image")
+T</pre>
+    <p>Without the image, the next start loads the Lisp files again, and the world is as new. A disk that nothing was saved on does the same: under QEMU, delete <code>build/disk-aarch64.img</code> and it is made anew; in UTM, import <code>build/claraos.img</code> again.</p>
+
+    <h3 id="refused">An image that is not taken</h3>
+    <p>When the system cannot use an image, it says why in its report and starts from the Lisp files, as if there had been none. The image stays on the disk until it is deleted or saved over.</p>
+    <table class="wrap">
+      <tr><th>The report says</th><th>which means</th></tr>
+      <tr><td>it was saved on ARM64, and this machine is X86-64</td><td>An image is for the kind of processor it was saved on.</td></tr>
+      <tr><td>it is not what was saved, by its checksum</td><td>The file was damaged, or changed, since it was written.</td></tr>
+      <tr><td>it is 775020 bytes long, and not as long as it says it is</td><td>The file is not whole: the machine stopped while it was being written, or it was cut short on the way.</td></tr>
+      <tr><td>it does not begin the way an image does</td><td>Some other file has the image's name.</td></tr>
+      <tr><td>ClaraOS 0.0.14 saved it, with objects that are not laid out as they are here</td><td>The image is from a version whose memory was arranged otherwise. Images of other versions are taken as long as that has not changed.</td></tr>
+      <tr><td>it has the function FOO in C, and this kernel has none of that name</td><td>The image was saved by a newer system than the one that is starting.</td></tr>
+      <tr><td>the machine has no memory for its heap</td><td>The world was saved on a machine with more memory.</td></tr>
+    </table>
+    <p>A newer ClaraOS starts an older image, and what it has more of is there. What the older world defined in Lisp stays as it was saved, the system's own files included. To have those as the newer system has them, delete the image, start again, and save a new one.</p>
+    <p>One thing an image cannot be saved from is itself. A world in which something essential was redefined and then saved starts like that every time, and if it cannot get to its prompt it cannot delete its own image. The way out is a disk without the image: the two at the end of <a href="#unsave">Going back to the files</a>.</p>
+  </section>
+
+  <section id="threads">
+    <h2>{{spleen:Threads}}</h2>
+    <p>A thread is a function that runs beside the others. The prompt is one thread, the listener, and each keyboard and pointer has one. The names are those that Bordeaux Threads made usual, in the package <code>CLARA</code>.</p>
+<pre class="session">&gt; (clara:current-thread)
+#&lt;THREAD "listener"&gt;
+&gt; (clara:join-thread (clara:make-thread (lambda () (* 6 7)) :name "worker"))
+42
+&gt; (defvar *jobs* 0)
+*JOBS*
+&gt; (let ((lock (clara:make-lock)))
+    (mapc #'clara:join-thread
+          (mapcar (lambda (n) (clara:make-thread (lambda () (clara:with-lock-held (lock) (incf *jobs* n)))))
+                  '(1 2 3)))
+    *jobs*)
+6
+&gt; (let ((bell (clara:make-event "bell")))
+    (clara:make-thread (lambda () (sleep 1) (clara:signal-event bell)))
+    (clara:wait-event bell))
+T
+&gt; (clara:join-thread (clara:make-thread (lambda () (car 5)) :name "faulty"))
+error in #&lt;THREAD "faulty"&gt;: CAR wants a list, and 5 is not one
+error: the thread #&lt;THREAD "faulty"&gt; ended with an error: CAR wants a list, and 5 is not one
+&gt; (defvar *spinner* (clara:make-thread (lambda () (do () (nil))) :name "spinner"))
+*SPINNER*
+&gt; (clara:thread-alive-p *spinner*)
+T
+&gt; (clara:destroy-thread *spinner*)
+T
+&gt; (clara:join-thread *spinner*)
+error: the thread #&lt;THREAD "spinner"&gt; was stopped</pre>
+    <ul>
+      <li><code>clara:make-thread</code> starts a function of no arguments in a thread of its own, and <code>clara:join-thread</code> waits for it and gives what the function gave.</li>
+      <li>A thread that ends with an error says so on the console, and the error is what <code>join-thread</code> then reports. The other threads go on.</li>
+      <li>A lock is held by one thread at a time. <code>clara:with-lock-held</code> takes it for the forms inside and gives it back whichever way they end.</li>
+      <li>An event counts how often it was signalled. <code>clara:wait-event</code> waits until it has been, and takes one off the count. With a number of milliseconds as its second argument it waits no longer than that, and gives <code>NIL</code> when the time ran out.</li>
+      <li><code>(sleep 2)</code> waits two seconds. The other threads run meanwhile.</li>
+      <li><code>clara:destroy-thread</code> tells a thread to stop, which it does at its next step, cleaning up on its way out.</li>
+    </ul>
+    <p>The threads take turns, a hundredth of a second each. One of them at a time is evaluating, on the one processor that the system uses, so threads keep the machine answering while something waits, and do not make a computation faster. Each thread has its own bindings of the special variables: one that it binds with <code>let</code> is bound for it alone. A thread costs about a mebibyte and a half of memory.</p>
+  </section>
+
+  <section id="machine">
+    <h2>{{spleen:Looking at the machine}}</h2>
+    <p>The drivers are Lisp, each in a package of its own, and what they know can be asked at the prompt.</p>
+<pre class="session">&gt; (list (clara.pci:location (car (clara.pci:devices))) (clara.pci:description (car (clara.pci:devices))))
+("00:00.0" "a host bridge")
+&gt; (let ((entry (car (clara.fat:entries "/EFI/BOOT"))))
+    (list (clara.fat:entry-name entry) (clara.fat:entry-directory-p entry) (&gt; (clara.fat:entry-size entry) 100000)))
+("BOOTAA64.EFI" NIL T)
+&gt; internal-time-units-per-second
+100</pre>
+    <table class="wrap">
+      <tr><td><code>(room)</code></td><td>how long the heap is, how much of it is free, and how often it has been collected</td></tr>
+      <tr><td><code>*features*</code></td><td><code>(:CLARA :ARM64)</code> or <code>(:CLARA :X86-64)</code>, which <code>#+</code> and <code>#-</code> go by</td></tr>
+      <tr><td><code>(get-internal-real-time)</code></td><td>the hundredths of a second since the machine started, which is all the time there is</td></tr>
+      <tr><td><code>(clara.pci:devices)</code></td><td>the devices on the PCI bus. <code>clara.pci:location</code> and <code>clara.pci:description</code> say where one is and what it is.</td></tr>
+      <tr><td><code>(clara.disk:disks)</code></td><td>the disks that have a driver. <code>clara.disk:disk-name</code>, <code>clara.disk:disk-sectors</code> and <code>clara.disk:disk-read-only</code> say more about one.</td></tr>
+      <tr><td><code>(clara.fat:volumes)</code></td><td>the FAT volumes on those disks. Names of files are looked up on the first.</td></tr>
+      <tr><td><code>(clara.fat:entries "/clara")</code></td><td>what a directory holds, with <code>clara.fat:entry-name</code>, <code>clara.fat:entry-size</code> and <code>clara.fat:entry-directory-p</code> for each entry</td></tr>
+      <tr><td><code>(clara.input:devices)</code></td><td>the keyboards and pointers</td></tr>
+      <tr><td><code>(clara.input:pointer)</code></td><td>where the pointer is, and which of its buttons are down, as three values. Nothing draws it yet.</td></tr>
+    </table>
+
+    <h3 id="outside">Files from outside, and to it</h3>
+    <p>The disk is an ordinary disk image with a FAT volume on it, and the computer that the virtual machine runs on can open it, while the machine is stopped. On macOS, double-click <code>build/disk-aarch64.img</code> in the Finder, or <code>build/claraos.img</code> for the one UTM was given. Put files there or take them, eject it, and start the machine. macOS leaves a few files of its own on such a volume, whose names begin with a dot. On Linux:</p>
+<pre><code>sudo mount -o loop,offset=1048576 build/disk-x86_64.img /mnt</code></pre>
+
+    <h3 id="unsafe">Memory and devices by hand</h3>
+    <p>The package <code>CLARA.UNSAFE</code> is what the drivers are written with: memory by its address, the I/O ports, page frames, and interrupts. It is there at the prompt as well, and it is called what it is. There is nothing between a Lisp program and the machine here but the language, and these functions are the way round the language: a wrong address written to is a mistake in the kernel itself.</p>
+<pre class="session">&gt; (let ((page (clara.unsafe:allocate-memory 1)))
+    (setf (clara.unsafe:memory-32 page) #xC1A4A)
+    (prog1 (list (clara.unsafe:memory-8 page) (clara.unsafe:memory-16 page))
+      (clara.unsafe:free-memory page 1)))
+(74 6730)
+&gt; (clara.unsafe:memory-8 0)
+error: nothing is mapped at #x0</pre>
+  </section>
+
+  <section id="trouble">
+    <h2>{{spleen:When something goes wrong}}</h2>
+    <table class="wrap">
+      <tr><th>What you see</th><th>What it is, and what to do</th></tr>
+      <tr><td>The prompt does not come back.</td><td>A form is still being evaluated, or is waiting. <kbd>Ctrl-C</kbd> stops it.</td></tr>
+      <tr><td>The firmware's own <code>Shell&gt;</code> prompt, and no ClaraOS.</td><td>The firmware found no disk with the kernel on it. Under QEMU, run <code>make</code> and start again. In UTM, see that the imported drive is there and is the only one.</td></tr>
+      <tr><td><code>disk: no disk that has a driver here</code>, and <code>directory</code> finds nothing.</td><td>The machine's drive is not a virtio disk. In UTM, set the drive's interface to VirtIO. The system runs without a disk, and can neither read files nor save.</td></tr>
+      <tr><td>Nothing happens when you type in UTM's window.</td><td>The machine has no keyboard that ClaraOS has a driver for: the report says <code>input: no keyboard and no mouse that has a driver here</code>. Add the two QEMU arguments of <a href="#utm">In UTM</a>, or type in the serial terminal.</td></tr>
+      <tr><td>On AArch64 in UTM, a line about the exception level, and then nothing.</td><td>The machine is emulated and not virtualized, which starts the kernel in a mode it does not handle yet. Use Virtualize on Apple silicon, or emulate x86_64.</td></tr>
+      <tr><td><code>error: the heap is full</code></td><td>A computation used the memory there is. It has been stopped, what it held is free again, and the prompt is back. A machine with more memory holds more.</td></tr>
+      <tr><td><code>error: the stack is full</code></td><td>Forms nested too deep, or a function that calls itself without end.</td></tr>
+      <tr><td>Boxes on the screen where characters should be.</td><td>The screen's font has the characters of ASCII. The characters themselves are right, and show on the serial port.</td></tr>
+      <tr><td>A file that was written is gone after <code>make</code>.</td><td>Under QEMU the disk is made again whenever a build changed something. Keep what matters outside <code>build/</code>, by way of <a href="#outside">the host</a>.</td></tr>
+      <tr><td><code>lisp: clara.image is not resumed</code> in the report.</td><td>A saved world could not be used, and the reason follows on the same line: <a href="#refused">An image that is not taken</a>.</td></tr>
+      <tr><td>A report that begins with <code>exception:</code> or <code>panic:</code>, and a machine that stands still.</td><td>The kernel, or a driver, has failed, and has stopped the machine where it was. The report says what happened in words, where, and what was in every register. Start the machine again. What was saved or written to a file before is there. Then please <a href="https://github.com/the-clara-os/clara-os/issues">say what you did</a>, with the report: that is a bug in ClaraOS.</td></tr>
+    </table>
+  </section>
+
+  <section id="names">
+    <h2>{{spleen:Everything that is defined}}</h2>
+    <p>These are all the names that the system gives a meaning when it starts, by subject. Each means what it means in Common Lisp, as far as <a href="#differs">this Lisp goes</a>. The lists are checked against the kernel whenever this page is built, so nothing is missing from them and nothing is in them that is not there.</p>
+
+    <h3>Defining</h3>
+    <p class="names"><code>defun</code> <code>defmacro</code> <code>lambda</code> <code>function</code> <code>defvar</code> <code>defparameter</code> <code>defconstant</code> <code>defstruct</code> <code>copy-structure</code> <code>defsetf</code> <code>define-condition</code> <code>defpackage</code> <code>declare</code> <code>&amp;optional</code> <code>&amp;rest</code> <code>&amp;key</code> <code>&amp;allow-other-keys</code> <code>&amp;aux</code> <code>&amp;body</code> <code>&amp;whole</code> <code>&amp;environment</code> <code>special</code></p>
+    <p class="aside">The last two are names that the reader knows and the evaluator refuses.</p>
+
+    <h3>Control</h3>
+    <p class="names"><code>quote</code> <code>if</code> <code>when</code> <code>unless</code> <code>cond</code> <code>case</code> <code>ecase</code> <code>otherwise</code> <code>and</code> <code>or</code> <code>not</code> <code>progn</code> <code>prog1</code> <code>let</code> <code>let*</code> <code>setq</code> <code>psetq</code> <code>setf</code> <code>incf</code> <code>decf</code> <code>push</code> <code>pop</code> <code>block</code> <code>return</code> <code>return-from</code> <code>tagbody</code> <code>go</code> <code>catch</code> <code>throw</code> <code>unwind-protect</code> <code>do</code> <code>do*</code> <code>dolist</code> <code>dotimes</code> <code>loop</code> <code>flet</code> <code>labels</code> <code>macrolet</code> <code>locally</code> <code>the</code> <code>eval-when</code></p>
+
+    <h3>Functions and values</h3>
+    <p class="names"><code>funcall</code> <code>apply</code> <code>identity</code> <code>functionp</code> <code>fboundp</code> <code>symbol-function</code> <code>eval</code> <code>macroexpand</code> <code>macroexpand-1</code> <code>values</code> <code>values-list</code> <code>multiple-value-bind</code> <code>multiple-value-call</code> <code>multiple-value-list</code> <code>multiple-value-prog1</code> <code>multiple-value-setq</code> <code>nth-value</code></p>
+
+    <h3>Numbers</h3>
+    <p class="names"><code>+</code> <code>-</code> <code>*</code> <code>/</code> <code>1+</code> <code>1-</code> <code>=</code> <code>/=</code> <code>&lt;</code> <code>&lt;=</code> <code>&gt;</code> <code>&gt;=</code> <code>floor</code> <code>truncate</code> <code>mod</code> <code>rem</code> <code>abs</code> <code>max</code> <code>min</code> <code>expt</code> <code>evenp</code> <code>oddp</code> <code>zerop</code> <code>plusp</code> <code>minusp</code> <code>integerp</code> <code>numberp</code> <code>ash</code> <code>logand</code> <code>logior</code> <code>logxor</code> <code>lognot</code></p>
+
+    <h3>Lists</h3>
+    <p class="names"><code>cons</code> <code>car</code> <code>cdr</code> <code>caar</code> <code>cadr</code> <code>cdar</code> <code>cddr</code> <code>caddr</code> <code>cdddr</code> <code>cadddr</code> <code>first</code> <code>second</code> <code>third</code> <code>fourth</code> <code>rest</code> <code>last</code> <code>nth</code> <code>nthcdr</code> <code>list</code> <code>list*</code> <code>append</code> <code>reverse</code> <code>nreverse</code> <code>copy-list</code> <code>length</code> <code>endp</code> <code>null</code> <code>consp</code> <code>atom</code> <code>listp</code> <code>rplaca</code> <code>rplacd</code> <code>member</code> <code>assoc</code> <code>getf</code> <code>mapcar</code> <code>mapc</code> <code>mapcan</code> <code>reduce</code> <code>remove</code> <code>remove-if</code> <code>remove-if-not</code> <code>find</code> <code>find-if</code> <code>position</code> <code>every</code> <code>some</code> <code>sort</code> <code>eq</code> <code>eql</code> <code>equal</code></p>
+
+    <h3>Characters, strings and vectors</h3>
+    <p class="names"><code>char</code> <code>schar</code> <code>char-code</code> <code>code-char</code> <code>char=</code> <code>char&lt;</code> <code>char-upcase</code> <code>char-downcase</code> <code>characterp</code> <code>string</code> <code>string=</code> <code>string-equal</code> <code>string-lessp</code> <code>string-upcase</code> <code>string-downcase</code> <code>stringp</code> <code>concatenate</code> <code>subseq</code> <code>vector</code> <code>make-array</code> <code>aref</code> <code>svref</code> <code>vectorp</code></p>
+
+    <h3>Symbols and packages</h3>
+    <p class="names"><code>t</code> <code>nil</code> <code>symbol-name</code> <code>symbol-package</code> <code>symbol-value</code> <code>symbol-plist</code> <code>get</code> <code>set</code> <code>boundp</code> <code>symbolp</code> <code>keywordp</code> <code>make-symbol</code> <code>gensym</code> <code>*gensym-counter*</code> <code>intern</code> <code>find-symbol</code> <code>export</code> <code>find-package</code> <code>package-name</code> <code>packagep</code> <code>make-package</code> <code>in-package</code> <code>*package*</code></p>
+
+    <h3>Conditions</h3>
+    <p class="names"><code>error</code> <code>warn</code> <code>signal</code> <code>handler-case</code> <code>ignore-errors</code> <code>make-condition</code> <code>condition</code> <code>serious-condition</code> <code>warning</code> <code>storage-condition</code> <code>simple-condition</code> <code>simple-error</code> <code>simple-warning</code> <code>simple-condition-format-control</code> <code>simple-condition-format-arguments</code> <code>type-error</code> <code>type-error-datum</code> <code>type-error-expected-type</code> <code>program-error</code> <code>control-error</code> <code>cell-error</code> <code>cell-error-name</code> <code>unbound-variable</code> <code>undefined-function</code> <code>arithmetic-error</code> <code>division-by-zero</code> <code>stream-error</code> <code>end-of-file</code> <code>parse-error</code> <code>reader-error</code></p>
+
+    <h3>Printing and reading</h3>
+    <p class="names"><code>format</code> <code>print</code> <code>prin1</code> <code>princ</code> <code>prin1-to-string</code> <code>princ-to-string</code> <code>write-string</code> <code>write-char</code> <code>write-line</code> <code>terpri</code> <code>fresh-line</code> <code>finish-output</code> <code>force-output</code> <code>read-line</code> <code>read-from-string</code> <code>*standard-output*</code> <code>*standard-input*</code> <code>streamp</code> <code>make-string-output-stream</code> <code>get-output-stream-string</code> <code>with-output-to-string</code> <code>make-string-input-stream</code></p>
+
+    <h3>Files</h3>
+    <p class="names"><code>open</code> <code>close</code> <code>with-open-file</code> <code>probe-file</code> <code>directory</code> <code>delete-file</code> <code>load</code></p>
+
+    <h3>The system</h3>
+    <p class="names"><code>room</code> <code>sleep</code> <code>get-internal-real-time</code> <code>internal-time-units-per-second</code> <code>*features*</code></p>
+
+    <h3>The package CLARA</h3>
+    <p>Threads, locks and events, the image, and two things for whoever writes a console or a file system: a stream made of two functions, and the way a file system tells the language that it is there.</p>
+    <p class="names" data-package="CLARA"><code>clara:make-thread</code> <code>clara:current-thread</code> <code>clara:threadp</code> <code>clara:thread-name</code> <code>clara:thread-alive-p</code> <code>clara:all-threads</code> <code>clara:join-thread</code> <code>clara:destroy-thread</code> <code>clara:thread-yield</code> <code>clara:make-lock</code> <code>clara:acquire-lock</code> <code>clara:release-lock</code> <code>clara:with-lock-held</code> <code>clara:make-event</code> <code>clara:signal-event</code> <code>clara:wait-event</code> <code>clara:save-image</code> <code>clara:keyboard-interrupt</code> <code>clara:make-stream</code> <code>clara:provide-files</code></p>
+    <p class="aside"><code>clara:keyboard-interrupt</code> is the condition that <kbd>Ctrl-C</kbd> is.</p>
+
+    <h3>The package CLARA.UNSAFE</h3>
+    <p>For drivers. What can be read with one of the first seven can be written with <code>setf</code>.</p>
+    <p class="names" data-package="CLARA.UNSAFE"><code>clara.unsafe:memory-8</code> <code>clara.unsafe:memory-16</code> <code>clara.unsafe:memory-32</code> <code>clara.unsafe:memory-64</code> <code>clara.unsafe:port-8</code> <code>clara.unsafe:port-16</code> <code>clara.unsafe:port-32</code> <code>clara.unsafe:fill-memory-32</code> <code>clara.unsafe:copy-memory</code> <code>clara.unsafe:expand-bits-32</code> <code>clara.unsafe:allocate-memory</code> <code>clara.unsafe:free-memory</code> <code>clara.unsafe:map-memory</code> <code>clara.unsafe:memory-string</code> <code>clara.unsafe:string-bytes</code> <code>clara.unsafe:string-memory</code> <code>clara.unsafe:heap-image</code> <code>clara.unsafe:interrupt-event</code> <code>clara.unsafe:message-interrupt</code> <code>clara.unsafe:pci-configuration</code> <code>clara.unsafe:framebuffer</code> <code>clara.unsafe:serial-device</code> <code>clara.unsafe:serial-byte</code> <code>clara.unsafe:serial-break</code> <code>clara.unsafe:keyboard-break</code> <code>clara.unsafe:take-screen</code> <code>clara.unsafe:give-screen</code></p>
+  </section>
+</main>
+
+<footer class="frame">
+  <p>This manual is for ClaraOS {{version}}, and is built from <a href="https://github.com/the-clara-os/clara-os">the repository</a> with the system. Its sessions are typed at a kernel every time the tests run, and its lists of names are held against the kernel's own. <a href="./">ClaraOS</a></p>
+</footer>
+
+</body>
+</html>

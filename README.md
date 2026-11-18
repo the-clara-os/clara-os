@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/the-clara-os/clara-os/actions/workflows/ci.yml/badge.svg)](https://github.com/the-clara-os/clara-os/actions/workflows/ci.yml)
 
-Website: <https://claraos.org>
+Website: <https://claraos.org>. User manual: <https://claraos.org/manual.html>
 
 A small operating system for x86_64 and AArch64, written in C to be read and
 understood from the first instruction up. It is not a Unix and does not try
@@ -74,7 +74,8 @@ Then, on either:
                       # and a second boot from the same disk has to start from it and answer
                       # tools/resumed.txt; AArch64 does all that twice, once for each version of
                       # its interrupt controller, and boots once more with the Lisp collector
-                      # running at every chance it has, from a disk whose saved world is damaged
+                      # running at every chance it has, from a disk whose saved world is damaged;
+                      # and what the user manual shows of the prompt is typed at one more machine
     make run-aarch64  # QEMU window, serial on the terminal: type a form in either; Ctrl-C stops a form
                       # that does not end, Ctrl-D ends the session, Ctrl-A X in the terminal leaves QEMU;
                       # hvf-accelerated on Apple silicon. The disk, build/disk-aarch64.img, is kept from
@@ -90,13 +91,17 @@ Layout:
     lisp/            Lisp sources: the language's own part, the console, the drivers, the file system, the listener;
                      the build copies them to the ESP's \clara directory, read at boot
     fonts/           the console font, Spleen 8x16, which tools/bdf2c.py turns into kernel/font.c
-    site/            the website: one page, filled in from ROADMAP.md by site/build.py (`make site`)
+    site/            the website: the front page and the user manual (manual.html), filled in from the
+                     repository and held against it by site/build.py (`make site`)
     tools/           run.sh (QEMU), mkdisk.py (the disk a machine boots from), boottest.sh (headless
                      check, typed session and screenshot), session.txt and resumed.txt (what the check
                      types and what must come back, at a new world and at one that was saved),
                      mkimage.sh (UTM disk)
 
 ## Running in UTM
+
+The [user manual](https://claraos.org/manual.html) has these steps too, and
+what to do at the prompt once it is there.
 
 1. `make image`.
 2. UTM, New, then Virtualize (AArch64 on Apple silicon) or Emulate (x86_64),

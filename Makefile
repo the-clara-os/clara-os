@@ -79,7 +79,9 @@ host-test:
 # (tools/session.txt), and the second boot, from a copy of that disk, has
 # to find the image, start from it, and answer for what the first one
 # defined (tools/resumed.txt). After every boot the host's own checker of
-# FAT volumes looks at the disk. Then AArch64 once more for
+# FAT volumes looks at the disk. Then the user manual: what it shows of
+# the prompt (site/manual.html) is typed at a machine, which saves its
+# world, and at the same machine started again. Then AArch64 once more for
 # tools/stress.txt, a session in which the collector runs at every safe
 # point of the evaluator while boot.lisp is loaded again and the
 # evaluator's self-test is repeated: whatever the evaluator fails to hold
@@ -97,6 +99,10 @@ test: all host-test
 	NAME=aarch64-gic2 NO_HVF=1 MKDISK="--fat 12 --table none" tools/boottest.sh aarch64 -machine gic-version=2
 	NAME=aarch64-gic2-resumed NO_HVF=1 DISK=$(BUILD)/boot-aarch64-gic2.img $(RESUME) \
 		tools/boottest.sh aarch64 -machine gic-version=2
+	python3 -I site/build.py --sessions $(BUILD)
+	NAME=manual SESSION=$(BUILD)/manual-first.txt tools/boottest.sh aarch64 -machine gic-version=3
+	NAME=manual-again DISK=$(BUILD)/boot-manual.img SESSION=$(BUILD)/manual-again.txt \
+		EXPECT='^lisp: the heap is an image' tools/boottest.sh aarch64 -machine gic-version=3
 	NAME=aarch64-stress SESSION=tools/stress.txt TIMEOUT=600 DISK=$(BUILD)/boot-aarch64.img SPOIL=1 \
 		EXPECT='^lisp: clara.image is not resumed: it is not what was saved' \
 		tools/boottest.sh aarch64 -machine gic-version=3
@@ -109,7 +115,10 @@ image: all
 font:
 	python3 -I tools/bdf2c.py fonts/spleen-8x16.bdf fonts/LICENSE.spleen kernel/font.c lisp/font.lisp
 
-# The website, the way .github/workflows/site.yml builds it for GitHub Pages.
+# The website, the way .github/workflows/site.yml builds it for GitHub Pages:
+# the front page and the user manual, which is held against the kernel on
+# the way, and stops the build when a name is defined that it has no word
+# about.
 site:
 	python3 -I site/build.py $(BUILD)/site
 
