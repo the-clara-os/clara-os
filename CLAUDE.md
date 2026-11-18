@@ -63,8 +63,9 @@ Rules:
   on"): after the last `make test` of the change, `make screenshot` makes
   site/boot.png of build/screen-aarch64-resumed.png and writes the version
   into it, and `make site` stops when the picture is of another version
-  than the kernel's. When tools/resumed.txt ends in another way, the words
-  beside the picture in site/index.html, its `alt`, are changed by hand.
+  than the kernel's. When tools/resumed.txt ends in another way, or types
+  something else into the listener's window, the words beside the picture
+  in site/index.html, its `alt`, are changed by hand.
 - Substrate code checks itself during boot (`pmm_selftest`) and panics when
   a check fails, so `make test` covers it. A check that needs a temporary
   change to the sources (a forced fault, an exhaustive loop) is run once and
@@ -252,8 +253,8 @@ Rules:
   no name of Common Lisp's given a new meaning (LISTEN is one), and the
   substrate only through CLARA and CLARA.UNSAFE. The kernel loads them
   in the order of `world` in lisp.c (the console, draw, pci, virtio,
-  input, disk, fat, the listener), and lisp/host/tests.lisp loads the same
-  files: a new one goes into both, and what its package exports goes into
+  input, disk, fat, the listener, windows, terminal), and
+  lisp/host/tests.lisp loads the same files: a new one goes into both, and what its package exports goes into
   a list of names in the manual, or `make site` stops. What `lisp_main`
   starts of a file that a world may be without, a world that an older
   kernel saved, it looks for first, as it does for CLARA.DRAW; and a
@@ -291,10 +292,43 @@ Rules:
   test that draws at random and wants every pixel that changed inside the
   damage. A picture of a surface there is its rows as strings, a character
   to the pixel. tools/session.txt defines `picture`, and tools/resumed.txt
-  ends by drawing it on the screen: that screen is the picture on the
-  website, so the last forms of that session are what the front page
-  shows. The console does not draw with this file, and writes over what is
+  ends by drawing it in a window: that screen is the picture on the
+  website, so the last forms of that session, and what it types into the
+  listener's window, are what the front page shows. The console does not draw with this file, and writes over what is
   shown.
+- Windows (lisp/windows.lisp, the package CLARA.WINDOWS). Nothing there
+  draws on the screen: what changes what the screen should show calls
+  `damaged` with the rectangle, and `settle` puts the dirty rectangles
+  together again on `*back*` and shows them (`compose`), all with `*lock*`
+  held. A window's surface is its thread's to draw on; this file only
+  copies from it. What a window is told (its KEY, POINTER and CLOSE
+  functions) and what a click launches are called after the lock is let
+  go, in the thread of the keyboard or the mouse, which is where
+  `key-typed` and `pointer-moved` run (`clara.input:send-keys-to`,
+  `send-pointer-to`). A new layer goes into `compose` and into
+  `should-show` of the host tests, and a new part of a frame into
+  `paint-window`, `window-at` and the tests' `window-rule`: the tests hold
+  every pixel of the screen against that rule after each thing they do
+  (`new-desk`, `wrong-pixels`), and a walk of random steps does it 160
+  times. START is for a user and RESUME for the boot: `lisp_main` calls
+  RESUME, having looked for the package, and RESUME starts the window
+  manager when `*running*` was true in the world that was saved. A
+  terminal (lisp/terminal.lisp) is a window with cells and a stream; the
+  listener in a window is its application, the first that is defined,
+  which START launches. Ctrl-C there is `clara:interrupt-thread`.
+- With the window manager running, the keyboard is the window's and not
+  the console's. So a session types into a window with a line `^T text`,
+  which echoes nothing on the serial port, and sees what came of it in the
+  one world: the sessions type `(k)`, a function that signals an event
+  which the serial port's form waits for. The second boot of each machine
+  starts in the window manager, so tools/resumed.txt has no `^K`. QEMU
+  sends a button through another device than a move of the mouse, each
+  with a thread of its own, so a session sends one step at a time and
+  waits for it (`pointer-at`, `until`, both defined in tools/session.txt);
+  the screens differ, 1280 by 800 on x86_64 and 800 by 600 on AArch64, so
+  the session first runs the pointer into the corner; and a line that is
+  waited for must be the only one of its text, which is why those lines
+  are told apart by a word in a list.
 - The Lisp runtime is kernel/lisp/, and lisp.h is its interface: the
   comment at its top says what a Lisp value is. In C a value is a `lisp`,
   one tagged word. Look at the tag (`lisp_is_cons`, `lisp_is_symbol`,
@@ -325,7 +359,10 @@ Rules:
   points a thread is alone in the heap. The evaluator's variables in
   eval.c are the running thread's; whatever is added there is put away
   and brought back in `lisp_evaluator_out` and `lisp_evaluator_in`, and
-  reached in `reach` if it holds an object. A function in C that has to
+  reached in `reach` if it holds an object. `g_cleaning` is one of them:
+  while it is not zero the thread is in the cleanup of an UNWIND-PROTECT,
+  and its safe points neither stop nor interrupt it (`may_stop`), so that
+  `with-lock-held` always gives its lock back. A function in C that has to
   wait does it through `wait()` in thread.c, which gives the runtime up:
   it puts the thread in the queue of what it waits for, waits, takes
   itself out, and calls `lisp_safe_point()`, returning at once when that
@@ -426,7 +463,8 @@ Rules:
   which has to be one that never ends and that the session types once:
   the boot test waits for the kernel to echo that line before it types
   the Ctrl-C and the rest. A line `^M command` is a command for QEMU's
-  monitor, sent at the same moment (`sendkey ctrl-c`, `mouse_move 30
+  monitor, sent at the same moment, and a line `^T text` is that text and
+  Enter typed on the keyboard then, with no echo waited for (`sendkey ctrl-c`, `mouse_move 30
   20`), and after a line `^K` the next line is typed on the keyboard, by
   `sendkey`, once the kernel has printed the line before the `^K`, which
   therefore has to be one that comes nowhere else. A line for the

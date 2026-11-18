@@ -78,6 +78,7 @@ td:first-child { white-space: nowrap; }
     <li><a href="#image">Saving the world</a></li>
     <li><a href="#threads">Threads</a></li>
     <li><a href="#drawing">Drawing</a></li>
+    <li><a href="#windows">Windows</a></li>
     <li><a href="#machine">Looking at the machine</a></li>
     <li><a href="#trouble">When something goes wrong</a></li>
     <li><a href="#names">Everything that is defined</a></li>
@@ -119,7 +120,7 @@ make run-x86_64    <span class="note"># emulated: the firmware takes a few secon
       <li>In UTM: New, then Virtualize on Apple silicon (the machine is AArch64) or Emulate (x86_64), operating system Other. Skip the ISO. Leave "UEFI Boot" checked. 512 MiB of memory is plenty.</li>
       <li>Remove the drive that UTM made. Then Drives, Import, <code>build/claraos.img</code>, with the interface <strong>VirtIO</strong>: that is the disk ClaraOS has a driver for. With any other interface the machine still starts, and has no files.</li>
       <li>Add a Serial device, mode "Built-in Terminal". The system talks there as well as on the screen, and you can type there.</li>
-      <li>For typing in the screen's own window, add a keyboard that ClaraOS has a driver for. UTM gives a machine USB devices, which it does not have one for. Under QEMU, Arguments, add two: <code>-device virtio-keyboard-pci</code> and <code>-device virtio-tablet-pci</code>.</li>
+      <li>For typing in the screen's own window, add a keyboard that ClaraOS has a driver for. UTM gives a machine USB devices, which it does not have one for. Under QEMU, Arguments, add two: <code>-device virtio-keyboard-pci</code> and <code>-device virtio-tablet-pci</code>. The second is the pointer, which the <a href="#windows">window manager</a> is worked with.</li>
       <li>Start.</li>
     </ol>
     <p>UTM copies the disk into the virtual machine. To put a newer ClaraOS there, or to go back to a system that nothing was saved on, import <code>build/claraos.img</code> again in place of the drive.</p>
@@ -132,6 +133,7 @@ make run-x86_64    <span class="note"># emulated: the firmware takes a few secon
       <tr><td>A disk</td><td>A virtio disk with a FAT volume, of 12, 16 or 32 bits, behind either kind of table of partitions or without one. The volume it starts from is the one whose files it sees.</td></tr>
       <tr><td>A place to type</td><td>A serial port, a virtio keyboard, or both.</td></tr>
       <tr><td>A screen</td><td>The one the firmware sets up, if there is one. Without it everything is on the serial port.</td></tr>
+      <tr><td>A pointer</td><td>A virtio mouse or tablet, for the <a href="#windows">window manager</a>. Nothing else has a use for one.</td></tr>
     </table>
     <p>It has no use yet for a network, for sound, for USB or for a clock.</p>
 
@@ -190,6 +192,7 @@ ONE
     </table>
     <p>That is all the editing there is. The arrow keys do nothing, and no line that was typed before can be called back. In a terminal on the serial port, the terminal's own copy and paste do what is missing: many forms can be pasted at once.</p>
     <p>The keyboard is read as one of the United States, with <kbd>Shift</kbd>, <kbd>Ctrl</kbd> and <kbd>Caps Lock</kbd>, and a key that is held down repeats. What is typed on the serial port can be any character, as UTF-8. The screen shows the characters of ASCII, and a box for any other.</p>
+    <p>A Listener <a href="#windows">window</a> has the same keys, with one difference: there <kbd>Ctrl-D</kbd> closes the window, and the machine goes on.</p>
     <p>The screen holds 100 columns and 37 rows at 800 by 600 pixels, and what scrolls off its top is gone. The terminal on the serial port keeps whatever a terminal keeps.</p>
 
     <h3 id="errors">Mistakes</h3>
@@ -317,7 +320,7 @@ error: the stack is full: the forms are nested too deep, or a function calls its
 <pre class="session">&gt; (directory "/*")
 ("/clara/" "/EFI/")
 &gt; (directory "/clara/*.lisp")
-("/clara/boot.lisp" "/clara/console.lisp" "/clara/disk.lisp" "/clara/draw.lisp" "/clara/fat.lisp" "/clara/font.lisp" "/clara/input.lisp" "/clara/listener.lisp" "/clara/pci.lisp" "/clara/self-test.lisp" "/clara/virtio.lisp")
+("/clara/boot.lisp" "/clara/console.lisp" "/clara/disk.lisp" "/clara/draw.lisp" "/clara/fat.lisp" "/clara/font.lisp" "/clara/input.lisp" "/clara/listener.lisp" "/clara/pci.lisp" "/clara/self-test.lisp" "/clara/terminal.lisp" "/clara/virtio.lisp" "/clara/windows.lisp")
 &gt; (probe-file "/CLARA/Boot.Lisp")
 "/CLARA/boot.lisp"
 &gt; (probe-file "/clara/nothing.lisp")
@@ -394,6 +397,7 @@ NIL
       <li>Functions, macros, structures, packages and conditions that were defined, and the values of variables, come back. So does the package that names were being read in.</li>
       <li>A special variable comes back with the value it has outside every <code>let</code>, also when it was saved from inside one.</li>
       <li>Threads do not come back. The world starts again at the prompt, and does not go on in the middle of what it was doing. A thread that was running is one that has been stopped, and a lock that was held is free.</li>
+      <li>The <a href="#windows">window manager</a> is running again when it was running, with one Listener window. The windows that were open do not come back.</li>
       <li>The devices are found again, as at every start. A world can be saved on one machine and started on another that has other devices, or another screen, as long as it is the same kind of processor.</li>
       <li>Files are on the disk either way, and have nothing to do with the image.</li>
     </ul>
@@ -457,6 +461,7 @@ error: the thread #&lt;THREAD "spinner"&gt; was stopped</pre>
       <li>An event counts how often it was signalled. <code>clara:wait-event</code> waits until it has been, and takes one off the count. With a number of milliseconds as its second argument it waits no longer than that, and gives <code>NIL</code> when the time ran out.</li>
       <li><code>(sleep 2)</code> waits two seconds. The other threads run meanwhile.</li>
       <li><code>clara:destroy-thread</code> tells a thread to stop, which it does at its next step, cleaning up on its way out.</li>
+      <li><code>clara:interrupt-thread</code> is <kbd>Ctrl-C</kbd> for one thread: what it computes, or waits for, ends with the condition <code>clara:keyboard-interrupt</code>, which the thread can handle. A Listener window does this to its own thread when <kbd>Ctrl-C</kbd> is typed in it.</li>
     </ul>
     <p>The threads take turns, a hundredth of a second each. One of them at a time is evaluating, on the one processor that the system uses, so threads keep the machine answering while something waits, and do not make a computation faster. Each thread has its own bindings of the special variables: one that it binds with <code>let</code> is bound for it alone. A thread costs about a mebibyte and a half of memory.</p>
   </section>
@@ -528,7 +533,7 @@ T</pre>
       <li><code>clara.draw:draw-bitmap</code> draws a picture of one bit to the pixel. The picture is a vector of its rows from the top, each a number whose bits are the pixels of the row, and after it comes how many pixels wide it is. Where a bit is 1 the pixel takes the colour. With one more colour after it, the pixels whose bit is 0 take that; without, they stay as they were.</li>
       <li><code>(clara.draw:screen)</code> is the screen as a surface, or <code>NIL</code> on a machine without one. Whatever is drawn on it shows at once, and it keeps no damage.</li>
     </ul>
-    <p>The console writes on the same screen. A picture that is shown there lies over the text, the lines that are written after it go over the picture where they meet it, and when the text moves up a line the picture moves up with it. So a picture stays where it was put only as long as nothing is printed.</p>
+    <p>The console writes on the same screen. A picture that is shown there lies over the text, the lines that are written after it go over the picture where they meet it, and when the text moves up a line the picture moves up with it. So a picture stays where it was put only as long as nothing is printed. A picture that is to stay belongs in a <a href="#windows">window</a>, and while the window manager runs the screen is its own: what is shown there directly is painted over the next time a window moves.</p>
 
     <h3 id="surfaces">Memory</h3>
     <p>A surface takes four bytes for every pixel, 1875 KiB for one as large as a screen of 800 by 600, and that memory is not the heap's: nothing gives it back when the surface is no longer used. <code>clara.draw:free-surface</code> does, and after it the surface cannot be drawn on.</p>
@@ -538,6 +543,111 @@ NIL
 error: this surface was freed</pre>
     <p>A <a href="#image">world that is saved</a> keeps its surfaces and not their pixels. After the machine has started again, a surface from before is refused with <code>this surface is of a machine that was switched off</code>: make a new one, and draw the picture again. A function that draws it comes back with the world.</p>
     <p>There is one font, in one size. There are no lines but those along a row or a column, no circles, and no colours that let what is under them show through.</p>
+  </section>
+
+  <section id="windows">
+    <h2>{{spleen:Windows}}</h2>
+    <p>The window manager puts windows on the screen: each is a surface that a program draws on, in a frame with its title. It takes the screen from the console, which goes on with the serial port, where the prompt stays as it was.</p>
+<pre class="session">&gt; (clara.windows:start)
+T
+&gt; (mapcar #'clara.windows:window-title (clara.windows:windows))
+("Listener")</pre>
+    <p>The screen now shows a bar along its top, with <code>Applications</code> at its left-hand end and the system's name and version at the right; a window named Listener, with a prompt in it; and the pointer. It is worked like this:</p>
+    <table class="wrap">
+      <tr><td>A click on a window</td><td>brings it to the top. The window on top has the focus: its frame is lit, and what is typed goes to it.</td></tr>
+      <tr><td>The title of a window</td><td>is where to take hold of it: press the button there, move, and let go.</td></tr>
+      <tr><td>The <code>x</code> at the end of the title</td><td>closes the window, and ends the program in it.</td></tr>
+      <tr><td><code>Applications</code></td><td>lists the applications there are. A click on a name starts one, and a click anywhere else puts the list away.</td></tr>
+    </table>
+    <p>A Listener window is a prompt like the first one, with the same <a href="#keys">keys</a>, except that <kbd>Ctrl-D</kbd> closes the window and <kbd>Ctrl-C</kbd> stops what that window is evaluating. Every listener is in the one world: what is defined in a window is defined at the serial port and in the next window. Each has a thread of its own, so one can compute while you type in another, and each is in a package of its own choosing.</p>
+    <p>It needs a keyboard and a pointer that the system has drivers for. <code>make run-aarch64</code> gives the machine both; in <a href="#utm">UTM</a> they are the two devices that are added by hand. With a keyboard alone, the Listener window still takes what is typed, and the functions below do what the pointer would.</p>
+
+    <h3 id="own">A window of your own</h3>
+    <p>The functions are in the package <code>CLARA.WINDOWS</code>. A window's inside is a surface, and is drawn on like any other. What was drawn reaches the screen with <code>clara.windows:show</code>, as far as the window can be seen behind the others.</p>
+<pre class="session">&gt; (defvar *window* (clara.windows:open-window "A window of my own" 240 120))
+*WINDOW*
+&gt; (defvar *inside* (clara.windows:window-surface *window*))
+*INSIDE*
+&gt; (clara.draw:fill-rectangle *inside* 20 20 80 60 *red*)
+T
+&gt; (clara.draw:draw-text *inside* 112 44 "Hello" *ink*)
+T
+&gt; (clara.windows:show *window*)
+T
+&gt; (clara.windows:move-window *window* 400 300)
+400
+300
+&gt; (clara.windows:launch "Listener")
+#&lt;THREAD "Listener"&gt;
+&gt; (mapcar #'clara.windows:window-title (clara.windows:windows))
+("Listener" "A window of my own" "Listener")
+&gt; (clara.windows:window-title (clara.windows:raise-window *window*))
+"A window of my own"</pre>
+    <ul>
+      <li><code>clara.windows:open-window</code> takes a title and the width and height of the inside, in pixels, and gives the window, on top of the others and the colour of the console's paper. With <code>:x</code> and <code>:y</code> it goes where they say, and otherwise a step down and across from the one before. A window is 24 pixels wide or more.</li>
+      <li><code>clara.windows:window-surface</code> is what to draw on, and <code>clara.windows:show</code> puts on the screen what was drawn since the last time. It gives <code>NIL</code> when there was nothing.</li>
+      <li><code>clara.windows:move-window</code> moves a window so that the corner of its inside is at a place on the screen, and gives the place it came to, which is <code>clara.windows:window-position</code> from then on: a window stays below the bar, and never leaves the screen altogether.</li>
+      <li><code>clara.windows:windows</code> lists the windows from the top one down, <code>clara.windows:focused-window</code> is the first of them, and <code>clara.windows:raise-window</code> brings one to the top.</li>
+      <li><code>clara.windows:close-window</code> takes a window off the screen and gives its memory back.</li>
+    </ul>
+    <p>A window belongs to the thread that opened it. That thread draws on it, shows it and closes it, and <code>close-window</code> from any other thread is an error for as long as the first one lives. Three functions can be given when a window is opened, for what happens to it meanwhile:</p>
+<pre class="session">&gt; (defvar *typed* nil)
+*TYPED*
+&gt; (defvar *keys* (clara.windows:open-window "Keys" 160 40 :key (lambda (code) (push (code-char code) *typed*))))
+*KEYS*
+&gt; (clara.windows:key-typed 97)
+97
+&gt; *typed*
+(#\a)
+&gt; (list (clara.windows:close-window *keys*) (clara.windows:close-window *window*))
+(NIL NIL)</pre>
+    <ul>
+      <li><code>:key</code> is called with the code of every character that is typed while the window has the focus. <code>clara.windows:key-typed</code> is what the keyboard's driver calls; here it stands in for a key.</li>
+      <li><code>:pointer</code> is called when a button of the pointer goes down or comes up on the inside of the window, with the place, counted from the corner of the inside, and the buttons that are down: 1 for the left one, 2 for the right, 4 for the middle. <code>clara.windows:pointer-moved</code> is what the drivers of mice and tablets call, with a place on the screen and the buttons.</li>
+      <li><code>:close</code> is called when the <code>x</code> in the title is clicked, and a window that was given none has no <code>x</code>. It is for the function to see that the window is closed, by the thread that opened it.</li>
+    </ul>
+    <p>The three are called in the thread of the keyboard or of the mouse, not in the window's own. They should note what they were told, or signal an event, and leave the drawing to the thread that the window belongs to.</p>
+
+    <h3 id="terminals">Text in a window</h3>
+    <p>A terminal is a window with a stream: what is written to the stream is drawn in the window, in rows that move up when the last one is full, and what is typed in the window comes back from the stream a line at a time. The package is <code>CLARA.TERMINAL</code>.</p>
+<pre class="session">&gt; (defvar *notes* (clara.terminal:open-terminal "Notes" :columns 40 :rows 8))
+*NOTES*
+&gt; (format (clara.terminal:terminal-stream *notes*) "written from the serial port~%")
+NIL
+&gt; (clara.terminal:clear *notes*)
+NIL
+&gt; (clara.windows:close-window (clara.terminal:terminal-window *notes*))
+NIL</pre>
+    <p><code>clara.terminal:open-terminal</code> takes a title and gives a terminal of 80 columns and 24 rows unless <code>:columns</code> and <code>:rows</code> say otherwise; <code>:x</code>, <code>:y</code> and <code>:close</code> are the window's. <code>clara.terminal:terminal-stream</code> is its stream, for <code>format</code>, <code>write-line</code> and <code>read-line</code>, and <code>clara.terminal:terminal-window</code> its window. <code>clara.terminal:clear</code> makes every row blank.</p>
+
+    <h3 id="applications">Applications</h3>
+    <p>An application is a name and a function. <code>clara.windows:launch</code> calls the function in a thread of its own and comes back with that thread once the application has its window. When the function is done, or its thread is stopped, the windows that the thread opened are closed for it.</p>
+<pre class="session">&gt; (clara.windows:define-application "Hello"
+    (lambda ()
+      (let ((terminal (clara.terminal:open-terminal "Hello" :columns 30 :rows 4)))
+        (format (clara.terminal:terminal-stream terminal) "hello from an application~%")
+        (sleep 2))))
+"Hello"
+&gt; (clara.windows:applications)
+("Listener" "Hello")
+&gt; (clara:join-thread (clara.windows:launch "Hello"))
+NIL</pre>
+    <p>The window is there for two seconds, and goes with its application. From now on <code>Hello</code> is in the list under <code>Applications</code>, below <code>Listener</code>, which is <code>clara.terminal:listener</code>, the first application and the one that is launched when the window manager starts.</p>
+
+    <h3 id="desk">Starting in it</h3>
+    <p>A <a href="#image">world that is saved</a> while the window manager runs starts in it: the screen goes from the boot report straight to the windows.</p>
+<pre class="session">&gt; (clara:save-image)
+"/clara/clara.image"</pre>
+    <p>The report of the next start says so, in its last line before the prompt of the serial port:</p>
+<pre><code>windows: the window manager has the screen again, as it had when the world was saved</code></pre>
+<pre class="session again">&gt; (list (clara.windows:running-p) (mapcar #'clara.windows:window-title (clara.windows:windows)))
+(T ("Listener"))
+&gt; (clara.windows:applications)
+("Listener" "Hello")
+&gt; (clara.windows:stop)
+T</pre>
+    <p>What is defined comes back, the applications among it. The windows that were open do not: a window is pixels and a thread, and an image has neither, so the window manager starts with one Listener, as it does the first time. <code>clara.windows:stop</code> ends the applications and gives the screen back to the console, cleared; a world that is saved after that starts at the console again.</p>
+    <p>A window is the size it was opened with. Nothing on the keyboard moves between windows or opens the list of applications, which the pointer does, and the pointer has one shape.</p>
   </section>
 
   <section id="machine">
@@ -633,27 +743,33 @@ error: nothing is mapped at #x0</pre>
     <p class="names"><code>open</code> <code>close</code> <code>with-open-file</code> <code>probe-file</code> <code>directory</code> <code>delete-file</code> <code>load</code></p>
 
     <h3>The system</h3>
-    <p class="names"><code>room</code> <code>sleep</code> <code>get-internal-real-time</code> <code>internal-time-units-per-second</code> <code>*features*</code></p>
+    <p class="names"><code>room</code> <code>sleep</code> <code>get-internal-real-time</code> <code>internal-time-units-per-second</code> <code>*features*</code> <code>lisp-implementation-type</code> <code>lisp-implementation-version</code></p>
+    <p class="aside"><code>(lisp-implementation-type)</code> is <code>"ClaraOS"</code>, and <code>(lisp-implementation-version)</code> the version of the kernel.</p>
 
     <h3>The package CLARA</h3>
     <p>Threads, locks and events, the image, and two things for whoever writes a console or a file system: a stream made of two functions, and the way a file system tells the language that it is there.</p>
-    <p class="names" data-package="CLARA"><code>clara:make-thread</code> <code>clara:current-thread</code> <code>clara:threadp</code> <code>clara:thread-name</code> <code>clara:thread-alive-p</code> <code>clara:all-threads</code> <code>clara:join-thread</code> <code>clara:destroy-thread</code> <code>clara:thread-yield</code> <code>clara:make-lock</code> <code>clara:acquire-lock</code> <code>clara:release-lock</code> <code>clara:with-lock-held</code> <code>clara:make-event</code> <code>clara:signal-event</code> <code>clara:wait-event</code> <code>clara:save-image</code> <code>clara:keyboard-interrupt</code> <code>clara:make-stream</code> <code>clara:provide-files</code></p>
+    <p class="names" data-package="CLARA"><code>clara:make-thread</code> <code>clara:current-thread</code> <code>clara:threadp</code> <code>clara:thread-name</code> <code>clara:thread-alive-p</code> <code>clara:all-threads</code> <code>clara:join-thread</code> <code>clara:destroy-thread</code> <code>clara:interrupt-thread</code> <code>clara:thread-yield</code> <code>clara:make-lock</code> <code>clara:acquire-lock</code> <code>clara:release-lock</code> <code>clara:with-lock-held</code> <code>clara:make-event</code> <code>clara:signal-event</code> <code>clara:wait-event</code> <code>clara:save-image</code> <code>clara:keyboard-interrupt</code> <code>clara:make-stream</code> <code>clara:provide-files</code></p>
     <p class="aside"><code>clara:keyboard-interrupt</code> is the condition that <kbd>Ctrl-C</kbd> is.</p>
 
     <h3>The package CLARA.DRAW</h3>
     <p><a href="#drawing">Drawing</a> says what each of these is for.</p>
     <p class="names" data-package="CLARA.DRAW"><code>clara.draw:screen</code> <code>clara.draw:allocate-surface</code> <code>clara.draw:free-surface</code> <code>clara.draw:surface-p</code> <code>clara.draw:surface-width</code> <code>clara.draw:surface-height</code> <code>clara.draw:color</code> <code>clara.draw:pixel</code> <code>clara.draw:fill-rectangle</code> <code>clara.draw:draw-rectangle</code> <code>clara.draw:draw-text</code> <code>clara.draw:text-width</code> <code>clara.draw:draw-bitmap</code> <code>clara.draw:copy-rectangle</code> <code>clara.draw:with-clip</code> <code>clara.draw:damage</code> <code>clara.draw:take-damage</code> <code>clara.draw:add-damage</code> <code>clara.draw:show</code> <code>clara.draw:start</code></p>
 
+    <h3>The packages CLARA.WINDOWS and CLARA.TERMINAL</h3>
+    <p><a href="#windows">Windows</a> says what each of these is for. <code>clara.windows:resume</code> is what the system calls as it starts, for a world that was saved with the window manager running.</p>
+    <p class="names" data-package="CLARA.WINDOWS"><code>clara.windows:start</code> <code>clara.windows:stop</code> <code>clara.windows:running-p</code> <code>clara.windows:resume</code> <code>clara.windows:open-window</code> <code>clara.windows:close-window</code> <code>clara.windows:show</code> <code>clara.windows:window-p</code> <code>clara.windows:window-title</code> <code>clara.windows:window-surface</code> <code>clara.windows:window-position</code> <code>clara.windows:move-window</code> <code>clara.windows:raise-window</code> <code>clara.windows:windows</code> <code>clara.windows:focused-window</code> <code>clara.windows:define-application</code> <code>clara.windows:applications</code> <code>clara.windows:launch</code> <code>clara.windows:key-typed</code> <code>clara.windows:pointer-moved</code></p>
+    <p class="names" data-package="CLARA.TERMINAL"><code>clara.terminal:open-terminal</code> <code>clara.terminal:terminal-p</code> <code>clara.terminal:terminal-stream</code> <code>clara.terminal:terminal-window</code> <code>clara.terminal:clear</code> <code>clara.terminal:listener</code></p>
+
     <h3>The console, the drivers and the file system</h3>
     <p>Each of these is a file of Lisp in <code>/clara</code> with a package of its own, and these are the names that it lets the others use. Most are for the system itself: <a href="#machine">Looking at the machine</a> has the ones that tell something at the prompt. A function named <code>start</code> is what the system calls as it starts, and is not for calling again.</p>
-    <p class="names" data-package="CLARA.CONSOLE"><code>clara.console:start</code> <code>clara.console:stop</code> <code>clara.console:write-text</code> <code>clara.console:read-text-line</code> <code>clara.console:use-serial</code> <code>clara.console:use-screen</code> <code>clara.console:make-console-stream</code> <code>clara.console:key-typed</code></p>
+    <p class="names" data-package="CLARA.CONSOLE"><code>clara.console:start</code> <code>clara.console:stop</code> <code>clara.console:write-text</code> <code>clara.console:read-text-line</code> <code>clara.console:use-serial</code> <code>clara.console:use-screen</code> <code>clara.console:make-console-stream</code> <code>clara.console:key-typed</code> <code>clara.console:read-edited-line</code> <code>clara.console:lend-screen</code> <code>clara.console:return-screen</code></p>
     <p class="names" data-package="CLARA.FONT"><code>clara.font:+width+</code> <code>clara.font:+height+</code> <code>clara.font:+first+</code> <code>clara.font:+last+</code> <code>clara.font:*glyphs*</code></p>
     <p class="names" data-package="CLARA.PCI"><code>clara.pci:start</code> <code>clara.pci:devices</code> <code>clara.pci:device-p</code> <code>clara.pci:device-bus</code> <code>clara.pci:device-slot</code> <code>clara.pci:device-part</code> <code>clara.pci:device-vendor</code> <code>clara.pci:device-id</code> <code>clara.pci:device-kind</code> <code>clara.pci:device-revision</code> <code>clara.pci:location</code> <code>clara.pci:description</code> <code>clara.pci:hex</code> <code>clara.pci:config-8</code> <code>clara.pci:config-16</code> <code>clara.pci:config-32</code> <code>clara.pci:capabilities</code> <code>clara.pci:base-address</code> <code>clara.pci:map-registers</code> <code>clara.pci:enable</code> <code>clara.pci:message-interrupt</code></p>
     <p class="names" data-package="CLARA.VIRTIO"><code>clara.virtio:device-type</code> <code>clara.virtio:open-device</code> <code>clara.virtio:start-device</code> <code>clara.virtio:device-p</code> <code>clara.virtio:device-pci</code> <code>clara.virtio:device-event</code> <code>clara.virtio:device-features</code> <code>clara.virtio:register-8</code> <code>clara.virtio:register-16</code> <code>clara.virtio:register-32</code> <code>clara.virtio:open-queue</code> <code>clara.virtio:queue-p</code> <code>clara.virtio:queue-size</code> <code>clara.virtio:queue-add</code> <code>clara.virtio:queue-notify</code> <code>clara.virtio:queue-take</code></p>
-    <p class="names" data-package="CLARA.INPUT"><code>clara.input:start</code> <code>clara.input:devices</code> <code>clara.input:pointer</code> <code>clara.input:pointer-changed</code> <code>clara.input:set-pointer-limits</code> <code>clara.input:key-character</code> <code>clara.input:*repeat-delay*</code> <code>clara.input:*repeat-interval*</code></p>
+    <p class="names" data-package="CLARA.INPUT"><code>clara.input:start</code> <code>clara.input:devices</code> <code>clara.input:pointer</code> <code>clara.input:pointer-changed</code> <code>clara.input:set-pointer-limits</code> <code>clara.input:key-character</code> <code>clara.input:send-keys-to</code> <code>clara.input:send-pointer-to</code> <code>clara.input:*repeat-delay*</code> <code>clara.input:*repeat-interval*</code></p>
     <p class="names" data-package="CLARA.DISK"><code>clara.disk:start</code> <code>clara.disk:disks</code> <code>clara.disk:disk-p</code> <code>clara.disk:disk-name</code> <code>clara.disk:disk-sectors</code> <code>clara.disk:disk-read-only</code> <code>clara.disk:read-sectors</code> <code>clara.disk:write-sectors</code> <code>clara.disk:*patience*</code></p>
     <p class="names" data-package="CLARA.FAT"><code>clara.fat:start</code> <code>clara.fat:volumes</code> <code>clara.fat:*volume*</code> <code>clara.fat:volume-p</code> <code>clara.fat:volume-disk</code> <code>clara.fat:volume-kind</code> <code>clara.fat:volume-first</code> <code>clara.fat:entries</code> <code>clara.fat:entry-p</code> <code>clara.fat:entry-name</code> <code>clara.fat:entry-short</code> <code>clara.fat:entry-directory-p</code> <code>clara.fat:entry-size</code> <code>clara.fat:names</code> <code>clara.fat:file-text</code> <code>clara.fat:read-file</code> <code>clara.fat:write-file</code> <code>clara.fat:remove-file</code></p>
-    <p class="names" data-package="CLARA.LISTENER"><code>clara.listener:run</code> <code>clara.listener:answer</code> <code>clara.listener:read-and-answer</code></p>
+    <p class="names" data-package="CLARA.LISTENER"><code>clara.listener:run</code> <code>clara.listener:answer</code> <code>clara.listener:read-and-answer</code> <code>clara.listener:answer-lines</code></p>
 
     <h3>The package CLARA.UNSAFE</h3>
     <p>For drivers. What can be read with one of the first seven can be written with <code>setf</code>.</p>

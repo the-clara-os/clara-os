@@ -69,6 +69,11 @@ dd if=/dev/zero of="$scratch" bs=1024 count=1024 2> /dev/null
 #               not on the serial port. Such a line is short: a key is four
 #               events, with Shift eight, and the 64 that the keyboard's
 #               queue holds are all that is sure to arrive on a slow machine.
+#   ^T text     the text is typed on the keyboard as well, and Enter after
+#               it, while the kernel evaluates the form in the line before
+#               it: for a window, which echoes what is typed on the screen
+#               and not on the serial port, so nothing waits for an echo.
+#               As short as a line after ^K.
 # So the session is typed in parts, and a part waits for a line of the
 # kernel's: a Ctrl-C or a command, and what follows them, until the kernel
 # has echoed the line before, which it is evaluating by then; a line for
@@ -98,6 +103,10 @@ LC_ALL=C awk -v out="$typing" '
     /^\^C$/     { begin_part(last); printf "\003" > (out "." part); next }
     /^\^M /     { if (!commands) begin_part(last)
                   print substr($0, 4) > (out "." part ".monitor"); commands = 1; next }
+    /^\^T /     { if (!commands) begin_part(last)
+                  for (i = 4; i <= length($0); i++)
+                      print "sendkey " keyname(substr($0, i, 1)) > (out "." part ".monitor")
+                  print "sendkey ret" > (out "." part ".monitor"); commands = 1; next }
     /^\^K$/     { begin_part(before); keyboard = 1; next }
     /^[> ] /    { if (keyboard) {
                       for (i = 3; i <= length($0); i++)
@@ -111,7 +120,7 @@ LC_ALL=C awk -v out="$typing" '
                   last = $0 }
                 { before = $0 }
     END         { if (commands) {
-                      print "tools/boottest.sh: a session cannot end with a ^M line: Ctrl-D would not wait for it" > "/dev/stderr"
+                      print "tools/boottest.sh: a session cannot end with a ^M or a ^T line: Ctrl-D would not wait for it" > "/dev/stderr"
                       exit 2
                   }
                   printf "\004" > (out "." part) }' "${session:-/dev/null}"

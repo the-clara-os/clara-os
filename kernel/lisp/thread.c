@@ -50,6 +50,7 @@ struct context {
     lisp self;             /* what it is to Lisp */
     void (*main)(void);    /* the first thread's: what it runs, in C */
     volatile int stop;     /* DESTROY-THREAD was called for it, and it has not acted on that yet */
+    volatile int interrupt; /* and INTERRUPT-THREAD: Ctrl-C, typed where this thread reads */
     char name[40];         /* for the substrate, which says it in a fault report */
 };
 
@@ -119,9 +120,11 @@ static void wait(uint64_t ticks)
 /* From the evaluator's safe point. When a tick has gone by since this
  * thread got the runtime and another waits for it, the other has its
  * turn, and this one queues up behind the rest. Then: has the thread been
- * told to stop, or, if it is the one that reads from the console, has
- * Ctrl-C been typed there? */
-enum lisp_turn lisp_thread_safe_point(void)
+ * told to stop, has Ctrl-C been typed where it reads, which is for
+ * INTERRUPT-THREAD to say, or, if it is the one that reads from the
+ * console, has Ctrl-C been typed there? Those three are not asked while
+ * the thread may not stop, and are still to be answered when it may. */
+enum lisp_turn lisp_thread_safe_point(int may_stop)
 {
     struct context *me = g_running;
 
@@ -131,9 +134,15 @@ enum lisp_turn lisp_thread_safe_point(void)
         leave();
         enter(me);
     }
+    if (!may_stop)
+        return LISP_GO_ON;
     if (me->stop) {
         me->stop = 0;
         return LISP_STOP;
+    }
+    if (me->interrupt) {
+        me->interrupt = 0;
+        return LISP_BREAK;
     }
     if (me == g_first && g_break && console_break && console_interrupted())
         return LISP_BREAK;
@@ -446,6 +455,26 @@ LISP_PRIMITIVE(lisp_p_destroy_thread)
     if (!c)
         return NIL;
     c->stop = 1;
+    thread_wake(c->thread);
+    return T;
+}
+
+/* (interrupt-thread thread): Ctrl-C, for that thread. What it computes is
+ * stopped at its next safe point, or the wait it is in is given up, with
+ * the condition KEYBOARD-INTERRUPT, which it can handle: that is what the
+ * serial port's Ctrl-C does to the thread that reads from the console, for
+ * a thread that reads somewhere else, in a window. */
+LISP_PRIMITIVE(lisp_p_interrupt_thread)
+{
+    struct context *c;
+
+    (void)argc;
+    if (!lisp_is(argv[0], LISP_THREAD))
+        return lisp_wants("a thread", argv[0]);
+    c = first(&lisp_as_thread(argv[0])->context);
+    if (!c)
+        return NIL;
+    c->interrupt = 1;
     thread_wake(c->thread);
     return T;
 }

@@ -44,7 +44,8 @@ manager, and the applications are Lisp programs loaded into that world.
   bootstrap and the fallback.
 - **The image is the system.** Booting means taking a saved heap image for
   the heap and starting the world that is in it, with the window manager
-  running once there is one ("Images", below). The boot handoff reads every
+  running when the world was saved with it running ("Images" and
+  "Windows", below). The boot handoff reads every
   file in the ESP's `\clara` directory through the UEFI file protocol
   before ExitBootServices, so no disk driver is needed to start: the image
   when there is one, and the Lisp sources that the build puts there from
@@ -448,7 +449,11 @@ architectures (kernel/vm.c).
   memory back. Stopping a thread is asked of it, and done by it: at its
   next safe point, or out of the wait it is in, it leaves by way of
   every UNWIND-PROTECT, and no handler sees it go, because it is no
-  condition.
+  condition. It is not stopped in the middle of the cleanup of an
+  UNWIND-PROTECT, nor interrupted there: the cleanup runs to its end
+  first, since what it is there to give back, a lock for one, would
+  otherwise stay taken (found in M12, when Ctrl-C began to reach threads
+  that hold locks).
 - What the substrate offers that Common Lisp has no name for is in two
   packages. CLARA has the threads, locks and events, under the names
   that Bordeaux Threads made usual, a way to make a stream, and the
@@ -533,7 +538,9 @@ architectures (kernel/vm.c).
 - A keyboard's driver turns keys into characters and hands them to the
   console, where they are read along with what the serial port brings.
   Mice and tablets move one pointer, whose place is kept for whoever
-  asks: the window manager will. Each device has a thread of its own.
+  asks. Both can be sent to a function in place of that, a call for every
+  character and for every change of the pointer, which is how the window
+  manager has them. Each device has a thread of its own.
 - A driver is tested twice. Under SBCL, against a device that the tests
   make up, registers, queues and messages and all, which is where its
   logic is looked at closely; and by booting, where `make test` types on
@@ -631,8 +638,9 @@ architectures (kernel/vm.c).
   build, so no thread comes back, the one that saved included: saving is
   not a place that a world wakes up in. It begins again where a new world
   does, with the console, the drivers and the file system started afresh
-  and the listener at its prompt; what a driver knew of its device was
-  true of another boot. So the same lines of C start a world that was
+  and the listener at its prompt, and with the window manager started
+  again if it was running; what a driver knew of its device was true of
+  another boot. So the same lines of C start a world that was
   loaded from the files and one that came as an image. The alternative, a
   world that goes on in the middle of what it was doing, needs the
   evaluator's own state in the heap, which an interpreter that calls
@@ -725,8 +733,8 @@ architectures (kernel/vm.c).
   whatever those pixels show: a picture on the screen scrolls away with
   the text around it. The console is the first thing that works and the
   last that should stop, and it pays some forty calls of the evaluator for
-  a character as it is. The window manager will take the screen from it,
-  and a console in a window will draw the way everything else does.
+  a character as it is. The window manager takes the screen from it, and
+  a console in a window draws the way everything else does ("Windows").
 - The text that can be drawn is the console's font, in its one size. There
   are no lines but those along a row or a column, which are rectangles, no
   curves, no scaling, and nothing between a pixel that is drawn and one
@@ -740,6 +748,84 @@ architectures (kernel/vm.c).
   draws a picture on its screen, reads pixels of the screen back, and
   draws it again from the world that it saved, which is the picture on the
   website.
+
+## Windows (decided in M12, 2026-11-18)
+
+- A window is a surface and a place. Its program draws on the surface,
+  which is the inside of the window, and says when it has; the window
+  manager (lisp/windows.lisp) draws the frame around it, and knows where
+  it lies and what lies over it. So a program draws in a window the way it
+  draws anywhere, and never learns how much of it can be seen.
+- Nothing draws on the screen. What the screen is to show is put together
+  on a surface of the screen's size, out of sight, from the lowest layer
+  to the topmost: the desk and the launcher's bar, the windows, the
+  launcher's list, the pointer. Whatever changes says which rectangle of
+  the screen it changed; those rectangles are put together again, and
+  then copied to the screen. The price is the memory of a second screen
+  and a copy. What it buys: nothing is seen half drawn, a window that is
+  moved needs no help from its program, and the pointer needs no memory of
+  what is under it, being the last thing that is painted. The topmost
+  window whose inside takes in a whole rectangle hides the rest, so text
+  that is printed in the window on top costs one copy, however many
+  windows there are.
+- The focus is the top. The window on top is the one that the keys go to,
+  and a click brings a window there. One order is easier to hold in the
+  head than two, and nothing yet needs a window that is typed in while
+  another lies over it.
+- Input comes to the window manager as calls, in the thread of the device.
+  The driver of the keyboards calls a function for every character, and
+  the driver of the pointers one for every change (lisp/input.lisp), each
+  in the order in which its device said them: no press is lost between two
+  looks at the pointer, and nothing waits for a thread of the window
+  manager's, which has none. A window is told the same way: a key, a
+  button on its inside, a click on its close box are functions that it was
+  opened with, called in that thread, and they hand on what they are told
+  to the window's own.
+- A window belongs to the thread that opened it. Its pixels are page
+  frames, which the substrate writes to without asking whose they are, so
+  a surface must not be freed while somebody draws on it: the thread that
+  draws is the one that closes, and anybody else may only when that thread
+  is no more. The window manager reads a window's surface and never
+  writes to it. Everything else, the windows there are, their order, the
+  surface that the screen is put together on, is touched with one lock
+  held, by whichever thread it is.
+- An application is a name and a function, and running it is a thread
+  that calls the function. The launcher lists the names. Whatever windows
+  the thread has open when the function is done, or when the thread is
+  stopped, are closed on its way out, so stopping the thread is how an
+  application is ended, by its close box or by anybody. Applications are
+  threads in the one world, with what protects any part of it from
+  another: the language.
+- The listener in a window is the console's listener with other streams.
+  A terminal (lisp/terminal.lisp) is a window with a grid of cells and a
+  stream, and puts its lines together with the console's own function for
+  that. Each listener has a thread and a package to be in, and they share
+  everything else, which is what one world means: what is defined in a
+  window is defined at the serial port.
+- Ctrl-C is for a thread. The serial port's goes to the thread that reads
+  from the console, as it did. The keyboard's goes to the window that has
+  the focus, whose terminal stops the thread that reads from it, by a
+  function of the substrate that does to any thread what the serial port's
+  Ctrl-C does to the first (CLARA:INTERRUPT-THREAD).
+- The console keeps the serial port. When the window manager starts, the
+  console lends it the screen and goes on without one, with its listener:
+  that is how the tests type, and how a machine without a keyboard is
+  reached. The substrate's console still takes the screen for a fault
+  report, without asking.
+- A world that was saved with the window manager running starts in it.
+  Whether it ran is a variable of the world's, and the window manager's
+  own function looks at it when the substrate calls it at every boot
+  (RESUME): what it knew of windows and pixels is forgotten, the pixels
+  and the threads having stayed behind, and it starts afresh, with one
+  listener. A world that is made from the files starts at the console, and
+  the window manager is started from there.
+- It is tested where it can be seen. Under SBCL the tests have a rule of
+  their own for what every pixel of the screen should be, from the windows
+  there are and where they lie, and hold the whole screen against it after
+  everything that is done, some two hundred times, most of them in an
+  order that is drawn at random. The boots type on QEMU's keyboard into a
+  window, take a window by its title with QEMU's mouse, launch from the
+  list, close by the box, save the world, and start again in it.
 
 ## Conventions
 

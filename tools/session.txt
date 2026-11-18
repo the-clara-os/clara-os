@@ -245,6 +245,90 @@ PICTURE
 > (let ((spare (clara.draw:allocate-surface 16 16)))
     (list (clara.draw:free-surface spare) (handler-case (clara.draw:pixel spare 0 0) (error (c) (princ-to-string c)))))
 (NIL "this surface was freed")
+> (defmacro until (test)
+    `(dotimes (i 400 'never) (when ,test (return 'ok)) (clara:wait-event (clara.input:pointer-changed) 50)))
+UNTIL
+> (defun pointer-at (x y buttons) (until (equal (multiple-value-list (clara.input:pointer)) (list x y buttons))))
+POINTER-AT
+> (defun where () (multiple-value-list (clara.windows:window-position (clara.windows:focused-window))))
+WHERE
+> (pointer-at 0 0 0)
+^M mouse_button 0
+^M mouse_move -5000 -5000
+OK
+> (defvar *seen* (clara:make-event "seen"))
+*SEEN*
+> (defun k () (clara:signal-event *seen*) 'k)
+K
+> (list (clara.windows:running-p) (clara.windows:applications) (clara.windows:start) (clara.windows:start))
+(NIL ("Listener") T T)
+> (list (clara.windows:stop) (clara.windows:running-p)                 ; and the console has the screen again, cleared
+        (= (clara.draw:pixel (clara.draw:screen) 700 300) (clara.draw:color 30 27 46)) (clara.windows:start))
+(T NIL T T)
+> (let ((screen (clara.draw:screen)) (listener (clara.windows:focused-window)))
+    (list (clara.windows:window-title listener) (where)
+          (= (clara.draw:pixel screen 300 50) (clara.draw:color 255 184 108)) ; the band of the window that has the focus,
+          (= (clara.draw:pixel screen 700 300) (clara.draw:color 45 41 66))   ; the desk,
+          (= (clara.draw:pixel screen 400 10) (clara.draw:color 30 27 46))))  ; and the launcher's bar
+("Listener" (40 64) T T T)
+> (clara:wait-event *seen* 60000)
+^T (k)
+T
+> (pointer-at 200 50 0)
+^M mouse_move 200 50
+OK
+> (pointer-at 200 50 1)
+^M mouse_button 1
+OK
+> (until (equal (where) '(100 104)))
+^M mouse_move 60 40
+OK
+> (pointer-at 260 90 0)
+^M mouse_button 0
+OK
+> (pointer-at 20 10 0)
+^M mouse_move -240 -80
+OK
+> (pointer-at 20 10 1)
+^M mouse_button 1
+OK
+> (list 'open (pointer-at 20 10 0))
+^M mouse_button 0
+(OPEN OK)
+> (pointer-at 20 30 0)
+^M mouse_move 0 20
+OK
+> (until (= (length (clara.windows:windows)) 2))
+^M mouse_button 1
+OK
+> (list 'launched (pointer-at 20 30 0) (where))
+^M mouse_button 0
+(LAUNCHED OK (64 88))
+> (list 'stopped (clara:wait-event *seen* 60000))
+^T (loop)
+^M sendkey ctrl-c
+^T (k)
+(STOPPED T)
+> (pointer-at 696 76 0)
+^M mouse_move 676 46
+OK
+> (until (= (length (clara.windows:windows)) 1))
+^M mouse_button 1
+OK
+> (list 'closed (pointer-at 696 76 0) (where))
+^M mouse_button 0
+(CLOSED OK (100 104))
+> (defvar *window* (clara.windows:open-window "A picture" 200 120 :x 500 :y 400))
+*WINDOW*
+> (list (picture (clara.windows:window-surface *window*)) (clara.windows:show *window*) (clara.windows:show *window*)
+        (= (clara.draw:pixel (clara.draw:screen) 600 410) (clara.draw:color 255 184 108)))
+(T T NIL T)
+> (list (multiple-value-list (clara.windows:move-window *window* 560 440))
+        (mapcar #'clara.windows:window-title (clara.windows:windows))
+        (= (clara.draw:pixel (clara.draw:screen) 660 450) (clara.draw:color 255 184 108)))
+((560 440) ("A picture" "Listener") T)
+> (list (clara.windows:close-window *window*) (length (clara.windows:windows)))
+(NIL 1)
 > (defpackage "PLAY" (:use "COMMON-LISP") (:export "BALL"))
 #<PACKAGE "PLAY">
 > (in-package "PLAY")

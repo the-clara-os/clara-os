@@ -18,8 +18,9 @@ error: the thread #<THREAD "spinner"> was stopped
 (NIL NIL FREE)
 > (list (clara:wait-event *bell* 0) (eq (clara:signal-event *bell*) *bell*) (clara:wait-event *bell* 0))
 (NIL T T)
-> (list (clara:current-thread) (- (length (clara:all-threads)) *threads*))
-(#<THREAD "listener"> 0)
+> (list (clara:current-thread) (- (length (clara:all-threads)) *threads*)
+        (clara.windows:running-p) (mapcar #'clara.windows:window-title (clara.windows:windows)) (where))
+(#<THREAD "listener"> 1 T ("Listener") (40 64))
 > (let ((lock (clara:make-lock)))
     (mapc #'clara:join-thread
           (mapcar (lambda (n) (clara:make-thread (lambda () (clara:with-lock-held (lock) (incf *jobs* n)))))
@@ -38,12 +39,14 @@ T
 (T T)
 > (list 'keyboards 'and 'pointers (length (clara.input:devices)))
 (KEYBOARDS AND POINTERS 3)
-^K
-> (+ 40 2)
-42
-> (do () (nil))
+> (clara:wait-event *seen* 60000)
+^T (k)
+T
+> (list 'stopped (clara:wait-event *seen* 60000))
+^T (loop)
 ^M sendkey ctrl-c
-error: interrupted from the keyboard
+^T (k)
+(STOPPED T)
 > (loop)
 ^C
 error: interrupted from the keyboard
@@ -61,6 +64,8 @@ T
 ("from the world that came back" 1)
 > (clara.draw:fill-rectangle *canvas* 0 0 10 10 0)
 error: this surface is of a machine that was switched off: a world is saved without its pixels
-> (progn (setq *canvas* (clara.draw:allocate-surface 200 120))
-    (list (picture *canvas*) (clara.draw:show *canvas* 590 300) (clara.draw:show *canvas* 590 300)))
+> (list (clara.windows:window-surface *window*) (clara.windows:close-window *window*))
+(NIL NIL)
+> (progn (setq *window* (clara.windows:open-window "A picture" 200 120 :x 540 :y 400))
+    (list (picture (clara.windows:window-surface *window*)) (clara.windows:show *window*) (clara.windows:show *window*)))
 (T T NIL)
