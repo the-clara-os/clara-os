@@ -431,6 +431,7 @@ struct lisp_values {
 extern struct lisp_values lisp_values;
 
 void lisp_eval_init(const struct boot_file *files); /* the files that LOAD can find */
+int  lisp_boot_file(const char *name);              /* is there one of that name among them? */
 void lisp_eval_start(void);                 /* for a thread that has just been given the runtime: how deep it may go */
 lisp lisp_eval(lisp form, lisp env);        /* env is NIL outside every binding */
 lisp lisp_apply(lisp function, unsigned argc, lisp *argv); /* the arguments have to be on the value stack */

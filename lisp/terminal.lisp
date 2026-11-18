@@ -261,3 +261,11 @@
           (format t "error: ~A~%" condition))))))
 
 (clara.windows:define-application "Listener" #'listener)
+
+;;; The applications that come with the system, after the listener in the
+;;; launcher's list. Each is a file of its own on the boot volume, which
+;;; nobody loads until the application is picked: lisp/editor.lisp and
+;;; lisp/files.lisp.
+
+(clara.windows:install-application "Editor" "/clara/editor.lisp")
+(clara.windows:install-application "Files" "/clara/files.lisp")

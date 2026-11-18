@@ -536,7 +536,12 @@ architectures (kernel/vm.c).
   in common, the opening moves and the queues, and a file for each kind
   of device has the rest.
 - A keyboard's driver turns keys into characters and hands them to the
-  console, where they are read along with what the serial port brings.
+  console, where they are read along with what the serial port brings. A
+  key that types no character, an arrow or a function key, is handed on as
+  well, as a code past the last that a character can have, and a key that
+  is typed with Alt held has a number added to its code: one stream of
+  integers serves a line at a prompt, which passes over what is no
+  character, and an editor, which does not.
   Mice and tablets move one pointer, whose place is kept for whoever
   asks. Both can be sent to a function in place of that, a call for every
   character and for every change of the pointer, which is how the window
@@ -819,6 +824,9 @@ architectures (kernel/vm.c).
   and the threads having stayed behind, and it starts afresh, with one
   listener. A world that is made from the files starts at the console, and
   the window manager is started from there.
+- The window manager has one key of its own, Tab with Alt held, which
+  brings the lowest window to the top and so each in turn. Every other key
+  is the focused window's, as it comes.
 - It is tested where it can be seen. Under SBCL the tests have a rule of
   their own for what every pixel of the screen should be, from the windows
   there are and where they lie, and hold the whole screen against it after
@@ -826,6 +834,76 @@ architectures (kernel/vm.c).
   order that is drawn at random. The boots type on QEMU's keyboard into a
   window, take a window by its title with QEMU's mouse, launch from the
   list, close by the box, save the world, and start again in it.
+
+## Applications (decided in M13, 2026-11-18)
+
+- An application that comes with the system is a file, and not part of
+  the world. The kernel loads the console, the drivers, the file system and
+  the window manager as it starts, and leaves the editor and the file
+  browser on the boot volume. The launcher knows each by a name and the
+  name of its file, and loads the file when the application is first
+  launched, in the thread that is to run it. So the world that starts is no
+  larger for the applications it could run, an application can be changed
+  while everything else goes on, and the first two are made the way that a
+  third will be: nothing about them is the kernel's to know.
+- The file says what it is. Its last form defines the application, under
+  the name that the launcher has for it, the way the listener's file does
+  for the listener. What a launcher would otherwise have to be told, which
+  function to call, is then in one place, the file.
+- Unloading is deleting packages. An application's file makes a package
+  for what it defines, and the launcher notes which packages were not there
+  before it loaded the file. To unload the application is to stop its
+  threads, which closes its windows, and to delete those packages: nothing
+  finds its functions by name any more, and the collector takes them when
+  the last thread that was running one has gone. That is all the unloading
+  a single heap needs, and all it can have: what something else still
+  holds, stays.
+- An application runs on what the language has. The editor reads and
+  writes files with OPEN, and the browser lists a directory with DIRECTORY:
+  neither knows of disks or of FAT. The price is what the language does not
+  say, the size of a file for one, which the browser therefore does not
+  show.
+- A program takes what happens to its window in its own thread. The window
+  manager's three functions for a key, a button and the close box are
+  called in the thread of the device, where nothing may draw; a window that
+  is opened to keep them queues what it is told, and its program asks for
+  the next when it is ready (`next-event`). An application is then a loop:
+  wait, change what it holds, draw. The terminal did by hand what this
+  gives every window.
+- One application starts another by its name, with arguments. The browser
+  opens a file by launching the editor with the file's name, and holds no
+  symbol of the editor's: either can be unloaded, or be another program
+  altogether under the same name, without the other knowing.
+- The editor's text is its lines, around the cursor. The lines above the
+  cursor's are a list, the nearest first, the line itself is a string, and
+  the lines below are a list in order. Whatever is typed is done at the
+  cursor, so a character makes a new string of one line, and a new line, or
+  a line that goes, is a cons, however long the text is. A vector of lines
+  would be copied at every Enter, by an interpreter; a single string would
+  be copied at every key.
+- A window of text is drawn a row at a time, and only the rows that
+  changed. Each of the two keeps what it drew in every row, as a string,
+  and draws a row again when what it should show is another string. That
+  is one comparison in the substrate for a row that stays, where drawing
+  it is eighty calls. When the text moves up or down, the rows that stay
+  are copied as pixels and what was noted moves with them.
+- A file, to the editor, is lines with an end after each. The line with
+  nothing in it after the last is where the text ends, and is not written.
+  A file comes back as it was saved, and a text that was typed without a
+  last Enter is a file that ends in a new line, like any other.
+- The forms of a text are evaluated in a thread of their own. An editor
+  that evaluated in its own thread would hear nothing while a form runs,
+  not Ctrl-C and not its close box; so it starts a thread for the forms,
+  waits for it, and stops it when Ctrl-C comes. What the forms define is
+  defined in the one world, as with a file that is loaded.
+- They are tested where they can be seen. Under SBCL each is driven key by
+  key in the thread of the test, with no thread of its own to wait for, and
+  every cell of its window is held against what its text or its list says
+  it should show. The editor is also held against a second editor, written
+  in the tests the slow way, a list of lines and two numbers, over hundreds
+  of keys drawn at random. The files are the host's own there, since SBCL's
+  OPEN is what an application calls under SBCL. The boots type on QEMU's
+  keyboard into both windows, on the real file system.
 
 ## Conventions
 

@@ -650,6 +650,22 @@ static const struct {
     { "(defconstant +two+ 2)", "+TWO+" },
     { "(setq +two+ 3)", "error: +TWO+ cannot be set: it is not a variable" },
     { "(let ((+two+ 3)) +two+)", "error: +TWO+ cannot be the name of a variable" },
+    /* a package that is deleted is found no more, and is a package still; the ones that are needed stay */
+    { "(let ((p (make-package \"CLARA.GONE\")))"
+      "  (list (delete-package p) (find-package \"CLARA.GONE\") (delete-package p) (packagep p)"
+      "        (if (member p (list-all-packages)) 'listed) (if (member (find-package \"CLARA\") (list-all-packages)) 'listed)))",
+      "(T NIL NIL T NIL LISTED)" },
+    { "(let ((p (make-package \"CLARA.GONE\"))) (intern \"KEPT\" p) (delete-package \"CLARA.GONE\") (cl::%collect)"
+      "  (list (find-symbol \"KEPT\" p) (symbol-name (intern \"KEPT\" (make-package \"CLARA.GONE\"))) (delete-package \"CLARA.GONE\")))",
+      "(CLARA.GONE::KEPT \"KEPT\" T)" },
+    { "(progn (make-package \"CLARA.LEANS\" :use (list (make-package \"CLARA.GONE\")))"
+      "  (list (handler-case (delete-package \"CLARA.GONE\") (error (c) (princ-to-string c)))"
+      "        (delete-package \"CLARA.LEANS\") (delete-package \"CLARA.GONE\")))",
+      "(\"the package CLARA.GONE is used by the package CLARA.LEANS, and is not deleted before that one\" T T)" },
+    { "(delete-package \"COMMON-LISP\")",
+      "error: the package COMMON-LISP is one that the system cannot do without, and is not deleted" },
+    { "(delete-package \"CLARA.NEVER\")", "error: there is no package named CLARA.NEVER" },
+    { "(list char-code-limit (char-code (code-char (1- char-code-limit))))", "(1114112 1114111)" },
     { "(list (let ((*package* (find-package \"KEYWORD\"))) (package-name *package*)) (package-name *package*))",
       "(\"KEYWORD\" \"CLARA.SELF-TEST\")" },
     /* blocks, tags and catches */
@@ -673,6 +689,17 @@ static const struct {
     { "(list (values 1 2) (values))", "(1 NIL)" },
     { "(multiple-value-bind (a b c) (values 1 2) (list a b c))", "(1 2 NIL)" },
     { "(multiple-value-call #'list (values 1 2) 3 (values) (values 4 5))", "(1 2 3 4 5)" },
+    /* a list taken apart, as a macro's arguments are */
+    { "(destructuring-bind (a (b &optional (c 5)) &rest d) '(1 (2) 3 4) (list a b c d))", "(1 2 5 (3 4))" },
+    { "(destructuring-bind (first second . others) (list 1 2 3 4) (list first second others))", "(1 2 (3 4))" },
+    { "(destructuring-bind (&whole all &key x (y (+ x 6))) '(:x 1) (values x y all))", "1 7 (:X 1)" },
+    { "(let ((n 0)) (destructuring-bind (a b) (progn (cl::%collect) (list 1 (list 2))) (setq n (+ n a)) (cl::%collect) (list n b)))",
+      "(1 (2))" },
+    { "(progn (defvar *apart* 1) (list (destructuring-bind (*apart* &optional (b *apart*)) '(2) (list *apart* b)) *apart*))",
+      "((2 2) 1)" },
+    { "(destructuring-bind (a b) '(1) (list a b))", "error: DESTRUCTURING-BIND got too few arguments" },
+    { "(destructuring-bind (a) '(1 2) a)", "error: DESTRUCTURING-BIND got too many arguments" },
+    { "(destructuring-bind (a (b)) '(1 2) (list a b))", "error: DESTRUCTURING-BIND got too few arguments" },
     { "(multiple-value-prog1 (values 1 2) (values 3 4))", "1 2" },
     { "(block b (return-from b (values 1 2)))", "1 2" },
     { "(catch 'c (throw 'c (values 1 2)))", "1 2" },
@@ -776,6 +803,11 @@ static const struct {
       "error: CAR wants a list, and NOT-A-LIST is not one, in the form at line 15 of self-test.lisp" },
     { "(list (package-name *package*) clara.loaded::*reached*)",
       "(\"CLARA.SELF-TEST\" CLARA.LOADED::THE-FORM-BEFORE)" },
+    /* the same file by its whole name: what the handoff read is what \clara held */
+    { "(cl::%load \"/Clara/self-test.lisp\")",
+      "error: CAR wants a list, and NOT-A-LIST is not one, in the form at line 15 of self-test.lisp" },
+    { "(cl::%load \"/clara/\")",
+      "error: LOAD finds no file \"/clara/\": no disk has it, and \\clara had none of that name at boot" },
     /* a text that is loaded, as LOAD does with a file from a disk */
     { "(cl::%load-text \"(defvar *from-a-text* 'the-form-before)\n(car 'not-a-list)\n(setq *from-a-text* nil)\" \"a text\")",
       "error: CAR wants a list, and NOT-A-LIST is not one, in the form at line 2 of a text" },
@@ -1440,6 +1472,31 @@ static void new_world(void)
     kprintf("lisp: boot.lisp is loaded, with %llu functions and macros in Lisp\n",
             after[LISP_FUNCTION] - before[LISP_FUNCTION]);
     eval_selftest();
+    /* A boot volume with a file \clara\stress asks for more: boot.lisp
+     * loaded once again and the evaluator's texts evaluated once again,
+     * with a collection at every safe point of the evaluator, so that
+     * whatever the evaluator fails to hold on to is gone at its next call.
+     * Here the heap has the language in it and nothing else yet, and such
+     * a collection is as short as it will ever be: afterwards it goes
+     * through the whole world every time. The boot test asks for this, on
+     * one of its machines (tools/session.txt writes the file). */
+    if (lisp_boot_file("stress")) {
+        struct lisp_heap heap;
+        uint64_t before, between;
+        unsigned texts;
+
+        lisp_heap_state(&heap);
+        before = heap.collections;
+        lisp_collect_every(1);
+        load("boot.lisp");
+        lisp_heap_state(&heap);
+        between = heap.collections;
+        texts = lisp_eval_texts();
+        lisp_collect_every(0);
+        lisp_heap_state(&heap);
+        kprintf("lisp: a collection at every safe point: boot.lisp once more in %llu, %u texts once more in %llu\n",
+                between - before, texts, heap.collections - between);
+    }
     for (unsigned i = 0; i < sizeof world / sizeof world[0]; i++)
         load(world[i]);
     lisp_heap_census(before);

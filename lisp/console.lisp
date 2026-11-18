@@ -236,8 +236,9 @@
 ;;; signals an event when it has (kernel/console.c). A line is put together
 ;;; from them here, and echoed as it is typed. Backspace or Delete takes
 ;;; the last character back, a tab counts as a space, and the other control
-;;; characters are dropped. Ctrl-D at the start of a line means that no
-;;; more is coming, and Ctrl-C anywhere gives the line up.
+;;; characters are dropped, as are the keys of a keyboard that type no
+;;; character, the arrows among them. Ctrl-D at the start of a line means
+;;; that no more is coming, and Ctrl-C anywhere gives the line up.
 ;;;
 ;;; A keyboard has a driver of its own, which hands in the characters that
 ;;; are typed on it, KEY-TYPED. They are read along with the bytes of the
@@ -338,7 +339,7 @@
                  (setq line (subseq line 0 (1- (length line))))
                  (write-string *rubout* stream)))
               (t
-               (let ((character (if (= code 9) #\Space (and (>= code 32) (code-char code)))))
+               (let ((character (if (= code 9) #\Space (and (>= code 32) (< code char-code-limit) (code-char code)))))
                  (when (and character (< (length line) +line-limit+))
                    (setq line (concatenate 'string line (string character)))
                    (write-string (string character) stream)))))))))

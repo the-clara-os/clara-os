@@ -17,7 +17,8 @@
 #                 whatever is on it: the world that another boot saved, or the
 #                 image that `make image` makes for UTM)
 #        SPOIL=1 (and change a byte of the world that was saved on it first)
-#        EXPECT="pattern" (a line that the boot report has to have)
+#        EXPECT="pattern" (a line that the boot report has to have; several
+#                 patterns with ;; between them are a line each)
 #        plus what tools/run.sh reads
 set -eu
 arch=${1:?usage: tools/boottest.sh <arch> [qemu args]}
@@ -214,6 +215,19 @@ check_volume() {
     fi
 }
 
+# The lines that the boot report has to have, when some were asked for.
+expected() {
+    [ -n "${EXPECT:-}" ] || return 0
+    # From the environment, and not with -v, which would take the backslashes of a pattern for its own.
+    EXPECT="$EXPECT" awk 'BEGIN { n = split(ENVIRON["EXPECT"], pattern, ";;"); for (i = 1; i <= n; i++) print pattern[i] }' |
+        while IFS= read -r pattern; do
+            if ! grep -q "$pattern" "$log"; then
+                echo "boottest $name: FAILED, the boot report has no line '$pattern'"
+                exit 1
+            fi
+        done
+}
+
 i=0
 while [ "$i" -lt $((timeout * 4)) ]; do
     if grep -q "$marker" "$log"; then
@@ -223,10 +237,7 @@ while [ "$i" -lt $((timeout * 4)) ]; do
             echo "boottest $name: FAILED, the kernel did not answer $session as written (above: -expected, +heard)"
             exit 1
         fi
-        if [ -n "${EXPECT:-}" ] && ! grep -q "$EXPECT" "$log"; then
-            echo "boottest $name: FAILED, the boot report has no line '$EXPECT'"
-            exit 1
-        fi
+        expected || exit 1
         if ! check_volume; then
             echo "boottest $name: FAILED, the volume that the kernel wrote to is not in order, by $fsck:"
             cat "build/fsck-$name.log"
