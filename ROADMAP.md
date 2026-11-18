@@ -1099,13 +1099,19 @@ M14b, a compiled world:
   which show nothing at the six thousandth call that they did not show at
   the first. So the collector runs before the first two hundred safe points
   that compiled code comes to in each text (`lisp_compiled_watched`): 1600
-  collections, 8 s for that boot under hvf, 41 s where the Mac emulates,
-  and on CI 215 s of the 600 in one run and 328 s in the next, of the same
-  code: the runners differ by that much, and the whole run took 7 minutes
-  and then 9. What the compiled texts add to it is small beside that; the
-  boot is long there because of the evaluator's 32000 collections, as it
-  was, and a slow runner on a day when that boot took 435 s for other
-  reasons would have run out of time.
+  collections. Measured on the Mac with the machine emulated, the whole
+  of that boot takes 133 s where main took 110 s: some 8 s are the
+  compiled texts, and the rest is the session that is typed with the
+  collector at work once the world is loaded, tools/stress.txt, which is
+  most of that boot (some 95 s of the 133) and goes through a world that
+  the compiler has made a fifth larger at every safe point. On CI the boot
+  took 215 s of its 600 in one run and 328 s and 327 s in the next two, of
+  code that is the same where it matters, and the runs 7 minutes and then
+  9: the runners differ by that much. It was 145 s and 162 s for M13. A
+  world that grows makes that session slower in proportion, and a compiled
+  world will be a larger one: before M14b adds to it, the forms that
+  tools/stress.txt types with the collector on, the one on the keyboard
+  above all, are where to take time out.
   Two mistakes were planted to see that this still finds what it is for:
   the arguments of a call taken off the stack before the call, which every
   boot notices, and those of a MULTIPLE-VALUE-CALL, which only this one
