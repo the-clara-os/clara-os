@@ -344,7 +344,8 @@ The compiler:
   where it should not. Every boot compiles the four hundred texts of the
   evaluator's self-test and holds what compiled code makes of them against
   what the evaluator made, and one boot of `make test` does it once more
-  with the collector at every safe point of compiled code. Under SBCL the
+  with a collection wherever compiled code comes to a safe point, up to
+  two hundred times a text. Under SBCL the
   compiler runs on a second machine, written in Lisp, and SBCL itself says
   what a form means: some 180 forms that were written and four hundred
   that are made at random have to give the same compiled. Found on the way
@@ -1037,7 +1038,8 @@ Infrastructure, for sessions with budget left over:
   makes a DEFVAR. The machine under SBCL was too forgiving of one, a
   record left on the stack by a tagbody, which the kernel answered with a
   fault: it now knows where its records are, and says so when one is
-  taken off while it is in force.
+  taken off while it is in force. Two more for the collector, with the
+  loose ends of M14b.
 
 Shortcuts and loose ends, under the milestone that settles each one. A
 session reads its own group before it starts, and whatever it leaves open
@@ -1081,12 +1083,24 @@ M14b, a compiled world:
   says why: one that was made where variables were in sight, a macro. When
   DEFUN compiles, a function that fails to compile has to stay the
   evaluator's without a word, or with one, which is to be decided there.
-- The stress boot went from 8 s to 16 s under hvf with the compiled texts
-  in it, from about a minute to 108 s where the Mac emulates, and takes
-  189 s in the Ubuntu container. On CI it was 145 s before. Compiling under the collector was not tried and would
-  take hours: the compiler is the evaluator's business there, and the
-  collector is switched on around each compiled form only
-  (`clara.compiler::*call*`).
+- The boot with the collector at work, and what the compiled texts cost
+  it. With a collection at every safe point while a compiled form ran, it
+  took three times as long on CI as before, 435 s of its 600, where it had
+  been 145 s, and the whole run 11 minutes of its 15. Nearly all of those
+  24000 collections were the machine's own safe points, and more than half
+  of them in the three texts that call themselves until the stack is full,
+  which show nothing at the six thousandth call that they did not show at
+  the first. So the collector runs before the first two hundred safe points
+  that compiled code comes to in each text (`lisp_compiled_watched`): 1600
+  collections, 8 s for that boot under hvf, 41 s where the Mac emulates.
+  Two mistakes were planted to see that this still finds what it is for:
+  the arguments of a call taken off the stack before the call, which every
+  boot notices, and those of a MULTIPLE-VALUE-CALL, which only this one
+  does. A collection at every safe point of everything while compiled code
+  runs is still to be had at the prompt, `(cl::%collect-every 1)`, and was
+  what the first run of this milestone passed. Compiling under the
+  collector was not tried and would take hours: the compiler is the
+  evaluator's business there.
 
 No milestone yet, to be picked up when they start to matter:
 

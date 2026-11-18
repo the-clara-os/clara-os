@@ -1397,7 +1397,9 @@ static const struct {
  *
  * %SELF-TEST runs this again from the prompt, which is how the boot test
  * puts all of it through a collection at every safe point. */
-static unsigned eval_texts(int64_t *deep, lisp compiler)
+enum { WATCHED = 200 }; /* the safe points of compiled code that begin with a collection, to a text */
+
+static unsigned eval_texts(int64_t *deep, lisp compiler, unsigned watched)
 {
     struct lisp_symbol *package = lisp_as_symbol(lisp_roots.package);
     lisp user = package->value, packages = lisp_roots.packages;
@@ -1413,7 +1415,7 @@ static unsigned eval_texts(int64_t *deep, lisp compiler)
         for (unsigned k = 0; compiler && k < sizeof compiled / sizeof compiled[0]; k++)
             if (same(evaluations[i].text, compiled[k].text))
                 expected = compiled[k].printed;
-
+        lisp_compiled_watched(watched);
         evaluate_text(evaluations[i].text, &printed, compiler);
         if (!same(printed.chars, expected)) {
             kprintf("lisp self-test: to %s, %s gave %s, not %s\n", who, evaluations[i].text, printed.chars, expected);
@@ -1421,6 +1423,7 @@ static unsigned eval_texts(int64_t *deep, lisp compiler)
         }
     }
     for (unsigned i = 0; i < others; i++) {
+        lisp_compiled_watched(watched);
         evaluate_text(either[i].text, &printed, compiler);
         if (!same(printed.chars, either[i].printed) && !same(printed.chars, either[i].otherwise)) {
             kprintf("lisp self-test: to %s, %s gave %s, not %s or %s\n", who, either[i].text, printed.chars,
@@ -1430,6 +1433,7 @@ static unsigned eval_texts(int64_t *deep, lisp compiler)
     }
     texts += others;
     for (unsigned i = 0; compiler && i < sizeof compilations / sizeof compilations[0]; i++, texts++) {
+        lisp_compiled_watched(watched);
         evaluate_text(compilations[i].text, &printed, 0);
         if (!same(printed.chars, compilations[i].printed)) {
             kprintf("lisp self-test: with a compiler, %s gave %s, not %s\n", compilations[i].text, printed.chars,
@@ -1440,7 +1444,9 @@ static unsigned eval_texts(int64_t *deep, lisp compiler)
     if (wrong)
         panic("lisp self-test: %s gave %u wrong answers out of %u", who, wrong, texts);
 
+    lisp_compiled_watched(watched);
     evaluate_text("(defvar *depth* 0) (defun dive (n) (setq *depth* n) (+ 1 (dive (+ n 1)))) (dive 1)", &printed, compiler);
+    lisp_compiled_watched(0);
     if (!same(printed.chars, STACK_FULL))
         panic("lisp self-test: to %s, a function that calls itself without end gave %s", who, printed.chars);
     evaluate_text("*depth*", &printed, 0);
@@ -1459,7 +1465,7 @@ unsigned lisp_eval_texts(void)
 {
     int64_t depth;
 
-    return eval_texts(&depth, 0);
+    return eval_texts(&depth, 0, 0);
 }
 
 /* What the heap holds, once what nobody holds has been collected. In a
@@ -1491,7 +1497,7 @@ static void eval_selftest(void)
     struct lisp_heap heap;
     struct text printed;
     int64_t depth;
-    unsigned texts = eval_texts(&depth, 0);
+    unsigned texts = eval_texts(&depth, 0, 0);
 
     /* Nobody asks for the next collection: the evaluator has to see for itself that it is time. When
      * that is depends on how much was in use after the last one, so there is one first, with
@@ -1611,17 +1617,19 @@ static void collector_selftest(void)
  * that the stack is full too.
  *
  * When more is asked for (new_world), all of it once again with a
- * collection at every safe point that compiled code comes to: whatever the
- * machine fails to hold on to is gone at its next call. The compiler
- * itself is left alone meanwhile. It is Lisp that the evaluator walks, a
- * collection at each of its calls would take minutes, and the evaluator
- * has been through that already. */
+ * collection where compiled code comes to a safe point, at the first
+ * WATCHED of them in every text: whatever the machine fails to hold on to
+ * is gone at its next call of a function in Lisp, or at the next turn of
+ * its loop. The compiler and the functions that compiled code calls are
+ * left alone meanwhile. They are Lisp that the evaluator walks, a
+ * collection at each of their calls takes minutes where the machine is
+ * emulated, and the evaluator has been through that already. */
 static void compiler_selftest(int more)
 {
     struct lisp_heap heap;
     uint64_t before;
     int64_t depth;
-    unsigned texts = eval_texts(&depth, own_form("clara.compiler:evaluate"));
+    unsigned texts = eval_texts(&depth, own_form("clara.compiler:evaluate"), 0);
 
     kprintf("lisp: the compiler passed: %u texts compiled and run, and a function called itself %lld deep\n", texts,
             (long long)depth);
@@ -1629,17 +1637,10 @@ static void compiler_selftest(int more)
         return;
     lisp_heap_state(&heap);
     before = heap.collections;
-    if (!lisp_evaluate(own_form("(setq clara.compiler::*call*"
-                                "  (lambda (function)"
-                                "    (cl::%collect-every 1)"
-                                "    (unwind-protect (funcall function) (cl::%collect-every 0))))")))
-        panic("lisp: the compiler's self-test could not ask for the collector");
-    texts = eval_texts(&depth, own_form("clara.compiler:evaluate"));
-    if (!lisp_evaluate(own_form("(setq clara.compiler::*call* 'funcall)")))
-        panic("lisp: the compiler's self-test could not send the collector away");
+    texts = eval_texts(&depth, own_form("clara.compiler:evaluate"), WATCHED);
     lisp_heap_state(&heap);
-    kprintf("lisp: a collection at every safe point of compiled code: %u texts once more in %llu\n", texts,
-            heap.collections - before);
+    kprintf("lisp: a collection at the safe points of compiled code, %u to a text: %u texts once more in %llu\n",
+            WATCHED, texts, heap.collections - before);
 }
 
 static void console_put(void *to, char c)

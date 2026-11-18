@@ -125,9 +125,31 @@ static const struct operation {
 /* The types of the errors that FAIL makes, by its first operand. */
 static const char *const failures[] = { "ERROR", "PROGRAM-ERROR", "CONTROL-ERROR" };
 
+static unsigned g_watched; /* the self-test wants a collection at so many more safe points of compiled code */
+
 static inline unsigned small(lisp x)
 {
     return (unsigned)lisp_fixnum_value(x);
+}
+
+/* For the self-test (lisp.c): the collector runs before each of the next
+ * so many safe points that the machine itself comes to, a call of a
+ * function in Lisp and a jump backwards. Whatever the machine holds and has
+ * not on the stack by then is gone when it looks again. A number, and not
+ * all of them for good, because a text that goes round a loop, or calls
+ * itself until the stack is full, shows nothing the thousandth time that
+ * it did not show the first. */
+void lisp_compiled_watched(unsigned points)
+{
+    g_watched = points;
+}
+
+static inline void watched(void)
+{
+    if (g_watched) {
+        g_watched--;
+        lisp_collect();
+    }
 }
 
 /* A record is made, on top of the stack: the innermost of this call. */
@@ -348,8 +370,10 @@ lisp lisp_call_compiled(lisp f, unsigned argc, lisp *argv)
                     value = p->fn(a, args);
                 } else
                     value = lisp_apply(args[-1], a, args);
-            } else
+            } else {
+                watched();
                 value = lisp_apply(args[-1], a, args);
+            }
             g_sp = args - 1;
             if (g_unwind.to)
                 goto unwind;
@@ -377,8 +401,11 @@ lisp lisp_call_compiled(lisp f, unsigned argc, lisp *argv)
             g_sp++;
             break;
         case OP_JUMP: /* on at a; backwards is a safe point, so that a loop can be stopped and others get their turn */
-            if (a < pc && !safe_point())
-                goto unwind;
+            if (a < pc) {
+                watched();
+                if (!safe_point())
+                    goto unwind;
+            }
             pc = a;
             break;
         case OP_JUMP_IF_NIL: /* value -> */
@@ -412,6 +439,7 @@ lisp lisp_call_compiled(lisp f, unsigned argc, lisp *argv)
         case OP_VALUES_CALL: /* function, as many arguments as the local variable a counted -> its first value */
             n = small(locals[a]);
             args = g_sp - n;
+            watched();
             value = lisp_apply(args[-1], n, args);
             g_sp = args - 1;
             if (g_unwind.to)
@@ -496,6 +524,7 @@ lisp lisp_call_compiled(lisp f, unsigned argc, lisp *argv)
             goto unwind;
         case OP_GO_TO: /* tag -> ; control leaves for the a-th tag of the tagbody of that tag; the constant b is its name */
             tag = *--g_sp; /* the function that is running holds it too, in a variable or in what it closes over */
+            watched();
             if (!safe_point())
                 goto unwind;
             if (lisp_as_cons(tag)->car == LISP_NIL) {

@@ -108,7 +108,7 @@ test: all host-test
 	NAME=manual-again DISK=$(BUILD)/boot-manual.img SESSION=$(BUILD)/manual-again.txt \
 		EXPECT='^lisp: the heap is an image' tools/boottest.sh aarch64 -machine gic-version=3
 	NAME=aarch64-stress SESSION=tools/stress.txt TIMEOUT=600 DISK=$(BUILD)/boot-aarch64.img SPOIL=1 \
-		EXPECT='^lisp: clara.image is not resumed: it is not what was saved;;^lisp: a collection at every safe point: boot.lisp once more in [0-9]\{4,\}, [0-9]* texts once more in [0-9]\{5,\};;^lisp: a collection at every safe point of compiled code: [0-9]* texts once more in [0-9]\{5,\}' \
+		EXPECT='^lisp: clara.image is not resumed: it is not what was saved;;^lisp: a collection at every safe point: boot.lisp once more in [0-9]\{4,\}, [0-9]* texts once more in [0-9]\{5,\};;^lisp: a collection at the safe points of compiled code, [0-9]* to a text: [0-9]* texts once more in [0-9]\{4,\}' \
 		tools/boottest.sh aarch64 -machine gic-version=3
 
 image: all

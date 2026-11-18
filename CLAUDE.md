@@ -277,9 +277,14 @@ Rules:
   self-test with a collection at every safe point, in `new_world`, before
   the rest of the world is in the heap: a collection goes through 270 KiB
   there and through everything later, so that is where a new text of the
-  self-test costs least. The texts are then compiled, with the collector
-  off, and each is run with it at every safe point again
-  (`compiler_selftest`), which doubles what a text costs that boot. tools/stress.txt then types a few forms with the
+  self-test costs least. The texts are then compiled and run once more
+  with a collection before the first two hundred safe points that
+  compiled code itself comes to in each text, a call of a function in
+  Lisp or a jump backwards (`compiler_selftest`, `lisp_compiled_watched`):
+  with one at every safe point, that boot took three times as long on CI,
+  435 s of its 600, most of it in the texts that call themselves until
+  the stack is full. A new place where vm.c comes to a safe point gets a
+  `watched()` before it. tools/stress.txt then types a few forms with the
   collector still at it, one of them on the keyboard. Both lines of the
   boot report are asked for with `EXPECT=`, whose patterns have `;;`
   between them. That boot runs the kernel that is on its disk, which is

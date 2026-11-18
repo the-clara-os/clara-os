@@ -505,6 +505,10 @@ void lisp_interrupt(enum lisp_interrupt source);        /* from its handler: the
 /* unsafe.c: the package CLARA.UNSAFE */
 void lisp_unsafe_init(const struct framebuffer *fb);    /* the screen, for a driver in Lisp to draw on */
 
+/* vm.c: the machine that compiled code runs on */
+void lisp_compiled_watched(unsigned points);            /* for the self-test: a collection before each of the next so
+                                                           many safe points that compiled code comes to */
+
 /* image.c: the heap as a file, and a file as the heap */
 int  lisp_image_load(const struct boot_file *file);     /* 1: the heap and the roots are what that file holds. 0: they
                                                            are as they were, and the boot report says why */

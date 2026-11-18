@@ -1264,11 +1264,6 @@
   (clara.unsafe:make-compiled-function
    (generate (convert-function name (cadr form) (cddr form) (make-env)))))
 
-;; What EVALUATE calls the function with that it has made of a form. The
-;; kernel's self-test puts a function here that has the collector run all
-;; the while (kernel/lisp/lisp.c).
-(defvar *call* 'funcall)
-
 ;; The values of a form, like EVAL, with the form compiled first. A PROGN
 ;; is taken a form at a time, and so is what a macro makes of the form:
 ;; each is evaluated before the next is compiled, so that a DEFVAR or a
@@ -1283,8 +1278,8 @@
          (multiple-value-bind (expansion expanded) (macroexpand-1 form)
            (if expanded
                (evaluate expansion)
-               (funcall *call* (compile-lambda (list 'lambda nil form))))))
-        (t (funcall *call* (compile-lambda (list 'lambda nil form))))))
+               (funcall (compile-lambda (list 'lambda nil form))))))
+        (t (funcall (compile-lambda (list 'lambda nil form))))))
 
 ;;; The listing of a compiled function, for DISASSEMBLE
 
