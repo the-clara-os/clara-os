@@ -59,7 +59,11 @@ boots straight into it. Two applications come with it, a text editor
 (lisp/editor.lisp) and a file browser (lisp/files.lisp): each is a file on
 the boot volume that the launcher loads when it is first picked, and
 unloads again when asked, and `(clara.windows:launch "Editor" "/notes.txt")`
-opens a file from a prompt. The same Lisp files load
+opens a file from a prompt. And there is a compiler, written in Lisp
+(lisp/compiler.lisp): `(compile 'name)` makes a function one that a small
+machine in the kernel runs, instruction by instruction, three or four times
+as quick as the evaluator walks its forms and with the same meaning, and
+`(disassemble 'name)` shows the instructions. The same Lisp files load
 under SBCL on the host, where they are tested against a machine that is
 made up for the purpose.
 [ROADMAP.md](ROADMAP.md) has what comes next, [DESIGN.md](DESIGN.md) the
@@ -105,9 +109,10 @@ Layout:
 
     kernel/          architecture-independent code and the UEFI handoff (boot.c)
     kernel/arch/     one directory per architecture: the only assembly and the only MMIO addresses
-    kernel/lisp/     the Lisp runtime: objects and the heap, symbols and packages, the reader, the printer
-    lisp/            Lisp sources: the language's own part, the console, drawing, the drivers, the file system, the listener,
-                     the window manager and the terminal in a window, which the kernel loads as it starts, and
+    kernel/lisp/     the Lisp runtime: objects and the heap, symbols and packages, the reader, the printer,
+                     the evaluator, and the machine that compiled code runs on (vm.c)
+    lisp/            Lisp sources: the language's own part, the compiler, the console, drawing, the drivers, the
+                     file system, the listener, the window manager and the terminal in a window, which the kernel loads as it starts, and
                      the two applications, editor.lisp and files.lisp, which the launcher loads when they are picked;
                      the build copies them to the ESP's \clara directory, read at boot
     fonts/           the console font, Spleen 8x16, which tools/bdf2c.py turns into kernel/font.c

@@ -38,9 +38,11 @@
 #include "lisp.h"
 
 /* What the objects of an image are in memory: the tags and the types of
- * lisp.h, each struct there, and lisp_roots. A change to any of them is a
- * new number here, and no older image is taken after it. */
-#define FORMAT 1
+ * lisp.h, each struct there, and lisp_roots; and what compiled code is, the
+ * items of enum lisp_code and the instructions of vm.c, since a world that
+ * was saved holds its compiled functions. A change to any of them is a new
+ * number here, and no older image is taken after it. */
+#define FORMAT 2
 
 struct image {
     char     magic[8];    /* "CLARAIMG" */

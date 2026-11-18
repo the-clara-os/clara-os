@@ -8,6 +8,30 @@ FACT
 error: the result is an integer too large for a fixnum, and there are no larger integers yet
 > (mapcar #'fact '(1 2 3 4 5))
 (1 2 6 24 120)
+> (list (compiled-function-p #'fact) (compile 'fact) (compiled-function-p #'fact) (fact 20))
+(NIL FACT T 2432902008176640000)
+> (disassemble 'fact)
+FACT: 1 local variable, 6 words of stack
+0   CONST <
+1   LOCAL 0
+2   CONST 2
+3   CALL 2
+4   JUMP-IF-NIL 7
+5   CONST 1
+6   RETURN-ONE
+7   CONST *
+8   LOCAL 0
+9   CONST FACT
+10  CONST -
+11  LOCAL 0
+12  CONST 1
+13  CALL 2
+14  CALL 1
+15  CALL 2
+16  RETURN
+NIL
+> (fact 21)
+error: the result is an integer too large for a fixnum, and there are no larger integers yet
 > (defmacro unless-zero (n &body body) `(if (= ,n 0) nil (progn ,@body)))
 UNLESS-ZERO
 > (macroexpand-1 '(unless-zero x (/ 100 x)))

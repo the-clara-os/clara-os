@@ -74,6 +74,7 @@ td:first-child { white-space: nowrap; }
     <li><a href="#start">Starting it</a></li>
     <li><a href="#prompt">The prompt</a></li>
     <li><a href="#language">The language</a></li>
+    <li><a href="#compiler">The compiler</a></li>
     <li><a href="#files">Files</a></li>
     <li><a href="#image">Saving the world</a></li>
     <li><a href="#threads">Threads</a></li>
@@ -211,7 +212,7 @@ error: interrupted from the keyboard</pre>
   <section id="language">
     <h2>{{spleen:The language}}</h2>
     <p>The Lisp is a part of Common Lisp, and not a dialect of its own: what is here means what it means in any Common Lisp, and a program that keeps to this part runs elsewhere as it stands. If you know Common Lisp, read <a href="#differs">where it stops short</a> and go on. If you do not, any introduction to it will do, for as far as this part goes.</p>
-    <p>It is an interpreter. A function is evaluated from its text every time it is called, so it is slow by the standards of a compiled Lisp, and quick enough to drive the machine it runs on: its console, its disks and its file system are written in it.</p>
+    <p>What you type is evaluated by an interpreter: a function is worked out from its text every time it is called. That is slow by the standards of a compiled Lisp, and quick enough to drive the machine it runs on, whose console, disks and file system are written in it. A function that has to be quicker can be <a href="#compiler">compiled</a>.</p>
 
     <h3 id="defining">Functions, macros and variables</h3>
 <pre class="session">&gt; (defun fact (n) (if (&lt; n 2) 1 (* n (fact (- n 1)))))
@@ -311,10 +312,75 @@ error: the stack is full: the forms are nested too deep, or a function calls its
       <li>There are no hash tables, no classes and generic functions, and no <code>typep</code>.</li>
       <li>A package can be made, used when it is made, exported from, and deleted when no other uses it. Nothing is imported or shadowed afterwards.</li>
       <li><code>eq</code> and <code>eql</code> are the same function. Letters change case as far as ASCII has them: <code>(string-upcase "é")</code> is <code>"é"</code>.</li>
-      <li>A function can call itself some three thousand calls deep. Past that it is the error above, and not the end of the machine.</li>
+      <li>A function can call itself some three thousand calls deep, and a <a href="#compiler">compiled</a> one about twice that. Past that it is the error above, and not the end of the machine.</li>
       <li><code>(declare (special ...))</code> and <code>&amp;environment</code> are refused, and so are the reader's <code>#.</code>, <code>#S</code> and <code>#P</code>.</li>
     </ul>
     <p><a href="#names">Everything that is defined</a>, at the end of this manual, is the whole list, by subject.</p>
+  </section>
+
+  <section id="compiler">
+    <h2>{{spleen:The compiler}}</h2>
+    <p><code>compile</code> makes a function quicker. It goes through the function once and writes down what the interpreter would find out again at every call: where each variable is, which form is a call and which a loop, what every macro stands for. What it leaves is a list of small steps, instructions, and a compiled function is run by carrying them out one after the other.</p>
+<pre class="session">&gt; (compiled-function-p #'fact)
+NIL
+&gt; (compile 'fact)
+FACT
+&gt; (compiled-function-p #'fact)
+T
+&gt; (fact 20)
+2432902008176640000
+&gt; (funcall (compile nil '(lambda (n) (* n n))) 12)
+144</pre>
+    <p><code>(compile 'fact)</code> puts the compiled function in the place of the one that <code>fact</code> named, and <code>(compile nil '(lambda ...))</code> gives a compiled function of a form. A compiled function means what it meant before. It takes the same arguments, gives the same values and fails with the same words, and it can call any other function and be called by any, compiled or not.</p>
+
+    <h3 id="quicker">How much quicker</h3>
+    <p><code>time</code> evaluates a form and says how long that took, to a hundredth of a second, which is how often the system's clock ticks. On one machine, before and after <code>(compile 'fib)</code>:</p>
+<pre><code>&gt; (defun fib (n) (if (&lt; n 2) n (+ (fib (- n 1)) (fib (- n 2)))))
+FIB
+&gt; (time (fib 30))
+390 milliseconds
+832040
+&gt; (compile 'fib)
+FIB
+&gt; (time (fib 30))
+110 milliseconds
+832040</code></pre>
+    <p>Three or four times as quick is usual for a function that counts and calls. A function that spends its time in other functions gains what those gain: <code>mapcar</code> and the rest of the system's own Lisp are not compiled yet, so a call of <code>mapcar</code> takes as long as it did.</p>
+
+    <h3 id="listing">What it made of a function</h3>
+    <p><code>disassemble</code> writes the instructions of a function out, with their numbers:</p>
+<pre class="session">&gt; (disassemble 'fact)
+FACT: 1 local variable, 6 words of stack
+0   CONST &lt;
+1   LOCAL 0
+2   CONST 2
+3   CALL 2
+4   JUMP-IF-NIL 7
+5   CONST 1
+6   RETURN-ONE
+7   CONST *
+8   LOCAL 0
+9   CONST FACT
+10  CONST -
+11  LOCAL 0
+12  CONST 1
+13  CALL 2
+14  CALL 1
+15  CALL 2
+16  RETURN
+NIL</pre>
+    <p>The instructions work on a stack. <code>CONST</code> puts a constant on it and <code>LOCAL</code> the value of a variable, which is known by its number: <code>n</code> is variable 0. <code>CALL 2</code> takes two arguments off the stack and the function under them, calls it, and leaves what it gives. So the first four are <code>(&lt; n 2)</code>, <code>JUMP-IF-NIL 7</code> goes on at instruction 7 when that gave <code>NIL</code>, and the rest is <code>(* n (fact (- n 1)))</code>. A function is still found by its name at the moment it is called: define <code>fact</code> or <code>*</code> again, and compiled code calls the new one.</p>
+    <p>Given a function that is not compiled, or a <code>lambda</code> form, <code>disassemble</code> shows what compiling it would make and leaves the function as it was. A function that is part of the kernel has no listing.</p>
+
+    <h3 id="uncompiled">What it leaves alone</h3>
+    <ul>
+      <li>Nothing is compiled unless you ask. <code>defun</code> makes a function for the interpreter, at the prompt and in a file that is loaded, and <code>(compile 'name)</code> makes it a compiled one.</li>
+      <li>Macros are not compiled. A macro runs when a call of it is expanded, and for a compiled function that happened once, when it was compiled. Define a macro again, and the functions that were compiled with the old one go on as they were until they are compiled again.</li>
+      <li>A function that was made inside a <code>let</code> and uses its variables cannot be compiled by itself: <code>compile</code> says so. Compile the function that makes it instead, and it makes compiled ones.</li>
+      <li><code>defvar</code> has to come before the functions that bind the variable are compiled. That is the order a file has them in anyway.</li>
+      <li>A form that is not what it should be, <code>(if)</code> for one, does not stop the compiler. The compiled function fails when it comes to that form, in the words the interpreter has for it.</li>
+    </ul>
+    <p>Compiled functions are part of the <a href="#image">world that is saved</a>, and come back compiled. <code>(clara.compiler:evaluate form)</code> is <code>eval</code> by way of the compiler: the form is compiled, and then run.</p>
   </section>
 
   <section id="files">
@@ -325,7 +391,7 @@ error: the stack is full: the forms are nested too deep, or a function calls its
 <pre class="session">&gt; (directory "/*")
 ("/clara/" "/EFI/")
 &gt; (directory "/clara/*.lisp")
-("/clara/boot.lisp" "/clara/console.lisp" "/clara/disk.lisp" "/clara/draw.lisp" "/clara/editor.lisp" "/clara/fat.lisp" "/clara/files.lisp" "/clara/font.lisp" "/clara/input.lisp" "/clara/listener.lisp" "/clara/pci.lisp" "/clara/self-test.lisp" "/clara/terminal.lisp" "/clara/virtio.lisp" "/clara/windows.lisp")
+("/clara/boot.lisp" "/clara/compiler.lisp" "/clara/console.lisp" "/clara/disk.lisp" "/clara/draw.lisp" "/clara/editor.lisp" "/clara/fat.lisp" "/clara/files.lisp" "/clara/font.lisp" "/clara/input.lisp" "/clara/listener.lisp" "/clara/pci.lisp" "/clara/self-test.lisp" "/clara/terminal.lisp" "/clara/virtio.lisp" "/clara/windows.lisp")
 &gt; (probe-file "/CLARA/Boot.Lisp")
 "/CLARA/boot.lisp"
 &gt; (probe-file "/clara/nothing.lisp")
@@ -387,8 +453,8 @@ NIL</pre>
     <p>The next time the machine starts, it finds that file and takes it for its world, in place of loading the Lisp files. The report says so:</p>
 <pre><code>lisp: the heap is an image: 1542 KiB that ClaraOS {{version}} saved, from clara.image on the boot volume</code></pre>
     <p>And at the prompt, what was defined is defined:</p>
-<pre class="session again">&gt; (fact 10)
-3628800
+<pre class="session again">&gt; (list (fact 10) (compiled-function-p #'fact))
+(3628800 T)
 &gt; (hello)
 hello from a file
 NIL
@@ -399,7 +465,7 @@ NIL
 
     <h3 id="saved">What comes back, and what does not</h3>
     <ul>
-      <li>Functions, macros, structures, packages and conditions that were defined, and the values of variables, come back. So does the package that names were being read in.</li>
+      <li>Functions, macros, structures, packages and conditions that were defined, and the values of variables, come back. So does the package that names were being read in. A function that was <a href="#compiler">compiled</a> comes back compiled.</li>
       <li>A special variable comes back with the value it has outside every <code>let</code>, also when it was saved from inside one.</li>
       <li>Threads do not come back. The world starts again at the prompt, and does not go on in the middle of what it was doing. A thread that was running is one that has been stopped, and a lock that was held is free.</li>
       <li>The <a href="#windows">window manager</a> is running again when it was running, with one Listener window. The windows that were open do not come back.</li>
@@ -858,7 +924,7 @@ error: nothing is mapped at #x0</pre>
     <p class="names"><code>quote</code> <code>if</code> <code>when</code> <code>unless</code> <code>cond</code> <code>case</code> <code>ecase</code> <code>otherwise</code> <code>and</code> <code>or</code> <code>not</code> <code>progn</code> <code>prog1</code> <code>let</code> <code>let*</code> <code>setq</code> <code>psetq</code> <code>setf</code> <code>incf</code> <code>decf</code> <code>push</code> <code>pop</code> <code>block</code> <code>return</code> <code>return-from</code> <code>tagbody</code> <code>go</code> <code>catch</code> <code>throw</code> <code>unwind-protect</code> <code>do</code> <code>do*</code> <code>dolist</code> <code>dotimes</code> <code>loop</code> <code>flet</code> <code>labels</code> <code>macrolet</code> <code>locally</code> <code>the</code> <code>eval-when</code></p>
 
     <h3>Functions and values</h3>
-    <p class="names"><code>funcall</code> <code>apply</code> <code>identity</code> <code>functionp</code> <code>fboundp</code> <code>symbol-function</code> <code>eval</code> <code>macroexpand</code> <code>macroexpand-1</code> <code>values</code> <code>values-list</code> <code>multiple-value-bind</code> <code>destructuring-bind</code> <code>multiple-value-call</code> <code>multiple-value-list</code> <code>multiple-value-prog1</code> <code>multiple-value-setq</code> <code>nth-value</code></p>
+    <p class="names"><code>funcall</code> <code>apply</code> <code>identity</code> <code>functionp</code> <code>compiled-function-p</code> <code>compile</code> <code>disassemble</code> <code>function-lambda-expression</code> <code>fboundp</code> <code>symbol-function</code> <code>eval</code> <code>macroexpand</code> <code>macroexpand-1</code> <code>values</code> <code>values-list</code> <code>multiple-value-bind</code> <code>destructuring-bind</code> <code>multiple-value-call</code> <code>multiple-value-list</code> <code>multiple-value-prog1</code> <code>multiple-value-setq</code> <code>nth-value</code></p>
 
     <h3>Numbers</h3>
     <p class="names"><code>+</code> <code>-</code> <code>*</code> <code>/</code> <code>1+</code> <code>1-</code> <code>=</code> <code>/=</code> <code>&lt;</code> <code>&lt;=</code> <code>&gt;</code> <code>&gt;=</code> <code>floor</code> <code>truncate</code> <code>mod</code> <code>rem</code> <code>abs</code> <code>max</code> <code>min</code> <code>expt</code> <code>evenp</code> <code>oddp</code> <code>zerop</code> <code>plusp</code> <code>minusp</code> <code>integerp</code> <code>numberp</code> <code>ash</code> <code>logand</code> <code>logior</code> <code>logxor</code> <code>lognot</code></p>
@@ -882,12 +948,12 @@ error: nothing is mapped at #x0</pre>
     <p class="names"><code>open</code> <code>close</code> <code>with-open-file</code> <code>probe-file</code> <code>directory</code> <code>delete-file</code> <code>load</code></p>
 
     <h3>The system</h3>
-    <p class="names"><code>room</code> <code>sleep</code> <code>get-internal-real-time</code> <code>internal-time-units-per-second</code> <code>*features*</code> <code>lisp-implementation-type</code> <code>lisp-implementation-version</code></p>
+    <p class="names"><code>room</code> <code>time</code> <code>sleep</code> <code>get-internal-real-time</code> <code>internal-time-units-per-second</code> <code>*features*</code> <code>lisp-implementation-type</code> <code>lisp-implementation-version</code></p>
     <p class="aside"><code>(lisp-implementation-type)</code> is <code>"ClaraOS"</code>, and <code>(lisp-implementation-version)</code> the version of the kernel.</p>
 
     <h3>The package CLARA</h3>
-    <p>Threads, locks and events, the image, and two things for whoever writes a console or a file system: a stream made of two functions, and the way a file system tells the language that it is there.</p>
-    <p class="names" data-package="CLARA"><code>clara:make-thread</code> <code>clara:current-thread</code> <code>clara:threadp</code> <code>clara:thread-name</code> <code>clara:thread-alive-p</code> <code>clara:all-threads</code> <code>clara:join-thread</code> <code>clara:destroy-thread</code> <code>clara:interrupt-thread</code> <code>clara:thread-yield</code> <code>clara:make-lock</code> <code>clara:acquire-lock</code> <code>clara:release-lock</code> <code>clara:with-lock-held</code> <code>clara:make-event</code> <code>clara:signal-event</code> <code>clara:wait-event</code> <code>clara:save-image</code> <code>clara:keyboard-interrupt</code> <code>clara:make-stream</code> <code>clara:provide-files</code></p>
+    <p>Threads, locks and events, the image, and what whoever writes a console, a file system or a compiler needs: a stream made of two functions, the way a file system and a compiler tell the language that they are there, and what kind of variable a name is, <code>:special</code>, <code>:constant</code> or neither.</p>
+    <p class="names" data-package="CLARA"><code>clara:make-thread</code> <code>clara:current-thread</code> <code>clara:threadp</code> <code>clara:thread-name</code> <code>clara:thread-alive-p</code> <code>clara:all-threads</code> <code>clara:join-thread</code> <code>clara:destroy-thread</code> <code>clara:interrupt-thread</code> <code>clara:thread-yield</code> <code>clara:make-lock</code> <code>clara:acquire-lock</code> <code>clara:release-lock</code> <code>clara:with-lock-held</code> <code>clara:make-event</code> <code>clara:signal-event</code> <code>clara:wait-event</code> <code>clara:save-image</code> <code>clara:keyboard-interrupt</code> <code>clara:make-stream</code> <code>clara:provide-files</code> <code>clara:provide-compiler</code> <code>clara:variable-kind</code></p>
     <p class="aside"><code>clara:keyboard-interrupt</code> is the condition that <kbd>Ctrl-C</kbd> is.</p>
 
     <h3>The package CLARA.DRAW</h3>
@@ -898,6 +964,10 @@ error: nothing is mapped at #x0</pre>
     <p><a href="#windows">Windows</a> says what each of these is for. <code>clara.windows:resume</code> is what the system calls as it starts, for a world that was saved with the window manager running.</p>
     <p class="names" data-package="CLARA.WINDOWS"><code>clara.windows:start</code> <code>clara.windows:stop</code> <code>clara.windows:running-p</code> <code>clara.windows:resume</code> <code>clara.windows:open-window</code> <code>clara.windows:close-window</code> <code>clara.windows:show</code> <code>clara.windows:window-p</code> <code>clara.windows:window-title</code> <code>clara.windows:window-surface</code> <code>clara.windows:window-position</code> <code>clara.windows:move-window</code> <code>clara.windows:raise-window</code> <code>clara.windows:rename-window</code> <code>clara.windows:next-event</code> <code>clara.windows:windows</code> <code>clara.windows:focused-window</code> <code>clara.windows:define-application</code> <code>clara.windows:install-application</code> <code>clara.windows:unload-application</code> <code>clara.windows:remove-application</code> <code>clara.windows:applications</code> <code>clara.windows:launch</code> <code>clara.windows:key-typed</code> <code>clara.windows:pointer-moved</code></p>
     <p class="names" data-package="CLARA.TERMINAL"><code>clara.terminal:open-terminal</code> <code>clara.terminal:terminal-p</code> <code>clara.terminal:terminal-stream</code> <code>clara.terminal:terminal-window</code> <code>clara.terminal:clear</code> <code>clara.terminal:listener</code></p>
+
+    <h3>The package CLARA.COMPILER</h3>
+    <p><a href="#compiler">The compiler</a> is a file of Lisp as well. What it is used by are Common Lisp's own names, <code>compile</code> and <code>disassemble</code>; the one name of its own is <code>eval</code> by way of the compiler.</p>
+    <p class="names" data-package="CLARA.COMPILER"><code>clara.compiler:evaluate</code></p>
 
     <h3>The packages CLARA.EDITOR and CLARA.FILES</h3>
     <p>The two <a href="#applications">applications</a> that are files. Each package is there once its application has been launched, and gone again when it is unloaded; the one name of each is the function that <code>clara.windows:launch</code> calls.</p>
@@ -916,8 +986,8 @@ error: nothing is mapped at #x0</pre>
     <p class="names" data-package="CLARA.LISTENER"><code>clara.listener:run</code> <code>clara.listener:answer</code> <code>clara.listener:read-and-answer</code> <code>clara.listener:answer-lines</code></p>
 
     <h3>The package CLARA.UNSAFE</h3>
-    <p>For drivers. What can be read with one of the first seven can be written with <code>setf</code>.</p>
-    <p class="names" data-package="CLARA.UNSAFE"><code>clara.unsafe:memory-8</code> <code>clara.unsafe:memory-16</code> <code>clara.unsafe:memory-32</code> <code>clara.unsafe:memory-64</code> <code>clara.unsafe:port-8</code> <code>clara.unsafe:port-16</code> <code>clara.unsafe:port-32</code> <code>clara.unsafe:fill-memory-32</code> <code>clara.unsafe:copy-memory</code> <code>clara.unsafe:expand-bits-32</code> <code>clara.unsafe:fill-rectangle-32</code> <code>clara.unsafe:copy-rectangle-32</code> <code>clara.unsafe:allocate-memory</code> <code>clara.unsafe:free-memory</code> <code>clara.unsafe:map-memory</code> <code>clara.unsafe:memory-string</code> <code>clara.unsafe:string-bytes</code> <code>clara.unsafe:string-memory</code> <code>clara.unsafe:heap-image</code> <code>clara.unsafe:interrupt-event</code> <code>clara.unsafe:message-interrupt</code> <code>clara.unsafe:pci-configuration</code> <code>clara.unsafe:framebuffer</code> <code>clara.unsafe:serial-device</code> <code>clara.unsafe:serial-byte</code> <code>clara.unsafe:serial-break</code> <code>clara.unsafe:keyboard-break</code> <code>clara.unsafe:take-screen</code> <code>clara.unsafe:give-screen</code></p>
+    <p>For drivers. What can be read with one of the first seven can be written with <code>setf</code>. The last two are the compiler's: a function made of code, and the code of a function. Code is looked at before it is made a function, and refused when it points where it should not; that it uses its stack as it says is taken on trust, which is why the two are here.</p>
+    <p class="names" data-package="CLARA.UNSAFE"><code>clara.unsafe:memory-8</code> <code>clara.unsafe:memory-16</code> <code>clara.unsafe:memory-32</code> <code>clara.unsafe:memory-64</code> <code>clara.unsafe:port-8</code> <code>clara.unsafe:port-16</code> <code>clara.unsafe:port-32</code> <code>clara.unsafe:fill-memory-32</code> <code>clara.unsafe:copy-memory</code> <code>clara.unsafe:expand-bits-32</code> <code>clara.unsafe:fill-rectangle-32</code> <code>clara.unsafe:copy-rectangle-32</code> <code>clara.unsafe:allocate-memory</code> <code>clara.unsafe:free-memory</code> <code>clara.unsafe:map-memory</code> <code>clara.unsafe:memory-string</code> <code>clara.unsafe:string-bytes</code> <code>clara.unsafe:string-memory</code> <code>clara.unsafe:heap-image</code> <code>clara.unsafe:interrupt-event</code> <code>clara.unsafe:message-interrupt</code> <code>clara.unsafe:pci-configuration</code> <code>clara.unsafe:framebuffer</code> <code>clara.unsafe:serial-device</code> <code>clara.unsafe:serial-byte</code> <code>clara.unsafe:serial-break</code> <code>clara.unsafe:keyboard-break</code> <code>clara.unsafe:take-screen</code> <code>clara.unsafe:give-screen</code> <code>clara.unsafe:make-compiled-function</code> <code>clara.unsafe:compiled-function-code</code></p>
   </section>
 </main>
 

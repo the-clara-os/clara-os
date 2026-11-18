@@ -39,9 +39,10 @@ manager, and the applications are Lisp programs loaded into that world.
   lambda-list keywords, conditions with handler-case and unwind-protect.
   Later: floats, CLOS, the rest of format.
 - **Interpreter first, compiler later.** The substrate evaluates Lisp with an
-  interpreter written in C. A compiler, to bytecode or native code, is
-  written in Lisp once the world can host it; the interpreter stays as the
-  bootstrap and the fallback.
+  interpreter written in C. A compiler is written in Lisp once the world
+  can host it, which it is since M14a ("The compiler", below): it makes
+  code for a small machine that the substrate has, and not yet for the
+  processor. The interpreter stays as the bootstrap and the fallback.
 - **The image is the system.** Booting means taking a saved heap image for
   the heap and starting the world that is in it, with the window manager
   running when the world was saved with it running ("Images" and
@@ -904,6 +905,93 @@ architectures (kernel/vm.c).
   of keys drawn at random. The files are the host's own there, since SBCL's
   OPEN is what an application calls under SBCL. The boots type on QEMU's
   keyboard into both windows, on the real file system.
+
+## The compiler (decided in M14a, 2026-11-18)
+
+- The compiler makes code for a machine that the substrate has, and not
+  for the processor (lisp/compiler.lisp, kernel/lisp/vm.c). Four things
+  follow. One compiler serves both architectures. Compiled code is data in
+  the heap like any other, so a world that is saved holds it, and the rule
+  that nothing can be run but the kernel image's code stays as it is. The
+  collector stays precise, because such a machine keeps what it holds where
+  the evaluator does. And an image still holds no address of the kernel's.
+  Code for the processor would be several times as quick again, and would
+  cost all four: two generators and their assemblers, memory that is
+  written and then run, a way for the collector to know what a register
+  and a frame of the processor's hold, and code in the heap that must not
+  name where the kernel is. It can come later, behind the same first pass.
+- The machine works on a stack, and the stack is the evaluator's value
+  stack: a call of a compiled function is the function, its local
+  variables and what its instructions push and pop, in one stretch of it.
+  So nothing had to be taught to the collector, and a safe point means
+  what it meant. An instruction is a word, a fixnum: the operation in its
+  lowest eight bits and two operands above them. Bytes would be a quarter
+  of that, and want a kind of object that the heap does not have; a word
+  is read without taking it apart, and the vector that holds the
+  instructions is a vector like any other.
+- A compiled function means what the evaluator makes of its forms, which
+  is the rule that the reader and the arithmetic go by: the same text must
+  not mean one thing here and another there. So a function is found by its
+  name at every call, and one that is defined again is the one that is
+  called; nothing is put in the place of a call, however small the
+  function. The errors are the evaluator's, in its words and of its types.
+  A form that is not what it should be does not stop the compiler: the
+  code fails when it comes to the form, as the evaluator would. And the
+  test is that rule: every text of the evaluator's self-test is compiled
+  and run at every boot, and has to give the answer that the evaluator
+  gave. The differences that remain are few and are written down: a
+  DEFVAR counts for the forms that are compiled after it has been
+  evaluated, as in a file under any Common Lisp, and a macro that is
+  defined again does not reach the functions that were compiled before.
+- It is Lisp, in the world, in the part of the language that the evaluator
+  has, and the evaluator runs it. That makes compiling slow by a
+  compiler's standards, half a millisecond for a small function, and is no
+  obstacle: the 400 texts are compiled in under half a second. It works in
+  two passes. The first makes a tree of a form in which nothing is left to
+  look up: macros are expanded, a name is the variable, the block or the
+  tag that it stands for, and what a function inside a function uses of
+  the variables around it is noted. Only then is it known which variables
+  are shared and which blocks are left from afar, and the second pass
+  writes the instructions.
+- A variable is a slot of its function's call, known by its number. One
+  that a function inside uses is handed to that function when it is made,
+  among the values that it closes over: the value itself when the variable
+  is never set, and a cell that both hold when it is. The evaluator's
+  frames in the heap, a vector for every LET, are gone from compiled code;
+  what is left in the heap is what closures need.
+- Leaving is the evaluator's way, by returning, so that an exit, a THROW
+  or a condition passes through functions of both kinds without either
+  knowing the other. What a compiled function has in force, a CATCH, a
+  HANDLER-CASE, an UNWIND-PROTECT, a block or a tagbody that can be left
+  from afar, is a record on the stack, and the way out goes through the
+  records. A RETURN-FROM or a GO that stays inside its function and leaves
+  nothing undone on the way is a jump, which is every loop. The compiler
+  tells the two apart by a barrier: a function inside, the form and the
+  cleanup of an UNWIND-PROTECT, and wherever the stack is as deep as some
+  forms have values.
+- A safe point is a call of a function in Lisp and a jump backwards. A
+  function in C is called without one: it does not last, and the turn of a
+  loop or the next call in Lisp is near. That is where compiled code gains
+  most of what it gains after the variables.
+- Macros are the evaluator's. A macro's body runs when a call is expanded,
+  and for compiled code that is while it is compiled; DEFMACRO in compiled
+  code makes a macro of the usual kind. Nothing is compiled unless
+  somebody asks: DEFUN makes a function for the evaluator, and COMPILE
+  makes it a compiled one. A world that compiles what it loads is M14b.
+- Code is looked at before it is made a function: every operand has to
+  name a constant, a variable or an instruction that is there. That the
+  instructions use the stack as they say is the compiler's word, and not
+  checked, so the function that makes a function of code is in
+  CLARA.UNSAFE with the others that can bring the kernel down. Checking it
+  is possible, by following every path through the code, and is what a
+  machine that took code from strangers would have to do.
+- Under SBCL the compiler is the same file, and the machine is a second
+  one, written in Lisp the slow way (lisp/host/vm.lisp), which keeps a
+  stack as deep as the kernel's and says so when code needs more than it
+  claims. The tests there have a witness that the kernel does not: SBCL
+  says what a form means, and what the compiler makes of the form has to
+  give the same, for some 180 forms that were written and four hundred
+  that are put together at random.
 
 ## Conventions
 

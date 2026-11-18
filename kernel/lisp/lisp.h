@@ -94,20 +94,40 @@ struct lisp_package {
     lisp external;  /* and the ones it offers to the packages that use it */
 };
 
-/* Whatever can be the function of a symbol. Which of the four it is sits
+/* Whatever can be the function of a symbol. Which of the five it is sits
  * where the length would be. */
 enum lisp_function_kind {
     LISP_PRIMITIVE, /* a function written in C: code is its place in lisp_primitives */
     LISP_SPECIAL_OPERATOR, /* IF, LET and the like: code is its place in the evaluator's table */
     LISP_CLOSURE,   /* a function written in Lisp: code is (lambda-list . body) */
     LISP_MACRO,     /* the same, called with the subforms of a form to make the form to evaluate instead */
+    LISP_COMPILED,  /* a function written in Lisp that the compiler has been over: code is what it made (vm.c) */
 };
 
 struct lisp_function {
     lisp header;
     lisp name; /* a symbol, or NIL for a LAMBDA */
     lisp code; /* a fixnum for the two kinds in C, never an address: an image has to outlive the kernel that saved it */
-    lisp env;  /* the environment a closure or a macro was made in (eval.c) */
+    lisp env;  /* the environment a closure or a macro was made in (eval.c); of a compiled function, the values it
+                  closes over, in a vector, or NIL */
+};
+
+/* The code of a compiled function: a vector with these items, which the
+ * compiler makes (lisp/compiler.lisp) and the machine in vm.c runs. */
+enum lisp_code {
+    LISP_CODE_INSTRUCTIONS, /* a vector of fixnums, an instruction each */
+    LISP_CODE_CONSTANTS,    /* a vector of what the instructions name */
+    LISP_CODE_NAME,         /* a symbol, or NIL for a LAMBDA */
+    LISP_CODE_LAMBDA_LIST,  /* as it was written: for the printer */
+    LISP_CODE_REQUIRED,     /* how many parameters have to get an argument, */
+    LISP_CODE_OPTIONAL,     /* and how many more can */
+    LISP_CODE_REST,         /* T when the arguments after those are wanted as a list */
+    LISP_CODE_KEYS,         /* NIL, or a vector of the keywords that the function takes */
+    LISP_CODE_ALLOW,        /* T when it takes any other keyword too */
+    LISP_CODE_LOCALS,       /* how many local variables a call has, the parameters among them, */
+    LISP_CODE_DEPTH,        /* how many more words of stack its instructions use, */
+    LISP_CODE_CLOSED,       /* and how many values a function of this code closes over */
+    LISP_CODE_ITEMS
 };
 
 struct lisp_structure {
@@ -551,6 +571,11 @@ LISP_PRIMITIVE(lisp_p_memory_string);
 LISP_PRIMITIVE(lisp_p_string_bytes);
 LISP_PRIMITIVE(lisp_p_string_memory);
 LISP_PRIMITIVE(lisp_p_heap_image);
+LISP_PRIMITIVE(lisp_p_make_compiled_function);
+LISP_PRIMITIVE(lisp_p_compiled_function_code);
+LISP_PRIMITIVE(lisp_p_compiled_function_p);
+LISP_PRIMITIVE(lisp_p_function_lambda_expression);
+LISP_PRIMITIVE(lisp_p_variable_kind);
 extern const struct lisp_primitive lisp_primitives[];
 extern const unsigned lisp_primitive_count;
 

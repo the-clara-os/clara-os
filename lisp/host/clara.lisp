@@ -23,7 +23,8 @@
            "JOIN-THREAD" "DESTROY-THREAD" "INTERRUPT-THREAD" "THREAD-YIELD"
            "MAKE-LOCK" "ACQUIRE-LOCK" "RELEASE-LOCK" "WITH-LOCK-HELD"
            "MAKE-EVENT" "SIGNAL-EVENT" "WAIT-EVENT"
-           "MAKE-STREAM" "KEYBOARD-INTERRUPT" "PROVIDE-FILES" "SAVE-IMAGE"))
+           "MAKE-STREAM" "KEYBOARD-INTERRUPT" "PROVIDE-FILES" "SAVE-IMAGE"
+           "VARIABLE-KIND" "PROVIDE-COMPILER"))
 
 (defpackage "CLARA.UNSAFE"
   (:use "COMMON-LISP")
@@ -34,7 +35,8 @@
            "INTERRUPT-EVENT" "FRAMEBUFFER" "SERIAL-DEVICE" "SERIAL-BYTE" "SERIAL-BREAK"
            "TAKE-SCREEN" "GIVE-SCREEN"
            "MAP-MEMORY" "PCI-CONFIGURATION" "MESSAGE-INTERRUPT" "KEYBOARD-BREAK" "MEMORY-STRING"
-           "STRING-BYTES" "STRING-MEMORY" "HEAP-IMAGE"))
+           "STRING-BYTES" "STRING-MEMORY" "HEAP-IMAGE"
+           "MAKE-COMPILED-FUNCTION" "COMPILED-FUNCTION-CODE"))
 
 (defpackage "CLARA.HOST"
   (:use "COMMON-LISP")
@@ -42,7 +44,7 @@
            "SET-FRAMEBUFFER" "SET-SERIAL-DEVICE" "SET-SCREEN-CURSOR" "GIVEN-SCREEN"
            "TYPE-BYTES" "RAISE-INTERRUPT" "SERIAL-BREAK-P"
            "SET-PCI-CONFIGURATION" "SEND-MESSAGE" "MESSAGE-INTERRUPTS" "KEYBOARD-BREAKS"
-           "ALLOCATED-PAGES" "PROVIDED-FILES" "SET-HEAP-IMAGE"))
+           "ALLOCATED-PAGES" "PROVIDED-FILES" "SET-HEAP-IMAGE" "PROVIDED-COMPILER"))
 
 ;;; CLARA: threads
 
@@ -218,6 +220,26 @@
         (clara.unsafe:free-memory memory pages)))
     name))
 
+;;; CLARA: what a compiler has to know, and where it says that it is there
+;;;
+;;; On ClaraOS COMPILE and DISASSEMBLE are in lisp/boot.lisp, and find the
+;;; compiler's functions through PROVIDE-COMPILER. SBCL has a compiler of
+;;; its own behind those names, so here the functions are kept for a test
+;;; to call. The machine that runs what the compiler makes is in
+;;; lisp/host/vm.lisp.
+
+(defun variable-kind (symbol)
+  (case (sb-int:info :variable :kind symbol)
+    (:special :special)
+    (:constant :constant)
+    (t nil)))
+
+(defvar *compiler* nil)
+
+(defun provide-compiler (&key compile list)
+  (setq *compiler* (if compile (list compile list)))
+  nil)
+
 ;;; CLARA.HOST: the machine that is not there
 
 (in-package "CLARA.HOST")
@@ -310,6 +332,9 @@
   (count 1 *pages*))
 
 ;; What CLARA:PROVIDE-FILES was given last: the functions, or NIL.
+(defun provided-compiler ()
+  clara::*compiler*)
+
 (defun provided-files ()
   clara::*files*)
 

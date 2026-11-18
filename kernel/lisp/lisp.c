@@ -504,8 +504,11 @@ void lisp_selftest(void)
 
 /* What the evaluator makes of a text: the forms in it are evaluated one
  * after the other, and what the last one gives is written down, its
- * values with a space between them, or the error. */
-static void evaluate_text(const char *source, struct text *printed)
+ * values with a space between them, or the error. With a compiler, which
+ * is the function that evaluates a form by compiling it
+ * (CLARA.COMPILER:EVALUATE, lisp/compiler.lisp), each form goes to that:
+ * what is written down is then what compiled code makes of the text. */
+static void evaluate_text(const char *source, struct text *printed, lisp compiler)
 {
     struct lisp_reader r;
     enum lisp_read_status status;
@@ -517,6 +520,8 @@ static void evaluate_text(const char *source, struct text *printed)
     while ((status = lisp_read(&r, &form)) == LISP_READ_OK) {
         printed->length = 0;
         printed->chars[0] = 0;
+        if (compiler) /* (evaluate 'form): made here and handed over at once */
+            form = lisp_cons(compiler, lisp_cons(lisp_cons(lisp_roots.quote, lisp_cons(form, LISP_NIL)), LISP_NIL));
         if (!lisp_evaluate(form)) {
             for (const char *s = "error: "; *s; s++)
                 text_put(printed, *s);
@@ -539,7 +544,12 @@ static void evaluate_text(const char *source, struct text *printed)
 /* Texts and what evaluating them has to give. They are evaluated in
  * order, in a package of the self-test's own, and a text can use what an
  * earlier one defined. The first part needs nothing but the substrate;
- * from the macros on, lisp/boot.lisp has its share in the answers. */
+ * from the macros on, lisp/boot.lisp has its share in the answers.
+ *
+ * The compiler is held to the same texts and the same answers
+ * (compiler_selftest): a compiled function means what the evaluator makes
+ * of its forms. Where the two differ all the same, the text is in the
+ * table after this one, with what compiled code gives. */
 static const struct {
     const char *text, *printed;
 } evaluations[] = {
@@ -650,6 +660,10 @@ static const struct {
     { "(defconstant +two+ 2)", "+TWO+" },
     { "(setq +two+ 3)", "error: +TWO+ cannot be set: it is not a variable" },
     { "(let ((+two+ 3)) +two+)", "error: +TWO+ cannot be the name of a variable" },
+    { "(list (defconstant +two+ 2) +two+)", "(+TWO+ 2)" },
+    { "(defconstant +two+ 3)", "error: +TWO+ is a constant already, and its value is 2" },
+    { "(defun if (x) x)", "error: IF is a special operator, and stays one" },
+    { "(defmacro if (x) x)", "error: IF is a special operator, and stays one" },
     /* a package that is deleted is found no more, and is a package still; the ones that are needed stay */
     { "(let ((p (make-package \"CLARA.GONE\")))"
       "  (list (delete-package p) (find-package \"CLARA.GONE\") (delete-package p) (packagep p)"
@@ -723,6 +737,8 @@ static const struct {
     { "(with-pair (x y) '(1 . 2) (list y x))", "(2 1)" },
     { "(defmacro whole (&whole form a . more) (list 'quote (list form a more))) (whole 1 2)", "((WHOLE 1 2) 1 (2))" },
     { "(macrolet ((twice (x) `(* 2 ,x))) (twice 21))", "42" },
+    { "(flet ((swap (a b) (list b a))) (swap 1 2))", "(2 1)" },
+    { "(funcall (lambda (x) \"documentation\" (declare (ignorable x)) (+ x 1)) 2)", "3" },
     { "(defun swapped (a b) (swap a b) (list a b)) (list (swapped 1 2) (swapped 3 4))", "((2 1) (4 3))" },
     { "(defmacro show (form) `(list ',form ,form)) (defun shows () (show (when t 1))) (list (shows) (shows))",
       "(((WHEN T 1) 1) ((WHEN T 1) 1))" },
@@ -1211,6 +1227,146 @@ static const struct {
     { "(handler-case (progn (clara.unsafe:keyboard-break) (loop)) (clara:keyboard-interrupt () 'stopped))", "STOPPED" },
 };
 
+/* The texts above that mean something else once they are compiled, with
+ * what they give then, and why. */
+static const struct {
+    const char *text, *printed;
+} compiled[] = {
+    /* a block that the compiler can see is never left needs no tag: nothing here to list yet */
+    { "", "" },
+};
+
+/* Texts for the evaluator once there is a compiler: what COMPILE and its
+ * kin give, and a function of each kind calling one of the other. */
+static const struct {
+    const char *text, *printed;
+} compilations[] = {
+    { "(list (compile 'add) (add 1 2) (compiled-function-p #'add) (compiled-function-p #'car) (compiled-function-p 'add))",
+      "(ADD 3 T T NIL)" },
+    { "(add 1)",
+      "error: #<FUNCTION ADD> got too few arguments" },
+    { "(defun walked (n) (* n 2)) (list (compiled-function-p #'walked) (function-lambda-expression #'walked))",
+      "(NIL (LAMBDA (N) (* N 2)))" },
+    { "(list (compile 'walked) (compiled-function-p #'walked) (walked 4) (function-lambda-expression #'walked))",
+      "(WALKED T 8 NIL)" },
+    { "(multiple-value-list (function-lambda-expression (let ((n 1)) (lambda () n))))",
+      "((LAMBDA NIL N) T NIL)" },
+    { "(funcall (compile nil '(lambda (a &optional (b 2) &key (c (+ a b))) (list a b c))) 1)",
+      "(1 2 3)" },
+    { "(compile nil (compile nil '(lambda () 1)))",
+      "#<FUNCTION (LAMBDA NIL)>" },
+    { "(compile nil 5)",
+      "error: COMPILE takes a function or a LAMBDA form, and 5 is neither" },
+    { "(compile 5)",
+      "error: COMPILE takes the name of a function, a symbol, and 5 is not one" },
+    { "(compile 'no-such-function)",
+      "error: the function NO-SUCH-FUNCTION is not defined" },
+    { "(compile 'when)",
+      "error: COMPILE takes a function or a LAMBDA form, and #<MACRO WHEN> is neither" },
+    { "(let ((n 1)) (compile nil (lambda () n)))",
+      "error: #<FUNCTION (LAMBDA NIL)> was made where variables or local functions were in sight, and holds on to them: the compiler takes a function that stands by itself" },
+    { "(compile 'named '(lambda (n) (if (< n 0) (return-from named 'negative)) n)) (list (named 1) (named -1) #'named)",
+      "(1 NEGATIVE #<FUNCTION NAMED>)" },
+    /* an exit, a condition and a binding pass through functions of both kinds */
+    { "(progn (compile 'thrower) (catch 'out (thrower) 1))",
+      "9" },
+    { "(block b (funcall (compile nil '(lambda (f) (funcall f) 'came-back)) (lambda () (return-from b 'left))))",
+      "LEFT" },
+    { "(funcall (compile nil '(lambda (f) (block b (funcall f (lambda () (return-from b 'left))) 'came-back))) (lambda (g) (funcall g)))",
+      "LEFT" },
+    { "(defvar *seen* nil) (list (catch 'c (funcall (compile nil '(lambda (f) (unwind-protect (funcall f) (push 'cleaned *seen*)))) (lambda () (throw 'c 1)))) *seen*)",
+      "(1 (CLEANED))" },
+    { "(handler-case (funcall (compile nil '(lambda () (car 5)))) (type-error (c) (type-error-datum c)))",
+      "5" },
+    { "(funcall (compile nil '(lambda (f) (handler-case (funcall f) (type-error () 'caught)))) (lambda () (car 5)))",
+      "CAUGHT" },
+    { "(list (funcall (compile nil '(lambda (f) (let ((*level* 9)) (funcall f)))) #'level) (level))",
+      "(9 6)" },
+    { "(mapcar (compile nil '(lambda (x) (* x x))) '(1 2 3))",
+      "(1 4 9)" },
+    { "(clara:join-thread (clara:make-thread (compile nil '(lambda () (+ 1 2)))))",
+      "3" },
+    /* the listing */
+    { "(with-output-to-string (*standard-output*) (disassemble (compile nil '(lambda (x) (car x)))))",
+      "\"(LAMBDA (X)): 1 local variable, 2 words of stack\n0   CONST CAR\n1   LOCAL 0\n2   CALL 1\n3   RETURN\n\"" },
+    { "(with-output-to-string (*standard-output*) (disassemble 'car))",
+      "\"#<FUNCTION CAR> is written in C, and there is no listing of it here\n\"" },
+    { "(with-output-to-string (*standard-output*) (disassemble '(lambda (x) (lambda () x))))",
+      "\"(LAMBDA (X)): 1 local variable, 1 word of stack\n0   LOCAL 0\n1   CLOSURE (LAMBDA NIL) 1\n2   RETURN-ONE\n"
+      "(LAMBDA NIL): 0 local variables, 1 word of stack\n0   CLOSED 0\n1   RETURN-ONE\n\"" },
+    /* a form compiled and evaluated at once, a part at a time */
+    { "(clara.compiler:evaluate '(progn (defvar *apart-again* 1) (let ((*apart-again* 2)) (symbol-value '*apart-again*))))",
+      "2" },
+    { "(list (clara:variable-kind 'car) (clara:variable-kind '*package*) (clara:variable-kind :key) (clara:variable-kind t) (clara:variable-kind '+two+))",
+      "(NIL :SPECIAL :CONSTANT :CONSTANT :CONSTANT)" },
+    { "(clara:variable-kind 5)",
+      "error: CLARA:VARIABLE-KIND wants a symbol, and 5 is not one" },
+    /* what is not code is refused before the machine is given it */
+    { "(clara.unsafe:make-compiled-function (vector 1 2 3))",
+      "error: the machine cannot run that code: it is not a vector of the items that code has" },
+    { "(let ((code (clara.unsafe:compiled-function-code (compile nil '(lambda () 1))))) (setf (aref (aref code 0) 0) 255) (clara.unsafe:make-compiled-function code))",
+      "error: the machine cannot run that code: one of its instructions is none that the machine has" },
+    { "(let ((code (clara.unsafe:compiled-function-code (compile nil '(lambda () 1))))) (setf (aref (aref code 0) 0) (+ 20 (ash 99 8))) (clara.unsafe:make-compiled-function code))",
+      "error: the machine cannot run that code: an instruction jumps past the end" },
+    { "(let ((code (clara.unsafe:compiled-function-code (compile nil '(lambda (x) x))))) (setf (aref code 9) 0) (clara.unsafe:make-compiled-function code))",
+      "error: the machine cannot run that code: it has more parameters than local variables" },
+    { "(let ((code (clara.unsafe:compiled-function-code (compile nil '(lambda (x) (lambda () x)))))) (clara.unsafe:make-compiled-function (aref (aref code 1) 0)))",
+      "error: the machine cannot run that code: it closes over values, and here are none" },
+    { "(list (clara.unsafe:compiled-function-code #'car) (vectorp (clara.unsafe:compiled-function-code #'named)))",
+      "(NIL T)" },
+    { "(clara.unsafe:compiled-function-code 5)",
+      "error: CLARA.UNSAFE:COMPILED-FUNCTION-CODE wants a function, and 5 is not one" },
+    /* a binding that was made inside a form is undone before the cleanup of that form, and before a block is back */
+    { "(let ((log nil)) (list (funcall (compile nil '(lambda (log) (handler-case (unwind-protect (let ((*level* 9)) (error \"x\")) (push *level* log)) (error () (list *level* log))))) log) *level*))",
+      "((6 (6)) 6)" },
+    { "(list (funcall (compile nil '(lambda () (block b (let ((*level* 9)) (funcall (lambda () (return-from b (level))))))))) (level))",
+      "(9 6)" },
+    /* values that leave from afar, and one value after a form that gave none */
+    { "(multiple-value-list (funcall (compile nil '(lambda () (block b (funcall (lambda () (return-from b (values 1 2)))))))))",
+      "(1 2)" },
+    { "(funcall (compile nil '(lambda () (block b (funcall (lambda () (values) (return-from b 7)))))))",
+      "7" },
+    { "(multiple-value-list (funcall (compile nil '(lambda () (multiple-value-call #'list (progn (floor 7 2) 5) (values))))))",
+      "((5))" },
+    /* one value is one value, whatever the form before it left behind */
+    { "(multiple-value-list (funcall (compile nil '(lambda () (floor 7 2) 5))))",
+      "(5)" },
+    { "(funcall (compile nil '(lambda () (values 8 9) (list (multiple-value-list (multiple-value-prog1 5 (values 3 4))) (multiple-value-bind (a b) 6 (list a b)) (unwind-protect 7 (identity 1)) (catch 'c (throw 'c 4))))))",
+      "((5) (6 NIL) 7 4)" },
+    /* a GO from afar undoes the bindings on its way, and a function that returns from inside a CATCH or a HANDLER-CASE takes them off */
+    { "(funcall (compile nil '(lambda () (let ((n 0)) (tagbody (let ((*level* 9)) (funcall (lambda () (go out)))) out (setq n (level))) n))))",
+      "6" },
+    { "(list (funcall (compile nil '(lambda () (block b (catch 'x (return-from b 1)))))) (funcall (compile nil '(lambda () (block b (handler-case (return-from b 2) (error () 3)))))) (catch 'x (throw 'x 4)) (handler-case (car 5) (error () 6)))",
+      "(1 2 4 6)" },
+    /* what is on the stack around a form is still there after it, whichever way the form ended */
+    { "(funcall (compile nil '(lambda () (list 1 (handler-case (error \"x\") (error () 2) (:no-error () 3)) (handler-case 5 (error () 2) (:no-error (v) (+ v 1))) 4))))",
+      "(1 2 6 4)" },
+    { "(funcall (compile nil '(lambda () (list 1 (block b (funcall (lambda (x) (if x (return-from b 2) 3)) nil)) 4))))",
+      "(1 3 4)" },
+    { "(multiple-value-list (funcall (compile nil '(lambda (f) (block b (funcall f (lambda () (return-from b 1))) (floor 7 2) 5))) (lambda (g) g)))",
+      "(5)" },
+    { "(defmacro define-and-bind () '(progn (defvar *bound-at-once* 1) (let ((*bound-at-once* 2)) (symbol-value '*bound-at-once*)))) (clara.compiler:evaluate '(define-and-bind))",
+      "2" },
+    /* a function with much of its own on the stack, calling itself without end */
+    { "(compile 'wide '(lambda (n) (unwind-protect (multiple-value-call #'+ 1 (wide (+ n 1))) (identity n)))) (handler-case (wide 1) (storage-condition () 'full))",
+      "FULL" },
+    /* code with an instruction that names what is not there */
+    { "(defun refused (word) (let ((code (clara.unsafe:compiled-function-code (compile nil '(lambda () 1))))) (setf (aref (aref code 0) 0) word) (handler-case (clara.unsafe:make-compiled-function code) (error (c) (subseq (princ-to-string c) 34))))) (list (refused 'x) (refused -1) (refused (ash 99 8)))",
+      "(\"one of its instructions is none that the machine has\" \"one of its instructions is none that the machine has\" \"an instruction names a constant that is not there\")" },
+    { "(list (refused (+ 1 (ash 99 8))) (refused (+ 3 (ash 5 8))) (refused 7))",
+      "(\"an instruction names a local variable that is not there\" \"an instruction names a closed-over value that is not there\" \"an instruction wants a symbol, and its constant is not one\")" },
+    { "(list (refused (+ 41 (ash 9 8))) (refused (+ 46 (ash 9 8)))"
+      " (let ((code (clara.unsafe:compiled-function-code (compile nil '(lambda () 1))))) (setf (aref (aref code 0) 1) 16)"
+      " (handler-case (clara.unsafe:make-compiled-function code) (error (c) (subseq (princ-to-string c) 34)))))",
+      "(\"an instruction jumps past the end\" \"an instruction fails in a way that there is no type for\""
+      " \"its last instruction lets the machine run on past the end\")" },
+    { "(let ((code (clara.unsafe:compiled-function-code (compile nil '(lambda (x) (lambda () x)))))) (setf (aref (aref (aref code 1) 0) 11) 2) (handler-case (clara.unsafe:make-compiled-function code) (error (c) (subseq (princ-to-string c) 34))))",
+      "\"a function inside it is not given the values that it closes over\"" },
+    /* how long a form took goes to where things are written, and its values come back */
+    { "(let* ((values nil) (said (with-output-to-string (*standard-output*) (setq values (multiple-value-list (time (floor 7 2))))))) (list values (subseq said (- (length said) 14))))",
+      "((3 1) \" milliseconds\n\")" },
+};
+
 /* Texts that give one thing on a machine of one kind and something else on
  * the other: with I/O ports or without, with a screen or without. */
 static const struct {
@@ -1241,42 +1397,56 @@ static const struct {
  *
  * %SELF-TEST runs this again from the prompt, which is how the boot test
  * puts all of it through a collection at every safe point. */
-static unsigned eval_texts(int64_t *deep)
+static unsigned eval_texts(int64_t *deep, lisp compiler)
 {
     struct lisp_symbol *package = lisp_as_symbol(lisp_roots.package);
     lisp user = package->value, packages = lisp_roots.packages;
     unsigned texts = sizeof evaluations / sizeof evaluations[0], others = sizeof either / sizeof either[0], wrong = 0;
+    const char *who = compiler ? "compiled code" : "the evaluator";
     struct text printed;
     int64_t depth;
 
     package->value = lisp_make_package("CLARA.SELF-TEST", NULL, lisp_cons(lisp_roots.common_lisp, LISP_NIL));
     for (unsigned i = 0; i < texts; i++) {
-        evaluate_text(evaluations[i].text, &printed);
-        if (!same(printed.chars, evaluations[i].printed)) {
-            kprintf("lisp self-test: %s gave %s, not %s\n", evaluations[i].text, printed.chars,
-                    evaluations[i].printed);
+        const char *expected = evaluations[i].printed;
+
+        for (unsigned k = 0; compiler && k < sizeof compiled / sizeof compiled[0]; k++)
+            if (same(evaluations[i].text, compiled[k].text))
+                expected = compiled[k].printed;
+
+        evaluate_text(evaluations[i].text, &printed, compiler);
+        if (!same(printed.chars, expected)) {
+            kprintf("lisp self-test: to %s, %s gave %s, not %s\n", who, evaluations[i].text, printed.chars, expected);
             wrong++;
         }
     }
     for (unsigned i = 0; i < others; i++) {
-        evaluate_text(either[i].text, &printed);
+        evaluate_text(either[i].text, &printed, compiler);
         if (!same(printed.chars, either[i].printed) && !same(printed.chars, either[i].otherwise)) {
-            kprintf("lisp self-test: %s gave %s, not %s or %s\n", either[i].text, printed.chars, either[i].printed,
-                    either[i].otherwise);
+            kprintf("lisp self-test: to %s, %s gave %s, not %s or %s\n", who, either[i].text, printed.chars,
+                    either[i].printed, either[i].otherwise);
             wrong++;
         }
     }
     texts += others;
+    for (unsigned i = 0; compiler && i < sizeof compilations / sizeof compilations[0]; i++, texts++) {
+        evaluate_text(compilations[i].text, &printed, 0);
+        if (!same(printed.chars, compilations[i].printed)) {
+            kprintf("lisp self-test: with a compiler, %s gave %s, not %s\n", compilations[i].text, printed.chars,
+                    compilations[i].printed);
+            wrong++;
+        }
+    }
     if (wrong)
-        panic("lisp self-test: the evaluator gave %u wrong answers out of %u", wrong, texts);
+        panic("lisp self-test: %s gave %u wrong answers out of %u", who, wrong, texts);
 
-    evaluate_text("(defvar *depth* 0) (defun dive (n) (setq *depth* n) (+ 1 (dive (+ n 1)))) (dive 1)", &printed);
+    evaluate_text("(defvar *depth* 0) (defun dive (n) (setq *depth* n) (+ 1 (dive (+ n 1)))) (dive 1)", &printed, compiler);
     if (!same(printed.chars, STACK_FULL))
-        panic("lisp self-test: a function that calls itself without end gave %s", printed.chars);
-    evaluate_text("*depth*", &printed);
+        panic("lisp self-test: to %s, a function that calls itself without end gave %s", who, printed.chars);
+    evaluate_text("*depth*", &printed, 0);
     depth = lisp_fixnum_value(lisp_values.value[0]);
     if (depth < 1000)
-        panic("lisp self-test: a function could call itself only %lld deep", (long long)depth);
+        panic("lisp self-test: to %s, a function could call itself only %lld deep", who, (long long)depth);
 
     /* The packages the texts made go with the self-test's own. */
     package->value = user;
@@ -1289,7 +1459,7 @@ unsigned lisp_eval_texts(void)
 {
     int64_t depth;
 
-    return eval_texts(&depth);
+    return eval_texts(&depth, 0);
 }
 
 /* What the heap holds, once what nobody holds has been collected. In a
@@ -1321,7 +1491,7 @@ static void eval_selftest(void)
     struct lisp_heap heap;
     struct text printed;
     int64_t depth;
-    unsigned texts = eval_texts(&depth);
+    unsigned texts = eval_texts(&depth, 0);
 
     /* Nobody asks for the next collection: the evaluator has to see for itself that it is time. When
      * that is depends on how much was in use after the last one, so there is one first, with
@@ -1329,7 +1499,7 @@ static void eval_selftest(void)
     lisp_collect();
     lisp_heap_state(&heap);
     collections = heap.collections;
-    evaluate_text("(dotimes (i 5000) (list i i i))", &printed);
+    evaluate_text("(dotimes (i 5000) (list i i i))", &printed, 0);
     lisp_heap_state(&heap);
     if (heap.collections == collections)
         panic("lisp self-test: the evaluator made 5000 lists and did not once stop to collect");
@@ -1339,7 +1509,7 @@ static void eval_selftest(void)
      * heap grows by meanwhile is a few. */
     frames = pmm_free_frames();
     evaluate_text("(dotimes (i 100) (read-from-string \"(a text)\") (cl::%load-text \"(car '(a text))\" \"a text\"))",
-                  &printed);
+                  &printed, 0);
     if ((int64_t)(frames - pmm_free_frames()) > 50)
         panic("lisp self-test: two hundred texts were read and loaded, and %llu page frames did not come back",
               frames - pmm_free_frames());
@@ -1434,6 +1604,44 @@ static void collector_selftest(void)
             2 * ITEMS + LINKS + 2, freed >> 10, after.size >> 10);
 }
 
+/* The compiler, once lisp/compiler.lisp is loaded: the texts of the
+ * evaluator's self-test once more, each form compiled and then run by the
+ * machine of vm.c, with the answers that the evaluator gave. Then a
+ * function that calls itself without end, compiled: the machine has to say
+ * that the stack is full too.
+ *
+ * When more is asked for (new_world), all of it once again with a
+ * collection at every safe point that compiled code comes to: whatever the
+ * machine fails to hold on to is gone at its next call. The compiler
+ * itself is left alone meanwhile. It is Lisp that the evaluator walks, a
+ * collection at each of its calls would take minutes, and the evaluator
+ * has been through that already. */
+static void compiler_selftest(int more)
+{
+    struct lisp_heap heap;
+    uint64_t before;
+    int64_t depth;
+    unsigned texts = eval_texts(&depth, own_form("clara.compiler:evaluate"));
+
+    kprintf("lisp: the compiler passed: %u texts compiled and run, and a function called itself %lld deep\n", texts,
+            (long long)depth);
+    if (!more)
+        return;
+    lisp_heap_state(&heap);
+    before = heap.collections;
+    if (!lisp_evaluate(own_form("(setq clara.compiler::*call*"
+                                "  (lambda (function)"
+                                "    (cl::%collect-every 1)"
+                                "    (unwind-protect (funcall function) (cl::%collect-every 0))))")))
+        panic("lisp: the compiler's self-test could not ask for the collector");
+    texts = eval_texts(&depth, own_form("clara.compiler:evaluate"));
+    if (!lisp_evaluate(own_form("(setq clara.compiler::*call* 'funcall)")))
+        panic("lisp: the compiler's self-test could not send the collector away");
+    lisp_heap_state(&heap);
+    kprintf("lisp: a collection at every safe point of compiled code: %u texts once more in %llu\n", texts,
+            heap.collections - before);
+}
+
 static void console_put(void *to, char c)
 {
     (void)to;
@@ -1457,13 +1665,16 @@ static void load(const char *file)
 
 /* A world, made: the collector is tested in the empty heap; boot.lisp is
  * loaded, the part of the language that is written in Lisp, and the
- * evaluator tested with it; and then the files that are the beginning of
- * the world. */
+ * evaluator tested with it; then the compiler, the first file of the
+ * world, and tested with the same texts; and then the other files that
+ * are the beginning of the world. */
 static void new_world(void)
 {
-    static const char *const world[] = { "font.lisp", "console.lisp", "draw.lisp",     "pci.lisp",     "virtio.lisp",  "input.lisp",
-                                         "disk.lisp", "fat.lisp",     "listener.lisp", "windows.lisp", "terminal.lisp" };
+    static const char *const world[] = { "compiler.lisp", "font.lisp",     "console.lisp", "draw.lisp",
+                                         "pci.lisp",      "virtio.lisp",   "input.lisp",   "disk.lisp",
+                                         "fat.lisp",      "listener.lisp", "windows.lisp", "terminal.lisp" };
     uint64_t before[LISP_TYPES], after[LISP_TYPES];
+    int more;
 
     collector_selftest();
     lisp_heap_census(before);
@@ -1480,7 +1691,8 @@ static void new_world(void)
      * a collection is as short as it will ever be: afterwards it goes
      * through the whole world every time. The boot test asks for this, on
      * one of its machines (tools/session.txt writes the file). */
-    if (lisp_boot_file("stress")) {
+    more = lisp_boot_file("stress");
+    if (more) {
         struct lisp_heap heap;
         uint64_t before, between;
         unsigned texts;
@@ -1497,10 +1709,15 @@ static void new_world(void)
         kprintf("lisp: a collection at every safe point: boot.lisp once more in %llu, %u texts once more in %llu\n",
                 between - before, texts, heap.collections - between);
     }
-    for (unsigned i = 0; i < sizeof world / sizeof world[0]; i++)
+    /* The compiler, and its self-test at once, while the heap is small: with more asked for, every
+     * safe point of compiled code is a collection there. */
+    load(world[0]);
+    compiler_selftest(more);
+    for (unsigned i = 1; i < sizeof world / sizeof world[0]; i++)
         load(world[i]);
+    lisp_collect(); /* what the compiler's self-test made, and nobody holds any more */
     lisp_heap_census(before);
-    kprintf("lisp: the console, drawing, the drivers, the files, the listener and the windows are loaded, %llu more functions\n",
+    kprintf("lisp: the world is loaded, from the compiler to the windows: %llu more functions\n",
             before[LISP_FUNCTION] - after[LISP_FUNCTION]);
 }
 

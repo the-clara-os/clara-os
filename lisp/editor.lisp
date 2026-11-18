@@ -305,20 +305,25 @@
           (values (format nil "line ~D: ~A" (1+ row) condition) row))))))
 
 (defun evaluate (editor)
-  (let* ((lines (all-lines editor)) (words nil) (row nil)
-         (thread (clara:make-thread (lambda ()
-                                      (multiple-value-setq (words row) (evaluate-lines lines)))
-                                    :name "evaluating")))
-    (setf (editor-message editor) "evaluating: Ctrl-C stops it")
-    (render editor)
-    ;; Should the editor itself be stopped meanwhile, the forms go with it.
+  (let ((lines (all-lines editor)) (words nil) (row nil) (thread nil))
+    ;; Should the editor itself be stopped meanwhile, the forms go with it:
+    ;; so their thread is made where leaving stops it, and not a step
+    ;; before, or an editor that is stopped while it draws would leave the
+    ;; forms running with nobody to stop them.
     (unwind-protect
-         (loop
-           (unless (clara:thread-alive-p thread)
-             (return))
-           (when (equal (clara.windows:next-event (editor-window editor) 20) '(:key 3))
-             (clara:interrupt-thread thread)))
-      (clara:destroy-thread thread))
+         (progn
+           (setq thread (clara:make-thread (lambda ()
+                                             (multiple-value-setq (words row) (evaluate-lines lines)))
+                                           :name "evaluating"))
+           (setf (editor-message editor) "evaluating: Ctrl-C stops it")
+           (render editor)
+           (loop
+             (unless (clara:thread-alive-p thread)
+               (return))
+             (when (equal (clara.windows:next-event (editor-window editor) 20) '(:key 3))
+               (clara:interrupt-thread thread))))
+      (when thread
+        (clara:destroy-thread thread)))
     (when row
       (go-to editor row 0))
     (setf (editor-message editor) (or words "the forms were stopped"))))

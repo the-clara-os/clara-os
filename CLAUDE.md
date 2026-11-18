@@ -210,6 +210,59 @@ Rules:
   DIRECTORY, OPEN with a name that could be there): the texts run again
   with a collection at every safe point, and one lookup would take
   minutes on CI.
+- The compiler (lisp/compiler.lisp) and its machine (kernel/lisp/vm.c).
+  A compiled function means what the evaluator makes of its forms, and
+  that is tested, not hoped: `compiler_selftest` (lisp.c) has every text
+  of `evaluations` compiled and run at every boot from the files, and what
+  comes back has to be the evaluator's answer. So a change to the
+  evaluator, to builtin.c or to boot.lisp that gets a row in `evaluations`
+  is tried compiled by that row; a text that has to differ once it is
+  compiled goes into `compiled`, with what it gives then; and what only
+  makes sense with a compiler, COMPILE and its kin, a function of one kind
+  calling one of the other, goes into `compilations`, which the evaluator
+  is given once the compiler is loaded. A new special form in eval.c gets
+  a converter in `*special-forms*` and a generator, with the same count of
+  parts: the host tests hold the two tables against each other.
+- The machine's instructions are a table in vm.c, with the enum above it
+  in the same order, and a list in lisp/compiler.lisp, `*operations*`,
+  which says for each what it does to the depth of the stack and what its
+  operands are; lisp/host/vm.lisp is the same machine a second time, in
+  Lisp. A new instruction goes into all of them in the same change, at the
+  end, and raises `FORMAT` in image.c: a world that was saved holds its
+  code. `check` in vm.c looks at every operand of code before it is made a
+  function, by the kinds that the table gives them; it looks at an
+  instruction's number before it uses it for anything.
+- vm.c keeps what it holds on the value stack, like eval.c, which it
+  shares its state with through eval.h: across `lisp_apply` and
+  `safe_point` nothing that the collector has to find is in a C variable
+  alone. The stress boot has the collector run at every safe point of
+  compiled code, so that whatever does is found. A record on the stack is six words that
+  the collector takes for values, so an address in one is a multiple of
+  eight.
+- The compiler counts the stack: every `emit` moves `*depth*` by what the
+  table says, and `gen` puts it right after a form, whichever way the
+  form's branches went. What code says it needs of stack is the deepest
+  that got. The kernel's machine believes that; the one under SBCL counts
+  the words and fails the run when code needs more, so a new generator is
+  tried there first. Where the depth is not known as the code is written,
+  the values of a form on the stack, no jump may leave: the forms there
+  are converted behind a barrier (`behind`), and an exit from them goes by
+  a tag and a record.
+- compiler.lisp is in the world, so it is written in what the evaluator
+  has, loads under SBCL as it stands, and names nothing of the substrate's
+  that begins with a %: what compiled code needs done is an instruction,
+  or a function of the compiler's own package (`key-tail`). What the
+  compiler has to write into a form that it rewrites are three forms of
+  its own, `%call`, `%fail` and `%raise`. Under SBCL a macro is expanded by
+  SBCL, so the forms of the host tests keep to the special forms, to
+  functions, and to the macros whose expansions are plain: WHEN, UNLESS,
+  AND, OR, COND, DOLIST, DOTIMES, RETURN, and INCF and PUSH of a variable.
+  SETF of anything else, CASE and LOOP with keywords are SBCL's own
+  business there. A form in `same` is evaluated by SBCL too, so it cannot
+  bind a name of Common Lisp's as a function.
+- What DISASSEMBLE writes is in a session and in the manual, and a line
+  of a session that begins with two spaces is one that is typed: a line of
+  a listing begins with its number.
 - `make test` boots nine times. Three machines, x86_64, AArch64 with GIC
   version 3, and AArch64 emulated with GIC version 2, whose files in build/
   are named aarch64-gic2, each from a disk of another kind, and each twice:
@@ -224,7 +277,9 @@ Rules:
   self-test with a collection at every safe point, in `new_world`, before
   the rest of the world is in the heap: a collection goes through 270 KiB
   there and through everything later, so that is where a new text of the
-  self-test costs least. tools/stress.txt then types a few forms with the
+  self-test costs least. The texts are then compiled, with the collector
+  off, and each is run with it at every safe point again
+  (`compiler_selftest`), which doubles what a text costs that boot. tools/stress.txt then types a few forms with the
   collector still at it, one of them on the keyboard. Both lines of the
   boot report are asked for with `EXPECT=`, whose patterns have `;;`
   between them. That boot runs the kernel that is on its disk, which is
@@ -266,8 +321,8 @@ Rules:
   SBCL as it stands: the subset of Common Lisp that the evaluator has,
   no name of Common Lisp's given a new meaning (LISTEN is one), and the
   substrate only through CLARA and CLARA.UNSAFE. The kernel loads them
-  in the order of `world` in lisp.c (the console, draw, pci, virtio,
-  input, disk, fat, the listener, windows, terminal), and
+  in the order of `world` in lisp.c (the compiler, then the console, draw,
+  pci, virtio, input, disk, fat, the listener, windows, terminal), and
   lisp/host/tests.lisp loads the same files: a new one goes into both, and what its package exports goes into
   a list of names in the manual, or `make site` stops. A file that is an
   application is not in `world`, and the launcher loads it (below). What `lisp_main`
@@ -353,6 +408,15 @@ Rules:
   The window manager keeps one for itself, Alt and Tab, in `key-typed`. A
   session sends such keys by QEMU's monitor, `^M sendkey up`, `^M sendkey
   alt-tab`, `^M sendkey ctrl-s`.
+- What an UNWIND-PROTECT is there to stop or to give back is made inside
+  its form, with nothing between the making and the variable that the
+  cleanup looks at: a thread can be stopped at any call. The editor made
+  the thread of its forms three lines before the UNWIND-PROTECT that
+  destroys it, and an editor that was stopped while it drew left the forms
+  running: one run in three of the host tests on CI, and every run in the
+  container, whose SBCL is older and slower. A test that stops a thread
+  waits for what says how far the thread has come, not for the thread to
+  be there.
 - A window that is opened with `:events t` keeps what it is told, and its
   program takes it with `clara.windows:next-event`, in its own thread:
   `(:key code)`, `(:pointer x y buttons)`, `(:close)`. That is how an

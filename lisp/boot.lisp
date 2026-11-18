@@ -41,7 +41,8 @@
           prin1 princ print format finish-output force-output
           make-string-output-stream get-output-stream-string with-output-to-string
           make-string-input-stream read-line read-from-string
-          open close with-open-file probe-file directory delete-file))
+          open close with-open-file probe-file directory delete-file
+          compile disassemble time))
 
 ;;; Control
 
@@ -996,6 +997,64 @@
       (%load-text (%file-text name) name)
       (%load name)))
 
+;;; The compiler
+;;;
+;;; A function that the evaluator walks the forms of can be made one that
+;;; the machine in kernel/lisp/vm.c runs instructions for, which means the
+;;; same and is several times as quick. What makes it so is Lisp that is
+;;; loaded after this file (lisp/compiler.lisp), and it says that it is
+;;; there with CLARA:PROVIDE-COMPILER, which it gives its functions: one
+;;; that makes a compiled function of a LAMBDA form and a name, and one
+;;; that lists the instructions of a function.
+
+(defvar %compiler nil) ; the two functions, in a list, once a compiler has said that it is there
+
+;; A definition as a compiled function: a LAMBDA form is compiled, and so
+;; is a function that is not compiled yet, from the form that it was made
+;; of. NAME is for the function to have, and for a block around its body,
+;; unless the function has a name of its own, which its body may leave by.
+(defun %compiled (definition name)
+  (cond ((null %compiler)
+         (error "there is no compiler here: lisp/compiler.lisp is not loaded"))
+        ((and (consp definition) (eq (car definition) 'lambda))
+         (funcall (car %compiler) definition name))
+        ((not (functionp definition))
+         (error "COMPILE takes a function or a LAMBDA form, and ~S is neither" definition))
+        ((compiled-function-p definition) definition)
+        (t (multiple-value-bind (form closure own) (function-lambda-expression definition)
+             (if closure
+                 (error "~S was made where variables or local functions were in sight, and holds on to them: the compiler takes a function that stands by itself" definition)
+                 (funcall (car %compiler) form (or own name)))))))
+
+;; (compile 'name) makes the function of that name a compiled one, and
+;; (compile 'name definition) gives the name the definition, compiled;
+;; either gives the name. (compile nil definition) gives the function.
+(defun compile (name &optional definition)
+  (cond ((null name) (%compiled definition nil))
+        ((not (symbolp name))
+         (error "COMPILE takes the name of a function, a symbol, and ~S is not one" name))
+        (t (%set-symbol-function name (%compiled (or definition (symbol-function name)) name))
+           name)))
+
+;; The instructions of a function, written out: of a compiled function, or
+;; of what a function, the function of a name or a LAMBDA form is when it
+;; is compiled, which leaves the function itself as it was.
+(defun disassemble (function)
+  (let ((function (if (and function (symbolp function)) (symbol-function function) function)))
+    (funcall (cadr %compiler)
+             (%compiled function (if (functionp function) (nth-value 2 (function-lambda-expression function)))))
+    nil))
+
+;; The values of a form, and how long it took to evaluate, to a hundredth
+;; of a second, which is how often the clock ticks.
+(defmacro time (form)
+  (let ((start (gensym)))
+    `(let ((,start (get-internal-real-time)))
+       (multiple-value-prog1 ,form
+         (fresh-line)
+         (format t "~D milliseconds~%"
+                 (* (floor 1000 internal-time-units-per-second) (- (get-internal-real-time) ,start)))))))
+
 ;; With no HANDLER-CASE for it, a warning is written down and the program
 ;; goes on.
 (defun warn (datum &rest arguments)
@@ -1026,7 +1085,7 @@
 
 (in-package "CLARA")
 
-(export '(make-thread with-lock-held make-stream keyboard-interrupt provide-files save-image))
+(export '(make-thread with-lock-held make-stream keyboard-interrupt provide-files save-image provide-compiler))
 
 ;; What Ctrl-C on the console is, to the computation it stops and to
 ;; whoever was reading a line.
@@ -1046,6 +1105,14 @@
 ;; is no file system any more.
 (defun provide-files (&key text names write delete)
   (setq cl::%files (if (and text names) (list text names write delete)))
+  nil)
+
+;; A compiler says that it is there: COMPILE makes a compiled function of a
+;; LAMBDA form and a name, which may be NIL, and LIST writes the
+;; instructions of a function out. From then on those are what COMPILE and
+;; DISASSEMBLE call.
+(defun provide-compiler (&key compile list)
+  (setq cl::%compiler (if compile (list compile list)))
   nil)
 
 ;; The world is saved: all that is in the heap goes into a file, and a

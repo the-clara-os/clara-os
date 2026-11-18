@@ -193,7 +193,7 @@ static void print_list(struct printer *p, lisp x)
 
 static void print_function(struct printer *p, lisp x)
 {
-    static const char *const kinds[] = { "FUNCTION", "SPECIAL-OPERATOR", "FUNCTION", "MACRO" };
+    static const char *const kinds[] = { "FUNCTION", "SPECIAL-OPERATOR", "FUNCTION", "MACRO", "FUNCTION" };
     const struct lisp_function *f = lisp_as_function(x);
 
     put_text(p, "#<");
@@ -203,7 +203,9 @@ static void print_function(struct printer *p, lisp x)
         print_object(p, f->name);
     else {
         put_text(p, "(LAMBDA ");
-        print_nested(p, lisp_is_cons(f->code) ? lisp_as_cons(f->code)->car : LISP_NIL);
+        print_nested(p, lisp_is_cons(f->code)                     ? lisp_as_cons(f->code)->car
+                        : lisp_function_kind(x) == LISP_COMPILED ? lisp_as_vector(f->code)->items[LISP_CODE_LAMBDA_LIST]
+                                                                 : LISP_NIL);
         put_char(p, ')');
     }
     put_char(p, '>');
