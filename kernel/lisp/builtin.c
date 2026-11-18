@@ -182,7 +182,8 @@ PREDICATE(p_characterp, lisp_is_character(x))
 PREDICATE(p_stringp, lisp_is(x, LISP_STRING))
 PREDICATE(p_vectorp, lisp_is(x, LISP_VECTOR) || lisp_is(x, LISP_STRING))
 PREDICATE(p_functionp, lisp_is(x, LISP_FUNCTION) && (lisp_function_kind(x) == LISP_PRIMITIVE ||
-                                                     lisp_function_kind(x) == LISP_CLOSURE))
+                                                     lisp_function_kind(x) == LISP_CLOSURE ||
+                                                     lisp_function_kind(x) == LISP_COMPILED))
 PREDICATE(p_packagep, lisp_is(x, LISP_PACKAGE))
 
 /* Integers. They are fixnums, and a result that is not one is an error:
@@ -1536,6 +1537,8 @@ const struct lisp_primitive lisp_primitives[] = {
     { "STRINGP", p_stringp, 1, 1 },
     { "VECTORP", p_vectorp, 1, 1 },
     { "FUNCTIONP", p_functionp, 1, 1 },
+    { "COMPILED-FUNCTION-P", lisp_p_compiled_function_p, 1, 1 },
+    { "FUNCTION-LAMBDA-EXPRESSION", lisp_p_function_lambda_expression, 1, 1 },
     { "PACKAGEP", p_packagep, 1, 1 },
     { "+", p_add, 0, LISP_MANY },
     { "-", p_subtract, 1, LISP_MANY },
@@ -1646,6 +1649,7 @@ const struct lisp_primitive lisp_primitives[] = {
     { "CLARA:MAKE-EVENT", lisp_p_make_event, 0, 1 },
     { "CLARA:SIGNAL-EVENT", lisp_p_signal_event, 1, 2 },
     { "CLARA:WAIT-EVENT", lisp_p_wait_event, 1, 2 },
+    { "CLARA:VARIABLE-KIND", lisp_p_variable_kind, 1, 1 },
     { "GET-INTERNAL-REAL-TIME", p_get_internal_real_time, 0, 0 },
     { "LISP-IMPLEMENTATION-TYPE", p_lisp_implementation_type, 0, 0 },
     { "LISP-IMPLEMENTATION-VERSION", p_lisp_implementation_version, 0, 0 },
@@ -1680,6 +1684,8 @@ const struct lisp_primitive lisp_primitives[] = {
     { "CLARA.UNSAFE:STRING-BYTES", lisp_p_string_bytes, 1, 1 },
     { "CLARA.UNSAFE:STRING-MEMORY", lisp_p_string_memory, 2, 2 },
     { "CLARA.UNSAFE:HEAP-IMAGE", lisp_p_heap_image, 0, 0 },
+    { "CLARA.UNSAFE:MAKE-COMPILED-FUNCTION", lisp_p_make_compiled_function, 1, 1 },
+    { "CLARA.UNSAFE:COMPILED-FUNCTION-CODE", lisp_p_compiled_function_code, 1, 1 },
     { "CLARA.UNSAFE:FRAMEBUFFER", lisp_p_framebuffer, 0, 0 },
     { "CLARA.UNSAFE:SERIAL-DEVICE", lisp_p_serial_device, 0, 0 },
     { "CLARA.UNSAFE:SERIAL-BYTE", lisp_p_serial_byte, 0, 0 },

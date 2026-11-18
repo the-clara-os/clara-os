@@ -4,6 +4,8 @@
 #<PACKAGE "COMMON-LISP-USER">
 > (list (fact 10) (mapcar #'fact '(1 2 3)) (unless-zero 4 'not-zero))
 (3628800 (1 2 6) NOT-ZERO)
+> (list (compiled-function-p #'fact) (fact 20) (funcall (compile nil '(lambda (n) (* n n))) 12))
+(T 2432902008176640000 144)
 > (list (depth) *depth* (let ((*depth* 2)) (depth)))
 (0 0 2)
 > (let ((p (make-point :x 3))) (setf (point-y p) 4) p)
