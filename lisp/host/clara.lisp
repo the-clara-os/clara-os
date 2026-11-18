@@ -28,7 +28,8 @@
 (defpackage "CLARA.UNSAFE"
   (:use "COMMON-LISP")
   (:export "MEMORY-8" "MEMORY-16" "MEMORY-32" "MEMORY-64"
-           "FILL-MEMORY-32" "COPY-MEMORY" "EXPAND-BITS-32" "ALLOCATE-MEMORY" "FREE-MEMORY"
+           "FILL-MEMORY-32" "COPY-MEMORY" "EXPAND-BITS-32" "FILL-RECTANGLE-32" "COPY-RECTANGLE-32"
+           "ALLOCATE-MEMORY" "FREE-MEMORY"
            "PORT-8" "PORT-16" "PORT-32"
            "INTERRUPT-EVENT" "FRAMEBUFFER" "SERIAL-DEVICE" "SERIAL-BYTE" "SERIAL-BREAK"
            "TAKE-SCREEN" "GIVE-SCREEN"
@@ -410,11 +411,45 @@
     (replace clara.host::*memory* (subseq clara.host::*memory* from (+ from bytes)) :start1 to))
   nil)
 
-(defun expand-bits-32 (address pitch bits start rows width one zero)
+;; A bit that is set becomes the word ONE and one that is not the word
+;; ZERO, and NIL for either leaves the pixel as it is; the lowest SKIP bits
+;; of a row are passed over.
+(defun expand-bits-32 (address pitch bits start rows width one zero &optional (skip 0))
+  (unless (and (<= 0 width) (<= (+ width skip) 62) (zerop (mod pitch 4)) (<= (* 4 width) pitch))
+    (error "a row of ~D pixels does not fit in a fixnum, or in ~D bytes" width pitch))
   (dotimes (row rows)
     (dotimes (x width)
-      (setf (memory-32 (+ address (* row pitch) (* 4 x)))
-            (if (logbitp (- width 1 x) (aref bits (+ start row))) one zero))))
+      (let ((word (if (logbitp (+ skip (- width 1 x)) (aref bits (+ start row))) one zero)))
+        (when word
+          (setf (memory-32 (+ address (* row pitch) (* 4 x))) word)))))
+  nil)
+
+;; A rectangle of pixels as ClaraOS takes one: so many in a row, so many
+;; rows, and so many bytes from one row to the next.
+(defun check-rectangle (pitch width height)
+  (unless (and (integerp width) (integerp height) (<= 0 width 65536) (<= 0 height 65536)
+               (integerp pitch) (zerop (mod pitch 4)) (<= (* 4 width) pitch (ash 1 24)))
+    (error "~D rows of ~D pixels, ~D bytes from one row to the next, are not a rectangle of 32-bit pixels"
+           height width pitch)))
+
+(defun fill-rectangle-32 (address pitch width height value)
+  (check-rectangle pitch width height)
+  (dotimes (row height)
+    (fill-memory-32 (+ address (* row pitch)) width value))
+  nil)
+
+;; All of it is read before any of it is written, which is right whichever
+;; way the two rectangles lie over each other.
+(defun copy-rectangle-32 (to to-pitch from from-pitch width height)
+  (check-rectangle to-pitch width height)
+  (check-rectangle from-pitch width height)
+  (let ((pixels (make-array (* width height))))
+    (dotimes (row height)
+      (dotimes (x width)
+        (setf (aref pixels (+ (* row width) x)) (memory-32 (+ from (* row from-pitch) (* 4 x))))))
+    (dotimes (row height)
+      (dotimes (x width)
+        (setf (memory-32 (+ to (* row to-pitch) (* 4 x))) (aref pixels (+ (* row width) x))))))
   nil)
 
 ;; Page frames side by side, all zeroes, the lowest that are free: and

@@ -527,6 +527,8 @@ LISP_PRIMITIVE(lisp_p_set_memory_64);
 LISP_PRIMITIVE(lisp_p_fill_memory_32);
 LISP_PRIMITIVE(lisp_p_copy_memory);
 LISP_PRIMITIVE(lisp_p_expand_bits_32);
+LISP_PRIMITIVE(lisp_p_fill_rectangle_32);
+LISP_PRIMITIVE(lisp_p_copy_rectangle_32);
 LISP_PRIMITIVE(lisp_p_allocate_memory);
 LISP_PRIMITIVE(lisp_p_free_memory);
 LISP_PRIMITIVE(lisp_p_port_8);

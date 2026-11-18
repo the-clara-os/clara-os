@@ -232,8 +232,30 @@ Devices and storage:
 
 The world:
 
-- [ ] **M11 drawing.** A software rasterizer in Lisp: rectangles, blits,
-  clipping, bitmap text, double buffering, damage rectangles.
+- [x] **M11 drawing** (2026-11-17, version 0.0.16). A rasterizer, in Lisp
+  (lisp/draw.lisp). It draws on surfaces, rectangles of pixels in memory:
+  the screen is one, and a program makes others, of page frames.
+  Rectangles, filled and in outline; text, in the console's font; pictures
+  of one bit to the pixel; and copies, from one surface to another or
+  within one, where the two parts may lie over each other. All of it is cut
+  to what the surface has, and to the part of it that drawing is kept to
+  for the time being, so what lies outside is not drawn and is no error. A
+  surface remembers what was drawn on it, as a few rectangles that are
+  joined where two make one, and showing it copies those to the screen and
+  nothing else: a picture is put together out of sight, and seen when it is
+  whole. A colour becomes a pixel by the masks that the firmware gave for
+  the screen. The pixels are written by the substrate, a rectangle to the
+  call: CLARA.UNSAFE has a function that fills one and a function that
+  copies one, and the one that draws a glyph can leave the pixels around
+  the glyph as they are and pass over its right-hand end. A surface that
+  came back with a saved world is refused, its pixels having stayed behind.
+  The host tests look at every pixel of each operation, at every place on a
+  surface and around it, against a rule of their own, and every machine of
+  `make test` draws a picture, reads its screen back, and draws the picture
+  again from the world that it saved. The picture on the website is that
+  screen: it carries the version it shows, and the site is not built from
+  one of another version. The manual lists what every package of the world
+  exports, held against the files.
 - [ ] **M12 the window manager.** Windows, focus, input routing, a REPL
   window, a launcher; the saved image boots straight into it.
 - [ ] **M13 applications.** A text editor and a file browser as the first
@@ -616,6 +638,70 @@ Infrastructure, for sessions with budget left over:
   refused more than 255, and so a string stream that had been written to 300
   times could not be read. The strings of a stream are joined by a function
   in C now, which takes them as a list, however many there are.
+  From M11: the two sessions from the disk image that macOS makes, with
+  4 GiB and four processors; a machine without a screen (x86_64 with
+  `-vga none`), which says so, draws on a surface all the same and shows
+  nothing; a machine of 128 MiB, where a surface of 8192 by 8192 pixels is
+  refused as a STORAGE-CONDITION and one of 2048 by 2048 is made, filled,
+  shown and freed; a world that 0.0.15 saved, started by this kernel: it has
+  no CLARA.DRAW and starts without, loads draw.lisp from its prompt, draws,
+  and the world that it saves then starts drawing by itself; how long
+  drawing takes, in the hundredths of a second that the machine counts:
+  under Apple's hypervisor 4 µs for a rectangle of 50 by 30 pixels, 22 µs
+  for ten characters, a third of a millisecond to fill a surface of 800 by
+  600 and copy it to the screen, and 80 ms to write as many pixels one at a
+  time from Lisp; on x86_64, emulated, 50 µs, 280 µs, a millisecond and
+  1.2 s; the manual's new chapter, as a browser shows it; the whole of
+  `make test` in an Ubuntu container, with clang 18, QEMU 8.2 and SBCL
+  2.2.9. And the code broken on purpose, 84 ways. lisp/draw.lisp, by the
+  host tests, 67 ways: a rectangle not cut on one side, or cut a pixel
+  late; one of no pixels taken for drawn; a surface of another boot, or one
+  that was freed, taken for one to draw on; a pixel's address a pixel off,
+  or by rows as long as the surface is wide; the part that drawing is kept
+  to left narrowed, not put back after a failure, wider than what it lay
+  in, a row short; damage that keeps what it should drop, joins rectangles
+  of different heights or widths or ones that lie apart, never joins a
+  second time, knows no limit, or makes the rectangle around them all too
+  small; a screen that keeps damage, a surface that keeps none; damage
+  given by its corners, taken and left where it was, counted past the
+  edges; PIXEL a pixel past the end of a row, or with rows and columns
+  changed over; a rectangle filled as wide as was asked, or from where it
+  was asked; an outline without its lower edge, with its right edge
+  outside, or of an empty rectangle; a copy of more than the first surface
+  has, from the corner or to the corner whatever was cut, with one length
+  of row for both surfaces, from a surface that nobody looked at; a bitmap
+  and a glyph whose right-hand end is not passed over, or that begin with
+  their first row whatever was cut; a bitmap with its colours changed over;
+  text without the box, with every character the first, without its
+  background, without its damage; the width of a text by the height of a
+  character; a surface shown whole every time, always at the corner of the
+  screen, with its damage left, or said not to have been shown; START that
+  keeps the machine or the screen it knew, takes the colours to be where
+  they usually are, or the rows to be as long as the screen is wide; a
+  colour of any number, with all eight bits whatever a pixel has, with
+  green and blue changed over, a mask counted from the bottom; a surface a
+  page frame short, of any size, kept to nothing; one that is still a
+  surface after it was freed, one that gives nothing back, a screen that
+  can be freed. Two got through the first version of the tests: PIXEL with
+  rows and columns changed over, which only a session noticed, the tests
+  having read pixels of a surface that was all zeroes; and a screen that
+  can be freed, which failed in the substrate all the same, in other words.
+  The tests read a surface whose every pixel is another number since, and
+  hold the words of each refusal. The substrate, by booting, 17 ways: a
+  rectangle filled a row short, a pixel short in every row, with rows as
+  long as it is wide; one copied with its rows always from the top or
+  always from the bottom, its pixels always from the left or always from
+  the right, with one length of row for both, from a place that is not
+  looked at; a bitmap whose lowest bits are not passed over, and one with a
+  pixel written where NIL says to leave it, of either kind; a rectangle
+  that is not looked at for whether it is mapped, or for how long its rows
+  are; EXPAND-BITS-32 with eight arguments and no more; a world without
+  draw.lisp, and one in which drawing is never started. One got through at
+  first: the rectangle of which only the first pixel is looked at for
+  whether it is mapped, since the text that tried it began where nothing
+  is; two texts begin in memory now and run off the end of it. And the
+  tests found a mistake as they were written: the outline of a rectangle
+  that has no width drew its left edge.
 
 Shortcuts and loose ends, under the milestone that settles each one. A
 session reads its own group before it starts, and whatever it leaves open
@@ -623,6 +709,20 @@ is added here in the same change.
 
 M12:
 
+- The console does not draw with lisp/draw.lisp. It has the screen, draws
+  its cells with CLARA.UNSAFE as before, turns a colour into a pixel by a
+  function of its own, and moves the pixels up when a line is full,
+  whatever they show: what a program puts on the screen lies under the
+  next line of text that reaches it and scrolls away with the rest. A
+  window manager has to take the screen from the console, which then goes
+  on with the serial port alone, and a console in a window draws like
+  everything else.
+- Nothing draws the pointer yet. A picture of one bit to the pixel, drawn
+  without a background, is what it would be drawn with, and what was under
+  it has to be put back when it moves.
+- A surface is one thread's at a time. What drawing is kept to and what was
+  drawn on are the surface's own, and nothing locks them: two threads that
+  draw on one surface get in each other's way.
 - What a world starts with is three lines of C, the same for a world that
   was loaded from the files and for one that came as an image: the console,
   the drivers and the file system, and the listener (kernel/lisp/lisp.c). An
@@ -631,14 +731,39 @@ M12:
 
 No milestone yet, to be picked up when they start to matter:
 
+- Drawing. What can be drawn is rectangles, outlines a pixel thick, text
+  in the one font and its one size, pictures of one bit to the pixel that
+  are 62 pixels wide at most, and copies. There are no lines but along a
+  row or a column, no curves, no scaling, and nothing between a pixel that
+  is drawn and one that is not: no colour lets what is under it show
+  through. Text is drawn a glyph to the call of the substrate. A surface is
+  page frames side by side, 469 of them for a screen of 800 by 600, and
+  needs that many free in a row; it is never made larger or smaller. The
+  collector knows nothing of that memory: a surface that nobody holds any
+  more keeps its page frames until the machine stops, unless it was freed.
+  A pixel that a program keeps in a variable is of the screen it was made
+  for, and a world that is saved on one machine and started on another
+  whose screen has its colours elsewhere shows the wrong ones. The damage
+  of a surface is eight rectangles at most, and then the one around them
+  all, so a change in two corners costs a copy of everything between. SHOW
+  copies when it is called: nothing waits for the display to be between two
+  pictures, there being no such signal from a framebuffer. PIXEL and a copy
+  from the screen read the framebuffer, which a real display is slow at.
+  The functions of CLARA.UNSAFE that write rectangles look whether the
+  memory is mapped, not whose it is. START called a second time in one boot
+  leaves the surfaces of the first unusable, with their memory. A world
+  that was saved before 0.0.16 has no CLARA.DRAW, and starts without:
+  `(load "draw.lisp")` and `(clara.draw:start)` at its prompt bring it in,
+  and a world that is saved after that starts it by itself.
 - The user manual. What is checked is its transcripts and its lists of
   names. Its prose is not: a sentence that was true when it was written
   stays until somebody reads it again. Three things in it are shown and not
   typed, since a machine answers them in its own way: the boot report, the
   line that says a heap is an image, and the reasons for which an image is
-  refused, which are the kernel's words copied by hand. The names of the
-  drivers' packages, as `clara.pci:devices`, are in a table that nothing
-  compares with the files. The transcripts are typed at AArch64 only. The
+  refused, which are the kernel's words copied by hand. What each function
+  of a package takes and gives is prose as well; only its name is compared
+  with the files. Nothing in it shows a picture that was drawn, only the
+  forms that draw one. The transcripts are typed at AArch64 only. The
   steps for UTM are as they were worked out from its source, and have not
   been followed in UTM itself. The page is one long page, without a search
   and without a place of its own for each function.
@@ -1064,7 +1189,7 @@ No milestone yet, to be picked up when they start to matter:
   machine describes how its devices' interrupt lines are wired.
 - QEMU's hvf has no GIC version 2, which is why `make test` boots AArch64
   a second time, emulated.
-- None of M4 to M10 has been booted in UTM itself. UTM runs AArch64
+- None of M4 to M11 has been booted in UTM itself. UTM runs AArch64
   under hvf with GIC version 3, four processors and 4 GiB, and that was
   checked with Homebrew's QEMU 11 from the disk image; UTM brings QEMU
   10.0 and a display device of its own. Whether its machine takes
@@ -1094,15 +1219,18 @@ No milestone yet, to be picked up when they start to matter:
   clang 23 and QEMU 11, and fsck.fat for the checker of volumes where the
   Mac has fsck_msdos. Nothing builds or boots on macOS except by hand.
   The boot with a collection at every safe point is emulated there, and
-  is the longest of the seven.
+  is the longest of the nine.
 - `make image` needs macOS (hdiutil), so CI neither builds nor boots the
   disk image that UTM gets.
-- site/boot.png, on the website, is a screenshot of version 0.0.14, to be
-  replaced by hand when what the screen shows has changed enough to
-  matter: build/screen-aarch64-resumed.png after `make test` is the same
-  picture of the current kernel, the end of the session that a world
-  which was saved answers. The website's caption takes the version from
-  this entry (site/build.py), so the two are changed together, here.
+- site/boot.png, on the website, is build/screen-aarch64-resumed.png, the
+  end of the session that a world which was saved answers, as `make
+  screenshot` copies it after `make test`, with the version that the
+  machine named written into the file. The website is not built from a
+  picture of another version than the kernel's, so a change of version
+  takes those two commands, and the repository gets a picture of some
+  16 KiB with each. The words beside the picture in site/index.html, for
+  whoever cannot see it, say what the session's end shows, and are changed
+  by hand when tools/resumed.txt ends in another way.
 - Where the logo, site/sun.png, came from and under what license is not
   recorded.
 - www.claraos.org has no DNS record; only the bare domain reaches the

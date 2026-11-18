@@ -1,8 +1,9 @@
 <!doctype html>
 <!-- The source of the ClaraOS user manual. site/build.py fills in the {{...}}
      marks, as it does for index.html, and holds the manual against the
-     kernel: every name that the kernel defines has to be in one of the
-     lists of the class "names", and nothing else may be. What is shown of
+     kernel: every name that the kernel defines, and every name that the
+     package of a file in lisp/ exports, has to be in one of the lists of
+     the class "names", and nothing else may be. What is shown of
      the prompt, the <pre> elements of the class "session", is typed at a
      kernel by `make test` and has to come back as written here; the ones
      of the class "session again" are typed after the machine has been
@@ -15,7 +16,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ClaraOS user manual</title>
-<meta name="description" content="How to build ClaraOS, start it under QEMU or in UTM, and work at its prompt: the Lisp that is there, files, saving the world, threads, and what to do when something goes wrong.">
+<meta name="description" content="How to build ClaraOS, start it under QEMU or in UTM, and work at its prompt: the Lisp that is there, files, saving the world, threads, drawing, and what to do when something goes wrong.">
 <meta property="og:title" content="ClaraOS user manual">
 <meta property="og:description" content="How to build ClaraOS, start it, and work at its prompt.">
 <meta property="og:url" content="https://claraos.org/manual.html">
@@ -76,6 +77,7 @@ td:first-child { white-space: nowrap; }
     <li><a href="#files">Files</a></li>
     <li><a href="#image">Saving the world</a></li>
     <li><a href="#threads">Threads</a></li>
+    <li><a href="#drawing">Drawing</a></li>
     <li><a href="#machine">Looking at the machine</a></li>
     <li><a href="#trouble">When something goes wrong</a></li>
     <li><a href="#names">Everything that is defined</a></li>
@@ -149,9 +151,10 @@ pci: 7 devices, by the configuration space at #x4010000000
 input: 00:03.0 is a keyboard, QEMU Virtio Keyboard
 disk: 00:02.0 has 72081 sectors of 512 bytes, 35 MiB
 files: a FAT32 volume of 33 MiB on the disk 00:02.0, from its sector 2048 on
+draw: a screen of 800 by 600 pixels
 clara: reading the serial port and the keyboard: a form is evaluated, Ctrl-C stops it, Ctrl-D ends
 &gt; </code></pre>
-    <p>The lines that begin with <code>pci:</code>, <code>input:</code>, <code>disk:</code> and <code>files:</code> say what the machine has: its devices, the keyboards and pointers among them, its disks, and the volume that names of files are looked up on. A line that begins with <code>panic:</code> or <code>exception:</code> means the kernel has stopped. <a href="#trouble">When something goes wrong</a> has more about those.</p>
+    <p>The lines that begin with <code>pci:</code>, <code>input:</code>, <code>disk:</code>, <code>files:</code> and <code>draw:</code> say what the machine has: its devices, the keyboards and pointers among them, its disks, the volume that names of files are looked up on, and the screen that <a href="#drawing">pictures</a> are shown on. A line that begins with <code>panic:</code> or <code>exception:</code> means the kernel has stopped. <a href="#trouble">When something goes wrong</a> has more about those.</p>
 
     <h3 id="stop">Stopping it</h3>
     <p><kbd>Ctrl-D</kbd> at the prompt ends the session. The kernel says <code>clara: nothing more to do, halting</code> and the machine stands still. Then close the window, or stop the virtual machine. Nothing is lost by stopping at any other moment either: a file is on the disk from the moment the form that wrote it has answered.</p>
@@ -314,7 +317,7 @@ error: the stack is full: the forms are nested too deep, or a function calls its
 <pre class="session">&gt; (directory "/*")
 ("/clara/" "/EFI/")
 &gt; (directory "/clara/*.lisp")
-("/clara/boot.lisp" "/clara/console.lisp" "/clara/disk.lisp" "/clara/fat.lisp" "/clara/font.lisp" "/clara/input.lisp" "/clara/listener.lisp" "/clara/pci.lisp" "/clara/self-test.lisp" "/clara/virtio.lisp")
+("/clara/boot.lisp" "/clara/console.lisp" "/clara/disk.lisp" "/clara/draw.lisp" "/clara/fat.lisp" "/clara/font.lisp" "/clara/input.lisp" "/clara/listener.lisp" "/clara/pci.lisp" "/clara/self-test.lisp" "/clara/virtio.lisp")
 &gt; (probe-file "/CLARA/Boot.Lisp")
 "/CLARA/boot.lisp"
 &gt; (probe-file "/clara/nothing.lisp")
@@ -458,6 +461,85 @@ error: the thread #&lt;THREAD "spinner"&gt; was stopped</pre>
     <p>The threads take turns, a hundredth of a second each. One of them at a time is evaluating, on the one processor that the system uses, so threads keep the machine answering while something waits, and do not make a computation faster. Each thread has its own bindings of the special variables: one that it binds with <code>let</code> is bound for it alone. A thread costs about a mebibyte and a half of memory.</p>
   </section>
 
+  <section id="drawing">
+    <h2>{{spleen:Drawing}}</h2>
+    <p>Pictures are drawn on surfaces. A surface is a rectangle of pixels in memory. The screen is one, and a program makes others, draws on them out of sight, and shows them on the screen when they are whole. The functions are in the package <code>CLARA.DRAW</code>. A place is counted in pixels from the upper left corner of a surface, first across and then down, and that corner is 0 and 0.</p>
+<pre class="session">&gt; (defvar *paper* (clara.draw:allocate-surface 160 80))
+*PAPER*
+&gt; (defvar *ink* (clara.draw:color 232 227 244))
+*INK*
+&gt; (defvar *red* (clara.draw:color 255 85 85))
+*RED*
+&gt; (clara.draw:fill-rectangle *paper* 0 0 160 80 (clara.draw:color 30 27 46))
+T
+&gt; (clara.draw:fill-rectangle *paper* 20 20 40 30 *red*)
+T
+&gt; (clara.draw:draw-rectangle *paper* 10 10 140 60 *ink*)
+T
+&gt; (clara.draw:draw-text *paper* 72 28 "Hello" *ink*)
+T
+&gt; (clara.draw:show *paper* 600 40)
+T</pre>
+    <p>The last of these puts the picture on the screen, its corner 600 pixels across and 40 down. Until then nothing of it could be seen.</p>
+    <ul>
+      <li><code>clara.draw:allocate-surface</code> makes a surface of so many pixels across and down, all of them black. <code>clara.draw:surface-width</code> and <code>clara.draw:surface-height</code> say how large one is.</li>
+      <li><code>clara.draw:color</code> makes a colour of its red, its green and its blue, each from 0 to 255. What it gives is a pixel as this machine's screen has them, a number, and that is what everything that draws takes.</li>
+      <li><code>clara.draw:fill-rectangle</code> takes a surface, the place of the rectangle's upper left corner, its width and its height, and a colour. <code>clara.draw:draw-rectangle</code> takes the same and draws the outline only, a pixel thick. A line along a row or a column is a rectangle that is one pixel high or wide.</li>
+      <li><code>clara.draw:draw-text</code> draws a string in the console's font, in which every character is 8 pixels wide and 16 high, with the upper left corner of the first one at the place given. With one more colour after the first, the cells of the characters are filled with it, and without it only the characters themselves are drawn, over what was there. <code>clara.draw:text-width</code> says how wide a string will be.</li>
+    </ul>
+
+    <h3 id="clipping">What lies outside</h3>
+    <p>Nothing is drawn outside a surface, and it is no mistake to try: a rectangle that lies half outside is drawn half. Each function that draws gives <code>T</code> when it drew something and <code>NIL</code> when all of it lay outside. <code>clara.draw:with-clip</code> keeps the drawing of the forms inside it to a part of the surface.</p>
+<pre class="session">&gt; (clara.draw:fill-rectangle *paper* 150 70 100 100 *red*)
+T
+&gt; (clara.draw:fill-rectangle *paper* 200 0 10 10 *red*)
+NIL
+&gt; (clara.draw:with-clip (*paper* 0 0 96 80)
+    (clara.draw:draw-text *paper* 72 48 "cut off" *red*))
+T
+&gt; (list (= (clara.draw:pixel *paper* 30 30) *red*)
+        (clara.draw:pixel *paper* 100 56) (clara.draw:pixel *paper* 160 0))
+(T 1973038 NIL)</pre>
+    <p>Of <code>"cut off"</code> the first three characters were drawn, up to the pixel 96 across. <code>clara.draw:pixel</code> gives the pixel at a place, or <code>NIL</code> when the surface has none there.</p>
+
+    <h3 id="showing">Showing what has changed</h3>
+    <p>A surface remembers which parts of it were drawn on, as a few rectangles: its damage. <code>clara.draw:show</code> copies those parts to the screen and forgets them, so what goes to the screen is what has changed since the last time, however much or little that is. Here it is the three characters and the corner that were drawn since the picture was first shown.</p>
+<pre class="session">&gt; (clara.draw:damage *paper*)
+((72 48 24 16) (150 70 10 10))
+&gt; (clara.draw:show *paper* 600 40)
+T
+&gt; (clara.draw:show *paper* 600 40)
+NIL
+&gt; (clara.draw:copy-rectangle *paper* 20 20 40 30 *paper* 110 44)
+T
+&gt; (defvar *arrow*
+    (vector #b1000000 #b1100000 #b1110000 #b1111000
+            #b1111100 #b1100000 #b0010000))
+*ARROW*
+&gt; (clara.draw:draw-bitmap *paper* 4 2 *arrow* 7 *ink*)
+T
+&gt; (clara.draw:damage *paper*)
+((4 2 7 7) (110 44 40 30))
+&gt; (clara.draw:show *paper* 600 40)
+T</pre>
+    <ul>
+      <li>A rectangle of damage is a list: how far across and down it begins, how wide it is and how high. <code>clara.draw:take-damage</code> gives the same list and leaves the surface without any, and <code>clara.draw:add-damage</code> counts a part as drawn on, to have it shown again.</li>
+      <li><code>clara.draw:copy-rectangle</code> copies a part of one surface to a place on another, or on the same one: the surface it comes from, the corner of the part, its width and height, then the surface it goes to and the corner there.</li>
+      <li><code>clara.draw:draw-bitmap</code> draws a picture of one bit to the pixel. The picture is a vector of its rows from the top, each a number whose bits are the pixels of the row, and after it comes how many pixels wide it is. Where a bit is 1 the pixel takes the colour. With one more colour after it, the pixels whose bit is 0 take that; without, they stay as they were.</li>
+      <li><code>(clara.draw:screen)</code> is the screen as a surface, or <code>NIL</code> on a machine without one. Whatever is drawn on it shows at once, and it keeps no damage.</li>
+    </ul>
+    <p>The console writes on the same screen. A picture that is shown there lies over the text, the lines that are written after it go over the picture where they meet it, and when the text moves up a line the picture moves up with it. So a picture stays where it was put only as long as nothing is printed.</p>
+
+    <h3 id="surfaces">Memory</h3>
+    <p>A surface takes four bytes for every pixel, 1875 KiB for one as large as a screen of 800 by 600, and that memory is not the heap's: nothing gives it back when the surface is no longer used. <code>clara.draw:free-surface</code> does, and after it the surface cannot be drawn on.</p>
+<pre class="session">&gt; (clara.draw:free-surface *paper*)
+NIL
+&gt; (clara.draw:draw-text *paper* 0 0 "gone" *red*)
+error: this surface was freed</pre>
+    <p>A <a href="#image">world that is saved</a> keeps its surfaces and not their pixels. After the machine has started again, a surface from before is refused with <code>this surface is of a machine that was switched off</code>: make a new one, and draw the picture again. A function that draws it comes back with the world.</p>
+    <p>There is one font, in one size. There are no lines but those along a row or a column, no circles, and no colours that let what is under them show through.</p>
+  </section>
+
   <section id="machine">
     <h2>{{spleen:Looking at the machine}}</h2>
     <p>The drivers are Lisp, each in a package of its own, and what they know can be asked at the prompt.</p>
@@ -507,6 +589,8 @@ error: nothing is mapped at #x0</pre>
       <tr><td><code>error: the heap is full</code></td><td>A computation used the memory there is. It has been stopped, what it held is free again, and the prompt is back. A machine with more memory holds more.</td></tr>
       <tr><td><code>error: the stack is full</code></td><td>Forms nested too deep, or a function that calls itself without end.</td></tr>
       <tr><td>Boxes on the screen where characters should be.</td><td>The screen's font has the characters of ASCII. The characters themselves are right, and show on the serial port.</td></tr>
+      <tr><td>A picture that was shown has text over it, or is no longer where it was put.</td><td>The console writes on the same screen, and moves everything on it up with every new line: <a href="#showing">Showing what has changed</a>. Show the picture again.</td></tr>
+      <tr><td><code>error: this surface is of a machine that was switched off</code></td><td>The surface was made before the world was saved, and its pixels were not saved with it. Make a new one and draw on that: <a href="#surfaces">Memory</a>.</td></tr>
       <tr><td>A file that was written is gone after <code>make</code>.</td><td>Under QEMU the disk is made again whenever a build changed something. Keep what matters outside <code>build/</code>, by way of <a href="#outside">the host</a>.</td></tr>
       <tr><td><code>lisp: clara.image is not resumed</code> in the report.</td><td>A saved world could not be used, and the reason follows on the same line: <a href="#refused">An image that is not taken</a>.</td></tr>
       <tr><td>A report that begins with <code>exception:</code> or <code>panic:</code>, and a machine that stands still.</td><td>The kernel, or a driver, has failed, and has stopped the machine where it was. The report says what happened in words, where, and what was in every register. Start the machine again. What was saved or written to a file before is there. Then please <a href="https://github.com/the-clara-os/clara-os/issues">say what you did</a>, with the report: that is a bug in ClaraOS.</td></tr>
@@ -515,7 +599,7 @@ error: nothing is mapped at #x0</pre>
 
   <section id="names">
     <h2>{{spleen:Everything that is defined}}</h2>
-    <p>These are all the names that the system gives a meaning when it starts, by subject. Each means what it means in Common Lisp, as far as <a href="#differs">this Lisp goes</a>. The lists are checked against the kernel whenever this page is built, so nothing is missing from them and nothing is in them that is not there.</p>
+    <p>These are all the names that the system gives a meaning when it starts, by subject. Each means what it means in Common Lisp, as far as <a href="#differs">this Lisp goes</a>. The lists are checked against the kernel and the system's Lisp files whenever this page is built, so nothing is missing from them and nothing is in them that is not there.</p>
 
     <h3>Defining</h3>
     <p class="names"><code>defun</code> <code>defmacro</code> <code>lambda</code> <code>function</code> <code>defvar</code> <code>defparameter</code> <code>defconstant</code> <code>defstruct</code> <code>copy-structure</code> <code>defsetf</code> <code>define-condition</code> <code>defpackage</code> <code>declare</code> <code>&amp;optional</code> <code>&amp;rest</code> <code>&amp;key</code> <code>&amp;allow-other-keys</code> <code>&amp;aux</code> <code>&amp;body</code> <code>&amp;whole</code> <code>&amp;environment</code> <code>special</code></p>
@@ -556,14 +640,29 @@ error: nothing is mapped at #x0</pre>
     <p class="names" data-package="CLARA"><code>clara:make-thread</code> <code>clara:current-thread</code> <code>clara:threadp</code> <code>clara:thread-name</code> <code>clara:thread-alive-p</code> <code>clara:all-threads</code> <code>clara:join-thread</code> <code>clara:destroy-thread</code> <code>clara:thread-yield</code> <code>clara:make-lock</code> <code>clara:acquire-lock</code> <code>clara:release-lock</code> <code>clara:with-lock-held</code> <code>clara:make-event</code> <code>clara:signal-event</code> <code>clara:wait-event</code> <code>clara:save-image</code> <code>clara:keyboard-interrupt</code> <code>clara:make-stream</code> <code>clara:provide-files</code></p>
     <p class="aside"><code>clara:keyboard-interrupt</code> is the condition that <kbd>Ctrl-C</kbd> is.</p>
 
+    <h3>The package CLARA.DRAW</h3>
+    <p><a href="#drawing">Drawing</a> says what each of these is for.</p>
+    <p class="names" data-package="CLARA.DRAW"><code>clara.draw:screen</code> <code>clara.draw:allocate-surface</code> <code>clara.draw:free-surface</code> <code>clara.draw:surface-p</code> <code>clara.draw:surface-width</code> <code>clara.draw:surface-height</code> <code>clara.draw:color</code> <code>clara.draw:pixel</code> <code>clara.draw:fill-rectangle</code> <code>clara.draw:draw-rectangle</code> <code>clara.draw:draw-text</code> <code>clara.draw:text-width</code> <code>clara.draw:draw-bitmap</code> <code>clara.draw:copy-rectangle</code> <code>clara.draw:with-clip</code> <code>clara.draw:damage</code> <code>clara.draw:take-damage</code> <code>clara.draw:add-damage</code> <code>clara.draw:show</code> <code>clara.draw:start</code></p>
+
+    <h3>The console, the drivers and the file system</h3>
+    <p>Each of these is a file of Lisp in <code>/clara</code> with a package of its own, and these are the names that it lets the others use. Most are for the system itself: <a href="#machine">Looking at the machine</a> has the ones that tell something at the prompt. A function named <code>start</code> is what the system calls as it starts, and is not for calling again.</p>
+    <p class="names" data-package="CLARA.CONSOLE"><code>clara.console:start</code> <code>clara.console:stop</code> <code>clara.console:write-text</code> <code>clara.console:read-text-line</code> <code>clara.console:use-serial</code> <code>clara.console:use-screen</code> <code>clara.console:make-console-stream</code> <code>clara.console:key-typed</code></p>
+    <p class="names" data-package="CLARA.FONT"><code>clara.font:+width+</code> <code>clara.font:+height+</code> <code>clara.font:+first+</code> <code>clara.font:+last+</code> <code>clara.font:*glyphs*</code></p>
+    <p class="names" data-package="CLARA.PCI"><code>clara.pci:start</code> <code>clara.pci:devices</code> <code>clara.pci:device-p</code> <code>clara.pci:device-bus</code> <code>clara.pci:device-slot</code> <code>clara.pci:device-part</code> <code>clara.pci:device-vendor</code> <code>clara.pci:device-id</code> <code>clara.pci:device-kind</code> <code>clara.pci:device-revision</code> <code>clara.pci:location</code> <code>clara.pci:description</code> <code>clara.pci:hex</code> <code>clara.pci:config-8</code> <code>clara.pci:config-16</code> <code>clara.pci:config-32</code> <code>clara.pci:capabilities</code> <code>clara.pci:base-address</code> <code>clara.pci:map-registers</code> <code>clara.pci:enable</code> <code>clara.pci:message-interrupt</code></p>
+    <p class="names" data-package="CLARA.VIRTIO"><code>clara.virtio:device-type</code> <code>clara.virtio:open-device</code> <code>clara.virtio:start-device</code> <code>clara.virtio:device-p</code> <code>clara.virtio:device-pci</code> <code>clara.virtio:device-event</code> <code>clara.virtio:device-features</code> <code>clara.virtio:register-8</code> <code>clara.virtio:register-16</code> <code>clara.virtio:register-32</code> <code>clara.virtio:open-queue</code> <code>clara.virtio:queue-p</code> <code>clara.virtio:queue-size</code> <code>clara.virtio:queue-add</code> <code>clara.virtio:queue-notify</code> <code>clara.virtio:queue-take</code></p>
+    <p class="names" data-package="CLARA.INPUT"><code>clara.input:start</code> <code>clara.input:devices</code> <code>clara.input:pointer</code> <code>clara.input:pointer-changed</code> <code>clara.input:set-pointer-limits</code> <code>clara.input:key-character</code> <code>clara.input:*repeat-delay*</code> <code>clara.input:*repeat-interval*</code></p>
+    <p class="names" data-package="CLARA.DISK"><code>clara.disk:start</code> <code>clara.disk:disks</code> <code>clara.disk:disk-p</code> <code>clara.disk:disk-name</code> <code>clara.disk:disk-sectors</code> <code>clara.disk:disk-read-only</code> <code>clara.disk:read-sectors</code> <code>clara.disk:write-sectors</code> <code>clara.disk:*patience*</code></p>
+    <p class="names" data-package="CLARA.FAT"><code>clara.fat:start</code> <code>clara.fat:volumes</code> <code>clara.fat:*volume*</code> <code>clara.fat:volume-p</code> <code>clara.fat:volume-disk</code> <code>clara.fat:volume-kind</code> <code>clara.fat:volume-first</code> <code>clara.fat:entries</code> <code>clara.fat:entry-p</code> <code>clara.fat:entry-name</code> <code>clara.fat:entry-short</code> <code>clara.fat:entry-directory-p</code> <code>clara.fat:entry-size</code> <code>clara.fat:names</code> <code>clara.fat:file-text</code> <code>clara.fat:read-file</code> <code>clara.fat:write-file</code> <code>clara.fat:remove-file</code></p>
+    <p class="names" data-package="CLARA.LISTENER"><code>clara.listener:run</code> <code>clara.listener:answer</code> <code>clara.listener:read-and-answer</code></p>
+
     <h3>The package CLARA.UNSAFE</h3>
     <p>For drivers. What can be read with one of the first seven can be written with <code>setf</code>.</p>
-    <p class="names" data-package="CLARA.UNSAFE"><code>clara.unsafe:memory-8</code> <code>clara.unsafe:memory-16</code> <code>clara.unsafe:memory-32</code> <code>clara.unsafe:memory-64</code> <code>clara.unsafe:port-8</code> <code>clara.unsafe:port-16</code> <code>clara.unsafe:port-32</code> <code>clara.unsafe:fill-memory-32</code> <code>clara.unsafe:copy-memory</code> <code>clara.unsafe:expand-bits-32</code> <code>clara.unsafe:allocate-memory</code> <code>clara.unsafe:free-memory</code> <code>clara.unsafe:map-memory</code> <code>clara.unsafe:memory-string</code> <code>clara.unsafe:string-bytes</code> <code>clara.unsafe:string-memory</code> <code>clara.unsafe:heap-image</code> <code>clara.unsafe:interrupt-event</code> <code>clara.unsafe:message-interrupt</code> <code>clara.unsafe:pci-configuration</code> <code>clara.unsafe:framebuffer</code> <code>clara.unsafe:serial-device</code> <code>clara.unsafe:serial-byte</code> <code>clara.unsafe:serial-break</code> <code>clara.unsafe:keyboard-break</code> <code>clara.unsafe:take-screen</code> <code>clara.unsafe:give-screen</code></p>
+    <p class="names" data-package="CLARA.UNSAFE"><code>clara.unsafe:memory-8</code> <code>clara.unsafe:memory-16</code> <code>clara.unsafe:memory-32</code> <code>clara.unsafe:memory-64</code> <code>clara.unsafe:port-8</code> <code>clara.unsafe:port-16</code> <code>clara.unsafe:port-32</code> <code>clara.unsafe:fill-memory-32</code> <code>clara.unsafe:copy-memory</code> <code>clara.unsafe:expand-bits-32</code> <code>clara.unsafe:fill-rectangle-32</code> <code>clara.unsafe:copy-rectangle-32</code> <code>clara.unsafe:allocate-memory</code> <code>clara.unsafe:free-memory</code> <code>clara.unsafe:map-memory</code> <code>clara.unsafe:memory-string</code> <code>clara.unsafe:string-bytes</code> <code>clara.unsafe:string-memory</code> <code>clara.unsafe:heap-image</code> <code>clara.unsafe:interrupt-event</code> <code>clara.unsafe:message-interrupt</code> <code>clara.unsafe:pci-configuration</code> <code>clara.unsafe:framebuffer</code> <code>clara.unsafe:serial-device</code> <code>clara.unsafe:serial-byte</code> <code>clara.unsafe:serial-break</code> <code>clara.unsafe:keyboard-break</code> <code>clara.unsafe:take-screen</code> <code>clara.unsafe:give-screen</code></p>
   </section>
 </main>
 
 <footer class="frame">
-  <p>This manual is for ClaraOS {{version}}, and is built from <a href="https://github.com/the-clara-os/clara-os">the repository</a> with the system. Its sessions are typed at a kernel every time the tests run, and its lists of names are held against the kernel's own. <a href="./">ClaraOS</a></p>
+  <p>This manual is for ClaraOS {{version}}, and is built from <a href="https://github.com/the-clara-os/clara-os">the repository</a> with the system. Its sessions are typed at a kernel every time the tests run, and its lists of names are held against the kernel's own and those of its Lisp files. <a href="./">ClaraOS</a></p>
 </footer>
 
 </body>

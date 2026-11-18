@@ -32,8 +32,8 @@ starting one, say what it will take, and let Julio choose.
 Build with `make` (Homebrew's llvm and lld under /opt/homebrew/opt when they
 are there, otherwise clang and lld-link from the PATH; `LLVM=` and `LLD=`
 name other directories). `make test` runs the host tests of the Lisp
-files under SBCL (`make host-test`, four seconds), then boots both
-architectures headless under QEMU, seven boots in about a minute and a
+files under SBCL (`make host-test`, five seconds), then boots both
+architectures headless under QEMU, nine boots in about a minute and a
 half, types a session at each kernel, and saves what each screen shows to
 build/screen-<name>.png; look at those images when a change touches the
 display. `make run-aarch64` and `make run-x86_64` open a QEMU window with
@@ -57,7 +57,14 @@ Rules:
   `make font`; never edit it by hand.
 - The version is `CLARA_VERSION` in kernel/kernel.h. Every finished piece
   of work bumps the patch number in the same change, and its ROADMAP.md
-  entry records the version.
+  entry records the version. The picture on the website goes with it
+  (Julio, twice on 2026-11-17, about a caption that named an older version
+  than the page: "this text is still out-of-sync with the version we're
+  on"): after the last `make test` of the change, `make screenshot` makes
+  site/boot.png of build/screen-aarch64-resumed.png and writes the version
+  into it, and `make site` stops when the picture is of another version
+  than the kernel's. When tools/resumed.txt ends in another way, the words
+  beside the picture in site/index.html, its `alt`, are changed by hand.
 - Substrate code checks itself during boot (`pmm_selftest`) and panics when
   a check fails, so `make test` covers it. A check that needs a temporary
   change to the sources (a forced fault, an exhaustive loop) is run once and
@@ -244,9 +251,15 @@ Rules:
   SBCL as it stands: the subset of Common Lisp that the evaluator has,
   no name of Common Lisp's given a new meaning (LISTEN is one), and the
   substrate only through CLARA and CLARA.UNSAFE. The kernel loads them
-  in the order of `world` in lisp.c (the console, pci, virtio, input,
-  disk, fat, the listener), and lisp/host/tests.lisp loads the same
-  files: a new one goes into both. What they print while they start is part of the boot
+  in the order of `world` in lisp.c (the console, draw, pci, virtio,
+  input, disk, fat, the listener), and lisp/host/tests.lisp loads the same
+  files: a new one goes into both, and what its package exports goes into
+  a list of names in the manual, or `make site` stops. What `lisp_main`
+  starts of a file that a world may be without, a world that an older
+  kernel saved, it looks for first, as it does for CLARA.DRAW; and a
+  function in C that the files call goes on taking the arguments it took,
+  since such a world calls it the old way: EXPAND-BITS-32 has a ninth that
+  it can do without. What they print while they start is part of the boot
   report, and a line of it stays under 100 characters too. Its logic is
   tested there, on the machine that lisp/host/clara.lisp makes up: a
   device is a function put at an address or at a port, and a test looks
@@ -261,6 +274,27 @@ Rules:
   `clara.unsafe:take-screen` and `give-screen`; a fault report takes it
   back and clears it, which `SESSION=` with a form that writes into the
   kernel's code shows.
+- Drawing (lisp/draw.lisp, the package CLARA.DRAW). A surface is where
+  some pixels are and how they are laid out; the pixels are page frames,
+  or the framebuffer. Whatever draws asks `inside` first, which cuts a
+  rectangle to what can be drawn on and refuses a surface that was freed
+  or that is of another boot (`*machine*`, made anew by START); hands the
+  substrate a rectangle that lies wholly within the surface; and ends with
+  `drawn`, which keeps the damage and is the T that it gives back. The
+  loops over pixels are in C (unsafe.c: FILL-RECTANGLE-32,
+  COPY-RECTANGLE-32, EXPAND-BITS-32), which looks whether every pixel it
+  is to touch is mapped and no further: a wrong rectangle from Lisp lands
+  in somebody's memory. The host tests hold each operation against a rule
+  that is written out there (`expected`), at every place on a surface and
+  around it (`sweep`), and say which one failed by its name: a new
+  operation gets a sweep, and a new way of joining damage a look at the
+  test that draws at random and wants every pixel that changed inside the
+  damage. A picture of a surface there is its rows as strings, a character
+  to the pixel. tools/session.txt defines `picture`, and tools/resumed.txt
+  ends by drawing it on the screen: that screen is the picture on the
+  website, so the last forms of that session are what the front page
+  shows. The console does not draw with this file, and writes over what is
+  shown.
 - The Lisp runtime is kernel/lisp/, and lisp.h is its interface: the
   comment at its top says what a Lisp value is. In C a value is a `lisp`,
   one tagged word. Look at the tag (`lisp_is_cons`, `lisp_is_symbol`,
@@ -427,7 +461,9 @@ Rules:
   name that is in none of the manual's lists (the elements of the class
   "names", at its end), or when a list has a name that nothing defines:
   put a new name where its subject is, and say what it is for in the
-  chapter that it belongs to, since the list alone only names it. And
+  chapter that it belongs to, since the list alone only names it. The
+  same goes for what the package of a file in lisp/ exports, which has a
+  list with `data-package` for each package. And
   what the manual shows of the prompt, every `<pre class="session">`, is
   typed at a kernel by `make test`, with the ones of the class
   "session again" typed after the machine was started again from the world

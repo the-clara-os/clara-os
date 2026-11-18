@@ -676,6 +676,71 @@ architectures (kernel/vm.c).
   machine boots from such a disk with a byte of the image changed, and
   has to refuse it.
 
+## Drawing (decided in M11, 2026-11-17)
+
+- Whatever is drawn is drawn on a surface: a rectangle of pixels in
+  memory, 32 bits to the pixel (lisp/draw.lisp). The screen is one, whose
+  memory is the framebuffer, and a program makes others. There is one way
+  of drawing, whatever it is drawn on.
+- A surface's pixels are page frames, not an object in the heap. The
+  language has no vector of anything but Lisp values, a collector that
+  walked megabytes of pixels at every collection would find nothing in
+  them, and a saved world would carry every picture that was ever drawn.
+  The price is the one that a driver's memory has: the collector does not
+  give page frames back, so a surface is freed by whoever made it, and a
+  world that is saved keeps its surfaces without their pixels. A surface
+  that came back with a world is refused when something draws on it, since
+  its address is somebody else's memory by then: each holds the machine it
+  was made on, and that is made anew at every boot.
+- Every surface has its pixels the way the screen has them, red, green and
+  blue in the bits that the firmware said, so that copying to the screen
+  is copying and nothing else. A colour is made a pixel once, when it is
+  named, and what draws takes pixels.
+- The substrate writes the pixels and Lisp says which. The interpreter,
+  going from pixel to pixel, takes 80 ms over a screen of 800 by 600 where
+  the processor is the host's own and more than a second where it is
+  emulated; the substrate fills such a screen and copies it in a third of a
+  millisecond. So three functions of CLARA.UNSAFE do a rectangle to the
+  call: one fills it, one copies it, in the order that is right when the
+  two lie over each other, and one makes pixels of a bitmap of one bit to
+  the pixel, which is a glyph. What is left is the rasterizer, and all of
+  it is Lisp: what a surface has of a rectangle, where a string's
+  characters go and which of them show, what has changed.
+- Everything is cut to what can be drawn on: the surface, and within it
+  the part that drawing is kept to for the time being. A rectangle that
+  lies half outside is drawn half, and one that lies outside is not an
+  error; a function that draws says whether it drew anything. Whoever
+  draws need not know where the edges are, which is what a window will
+  want of what is drawn in it.
+- A surface remembers what was drawn on it, its damage, as a few
+  rectangles, and showing a surface copies those to the screen and
+  forgets them. That is the whole of double buffering here: a picture is
+  put together out of sight, on a surface that is not the screen, and what
+  reaches the screen is what has changed, when it is whole. The
+  rectangles are kept few by joining them, two that make one rectangle
+  between them and, past a handful, all of them into the one around them:
+  what is copied may be more than changed and is never less.
+- The console is not drawn with any of this. It has the screen, as it had,
+  draws its own cells and moves the pixels up when a line is full,
+  whatever those pixels show: a picture on the screen scrolls away with
+  the text around it. The console is the first thing that works and the
+  last that should stop, and it pays some forty calls of the evaluator for
+  a character as it is. The window manager will take the screen from it,
+  and a console in a window will draw the way everything else does.
+- The text that can be drawn is the console's font, in its one size. There
+  are no lines but those along a row or a column, which are rectangles, no
+  curves, no scaling, and nothing between a pixel that is drawn and one
+  that is not. Each waits for the first thing that needs it.
+- It is tested where it can be seen. Under SBCL the tests draw on surfaces
+  of a machine that is made up and look at every pixel, against what the
+  pixel should be by a rule that the tests write down themselves:
+  rectangles, outlines, bitmaps, text and copies at every place on a
+  surface and around it. The three functions in C are tried by the
+  kernel's own self-test at every boot. And each machine of `make test`
+  draws a picture on its screen, reads pixels of the screen back, and
+  draws it again from the world that it saved, which is the picture on the
+  website.
+
 ## Conventions
 
 - C: lower_snake_case for functions and files. Kernel-wide symbols carry
