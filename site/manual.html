@@ -113,8 +113,9 @@ make run-x86_64    <span class="note"># emulated: the firmware takes a few secon
       <tr><td><kbd>Ctrl-A</kbd> <kbd>X</kbd></td><td>in the terminal: leave QEMU, whatever the machine is doing</td></tr>
       <tr><td><kbd>Ctrl-A</kbd> <kbd>C</kbd></td><td>in the terminal: QEMU's own monitor, and back</td></tr>
       <tr><td><code>MEM=1G make run-aarch64</code></td><td>a machine with that much memory, where it has 512 MiB otherwise</td></tr>
+      <tr><td><code>WORK=~/clara-work.img make run-aarch64</code></td><td>a machine with a second disk, <a href="#work">one of your own</a></td></tr>
     </table>
-    <p>The machine starts from a disk image, <code>build/disk-aarch64.img</code> or <code>build/disk-x86_64.img</code>, which is made of the files in <code>build/esp</code> the first time and kept from one run to the next. Files that you write are on it the next time, and so is a <a href="#image">world that you saved</a>. After the next <code>make</code> that changed something, the disk is made again and both are gone.</p>
+    <p>The machine starts from a disk image, <code>build/disk-aarch64.img</code> or <code>build/disk-x86_64.img</code>, which is made of the files in <code>build/esp</code> the first time and kept from one run to the next. Files that you write are on it the next time, and so is a <a href="#image">world that you saved</a>. After the next <code>make</code> that changed something, the disk is made again and both are gone. What is to stay longer than that goes on <a href="#work">a disk of your own</a>.</p>
 
     <h3 id="utm">In UTM</h3>
     <ol>
@@ -125,14 +126,14 @@ make run-x86_64    <span class="note"># emulated: the firmware takes a few secon
       <li>For typing in the screen's own window, add a keyboard that ClaraOS has a driver for. UTM gives a machine USB devices, which it does not have one for. Under QEMU, Arguments, add two: <code>-device virtio-keyboard-pci</code> and <code>-device virtio-tablet-pci</code>. The second is the pointer, which the <a href="#windows">window manager</a> is worked with.</li>
       <li>Start.</li>
     </ol>
-    <p>UTM copies the disk into the virtual machine. To put a newer ClaraOS there, or to go back to a system that nothing was saved on, import <code>build/claraos.img</code> again in place of the drive.</p>
+    <p>UTM copies the disk into the virtual machine. To put a newer ClaraOS there, or to go back to a system that nothing was saved on, import <code>build/claraos.img</code> again in place of the drive. The files that were written on the old drive go with it, and so does a world that was saved there.</p>
 
     <h3 id="needs">What it needs of a machine</h3>
     <table class="wrap">
       <tr><td>A processor</td><td>x86_64 or AArch64. One is used, however many the machine has.</td></tr>
       <tr><td>Firmware</td><td>UEFI. The kernel is the program that the firmware starts: there is no boot loader between them.</td></tr>
       <tr><td>Memory</td><td>128 MiB is enough to start and to work. It is given 512 MiB unless you say otherwise.</td></tr>
-      <tr><td>A disk</td><td>A virtio disk with a FAT volume, of 12, 16 or 32 bits, behind either kind of table of partitions or without one. The volume it starts from is the one whose files it sees.</td></tr>
+      <tr><td>A disk</td><td>A virtio disk with a FAT volume, of 12, 16 or 32 bits, behind either kind of table of partitions or without one. The volume it starts from is the one whose files it sees, until it is told to look on <a href="#work">another disk's</a>.</td></tr>
       <tr><td>A place to type</td><td>A serial port, a virtio keyboard, or both.</td></tr>
       <tr><td>A screen</td><td>The one the firmware sets up, if there is one. Without it everything is on the serial port.</td></tr>
       <tr><td>A pointer</td><td>A virtio mouse or tablet, for the <a href="#windows">window manager</a>. Nothing else has a use for one.</td></tr>
@@ -466,6 +467,65 @@ NIL</pre>
       <li>Directories cannot be made, and a file cannot be renamed or moved. A new file goes into a directory that is there.</li>
       <li>There is no clock in the system, so every file it writes is dated the first of January 1980.</li>
       <li>The disk is a FAT volume, which other systems read. On macOS, <code>build/claraos.img</code> opens with a double click, and the files that ClaraOS wrote are in it.</li>
+    </ul>
+
+    <h3 id="work">A disk of your own</h3>
+    <p>The disk that the machine starts from is the system's. It is made again for every newer ClaraOS, and whatever was written on the old one is gone with it, your files and the <a href="#image">world that you saved</a>. What is to stay goes on a second disk, which is yours: nothing here makes it again, and nothing is written to it that you did not write. Make one once, a FAT volume with nothing on it, somewhere outside <code>build</code>:</p>
+<pre><code>mkdir -p build/empty &amp;&amp; python3 tools/mkdisk.py build/empty ~/clara-work.img</code></pre>
+    <p>Then name it when you start the machine:</p>
+<pre><code>WORK=~/clara-work.img make run-aarch64</code></pre>
+    <p>With <code>export WORK=~/clara-work.img</code> in your shell's profile, every <code>make run-aarch64</code> has it. The report shows two disks then, each with a volume, and says where names are looked up:</p>
+<pre><code>disk: 00:02.0 has 72081 sectors of 512 bytes, 35 MiB
+disk: 00:06.0 has 72081 sectors of 512 bytes, 35 MiB
+files: a FAT32 volume of 33 MiB on the disk 00:02.0, from its sector 2048 on
+files: a FAT32 volume of 33 MiB on the disk 00:06.0, from its sector 2048 on
+files: names are looked up on the first of these volumes</code></pre>
+    <p>The first is the system's, so nothing has changed for the files so far. <code>(clara.fat:volumes)</code> gives the volumes in that order, and <code>clara.fat:*volume*</code> holds the one that names are looked up on. Bind it to yours around a form, and the files of that form are the ones on your disk:</p>
+<pre class="session">&gt; (length (clara.fat:volumes))
+2
+&gt; (defun work () (second (clara.fat:volumes)))
+WORK
+&gt; (let ((clara.fat:*volume* (work)))
+    (with-open-file (out "/mine.lisp" :direction :output)
+      (format out "(defun mine () ~S)~%" "kept on a disk of my own")))
+NIL
+&gt; (let ((clara.fat:*volume* (work))) (directory "/*"))
+("/mine.lisp")
+&gt; (let ((clara.fat:*volume* (work))) (load "/mine.lisp"))
+T
+&gt; (mine)
+"kept on a disk of my own"</pre>
+    <p>A file is carried from one volume to the other by reading it with the variable bound one way and writing it with the variable bound the other way. <code>clara.fat:file-text</code> gives the text of a file as one string:</p>
+<pre class="session">&gt; (defun copy-text (name from to)
+    (let ((text (let ((clara.fat:*volume* from)) (clara.fat:file-text name))))
+      (let ((clara.fat:*volume* to))
+        (with-open-file (out name :direction :output :if-exists :supersede)
+          (write-string text out)))
+      name))
+COPY-TEXT
+&gt; (copy-text "/hello.lisp" (first (clara.fat:volumes)) (work))
+"/hello.lisp"
+&gt; (let ((clara.fat:*volume* (work))) (directory "/*"))
+("/hello.lisp" "/mine.lisp")</pre>
+    <p>A <code>let</code> reaches the forms inside it and nothing else. To work on your disk for a while, set the variable instead: then every name is looked up there, in every thread, so the <a href="#applications">Editor and the file browser</a> open and save there as well.</p>
+<pre class="session">&gt; (progn (setq clara.fat:*volume* (work)) (directory "/*"))
+("/hello.lisp" "/mine.lisp")
+&gt; (clara:save-image)
+error: there is no directory for a file /clara/clara.image to be in
+&gt; (progn (setq clara.fat:*volume* (first (clara.fat:volumes))) (directory "/*"))
+("/clara/" "/EFI/" "/hello.lisp")</pre>
+    <p>As the error in the middle shows, the world is saved where names are looked up, and the machine only starts from an image that is on the system's disk: set the variable back to the first volume before you <a href="#image">save the world</a>. The applications start either way, since <code>load</code> finds the system's own files in what the machine read of them as it started.</p>
+    <p>The next time the machine starts, your disk is as you left it, whatever became of the system's in the meantime. On a newer system nothing that you defined is defined, and one line brings it back:</p>
+<pre class="session again">&gt; (let ((clara.fat:*volume* (second (clara.fat:volumes)))) (load "/mine.lisp"))
+T
+&gt; (mine)
+"kept on a disk of my own"</pre>
+    <p>A file of yours that loads all the others makes that the only line to type after an update. What to know about such a disk:</p>
+    <ul>
+      <li>The volumes are found anew at every start, so ask <code>(clara.fat:volumes)</code> for yours each time, as <code>work</code> does. A volume that a variable has kept since before the machine was started again, in a world that was saved, is refused.</li>
+      <li>Directories cannot be made on it either. Make them on the host: on macOS the disk opens with a double click, like the system's. That is also the way to carry files in and out, and the whole disk is one file, which is easy to keep a copy of.</li>
+      <li>The host and the machine must not have it at the same time, since each would write without knowing of the other. Eject it on the host before you start the machine: on macOS, QEMU does not start until you have. The other way round nothing stops you, so stop the machine before you open the disk on the host.</li>
+      <li>Any FAT volume will do, as large as you like, made with whatever the host has for that. The one above has 33 MiB, which is room for a great many texts.</li>
     </ul>
   </section>
 
@@ -894,7 +954,7 @@ NIL
       <tr><td><code>(get-internal-real-time)</code></td><td>the hundredths of a second since the machine started, which is all the time there is</td></tr>
       <tr><td><code>(clara.pci:devices)</code></td><td>the devices on the PCI bus. <code>clara.pci:location</code> and <code>clara.pci:description</code> say where one is and what it is.</td></tr>
       <tr><td><code>(clara.disk:disks)</code></td><td>the disks that have a driver. <code>clara.disk:disk-name</code>, <code>clara.disk:disk-sectors</code> and <code>clara.disk:disk-read-only</code> say more about one.</td></tr>
-      <tr><td><code>(clara.fat:volumes)</code></td><td>the FAT volumes on those disks. Names of files are looked up on the first.</td></tr>
+      <tr><td><code>(clara.fat:volumes)</code></td><td>the FAT volumes on those disks. Names of files are looked up on the first, or on the one that <code>clara.fat:*volume*</code> is given: <a href="#work">a disk of your own</a>.</td></tr>
       <tr><td><code>(clara.fat:entries "/clara")</code></td><td>what a directory holds, with <code>clara.fat:entry-name</code>, <code>clara.fat:entry-size</code> and <code>clara.fat:entry-directory-p</code> for each entry</td></tr>
       <tr><td><code>(clara.input:devices)</code></td><td>the keyboards and pointers</td></tr>
       <tr><td><code>(clara.input:pointer)</code></td><td>where the pointer is, and which of its buttons are down, as three values. Nothing draws it yet.</td></tr>

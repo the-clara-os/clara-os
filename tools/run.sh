@@ -14,6 +14,12 @@
 #        INPUT="-device virtio-keyboard-pci ..." (the keyboard and the pointers the
 #        machine gets; the default is a virtio keyboard, mouse and tablet, and
 #        INPUT= gives a machine with none of them)
+#        WORK=~/clara-work.img (a second disk, the user's own: a raw image with a
+#        FAT volume, for the files that are to outlive the disk above, which is
+#        made again for every newer system. Nothing here makes that file or
+#        makes it again; the kernel finds its volume after the boot volume, and
+#        the manual says how to make one and how to reach it, under "A disk of
+#        your own".)
 set -eu
 arch=${1:?usage: tools/run.sh <x86_64|aarch64> [qemu args]}
 shift
@@ -23,6 +29,23 @@ serial=${SERIAL:-mon:stdio}
 mem=${MEM:-512M}
 input=${INPUT--device virtio-keyboard-pci -device virtio-mouse-pci -device virtio-tablet-pci}
 mkdir -p build
+
+# The user's own disk goes in front of whatever else was asked for, which
+# puts it behind the boot disk and the keyboard and pointers: the kernel
+# looks names up on the first volume of the bus, and that has to stay the
+# one that the machine was started from. A ~ that the shell left as it was
+# written, as it does in an argument of make's, is the home directory.
+if [ -n "${WORK:-}" ]; then
+    case "$WORK" in
+    "~/"*) WORK=$HOME/${WORK#??} ;;
+    esac
+    if [ ! -f "$WORK" ]; then
+        echo "tools/run.sh: there is no disk $WORK to attach. To make one, a FAT volume with nothing on it:" >&2
+        echo "    mkdir -p build/empty && python3 tools/mkdisk.py build/empty \"$WORK\"" >&2
+        exit 1
+    fi
+    set -- -drive "if=none,id=work,format=raw,file=$WORK" -device virtio-blk-pci,drive=work "$@"
+fi
 
 # EDK2 firmware is two flash images: the code, which is read-only, and a
 # variable store, which each machine keeps its own copy of. Homebrew's qemu

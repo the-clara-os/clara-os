@@ -81,7 +81,11 @@ host-test:
 # defined (tools/resumed.txt). After every boot the host's own checker of
 # FAT volumes looks at the disk. Then the user manual: what it shows of
 # the prompt (site/manual.html) is typed at a machine, which saves its
-# world, and at the same machine started again. Then AArch64 once more,
+# world, and at the same machine started again. That machine has a second
+# disk, with a volume that has nothing on it, given to it the way
+# tools/run.sh gives a user's machine a disk of the user's own (WORK=): the
+# manual keeps a file there, and the machine that is started again has to
+# find it. Then AArch64 once more,
 # with the collector at every safe point of the evaluator: whatever the
 # evaluator fails to hold on to is gone at its next call. Its disk is the
 # one that the first session of that machine left, which has two things on
@@ -95,7 +99,10 @@ host-test:
 # them typed on the keyboard. Where AArch64 is emulated, on CI, that boot
 # takes minutes, so it is given ten. A world that was saved is compiled
 # through and through, and the second boot of each machine has to say so:
-# none of its functions is left for the evaluator to walk.
+# none of its functions is left for the evaluator to walk. A disk of the
+# user's own, which WORK= names for `make run-*`, stays out of all of them:
+# a machine here has the disks that its line gives it.
+test: export WORK :=
 RESUME := SESSION=tools/resumed.txt EXPECT='^lisp: the heap is an image;;^lisp: and with it [0-9]* KiB of code for the processor;;^lisp:   of the functions .* and 0 are walked;;^lisp:   the processor runs [1-9][0-9]* of the compiled ones itself'
 test: all host-test
 	tools/boottest.sh x86_64
@@ -106,8 +113,9 @@ test: all host-test
 	NAME=aarch64-gic2-resumed NO_HVF=1 DISK=$(BUILD)/boot-aarch64-gic2.img $(RESUME) \
 		tools/boottest.sh aarch64 -machine gic-version=2
 	python3 -I site/build.py --sessions $(BUILD)
-	NAME=manual SESSION=$(BUILD)/manual-first.txt tools/boottest.sh aarch64 -machine gic-version=3
-	NAME=manual-again DISK=$(BUILD)/boot-manual.img SESSION=$(BUILD)/manual-again.txt \
+	rm -rf $(BUILD)/empty && mkdir -p $(BUILD)/empty && python3 -I tools/mkdisk.py $(BUILD)/empty $(BUILD)/work.img
+	NAME=manual WORK=$(BUILD)/work.img SESSION=$(BUILD)/manual-first.txt tools/boottest.sh aarch64 -machine gic-version=3
+	NAME=manual-again DISK=$(BUILD)/boot-manual.img WORK=$(BUILD)/work-manual.img SESSION=$(BUILD)/manual-again.txt \
 		EXPECT='^lisp: the heap is an image;;^lisp:   of the functions .* and 0 are walked' \
 		tools/boottest.sh aarch64 -machine gic-version=3
 	NAME=aarch64-stress SESSION=tools/stress.txt TIMEOUT=600 DISK=$(BUILD)/boot-aarch64.img SPOIL=1 \

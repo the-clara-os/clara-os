@@ -19,6 +19,9 @@
 #        SPOIL=1 (and change a byte of the world that was saved on it first)
 #        EXPECT="pattern" (a line that the boot report has to have; several
 #                 patterns with ;; between them are a line each)
+#        WORK=build/work.img (give the machine a copy of that disk as well, the
+#                 way tools/run.sh gives a user's machine a disk of the user's
+#                 own; afterwards the host looks at the volume on it too)
 #        plus what tools/run.sh reads
 set -eu
 arch=${1:?usage: tools/boottest.sh <arch> [qemu args]}
@@ -51,6 +54,18 @@ elif [ ! "$DISK" -ef "$boot" ]; then
     cp -c "$DISK" "$boot" 2> /dev/null || cp "$DISK" "$boot"
 fi
 [ -z "${SPOIL:-}" ] || python3 -I tools/mkdisk.py --spoil "$boot"
+
+# A disk of the user's own, when the machine is to have one: a copy of it
+# as well, so that the disk that was named is never written to, and the
+# copy is what the next boot of the same machine can be given.
+work=
+if [ -n "${WORK:-}" ]; then
+    work=build/work-$name.img
+    if [ ! "$WORK" -ef "$work" ]; then
+        rm -f "$work"
+        cp -c "$WORK" "$work" 2> /dev/null || cp "$WORK" "$work"
+    fi
+fi
 
 # A second disk, a mebibyte of zeroes, for a session to write sectors to
 # that are nobody's: the boot volume has files on it. It comes after every
@@ -133,7 +148,7 @@ LC_ALL=C awk -v out="$typing" '
 # would take it for keys pressed at its own console.
 mkfifo "$keys"
 exec 3<> "$keys"
-DISK="$boot" SERIAL=stdio tools/run.sh "$arch" -display none -monitor "unix:$sock,server=on,wait=off" "$@" \
+DISK="$boot" WORK="$work" SERIAL=stdio tools/run.sh "$arch" -display none -monitor "unix:$sock,server=on,wait=off" "$@" \
     -drive "if=none,id=scratch,format=raw,file=$scratch" -device virtio-blk-pci,drive=scratch \
     < "$keys" > "$log" 2> "build/qemu-$name.log" 3>&- &
 pid=$!
@@ -198,7 +213,8 @@ stop_qemu() {
 # The volume that the kernel booted from, and wrote to, as the host's own
 # program for mending FAT volumes sees it: fsck_msdos on macOS, fsck.fat
 # of the dosfstools elsewhere. It is asked to change nothing, and has to
-# find nothing that it would change.
+# find nothing that it would change. The same for the volume of the user's
+# own disk, when the machine had one.
 check_volume() {
     if [ -x /sbin/fsck_msdos ]; then
         fsck=/sbin/fsck_msdos
@@ -206,13 +222,13 @@ check_volume() {
         fsck=$(PATH="$PATH:/usr/sbin:/sbin" command -v fsck.fat || true)
     fi
     [ -n "$fsck" ] || { volume="its volume was not looked at: the host has no fsck for FAT"; return 0; }
-    python3 -I tools/mkdisk.py --volume "$boot" "build/volume-$name.img"
-    if "$fsck" -n "build/volume-$name.img" > "build/fsck-$name.log" 2>&1; then
-        volume="its volume is in order"
+    for checked in "$boot" ${work:+"$work"}; do
+        python3 -I tools/mkdisk.py --volume "$checked" "build/volume-$name.img"
+        "$fsck" -n "build/volume-$name.img" > "build/fsck-$name.log" 2>&1 || return 1
         rm -f "build/volume-$name.img"
-    else
-        return 1
-    fi
+    done
+    volume="its volume is in order"
+    [ -z "$work" ] || volume="its volumes are in order"
 }
 
 # The lines that the boot report has to have, when some were asked for.
@@ -239,7 +255,7 @@ while [ "$i" -lt $((timeout * 4)) ]; do
         fi
         expected || exit 1
         if ! check_volume; then
-            echo "boottest $name: FAILED, the volume that the kernel wrote to is not in order, by $fsck:"
+            echo "boottest $name: FAILED, the volume on $checked that the kernel wrote to is not in order, by $fsck:"
             cat "build/fsck-$name.log"
             exit 1
         fi

@@ -3004,14 +3004,38 @@
     (check-condition error (clara.fat:entries "/"))))
 (let* ((first (fat-bytes (make-fat-volume 12 '(("first.txt" "on the first")))))
        (second (fat-bytes (make-fat-volume 16 '(("second.txt" "on the second")))))
-       (said (start-files (make-disk :old (cons 63 first) (cons 8000 second)))))
+       (disk (make-disk :old (cons 63 first) (cons 8000 second)))
+       (said (start-files disk)))
   (check (format nil "files: a FAT12 volume of 1 MiB on the disk 00:03.0, from its sector 63 on~%~
                       files: a FAT16 volume of 2 MiB on the disk 00:03.0, from its sector 8000 on~%~
                       files: names are looked up on the first of these volumes~%")
          said)
   (check '("first.txt") (clara.fat:names "/"))
   (let ((clara.fat:*volume* (second (clara.fat:volumes))))
-    (check "on the second" (text-of-file "/second.txt"))))
+    (check "on the second" (text-of-file "/second.txt")))
+  ;; A volume that a variable keeps while the machine is started again, as
+  ;; a world that was saved is, is none of the volumes that are found then:
+  ;; it knows a disk and a page frame that are no longer its own, and no
+  ;; name is looked up on it, to read or to write. Nor on what is no volume.
+  (let ((kept (second (clara.fat:volumes)))
+        (earlier "the volume in CLARA.FAT:*VOLUME* is from an earlier start; (clara.fat:volumes) has this start's"))
+    (start-files disk)
+    (check '(2 nil) (list (length (clara.fat:volumes)) (and (member kept (clara.fat:volumes)) t)))
+    (let ((clara.fat:*volume* kept))
+      (check (list :error earlier) (text-of-file "/second.txt"))
+      (check (list :error earlier) (handler-case (clara.fat:names "/") (error (c) (list :error (princ-to-string c)))))
+      (check-condition error (clara.fat:entries "/"))
+      (check-condition error (clara.fat:read-file "/second.txt"))
+      (check-condition error (clara.fat:write-file "/new.txt" 0 0))
+      (check-condition error (clara.fat:remove-file "/second.txt")))
+    (let ((clara.fat:*volume* "second"))
+      (check '(:error "CLARA.FAT:*VOLUME* holds \"second\", which is no volume: (clara.fat:volumes) has them")
+             (text-of-file "/second.txt"))
+      (check-condition error (clara.fat:names "/"))
+      (check-condition error (clara.fat:write-file "/new.txt" 0 0)))
+    (let ((clara.fat:*volume* (second (clara.fat:volumes))))
+      (check '("second.txt") (clara.fat:names "/"))
+      (check "on the second" (text-of-file "/second.txt")))))
 ;; A table of the newer kind that is not one, a partition that begins past
 ;; the end of the disk, and a disk that cannot be read.
 (let ((disk (make-disk :new (cons 40 (fat-bytes (make-fat-volume 12 '(("a.txt" "a"))))))))

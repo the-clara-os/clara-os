@@ -595,7 +595,14 @@ architectures (kernel/vm.c).
   sector on, the partitions of a table in that sector, the partitions of
   a GUID partition table. Which of the three kinds of FAT a volume is
   follows from how many clusters it has, as its specification says, and
-  from nothing that the volume says of itself.
+  from nothing that the volume says of itself. Names are looked up on the
+  first that was found, the one the machine was started from, until
+  `clara.fat:*volume*` is given another: a second disk is how a user's
+  files outlive the system's disk, which is made again for every newer
+  system. The volumes are found again at every start, and a name is looked
+  up on one of those and on nothing else: a volume that a saved world
+  still holds from an earlier start knows a disk and a page frame that are
+  no longer its own.
 - A file is named by a string: the directories that lead to it from the
   root and then its own name, with a slash before each. There are no
   pathnames. Common Lisp's are a small language of their own, and what

@@ -878,9 +878,21 @@
 (defun find-entry (volume name)
   (find-parts volume (name-parts name)))
 
+;; The volume that names are looked up on: one of those that START found,
+;; whichever *VOLUME* was given. A volume that a variable has kept from an
+;; earlier start, in a world that was saved, knows the disk and the page
+;; frame of that time, which are somebody else's by now, so no name is
+;; looked up on it, nor on what is no volume at all.
 (defun the-volume ()
-  (or *volume*
-      (error "there are no files: no disk has a volume that is known here")))
+  (let ((volume *volume*))
+    (cond ((null volume)
+           (error "there are no files: no disk has a volume that is known here"))
+          ((member volume *volumes*)
+           volume)
+          ((volume-p volume)
+           (error "the volume in CLARA.FAT:*VOLUME* is from an earlier start; (clara.fat:volumes) has this start's"))
+          (t
+           (error "CLARA.FAT:*VOLUME* holds ~S, which is no volume: (clara.fat:volumes) has them" volume)))))
 
 (defun sorted (entries)
   (sort entries #'string-lessp :key #'entry-name))
@@ -898,7 +910,7 @@
 ;; The same as names, a directory's with a slash at its end; NIL when
 ;; there is no such directory.
 (defun names (name)
-  (let ((volume *volume*))
+  (let ((volume (and *volume* (the-volume))))
     (when volume
       (clara:with-lock-held ((volume-lock volume))
         (let ((directory (find-entry volume name)))
