@@ -549,6 +549,29 @@ Infrastructure, done:
   opens a machine's disk like any other and files can be carried to it and
   back.
 
+- **A disk of the user's own** (2026-11-19, version 0.0.22). `WORK=file`
+  gives the machine of `make run-*` a second disk (tools/run.sh): a file
+  that no build makes again, attached behind the boot disk, so that names
+  are still looked up on the system's volume. A file that is not there is
+  said before anything else is done, with the line that makes one. The
+  manual has a section for it under Files, "A disk of your own": making
+  the volume with tools/mkdisk.py, binding `clara.fat:*volume*` to read
+  and write there, carrying a file across, setting the variable so that
+  the Editor and the file browser work there, loading a file of one's own
+  on a newer system, and what to mind. `make test` types that at the
+  manual's machine, which has such a disk, and at the same machine started
+  again, which has to find the file there; tools/boottest.sh takes `WORK=`
+  like `DISK=`, boots with a copy, and has the host's checker look at that
+  volume too. A work disk that the environment names stays out of `make
+  test`. One mend in the file system came with it, since the section
+  teaches the variable: a volume that a variable had kept from an earlier
+  start, in a world that was saved, was used as it was, with the disk and
+  the page frame of that time. On the machine a lookup through it read
+  memory that was no longer its own and failed on what it found there, and
+  under the host tests a file written through it went to the disk. No name
+  is looked up on such a volume now, nor on what is no volume
+  (`the-volume`, lisp/fat.lisp).
+
 Infrastructure, for sessions with budget left over:
 
 - Read the UART base from ACPI (SPCR or DBG2) instead of assuming
@@ -1291,7 +1314,23 @@ Infrastructure, for sessions with budget left over:
   when it is full, which every caller above puts right; and the
   processor's stack eight bytes off what the calling convention says on
   x86-64, which nothing in a kernel built without those instructions
-  minds.
+  minds. From the disk of the user's own (0.0.22): tools/run.sh by hand
+  with a file that is not there, with a `~` that the shell had left as it
+  was written, and with `WORK=` empty; x86_64 and AArch64 emulated with
+  GIC version 2 with such a disk, and AArch64 with a volume of 64 MiB that
+  macOS made (hdiutil), each reading, writing and carrying a file across;
+  a file typed into the Editor and saved while the variable was set, which
+  was on the user's volume and not on the system's, with the file browser
+  open there; a volume kept in a variable across a start from a saved
+  world, which 0.0.21 looked a name up on; QEMU refusing a disk that macOS
+  had open, and macOS opening one that QEMU had, which the manual warns
+  of; and a work volume with a cluster of nobody's planted in its table,
+  which the boot test's checker found. Seven mistakes planted, all
+  noticed: the guard taken out of `the-volume`, and out of `names` alone
+  (the host tests); no copy of the work disk for a boot, the copy made
+  and not used, the work disk ahead of the boot disk on the bus, the disk
+  not attached at all (the manual's two boots); and `make test` taking a
+  work disk from the environment.
 
 Shortcuts and loose ends, under the milestone that settles each one. A
 session reads its own group before it starts, and whatever it leaves open
@@ -1303,8 +1342,9 @@ M15a, an upgrade in place:
   new disk: in UTM `build/claraos.img` is imported again in place of the
   drive, and `make run-*` makes build/disk-<arch>.img again when build/esp
   has something newer. The world that was saved and every file that was
-  written go with the old disk, and the manual says to import the disk
-  again without saying so. UTM keeps a drive that it imported as a qcow2
+  written go with the old disk, which the manual says since 0.0.22, where
+  it also has the way to keep files meanwhile under QEMU: a second disk,
+  the user's own (`WORK=`, below under M15b). UTM keeps a drive that it imported as a qcow2
   file of its own, so the host does not open it afterwards.
 - It was done by hand once, under QEMU on AArch64: 0.0.18 running from its
   disk, the disk that tools/mkdisk.py makes of 0.0.19's build/esp attached
@@ -1357,10 +1397,34 @@ M15b, work kept as text:
   its DEFVAR comes back with the value that the form gives it. That is
   M15c's, below.
 - Where the directory is and what it is called, and whether `make image`
-  and tools/mkdisk.py make it. Whether a second disk can be the user's: a
-  volume other than the first is reached by binding `clara.fat:*volume*`
-  and has no name of its own. On 2026-11-18 a file was loaded from such a
-  volume and one was written to it, under QEMU.
+  and tools/mkdisk.py make it. Whether a second disk can be the user's:
+  since 0.0.22 `WORK=` gives a machine under QEMU one, and the manual says
+  how files are kept there, all of it by hand. What that leaves for this
+  slice. The volume has no name of its own: it is reached by binding or
+  setting `clara.fat:*volume*`, and a name of a file does not say which
+  volume it is on. A LET of the variable does not reach another thread, so
+  the Editor and the file browser follow a SETQ only, and a user who sets
+  it has to set it back. SAVE-IMAGE writes where the variable points: an
+  error on a volume without `/clara`, and on one that has it a world that
+  no start finds. So: a name for the user's volume, SAVE-IMAGE on the boot
+  volume whatever the variable holds, and the file that every new world
+  loads looked for there. Which disk is the user's is "the second" today;
+  a machine with more disks needs a mark on the volume. Directories cannot
+  be made, so the user's are made on the host.
+- The disk driver has the gap that the file system had until 0.0.22: a
+  disk that a variable kept from an earlier start is asked as if it were
+  there (`request`, lisp/disk.lisp). No file function reaches one any
+  more; `clara.disk:read-sectors` and `write-sectors` still take it.
+- UTM. A second drive for the user's files was not tried there: whether
+  UTM keeps it apart from the system's drive when that is imported again,
+  and that it has to come after it in the list of drives. UTM turns an
+  imported drive into a qcow2 file of its own, which the host does not
+  open, so carrying files in and out by the host is QEMU's way only.
+- tools/run.sh makes build/disk-<arch>.img again when the build is newer,
+  also while a machine is still running from that file, which then has
+  its disk rewritten under it. The second machine does not start (QEMU's
+  lock), and the first is not told. Making the new disk beside the old
+  one and moving it into place would leave the running machine its own.
 
 M15c, a world made again:
 
@@ -1815,7 +1879,8 @@ No milestone yet, to be picked up when they start to matter:
   disks on the PCI bus: the kernel does not know which disk it was booted
   from, and with the boot disk first on the bus, as QEMU and UTM have it,
   that is the ESP. Another volume is reached by binding
-  `clara.fat:*volume*`, and there is no name that says which volume. A
+  `clara.fat:*volume*`, and there is no name that says which volume; one
+  that START did not find is refused. A
   name has no `.` and no `..` in it. Letters match whatever their case as
   far as ASCII goes, where FAT means every alphabet; a short name outside
   ASCII is in an alphabet that the volume does not name, and shows as

@@ -105,12 +105,16 @@ Then, on either:
                       # tools/resumed.txt; AArch64 does all that twice, once for each version of
                       # its interrupt controller, and boots once more with the Lisp collector
                       # running at every chance it has, from a disk whose saved world is damaged;
-                      # and what the user manual shows of the prompt is typed at one more machine
+                      # and what the user manual shows of the prompt is typed at one more machine,
+                      # which has a second disk, as WORK= below gives one
     make run-aarch64  # QEMU window, serial on the terminal: type a form in either; Ctrl-C stops a form
                       # that does not end, Ctrl-D ends the session, Ctrl-A X in the terminal leaves QEMU;
                       # hvf-accelerated on Apple silicon. The disk, build/disk-aarch64.img, is kept from
                       # one run to the next, with a world that was saved on it, until the next build
     make run-x86_64   # same, emulated (TCG), so the firmware takes a few seconds
+    WORK=~/clara-work.img make run-aarch64
+                      # the same machine with a second disk, which is yours and outlives every build:
+                      # the manual's "A disk of your own" says how to make one and how to reach it
     make image        # build/claraos.img, a GPT + FAT32 raw disk for UTM; needs macOS
     make site         # build/site: the website, which is not built when the manual lacks a name that
                       # the system defines, or when its picture is of another version than the kernel's

@@ -137,7 +137,22 @@ Rules:
   (`--fat`, `--table`): build/disk-<arch>.img for `make run-*`, made again
   when build/esp has something newer and kept until then with whatever
   the kernel wrote to it, a saved world among it; and for a boot of the
-  tests build/boot-<name>.img, new every time.
+  tests build/boot-<name>.img, new every time. Run by hand without
+  `DISK=`, tools/run.sh makes that first file again when the build is
+  newer, also under a machine that is running from it, which Julio often
+  has: give it `DISK=` and a file of the session's own, or use
+  tools/boottest.sh, which always does.
+- `WORK=file` gives a machine a second disk, the user's own (the manual,
+  "A disk of your own"): tools/run.sh puts it in front of the other
+  arguments, which is behind the boot disk and the keyboard and pointers
+  on the bus, since names are looked up on the first volume there. It
+  makes no such file and stops when there is none. tools/boottest.sh
+  takes `WORK=` like `DISK=`: the machine gets a copy,
+  build/work-<name>.img, which the next boot of that machine can be given
+  and which the host's checker looks at with the boot volume. `make test`
+  clears the variable (`test: export WORK :=`), so a work disk that the
+  environment names stays out of it, and gives one to the manual's two
+  boots, where the manual's section is typed.
 - Disks and files. lisp/disk.lisp is the driver for virtio's disks:
   sectors of 512 bytes, into and out of page frames, one request at a
   time. lisp/fat.lisp reads FAT volumes on them, and hands the language
@@ -145,7 +160,11 @@ Rules:
   and DIRECTORY are in lisp/boot.lisp and ask those. Whatever a function
   there takes from `clara.unsafe:allocate-memory` it gives back on every
   way out, with UNWIND-PROTECT, and whatever looks at a volume's table
-  holds the volume's lock. The host tests have the other side:
+  holds the volume's lock. Whatever looks a name up takes its volume from
+  `the-volume`, which gives `clara.fat:*volume*` only when START found it:
+  a user binds that variable to a second volume, and a world that was
+  saved can hold a volume of an earlier start, with a disk and a page
+  frame that are no longer its own. The host tests have the other side:
   `add-disk` makes a disk of a vector of bytes, which can fail, take its
   time, lose its interrupt or say nothing, and which fails the run when
   it is asked in the wrong way, given memory that was not handed out, or
