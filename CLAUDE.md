@@ -364,10 +364,12 @@ Rules:
   no piece of code left. On the stress boot there is a collection before
   the first fifty safe points of such code in each text
   (`lisp_native_watched`), and a loop without a call has to have one at
-  each of its first fifty turns. Fifty and not the machine's two hundred,
-  because a collection goes through the whole world by then: with two
-  hundred that boot took 237 s of its 600 on CI. A new place where code
-  for the processor comes to a safe point gets a `watched_native()`.
+  each of its first fifty turns. A new place where code for the processor
+  comes to a safe point gets a `watched_native()`. What that boot costs
+  is mostly elsewhere, and was guessed wrongly before it was measured
+  (ROADMAP.md, under M16b): to see where its time goes, start it with
+  `NO_HVF=1` and print the time whenever build/boot-<name>.log has a new
+  line.
   Under SBCL nothing of it runs: the tests there translate every function
   that the compiler's forms make, for both processors, and look at what
   can be seen without running it.

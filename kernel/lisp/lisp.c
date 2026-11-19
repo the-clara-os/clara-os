@@ -1646,10 +1646,14 @@ static unsigned eval_texts(int64_t *deep, lisp compiler, unsigned watched)
     if (depth < 1000)
         panic("lisp self-test: to %s, a function could call itself only %lld deep", who, (long long)depth);
     /* And one that keeps nothing in hand while it does: its calls take the least of the value stack that a
-     * call can take, so what stops it is how deep the thread's own stack may go, where that is used. */
-    evaluate_text("(defun deeper (n) (deeper n)) (deeper 1)", &printed, compiler);
-    if (!same(printed.chars, STACK_FULL))
-        panic("lisp self-test: to %s, a function that only calls itself gave %s", who, printed.chars);
+     * call can take, so what stops compiled code is how deep the thread's own stack may go. The evaluator
+     * comes to that end with the function above, and is spared this one: where every safe point of its
+     * collects, it is some thousands of collections for nothing new. */
+    if (compiler) {
+        evaluate_text("(defun deeper (n) (deeper n)) (deeper 1)", &printed, compiler);
+        if (!same(printed.chars, STACK_FULL))
+            panic("lisp self-test: to %s, a function that only calls itself gave %s", who, printed.chars);
+    }
 
     /* The packages the texts made go with the self-test's own, and so does what the last texts gave:
      * a value that is left there holds on to its package, and to every function in it. */

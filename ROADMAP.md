@@ -1539,13 +1539,21 @@ M16b, a world for the processor:
   run it too.
 - What it costs CI, where both machines are emulated. A boot from the
   files takes 4.5 s more on AArch64 and 7.4 s more on x86-64, for the
-  texts compiled, translated and run once more. The first run took 7m56s,
-  where the one before the milestone took 5m25s, and its stress boot 237 s
-  of its 600, where it had taken 127: most of that was a collection at
-  two hundred safe points of translated code in each text, 1641 of them,
-  each through the whole world. It is fifty to a text now. When the world
-  itself is translated, every safe point of that boot's session is one of
-  this kind, and its cost is the first thing to measure.
+  texts compiled, translated and run once more. A run took 7m56s, where
+  the one before the milestone took 5m25s, and its stress boot 237 s of
+  its 600, where it had taken 127. That was taken for the collections at
+  the safe points of translated code, two hundred to a text and 1641 in
+  all, and they were made fifty: the next run's stress boot took 234 s,
+  so that was not it. Timed line
+  by line on the Mac, emulated, where that boot takes 88 s and took 61
+  before: the evaluator's round with a collection at every safe point has
+  8000 collections more, for the texts that this milestone added, and
+  takes 8 s longer; the two rounds of translated code are 7 s; and the
+  session at the end, which is half of the boot, goes through a world that
+  is a seventh larger at every one of its collections. The text that was
+  4900 of the 8000 is no longer given to the evaluator. The number stays
+  at fifty, which lost nothing. When the world itself is translated, the
+  session at the end of that boot is where to look first.
 
 No milestone yet, to be picked up when they start to matter:
 
