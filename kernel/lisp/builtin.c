@@ -773,7 +773,8 @@ PRIMITIVE(p_set_symbol_function) /* symbol function */
         return lisp_wants("a function", argv[1]);
     if (argv[0] == NIL || (old != LISP_UNBOUND && lisp_function_kind(old) == LISP_SPECIAL_OPERATOR))
         return lisp_fail("~S cannot be given a function", argv[0]);
-    return lisp_as_symbol(argv[0])->function = argv[1];
+    lisp_set_function(argv[0], argv[1]);
+    return argv[1];
 }
 
 PRIMITIVE(p_set_symbol_plist) /* symbol list */
@@ -1090,9 +1091,11 @@ static lisp copy(lisp form)
 
 PRIMITIVE(p_eval)
 {
-    lisp form = copy(argv[0]);
+    /* The evaluator writes what a macro made of a form into the form, so it gets a copy. A compiler
+     * leaves the form as it is. */
+    lisp form = lisp_compiler() == NIL ? copy(argv[0]) : argv[0];
 
-    return lisp_unwinding() ? NIL : lisp_eval(form, NIL);
+    return lisp_unwinding() ? NIL : lisp_eval_form(form);
 }
 
 PRIMITIVE(p_macroexpand_1)

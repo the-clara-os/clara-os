@@ -93,8 +93,10 @@ host-test:
 # for every collection to go through. tools/stress.txt
 # then has the collector do the same for a few forms at the prompt, one of
 # them typed on the keyboard. Where AArch64 is emulated, on CI, that boot
-# takes minutes, so it is given ten.
-RESUME := SESSION=tools/resumed.txt EXPECT='^lisp: the heap is an image'
+# takes minutes, so it is given ten. A world that was saved is compiled
+# through and through, and the second boot of each machine has to say so:
+# none of its functions is left for the evaluator to walk.
+RESUME := SESSION=tools/resumed.txt EXPECT='^lisp: the heap is an image;;^lisp:   of the functions .* and 0 are walked'
 test: all host-test
 	tools/boottest.sh x86_64
 	NAME=x86_64-resumed DISK=$(BUILD)/boot-x86_64.img $(RESUME) tools/boottest.sh x86_64
@@ -106,7 +108,8 @@ test: all host-test
 	python3 -I site/build.py --sessions $(BUILD)
 	NAME=manual SESSION=$(BUILD)/manual-first.txt tools/boottest.sh aarch64 -machine gic-version=3
 	NAME=manual-again DISK=$(BUILD)/boot-manual.img SESSION=$(BUILD)/manual-again.txt \
-		EXPECT='^lisp: the heap is an image' tools/boottest.sh aarch64 -machine gic-version=3
+		EXPECT='^lisp: the heap is an image;;^lisp:   of the functions .* and 0 are walked' \
+		tools/boottest.sh aarch64 -machine gic-version=3
 	NAME=aarch64-stress SESSION=tools/stress.txt TIMEOUT=600 DISK=$(BUILD)/boot-aarch64.img SPOIL=1 \
 		EXPECT='^lisp: clara.image is not resumed: it is not what was saved;;^lisp: a collection at every safe point: boot.lisp once more in [0-9]\{4,\}, [0-9]* texts once more in [0-9]\{5,\};;^lisp: a collection at the safe points of compiled code, [0-9]* to a text: [0-9]* texts once more in [0-9]\{4,\}' \
 		tools/boottest.sh aarch64 -machine gic-version=3

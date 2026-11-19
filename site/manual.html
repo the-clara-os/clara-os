@@ -212,7 +212,7 @@ error: interrupted from the keyboard</pre>
   <section id="language">
     <h2>{{spleen:The language}}</h2>
     <p>The Lisp is a part of Common Lisp, and not a dialect of its own: what is here means what it means in any Common Lisp, and a program that keeps to this part runs elsewhere as it stands. If you know Common Lisp, read <a href="#differs">where it stops short</a> and go on. If you do not, any introduction to it will do, for as far as this part goes.</p>
-    <p>What you type is evaluated by an interpreter: a function is worked out from its text every time it is called. That is slow by the standards of a compiled Lisp, and quick enough to drive the machine it runs on, whose console, disks and file system are written in it. A function that has to be quicker can be <a href="#compiler">compiled</a>.</p>
+    <p>What you type is <a href="#compiler">compiled</a> before it runs, by a compiler that is written in this Lisp like the rest of the system, and what the compiler makes is carried out by a small machine in the kernel. That is slower than a Lisp that compiles for the processor, and quick enough to drive the machine it runs on, whose console, disks, file system and windows are written in it.</p>
 
     <h3 id="defining">Functions, macros and variables</h3>
 <pre class="session">&gt; (defun fact (n) (if (&lt; n 2) 1 (* n (fact (- n 1)))))
@@ -312,7 +312,7 @@ error: the stack is full: the forms are nested too deep, or a function calls its
       <li>There are no hash tables, no classes and generic functions, and no <code>typep</code>.</li>
       <li>A package can be made, used when it is made, exported from, and deleted when no other uses it. Nothing is imported or shadowed afterwards.</li>
       <li><code>eq</code> and <code>eql</code> are the same function. Letters change case as far as ASCII has them: <code>(string-upcase "é")</code> is <code>"é"</code>.</li>
-      <li>A function can call itself some three thousand calls deep, and a <a href="#compiler">compiled</a> one about twice that. Past that it is the error above, and not the end of the machine.</li>
+      <li>A function can call itself some six thousand calls deep. Past that it is the error above, and not the end of the machine.</li>
       <li><code>(declare (special ...))</code> and <code>&amp;environment</code> are refused, and so are the reader's <code>#.</code>, <code>#S</code> and <code>#P</code>.</li>
     </ul>
     <p><a href="#names">Everything that is defined</a>, at the end of this manual, is the whole list, by subject.</p>
@@ -320,67 +320,57 @@ error: the stack is full: the forms are nested too deep, or a function calls its
 
   <section id="compiler">
     <h2>{{spleen:The compiler}}</h2>
-    <p><code>compile</code> makes a function quicker. It goes through the function once and writes down what the interpreter would find out again at every call: where each variable is, which form is a call and which a loop, what every macro stands for. What it leaves is a list of small steps, instructions, and a compiled function is run by carrying them out one after the other.</p>
+    <p>Whatever you define is compiled. The compiler goes through a function once and writes down what an interpreter would have to find out again at every call: where each variable is, which form is a call and which a loop, what every macro stands for. What it leaves is a list of small steps, instructions, and the function is run by carrying them out one after the other. That happens when a form is typed at the prompt, when a file is loaded and when <code>eval</code> is given a form, so there is nothing to ask for:</p>
 <pre class="session">&gt; (compiled-function-p #'fact)
-NIL
-&gt; (compile 'fact)
-FACT
-&gt; (compiled-function-p #'fact)
 T
-&gt; (fact 20)
-2432902008176640000
+&gt; (compiled-function-p (lambda (n) (* n n)))
+T
 &gt; (funcall (compile nil '(lambda (n) (* n n))) 12)
 144</pre>
-    <p><code>(compile 'fact)</code> puts the compiled function in the place of the one that <code>fact</code> named, and <code>(compile nil '(lambda ...))</code> gives a compiled function of a form. A compiled function means what it meant before. It takes the same arguments, gives the same values and fails with the same words, and it can call any other function and be called by any, compiled or not.</p>
+    <p>The system is compiled in the same way. The console, the file system, the window manager, the applications and the compiler itself are Lisp, and when a machine starts from the Lisp files the compiler first compiles itself and then everything else. That takes a fraction of a second, or a few seconds where the machine is emulated. A <a href="#image">world that is saved</a> holds all of it compiled, and a machine that starts from one does none of that work again.</p>
+    <p><code>compile</code> is still there: <code>(compile nil '(lambda ...))</code> gives the compiled function of a form, as above, and <code>(compile 'fact)</code> leaves a function that is compiled already as it is.</p>
 
-    <h3 id="quicker">How much quicker</h3>
-    <p><code>time</code> evaluates a form and says how long that took, to a hundredth of a second, which is how often the system's clock ticks. On one machine, before and after <code>(compile 'fib)</code>:</p>
+    <h3 id="quicker">How quick</h3>
+    <p><code>time</code> evaluates a form and says how long that took, to a hundredth of a second, which is how often the system's clock ticks. On one machine:</p>
 <pre><code>&gt; (defun fib (n) (if (&lt; n 2) n (+ (fib (- n 1)) (fib (- n 2)))))
 FIB
 &gt; (time (fib 30))
-390 milliseconds
-832040
-&gt; (compile 'fib)
-FIB
-&gt; (time (fib 30))
-110 milliseconds
+80 milliseconds
 832040</code></pre>
-    <p>Three or four times as quick is usual for a function that counts and calls. A function that spends its time in other functions gains what those gain: <code>mapcar</code> and the rest of the system's own Lisp are not compiled yet, so a call of <code>mapcar</code> takes as long as it did.</p>
+    <p>The interpreter that ClaraOS had before it had a compiler, which walked the text of <code>fib</code> at every call, took 390 milliseconds for the same on that machine.</p>
 
     <h3 id="listing">What it made of a function</h3>
     <p><code>disassemble</code> writes the instructions of a function out, with their numbers:</p>
 <pre class="session">&gt; (disassemble 'fact)
-FACT: 1 local variable, 6 words of stack
-0   CONST &lt;
-1   LOCAL 0
-2   CONST 2
-3   CALL 2
-4   JUMP-IF-NIL 7
-5   CONST 1
-6   RETURN-ONE
-7   CONST *
+FACT: 1 local variable, 4 words of stack
+0   LOCAL 0
+1   CONST 2
+2   &lt;
+3   JUMP-IF-NIL 6
+4   CONST 1
+5   RETURN-ONE
+6   LOCAL 0
+7   CONST FACT
 8   LOCAL 0
-9   CONST FACT
-10  CONST -
-11  LOCAL 0
-12  CONST 1
-13  CALL 2
-14  CALL 1
-15  CALL 2
-16  RETURN
+9   CONST 1
+10  -
+11  CALL 1
+12  *
+13  RETURN
 NIL</pre>
-    <p>The instructions work on a stack. <code>CONST</code> puts a constant on it and <code>LOCAL</code> the value of a variable, which is known by its number: <code>n</code> is variable 0. <code>CALL 2</code> takes two arguments off the stack and the function under them, calls it, and leaves what it gives. So the first four are <code>(&lt; n 2)</code>, <code>JUMP-IF-NIL 7</code> goes on at instruction 7 when that gave <code>NIL</code>, and the rest is <code>(* n (fact (- n 1)))</code>. A function is still found by its name at the moment it is called: define <code>fact</code> or <code>*</code> again, and compiled code calls the new one.</p>
-    <p>Given a function that is not compiled, or a <code>lambda</code> form, <code>disassemble</code> shows what compiling it would make and leaves the function as it was. A function that is part of the kernel has no listing.</p>
+    <p>The instructions work on a stack. <code>LOCAL</code> puts the value of a variable on it, which is known by its number: <code>n</code> is variable 0. <code>CONST</code> puts a constant there. <code>&lt;</code> takes two numbers off the stack and leaves <code>T</code> or <code>NIL</code>, so the first three are <code>(&lt; n 2)</code>, and <code>JUMP-IF-NIL 6</code> goes on at instruction 6 when that gave <code>NIL</code>. <code>CALL 1</code> takes an argument off the stack and the function under it, calls it, and leaves what it gives. The rest is <code>(* n (fact (- n 1)))</code>.</p>
+    <p>A function is found by its name at the moment it is called: define <code>fact</code> again, and compiled code calls the new one. The commonest functions of the kernel have an instruction each, which does the work without a call: <code>car</code>, <code>cdr</code>, <code>not</code>, <code>null</code>, <code>consp</code>, <code>atom</code>, <code>1+</code> and <code>1-</code> of one argument, and <code>cons</code>, <code>eq</code>, <code>+</code>, <code>-</code>, <code>*</code>, <code>&lt;</code>, <code>&gt;</code>, <code>&lt;=</code>, <code>&gt;=</code>, <code>=</code>, <code>aref</code> and <code>svref</code> of two. Such an instruction looks first whether its name still means the kernel's function. If you have defined <code>*</code> again, it calls yours.</p>
+    <p>Given a <code>lambda</code> form, <code>disassemble</code> shows what compiling it makes. A function that is part of the kernel has no listing.</p>
 
-    <h3 id="uncompiled">What it leaves alone</h3>
+    <h3 id="mind">What to keep in mind</h3>
     <ul>
-      <li>Nothing is compiled unless you ask. <code>defun</code> makes a function for the interpreter, at the prompt and in a file that is loaded, and <code>(compile 'name)</code> makes it a compiled one.</li>
-      <li>Macros are not compiled. A macro runs when a call of it is expanded, and for a compiled function that happened once, when it was compiled. Define a macro again, and the functions that were compiled with the old one go on as they were until they are compiled again.</li>
-      <li>A function that was made inside a <code>let</code> and uses its variables cannot be compiled by itself: <code>compile</code> says so. Compile the function that makes it instead, and it makes compiled ones.</li>
-      <li><code>defvar</code> has to come before the functions that bind the variable are compiled. That is the order a file has them in anyway.</li>
-      <li>A form that is not what it should be, <code>(if)</code> for one, does not stop the compiler. The compiled function fails when it comes to that form, in the words the interpreter has for it.</li>
+      <li>A macro runs when a call of it is expanded, and for a compiled function that happened once, when the function was compiled. Define a macro again, and the functions that were compiled with the old one go on as they were until they are defined again. Macros are compiled like functions.</li>
+      <li>The macros of a <code>macrolet</code> run while the forms around them are compiled, so they cannot use the variables of the function that they are written in. They can use the macros of a <code>macrolet</code> around them.</li>
+      <li><code>defvar</code> has to come before the functions that bind the variable. That is the order a file has them in anyway.</li>
+      <li>A form that is not what it should be, <code>(if)</code> for one, does not stop the compiler. The compiled function fails when it comes to that form.</li>
+      <li>The kernel still has its interpreter. It runs the first two Lisp files when a machine starts from them, until the compiler has compiled itself, and at every such start the kernel holds what compiled code does against it: some four hundred small programs have to give the same answers both ways.</li>
     </ul>
-    <p>Compiled functions are part of the <a href="#image">world that is saved</a>, and come back compiled. <code>(clara.compiler:evaluate form)</code> is <code>eval</code> by way of the compiler: the form is compiled, and then run.</p>
+    <p>Compiled functions are part of the <a href="#image">world that is saved</a>. <code>(clara.compiler:evaluate form)</code> is the function that <code>eval</code> calls: the form is compiled, and then run.</p>
   </section>
 
   <section id="files">
@@ -465,7 +455,7 @@ NIL
 
     <h3 id="saved">What comes back, and what does not</h3>
     <ul>
-      <li>Functions, macros, structures, packages and conditions that were defined, and the values of variables, come back. So does the package that names were being read in. A function that was <a href="#compiler">compiled</a> comes back compiled.</li>
+      <li>Functions, macros, structures, packages and conditions that were defined, and the values of variables, come back. So does the package that names were being read in. All of it is <a href="#compiler">compiled</a>, and comes back compiled.</li>
       <li>A special variable comes back with the value it has outside every <code>let</code>, also when it was saved from inside one.</li>
       <li>Threads do not come back. The world starts again at the prompt, and does not go on in the middle of what it was doing. A thread that was running is one that has been stopped, and a lock that was held is free.</li>
       <li>The <a href="#windows">window manager</a> is running again when it was running, with one Listener window. The windows that were open do not come back.</li>
@@ -966,7 +956,7 @@ error: nothing is mapped at #x0</pre>
     <p class="names" data-package="CLARA.TERMINAL"><code>clara.terminal:open-terminal</code> <code>clara.terminal:terminal-p</code> <code>clara.terminal:terminal-stream</code> <code>clara.terminal:terminal-window</code> <code>clara.terminal:clear</code> <code>clara.terminal:listener</code></p>
 
     <h3>The package CLARA.COMPILER</h3>
-    <p><a href="#compiler">The compiler</a> is a file of Lisp as well. What it is used by are Common Lisp's own names, <code>compile</code> and <code>disassemble</code>; the one name of its own is <code>eval</code> by way of the compiler.</p>
+    <p><a href="#compiler">The compiler</a> is a file of Lisp as well. What it is used by are Common Lisp's own names, <code>eval</code>, <code>load</code>, <code>compile</code> and <code>disassemble</code>; the one name of its own is the function that <code>eval</code> calls.</p>
     <p class="names" data-package="CLARA.COMPILER"><code>clara.compiler:evaluate</code></p>
 
     <h3>The packages CLARA.EDITOR and CLARA.FILES</h3>

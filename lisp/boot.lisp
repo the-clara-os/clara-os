@@ -1007,7 +1007,7 @@
 ;;; that makes a compiled function of a LAMBDA form and a name, and one
 ;;; that lists the instructions of a function.
 
-(defvar %compiler nil) ; the two functions, in a list, once a compiler has said that it is there
+(defvar %compiler nil) ; the three functions, in a list, once a compiler has said that it is there
 
 ;; A definition as a compiled function: a LAMBDA form is compiled, and so
 ;; is a function that is not compiled yet, from the form that it was made
@@ -1108,11 +1108,14 @@
   nil)
 
 ;; A compiler says that it is there: COMPILE makes a compiled function of a
-;; LAMBDA form and a name, which may be NIL, and LIST writes the
-;; instructions of a function out. From then on those are what COMPILE and
-;; DISASSEMBLE call.
-(defun provide-compiler (&key compile list)
-  (setq cl::%compiler (if compile (list compile list)))
+;; LAMBDA form and a name, which may be NIL, LIST writes the instructions
+;; of a function out, and EVALUATE gives the values of a form, having
+;; compiled it. From then on the first two are what COMPILE and DISASSEMBLE
+;; call, and the third is what EVAL is, and what LOAD does with every form
+;; that it reads (kernel/lisp/eval.c): whatever is typed or loaded is
+;; compiled before it runs.
+(defun provide-compiler (&key compile list evaluate)
+  (setq cl::%compiler (if compile (list compile list evaluate)))
   nil)
 
 ;; The world is saved: all that is in the heap goes into a file, and a

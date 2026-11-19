@@ -60,10 +60,16 @@ boots straight into it. Two applications come with it, a text editor
 the boot volume that the launcher loads when it is first picked, and
 unloads again when asked, and `(clara.windows:launch "Editor" "/notes.txt")`
 opens a file from a prompt. And there is a compiler, written in Lisp
-(lisp/compiler.lisp): `(compile 'name)` makes a function one that a small
-machine in the kernel runs, instruction by instruction, three or four times
-as quick as the evaluator walks its forms and with the same meaning, and
-`(disassemble 'name)` shows the instructions. The same Lisp files load
+(lisp/compiler.lisp), which everything goes through: what is typed at a
+prompt or loaded from a file is compiled before it runs, and so are the
+console, the file system, the window manager, the applications and the
+compiler itself, which it compiles when a machine starts from the files.
+What it makes is run by a small machine in the kernel, instruction by
+instruction, several times as quick as the evaluator walks the same forms
+and with the same meaning, and `(disassemble 'name)` shows the
+instructions. The evaluator is still there to run the compiler until it
+has compiled itself, and every such start holds the two against each
+other. The same Lisp files load
 under SBCL on the host, where they are tested against a machine that is
 made up for the purpose.
 [ROADMAP.md](ROADMAP.md) has what comes next, [DESIGN.md](DESIGN.md) the

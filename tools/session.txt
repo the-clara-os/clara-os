@@ -8,27 +8,24 @@ FACT
 error: the result is an integer too large for a fixnum, and there are no larger integers yet
 > (mapcar #'fact '(1 2 3 4 5))
 (1 2 6 24 120)
-> (list (compiled-function-p #'fact) (compile 'fact) (compiled-function-p #'fact) (fact 20))
-(NIL FACT T 2432902008176640000)
+> (list (compiled-function-p #'fact) (compiled-function-p (eval '(lambda (n) n))) (compile 'fact) (fact 20))
+(T T FACT 2432902008176640000)
 > (disassemble 'fact)
-FACT: 1 local variable, 6 words of stack
-0   CONST <
-1   LOCAL 0
-2   CONST 2
-3   CALL 2
-4   JUMP-IF-NIL 7
-5   CONST 1
-6   RETURN-ONE
-7   CONST *
+FACT: 1 local variable, 4 words of stack
+0   LOCAL 0
+1   CONST 2
+2   <
+3   JUMP-IF-NIL 6
+4   CONST 1
+5   RETURN-ONE
+6   LOCAL 0
+7   CONST FACT
 8   LOCAL 0
-9   CONST FACT
-10  CONST -
-11  LOCAL 0
-12  CONST 1
-13  CALL 2
-14  CALL 1
-15  CALL 2
-16  RETURN
+9   CONST 1
+10  -
+11  CALL 1
+12  *
+13  RETURN
 NIL
 > (fact 21)
 error: the result is an integer too large for a fixnum, and there are no larger integers yet
@@ -458,6 +455,16 @@ OK
 *BELL*
 > (defvar *waiter* (clara:make-thread (lambda () (clara:wait-event *bell*)) :name "waiter"))
 *WAITER*
+> (defvar *svref* #'svref)
+*SVREF*
+> (defvar *asked* 0)
+*ASKED*
+> (defun svref (vector index) (setq *asked* (+ *asked* 1)) (aref vector index))
+SVREF
+> (defun first-of (vector) (svref vector 0))
+FIRST-OF
+> (let ((before *asked*)) (list (first-of (vector 'a 'b)) (> *asked* before)))
+(A T)
 > (defpackage "BARE" (:use))
 #<PACKAGE "BARE">
 > (in-package "BARE")

@@ -110,7 +110,7 @@ footer p { max-width: 40rem; }
 
 <main class="frame">
   <p class="lede">A small operating system for x86_64 and AArch64, written to be read from the first instruction up.</p>
-  <p>Those two lines at the top are what the kernel prints when it takes over from the firmware. ClaraOS is a Lisp machine in the making: a C kernel small enough for one person to hold in their head, under a world written in Common Lisp. It has a window manager, and a world that was saved in it boots straight into it; its applications are Lisp programs, a text editor and a file browser the first of them, each loaded from its file when it is first picked. Its Lisp has a compiler, written in that Lisp, which makes a function several times as quick when it is asked to. It is not a Unix, and it does not try to run Linux software.</p>
+  <p>Those two lines at the top are what the kernel prints when it takes over from the firmware. ClaraOS is a Lisp machine in the making: a C kernel small enough for one person to hold in their head, under a world written in Common Lisp. It has a window manager, and a world that was saved in it boots straight into it; its applications are Lisp programs, a text editor and a file browser the first of them, each loaded from its file when it is first picked. Its Lisp has a compiler, written in that Lisp, and everything in the world is compiled by it, the compiler included. It is not a Unix, and it does not try to run Linux software.</p>
   <p class="links">
     <a class="source" href="https://github.com/the-clara-os/clara-os">Read the source</a>
     <a href="https://github.com/the-clara-os/clara-os/blob/main/DESIGN.md">Design</a>
@@ -120,7 +120,7 @@ footer p { max-width: 40rem; }
 
   <section id="shape">
     <h2>{{spleen:The shape}}</h2>
-    <p><strong>The substrate</strong> is the C kernel. It brings up the processor, hands out memory, runs threads, takes interrupts, and holds the Lisp runtime itself: the reader, the evaluator and the garbage collector.</p>
+    <p><strong>The substrate</strong> is the C kernel. It brings up the processor, hands out memory, runs threads, takes interrupts, and holds the Lisp runtime itself: the reader, the evaluator, the machine that runs compiled code and the garbage collector.</p>
     <p><strong>The world</strong> is Lisp: the console and the REPL, the logic of the drivers, the filesystem, the window manager and every application.</p>
     <p><strong>One address space</strong>, one heap, no user mode. Lisp code cannot forge a pointer, so protection comes from the language and not from page tables. An application that fails is a condition for the window manager to handle.</p>
     <p><strong>The Lisp</strong> is a subset of Common Lisp, chosen so that every file also loads under SBCL on an ordinary computer, where it is written and tested.</p>

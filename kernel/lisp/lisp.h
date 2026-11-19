@@ -100,8 +100,17 @@ enum lisp_function_kind {
     LISP_PRIMITIVE, /* a function written in C: code is its place in lisp_primitives */
     LISP_SPECIAL_OPERATOR, /* IF, LET and the like: code is its place in the evaluator's table */
     LISP_CLOSURE,   /* a function written in Lisp: code is (lambda-list . body) */
-    LISP_MACRO,     /* the same, called with the subforms of a form to make the form to evaluate instead */
+    LISP_MACRO,     /* the same, called with the subforms of a form to make the form to evaluate instead; or, made by
+                       compiled code, code is a function that is given the form itself */
     LISP_COMPILED,  /* a function written in Lisp that the compiler has been over: code is what it made (vm.c) */
+};
+
+/* The functions that the heap holds, counted (lisp_heap_functions). */
+struct lisp_functions {
+    uint64_t in_c;     /* functions in C, and the special forms */
+    uint64_t compiled; /* functions that the machine runs the code of, */
+    uint64_t macros;   /* and macros whose function is one of those */
+    uint64_t walked;   /* functions and macros whose forms the evaluator walks */
 };
 
 struct lisp_function {
@@ -353,6 +362,7 @@ void    *lisp_alloc(enum lisp_type type, uint64_t length); /* a new object, all 
 uint64_t lisp_object_words(lisp header);                   /* how long the object under that header is */
 int      lisp_heap_room(uint64_t words);                   /* can an object that long be made, and memory be left over? */
 uint64_t lisp_heap_census(uint64_t count[LISP_TYPES]);     /* walk the heap, count by type; bytes in use */
+void     lisp_heap_functions(struct lisp_functions *count); /* how many functions of each kind are in the heap */
 void     lisp_heap_state(struct lisp_heap *state);
 uint64_t lisp_collect(void);                               /* free what is not in use; how many bytes that was */
 void     lisp_reach(lisp x);                               /* from the collector's helpers: x is in use */
@@ -454,11 +464,22 @@ void lisp_eval_init(const struct boot_file *files); /* the files that LOAD can f
 int  lisp_boot_file(const char *name);              /* is there one of that name among them? */
 void lisp_eval_start(void);                 /* for a thread that has just been given the runtime: how deep it may go */
 lisp lisp_eval(lisp form, lisp env);        /* env is NIL outside every binding */
+lisp lisp_compiler(void);                   /* the function that compiles a form and runs it, or NIL: no compiler yet */
+void lisp_set_function(lisp symbol, lisp function); /* the one way to give a symbol a function: the machine that runs
+                                               compiled code has to hear of it (vm.c) */
+void lisp_vm_init(void);                    /* vm.c: the functions in C that the machine has instructions for */
+lisp lisp_eval_form(lisp form);             /* EVAL and LOAD: compiled and run when there is a compiler, walked if not */
 lisp lisp_apply(lisp function, unsigned argc, lisp *argv); /* the arguments have to be on the value stack */
 int  lisp_evaluate(lisp form);              /* at the top level. 1: lisp_values has the values, the only one too. 0: the
                                                condition that nothing handled */
 int  lisp_call(lisp function, unsigned argc, const lisp *argv); /* the same for a function and its arguments,
                                                at the bottom of a thread; -1 when the thread was told to stop */
+/* Not zero when a thread that comes to a safe point has something to look
+ * at there: it is time to collect, another thread wants the runtime, this
+ * one was told to stop, Ctrl-C was typed, an interrupt came in. Whoever
+ * brings one of those about says so here, and the safe point itself is a
+ * look at this and nothing more for as long as nobody has (eval.h). */
+extern volatile int lisp_attention;
 int  lisp_safe_point(void);                 /* for C that has waited: the evaluator's safe point. 0: return, an exit is
                                                under way */
 int  lisp_unwinding(void);

@@ -69,8 +69,16 @@
 (defun current-thread ()
   *this-thread*)
 
+;; A thread takes itself off the list as it ends. One that was stopped
+;; before it got as far as its function never does, and nobody may wait
+;; for it either (JOIN-THREAD), so it is taken off here, when somebody
+;; asks: a thread that SBCL has no longer is not one that has not finished.
 (defun all-threads ()
   (sb-thread:with-mutex (*threads-lock*)
+    (setq *threads* (remove-if (lambda (thread)
+                                 (let ((native (thread-native thread)))
+                                   (and native (not (sb-thread:thread-alive-p native)))))
+                               *threads*))
     (cons *this-thread* (remove *this-thread* (copy-list *threads*)))))
 
 (defun make-thread (function &key name)
@@ -81,18 +89,23 @@
           (sb-thread:make-thread
            (lambda ()
              (let ((*this-thread* thread) (state :stopped) (result nil))
-               (unwind-protect
-                    (handler-case (setq result (multiple-value-list (funcall function))
-                                        state :finished)
-                      (serious-condition (condition)
-                        (fresh-line)
-                        (format t "error in ~S: ~A~%" thread condition)
-                        (setq result condition
-                              state :failed)))
-                 (setf (thread-result thread) result
-                       (thread-state thread) state)
-                 (sb-thread:with-mutex (*threads-lock*)
-                   (setq *threads* (remove thread *threads*))))))
+               ;; What says how the thread ended is not to be cut short by a second
+               ;; DESTROY-THREAD, which would leave the thread on the list: it runs with
+               ;; interrupts off, and the function itself with them on.
+               (sb-sys:without-interrupts
+                 (unwind-protect
+                      (sb-sys:with-local-interrupts
+                        (handler-case (setq result (multiple-value-list (funcall function))
+                                            state :finished)
+                          (serious-condition (condition)
+                            (fresh-line)
+                            (format t "error in ~S: ~A~%" thread condition)
+                            (setq result condition
+                                  state :failed))))
+                   (setf (thread-result thread) result
+                         (thread-state thread) state)
+                   (sb-thread:with-mutex (*threads-lock*)
+                     (setq *threads* (remove thread *threads*)))))))
            :name name))
     thread))
 
@@ -236,8 +249,8 @@
 
 (defvar *compiler* nil)
 
-(defun provide-compiler (&key compile list)
-  (setq *compiler* (if compile (list compile list)))
+(defun provide-compiler (&key compile list evaluate)
+  (setq *compiler* (if compile (list compile list evaluate)))
   nil)
 
 ;;; CLARA.HOST: the machine that is not there

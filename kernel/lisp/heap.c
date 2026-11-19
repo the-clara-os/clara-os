@@ -259,6 +259,8 @@ void *lisp_alloc(enum lisp_type type, uint64_t length)
         g_next += bytes;
     }
     g_since += bytes;
+    if (g_since >= g_trigger)
+        lisp_attention = 1; /* time to collect, at the next safe point */
     memset(object, 0, bytes);
     object[0] = header;
     return object;
@@ -313,6 +315,43 @@ uint64_t lisp_heap_census(uint64_t count[LISP_TYPES])
         at += words * sizeof(lisp);
     }
     return in_use;
+}
+
+/* The functions in the heap, by who runs them. A collection first leaves
+ * only the ones that somebody can still call. */
+void lisp_heap_functions(struct lisp_functions *count)
+{
+    memset(count, 0, sizeof *count);
+    for (uint64_t at = VM_HEAP_BASE; at < g_next;) {
+        lisp *object = (lisp *)(uintptr_t)at;
+        uint64_t words = lisp_object_words(*object);
+
+        if (!words || words > (g_next - at) / sizeof(lisp))
+            panic("lisp: the heap is damaged: at %llx the header is %llx", at, *object);
+        if ((*object & 0xff) == LISP_FUNCTION) {
+            const struct lisp_function *f = (const struct lisp_function *)object;
+
+            switch ((enum lisp_function_kind)lisp_length(f->header)) {
+            case LISP_PRIMITIVE:
+            case LISP_SPECIAL_OPERATOR:
+                count->in_c++;
+                break;
+            case LISP_COMPILED:
+                count->compiled++;
+                break;
+            case LISP_MACRO:
+                if (lisp_is(f->code, LISP_FUNCTION)) {
+                    count->macros++;
+                    break;
+                }
+                /* fall through */
+            case LISP_CLOSURE:
+                count->walked++;
+                break;
+            }
+        }
+        at += words * sizeof(lisp);
+    }
 }
 
 void lisp_heap_state(struct lisp_heap *state)
@@ -516,6 +555,8 @@ uint64_t lisp_collect(void)
  * all the same, which is for the evaluator to make an error of. */
 int lisp_heap_safe_point(void)
 {
+    if (g_every)
+        lisp_attention = 1; /* the next safe point is to count as well */
     if (g_since < g_trigger && (!g_every || ++g_passed < g_every))
         return 1;
     lisp_collect();
@@ -539,6 +580,7 @@ uint64_t lisp_collect_every(uint64_t n)
 
     g_every = n;
     g_passed = 0;
+    lisp_attention = 1;
     return before;
 }
 

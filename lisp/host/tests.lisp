@@ -206,7 +206,43 @@
              (failed "the compiler takes ~A with ~A to ~A parts, and the evaluator with ~A to ~A"
                      (second parts) (second known) (third known) (fourth parts) (fifth parts)))))))
 
-(check '(clara.compiler::compile-lambda clara.compiler::list-function) (clara.host:provided-compiler))
+(check '(clara.compiler::compile-lambda clara.compiler::list-function clara.compiler:evaluate)
+       (clara.host:provided-compiler))
+
+;; The instructions after FAIL stand for functions in C, each under the
+;; name of its function, which it calls when it cannot do the work itself:
+;; so the function has to be one of builtin.c's, and take as many arguments
+;; as the instruction does.
+(let ((known (cdr (member :fail clara.compiler::*operations* :key #'car)))
+      (table (lines (file-text "kernel/lisp/builtin.c"))))
+  (check 20 (length known))
+  (dolist (row known)
+    (incf *checks*)
+    (let* ((function (find-symbol (symbol-name (car row)) "COMMON-LISP"))
+           (arguments (- 1 (second row)))
+           (line (find-if (lambda (line) (starts-with (format nil "    { \"~A\", " (car row)) line)) table))
+           (parts (and line (words (substitute #\Space #\, line)))))
+      (cond ((not (and function (eq (get function 'clara.compiler::instruction) (car row))))
+             (failed "the machine has the instruction ~A, and the compiler has no function for it" (car row)))
+            ((null parts)
+             (failed "the machine has the instruction ~A, and no function in C has that name" (car row)))
+            ((or (< arguments (parse-integer (fourth parts)))
+                 (and (string/= (fifth parts) "LISP_MANY") (> arguments (parse-integer (fifth parts)))))
+             (failed "the instruction ~A takes ~A arguments, and the function in C ~A to ~A"
+                     (car row) arguments (fourth parts) (fifth parts)))))))
+
+;; Such an instruction looks whether its name still means the function in
+;; C, in a word that is kept right where a symbol is given a function
+;; (lisp_set_function, kernel/lisp/vm.c). So nothing else may write the
+;; function of a symbol, apart from the evaluator as it starts, which has
+;; the machine look afterwards.
+(let ((writes nil))
+  (dolist (file (directory (merge-pathnames "*.c" (source "kernel/lisp/"))))
+    (let ((name (format nil "kernel/lisp/~A.c" (pathname-name file))))
+      (dolist (line (lines (file-text name)))
+        (when (and (search "lisp_as_symbol(" line) (search ")->function = " line))
+          (push name writes)))))
+  (check '("kernel/lisp/eval.c" "kernel/lisp/eval.c" "kernel/lisp/vm.c") (sort writes #'string<)))
 
 ;; What a form gives: its values, or :ERROR.
 (defun outcome (function form)
@@ -418,7 +454,36 @@
  (eval-when (:execute) 1 2) (eval-when (:compile-toplevel) 1) (locally (declare (optimize speed)) 3) (the fixnum 4)
  (funcall (function (lambda (x) (+ x 1))) 1)
  (mapcar #'1+ '(1 2 3))
- (funcall 'list 1 2))
+ (funcall 'list 1 2)
+ ;; the functions that the machine has instructions for: what they give, with any number of arguments,
+ ;; as the one value of a form, with arguments that they do not take, and by their names
+ (let ((a '(1 2)) (b 2))
+   (list (car a) (cdr a) (cons b a) (not a) (null b) (consp a) (atom a) (eq a a) (+ b 1) (- b 1) (* b 3) (1+ b) (1- b)
+         (< b 3) (> b 3) (<= b 2) (>= b 3) (= b 2) (aref (vector 5 6) 1) (svref (vector 7 8) 0)))
+ (list (+) (+ 1) (+ 1 2 3) (- 5) (- 9 1 2) (* 2 3 4) (< 1 2 3) (= 2 2 2) (>= 3 3 1) (car nil) (cdr nil))
+ (multiple-value-list (funcall (lambda (x) (floor 7 2) (car x)) '(1 2)))
+ (multiple-value-list (progn (floor 7 2) (+ 1 2)))
+ (multiple-value-call #'list (floor 7 2) (car '(a)) (1+ 2))
+ (progn (car '(1)) (+ 1 2) (cons 1 2) 3)
+ (let ((n 0)) (dotimes (i 10) (setq n (+ n (* i 2)))) n)
+ (block b (+ 1 (return-from b 2)))
+ (list 1 (block b (cons 2 (funcall (lambda () (return-from b 3))))) 4)
+ (catch 'c (+ 1 (throw 'c (* 2 3))))
+ (handler-case (+ 1 (car 5)) (type-error () 'caught))
+ (car 5) (+ 1 'a) (svref (vector 1) 3) (cons 1) (car)
+ (list (funcall #'car '(1)) (apply '+ '(1 2)) (mapcar #'1+ '(1 2)) (funcall '< 1 2))
+ ;; macros that the compiler makes functions of: of MACROLET, which see the macros around them,
+ ;; and of DEFMACRO, which see the variables
+ (macrolet ((make-form (op) (list 'quote (list op 1 2)))) (macrolet ((sum () (make-form +))) (sum)))
+ (macrolet ((taken (&whole all (a b) &optional (c 3) &rest more) (list 'quote (list a b c more all))))
+   (list (taken (1 2)) (taken (1 2) 4 5 6)))
+ (macrolet ((keyed (&key a (b 2)) (list 'quote (list a b)))) (list (keyed) (keyed :b 5 :a 1)))
+ (macrolet ((dotted (a . more) (list 'quote (list a more)))) (dotted 1 2 3))
+ (macrolet ((early (x) (if x (return-from early 'left) 'stayed))) (list (early t) (early nil)))
+ (progn (defmacro cm-taken (&whole all (a b) &optional (c 3) &rest more) (list 'quote (list a b c more all)))
+        (list (cm-taken (1 2)) (cm-taken (1 2) 4 5 6)))
+ (progn (let ((n 5)) (defmacro cm-five-more (x) (list '+ x n))) (cm-five-more 1))
+ (progn (defmacro cm-early (x) (if x (return-from cm-early ''left) ''stayed)) (list (cm-early t) (cm-early nil))))
 
 ;; A form is taken a part at a time, and so is what a macro makes of it: a
 ;; DEFVAR counts for the part after it. (SBCL is not asked: it would have
@@ -450,6 +515,21 @@
 (check-condition control-error (clara.compiler:evaluate '(go nowhere)))
 (check-condition program-error (clara.compiler:evaluate '(funcall (lambda (a) a))))
 (check-condition error (clara.compiler::compile-lambda '(not a lambda)))
+;; A macro that the compiler made says what is wrong with a form in the
+;; words that the evaluator has for its own.
+(clara.compiler:evaluate '(defmacro cm-keyed (&key a) (list 'quote a)))
+(check "#<MACRO CM-TAKEN> got too few arguments" (failing '(cm-taken)))
+(check "#<MACRO CM-TAKEN> got too few arguments" (failing '(cm-taken (1))))
+(check "#<MACRO CM-TAKEN> got too many arguments" (failing '(cm-taken (1 2 3))))
+(check "#<MACRO CM-KEYED> does not take the keyword argument :C" (failing '(cm-keyed :c 1)))
+(check "#<MACRO CM-KEYED> got an odd number of keyword arguments" (failing '(cm-keyed :a)))
+(check "&ENVIRONMENT in a lambda list, which the evaluator does not know yet"
+       (progn (clara.compiler:evaluate '(defmacro cm-environment (&environment e) e))
+              (failing '(cm-environment))))
+;; So does a macro of MACROLET, and the error is of the type that it was.
+(check 'a-program-error
+       (clara.compiler:evaluate '(handler-case (macrolet ((needs-one (a) a)) (needs-one))
+                                  (program-error () 'a-program-error))))
 ;; A macro that fails is the form's own failure, when the form is reached.
 (defmacro always-wrong () (error "the macro went wrong"))
 (check "the macro went wrong" (failing '(always-wrong)))
@@ -473,13 +553,14 @@
 
 ;; The listing of a function, and of a function inside it.
 (check (format nil "~{~A~%~}" '("LISTED: 1 local variable, 3 words of stack"
-                                "0   CONST +"
+                                "0   CONST LIST"
                                 "1   LOCAL 0"
                                 "2   CONST 1"
-                                "3   CALL 2"
-                                "4   RETURN"))
+                                "3   +"
+                                "4   CALL 1"
+                                "5   RETURN"))
        (with-output-to-string (*standard-output*)
-         (clara.compiler::list-function (clara.compiler::compile-lambda '(lambda (x) (+ x 1)) 'listed))))
+         (clara.compiler::list-function (clara.compiler::compile-lambda '(lambda (x) (list (+ x 1))) 'listed))))
 (check t (let ((text (with-output-to-string (*standard-output*)
                        (clara.compiler::list-function
                         (clara.compiler::compile-lambda '(lambda (x) (lambda () x)))))))
@@ -4780,6 +4861,18 @@
   (clara:destroy-thread thread)               ; stopped, perhaps before it began
   (check-condition error (clara:join-thread thread))
   (check nil (clara:thread-alive-p thread)))
+;; A thread that is stopped before it has begun, and that nobody waits for,
+;; is gone all the same: closing a window stops its thread in that way, and
+;; on a machine that is slow enough the thread has not yet had its turn.
+(dotimes (i 200)
+  (clara:destroy-thread (clara:make-thread (lambda () (loop (sleep 0.01))))))
+(check t (eventually (lambda () (= (length (clara:all-threads)) 1))))
+;; And one that is stopped a second time while it is ending.
+(dotimes (i 200)
+  (let ((thread (clara:make-thread (lambda () nil))))
+    (clara:destroy-thread thread)
+    (clara:destroy-thread thread)))
+(check t (eventually (lambda () (= (length (clara:all-threads)) 1))))
 (check 1 (length (clara:all-threads)))
 
 (format t "host tests: ~D checks under ~A ~A, ~D failed~%"

@@ -196,7 +196,9 @@ Rules:
   image by hand: `tools/boottest.sh <arch>`, then
   `NAME=<arch>-resumed DISK=build/boot-<arch>.img SESSION=tools/resumed.txt tools/boottest.sh <arch>`;
   `SPOIL=1` changes a byte of the image first, and `EXPECT=` is a line
-  that the boot report has to have. The boot report says
+  that the boot report has to have: give it with `SPOIL=1`, since a
+  spoiled world that is resumed all the same shows only in answers that
+  make no sense. The boot report says
   `lisp: the heap is an image` or `lisp: clara.image is not resumed:`
   and why; a world that came as an image skips the tests of the reader,
   the collector and the evaluator, which `(cl::%self-test)` at its prompt
@@ -222,7 +224,44 @@ Rules:
   calling one of the other, goes into `compilations`, which the evaluator
   is given once the compiler is loaded. A new special form in eval.c gets
   a converter in `*special-forms*` and a generator, with the same count of
-  parts: the host tests hold the two tables against each other.
+  parts: the host tests hold the two tables against each other. The texts
+  are gone through three times at such a boot: by the evaluator; compiled
+  by the compiler while the evaluator still walks it; and compiled by the
+  compiler once it has compiled itself and boot.lisp (`new_world`), with
+  `compilations` in the last two. So a text leaves nothing behind that
+  the next round trips over: one that gives a function of the system's
+  another meaning puts the old one back in an UNWIND-PROTECT.
+- A compiled world. Once lisp/compiler.lisp has said that it is there
+  (`clara:provide-compiler`), EVAL compiles the form it is given and LOAD
+  every form that it reads (`lisp_eval_form`, eval.c), so whatever is
+  typed or loaded is the machine's. `lisp_evaluate` in C is still the
+  evaluator: the texts of the self-test go to it, so `(defun ...)` in a
+  text of `compilations` makes a function that is walked, and `(eval
+  '(defun ...))` a compiled one. lisp/boot.lisp and lisp/compiler.lisp are
+  loaded twice when a machine starts from the files, walked and then
+  compiled, the compiler first, so every form at the top of those two
+  bears being evaluated twice: what lasts is in a DEFVAR, and nothing
+  there adds to what the first load made, a PUSH onto a list, a counter.
+  While compiler.lisp is loaded the second time the compiler is partly
+  walked and partly compiled, and each definition has to work with either
+  kind of every other. A file of the world is never walked: it is
+  compiled a form at a time as it is loaded, so a macro stands before the
+  first function that uses it, as in any file that is compiled. When the
+  world is loaded, `new_world` goes through the heap and panics if a
+  function or a macro is left that the evaluator would walk
+  (`lisp_heap_functions`): something that the first load of one of the
+  two files put into a table and the second did not replace, or something
+  that is held from outside the heap, on the value stack, in the bindings,
+  in `lisp_values` or in `g_unwind`. An exit that is over leaves nothing
+  in `g_unwind`: the collector looks there, and a clause that stayed held
+  on to its function and to all that the function's symbols lead to.
+- A macro that compiled code makes is a function of the kind LISP_MACRO
+  whose code is a compiled function of the whole form (`convert-expander`
+  in lisp/compiler.lisp, `expand` in eval.c); the evaluator's own has a
+  lambda list and a body there. The compiled one takes its form apart
+  with `destructure-bindings`, which is told who is doing it, for what an
+  error says: the words are the ones of `bind` in eval.c, and the texts of
+  `evaluations` about macros hold the two to one answer.
 - The machine's instructions are a table in vm.c, with the enum above it
   in the same order, and a list in lisp/compiler.lisp, `*operations*`,
   which says for each what it does to the depth of the stack and what its
@@ -232,6 +271,18 @@ Rules:
   code. `check` in vm.c looks at every operand of code before it is made a
   function, by the kinds that the table gives them; it looks at an
   instruction's number before it uses it for anything.
+- The instructions from `OP_CAR` on stand for a function in C, each under
+  that function's name. One more of them is a row in both tables, a line
+  `ONE` or `TWO` in vm.c, the name in the list of lisp/compiler.lisp that
+  gives the symbols their `instruction`, and a place in the manual's
+  sentence that names them. The line in vm.c says which arguments the
+  instruction takes for itself and what it gives for them, which has to
+  be what the function in builtin.c gives; anything else it leaves to the
+  function (`known:`), which says what is wrong in its own words. It does
+  its work only while its bit of `g_original` is set, and
+  `lisp_set_function` is what keeps those bits: nothing else gives a
+  symbol its function once the evaluator has started, and the host tests
+  count the places in the sources that do.
 - vm.c keeps what it holds on the value stack, like eval.c, which it
   shares its state with through eval.h: across `lisp_apply` and
   `safe_point` nothing that the collector has to find is in a C variable
@@ -285,7 +336,11 @@ Rules:
   435 s of its 600, most of it in the texts that call themselves until
   the stack is full. A new place where vm.c comes to a safe point gets a
   `watched()` before it. tools/stress.txt then types a few forms with the
-  collector still at it, one of them on the keyboard. Both lines of the
+  collector still at it, one of them on the keyboard. Each of those forms
+  is compiled under the collector, by a compiler that is compiled code,
+  and read by a console that is: that session is where the machine is
+  tried with a collection at every one of its safe points in code that
+  nobody wrote for the test. Both lines of the
   boot report are asked for with `EXPECT=`, whose patterns have `;;`
   between them. That boot runs the kernel that is on its disk, which is
   the one the first AArch64 session booted: to try a change there by
@@ -318,8 +373,10 @@ Rules:
   list at the top of the file, or no other package can call it, and a
   helper that nothing else should use has a name that begins with %. A
   macro's body runs when the macro is first used, so the order of the
-  file matters only for what runs while it loads, DEFSETF for one. Its
-  last two parts are read in CLARA and in CLARA.UNSAFE. The host tests
+  file matters only for what runs while it loads, DEFSETF for one. That
+  is so the first time, when the evaluator walks the file; it is loaded a
+  second time, compiled, once there is a compiler (a compiled world,
+  above). Its last two parts are read in CLARA and in CLARA.UNSAFE. The host tests
   read the file as text and hold its names against SBCL's: keep a
   definition's `(defun ` and its like at the start of a line.
 - The other files in lisp/ are the world, and each has to load under
@@ -427,7 +484,11 @@ Rules:
   running: one run in three of the host tests on CI, and every run in the
   container, whose SBCL is older and slower. A test that stops a thread
   waits for what says how far the thread has come, not for the thread to
-  be there.
+  be there. Under SBCL a thread can be stopped before it has run at all,
+  and on CI one is: lisp/host/clara.lisp lets go of a thread that SBCL no
+  longer has when the list of threads is asked for, since such a thread
+  never took itself off, and the last check of the tests wants that list
+  to hold the one thread that runs them.
 - A window that is opened with `:events t` keeps what it is told, and its
   program takes it with `clara.windows:next-event`, in its own thread:
   `(:key code)`, `(:pointer x y buttons)`, `(:close)`. That is how an
@@ -482,6 +543,17 @@ Rules:
   of lisp.c. Every word after its header has to be a Lisp value, as it
   is for every type but strings, or the collector has to be told
   otherwise where it looks into an object.
+- A safe point is `safe_point()` in eval.h, a look at `lisp_attention`,
+  and `attend()` in eval.c is the call behind it. Whatever brings about
+  something for a thread to see at a safe point sets that word: the
+  allocator when it is time to collect, a thread that queues for the
+  runtime, whoever stops or interrupts a thread, an interrupt. `attend`
+  clears it before it looks at anything, and what is still to be answered
+  when it returns sets it again. The timer sets it at every tick, so a
+  place that forgets to shows as a wait of up to a hundredth of a second
+  and not as a machine that hangs: what finds it is a test that wants the
+  thing seen at once, like the loop of `new_world` that makes lists in
+  less than a tick and has to collect.
 - The collector (heap.c) runs at the evaluator's safe points and nowhere
   else: making an object never collects. So the runtime's C code may keep
   objects in local variables while it makes others, and nothing in

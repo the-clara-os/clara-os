@@ -361,18 +361,51 @@ The compiler:
   the pointer where it had been. The place is read and written in one
   step now, and the host tests have two devices move the pointer two
   thousand times each at the same moment.
-- [ ] **M14b a compiled world.** Nothing is compiled yet unless somebody
-  asks. The world is: `defun` gives a compiled function when a compiler is
-  there, at the prompt and in a file that is loaded; the compiler compiles
-  itself, lisp/boot.lisp and the files of the world, so that the console,
-  the file system, the window manager and the applications run on the
-  machine; macros are compiled, which the compiler's own way of taking a
-  list apart is ready for; and a world that is saved is compiled through
-  and through, so that a machine which starts from an image has paid for
-  none of it. Then the machine is made quicker where the time goes:
-  instructions of their own for the commonest functions, `car`, `+`, `<`
-  and their like, guarded so that defining one of them again still counts,
-  and a safe point that costs a look and no call.
+- [x] **M14b a compiled world** (2026-11-18, version 0.0.20). Whatever is
+  typed or loaded is compiled before it runs. Once the compiler is there,
+  `eval` and `load` hand it every form, so a `defun` gives a compiled
+  function at the prompt, in a file and in the editor, and so does a
+  `lambda` wherever it stands. A machine that starts from the files has
+  the compiler compile itself: lisp/boot.lisp and lisp/compiler.lisp are
+  loaded once for the evaluator to walk, which is how the compiler first
+  runs, and once more through the compiler, and after them the files of
+  the world, which are never walked. That takes a quarter of a second,
+  and some four where the machine is emulated. When it is done the heap is
+  gone through, and a function that the evaluator would still have to
+  walk is a panic. A world that is saved holds 929 functions and 36 macros
+  of the machine's and none of the evaluator's, in 880 KiB where it took
+  1450, and a machine that starts from one compiles nothing. Macros are
+  compiled: a macro is a function of the form that calls it, it sees the
+  variables where it was defined, and the macros of a MACROLET see those
+  of the MACROLET around them. Then the machine was made quicker where the
+  time went. The commonest functions in C, twenty from `car` to `svref`,
+  have an instruction each, which does the work without a call and calls
+  whatever the name has come to mean once the function is defined again;
+  a safe point is a look at one word; and compiled code calls compiled
+  code without going through the evaluator's door. Where the processor
+  runs the code itself, `(fib 30)` took 100 ms and takes 80, five million
+  additions 150 and 70, a million items pushed, reversed and mapped over
+  530 and 120, and a small function is compiled in a tenth of a
+  millisecond where it took seven. Every boot from the files compiles the
+  texts of the self-test three times now: by the compiler that the
+  evaluator walks, with a collection at the safe points of compiled code
+  on one boot, and by the compiler that has compiled itself, with the
+  answers that the evaluator gave each time. Found on the way and mended.
+  The evaluator kept the clause that had last taken a condition and the
+  place of the last GO where the collector looks, so the functions of
+  every self-test since M6c stayed in the heap, 27 of them. And the boot
+  test spoiled a saved world by looking for its eight letters at the start
+  of a sector, which the kernel has among its own constants: this build
+  put those at the start of a sector, a byte of the kernel was turned over
+  in place of one of the world, and the boot that has to refuse the world
+  resumed it. The tool looks at what follows the letters now. And under
+  SBCL a thread that was stopped before it had begun to run, with nobody
+  waiting for it, stayed on the list of threads for good. Closing a window
+  stops its thread in just that way, and the runner of CI was slow enough,
+  on the first run of this milestone, for one such thread not to have had
+  a turn yet: the last check of the host tests, which wants every thread
+  gone, failed there and nowhere else. Tried by itself it happened 2991
+  times in 3000. The list lets go of a thread that SBCL no longer has.
 
 Upgrades:
 
@@ -1054,9 +1087,11 @@ Infrastructure, for sessions with budget left over:
   environment now. And that boot runs the kernel that is on its disk, the
   one the first session of the machine was booted with: a kernel is tried
   there only after a first session of its own. From M14a: how long things
-  take, under hvf, with `time` at the prompt (the figures are with the
-  loose ends of M14b, below); the pass over the 400 texts on x86_64 and on
-  AArch64 emulated, 1.4 s each where hvf takes 0.4 s; the boot with the
+  take, under hvf, with `time` at the prompt (`(fib 30)` 390 ms walked
+  and 110 ms compiled, five million additions in a loop 590 and 130, a
+  million items pushed, reversed and mapped over 700 and 460); the pass
+  over the 400 texts on x86_64 and on AArch64 emulated, 1.4 s each where
+  hvf takes 0.4 s; the boot with the
   collector at every safe point emulated on the Mac, 108 s; the listing
   of functions with every kind of instruction in them, read by eye
   against the forms. And the machine and the compiler broken on purpose,
@@ -1097,81 +1132,54 @@ Infrastructure, for sessions with budget left over:
   makes a DEFVAR. The machine under SBCL was too forgiving of one, a
   record left on the stack by a tagbody, which the kernel answered with a
   fault: it now knows where its records are, and says so when one is
-  taken off while it is in force. Two more for the collector, with the
-  loose ends of M14b.
+  taken off while it is in force. Two more for the collector: the
+  arguments of a call taken off the stack before the call, which every
+  boot notices, and those of a MULTIPLE-VALUE-CALL, which only the boot
+  with a collection at the safe points of compiled code does. From M14b:
+  the same forms timed on the kernel of main and on this one, under hvf
+  (the figures are in the entry of the milestone); the boot with the
+  collector at every safe point emulated on the Mac, 61 s; what a world
+  holds that main saved and that this one saved, 1449 KiB in 3159 and 879
+  KiB in 1707; and a world that 0.0.19 saved, put on a disk beside the
+  kernel of 0.0.20, which says that its objects are not laid out as they
+  are here and makes the world from the files. And 69 mistakes
+  planted, in four copies of the tree at once. The machine and the
+  substrate, 51 ways, each tried by a boot: an instruction of the twenty
+  that takes arguments it should leave to its function, forgets to look
+  at the size of a sum, gives the wrong answer, leaves the values of the
+  form before it or a word on the stack; the bit that says whether a name
+  still means its function in C never looked at, never kept, taken for
+  set in a world that was resumed, set for any function in C; a call of a
+  compiled function with no safe point; the allocator, the interrupts and
+  the collector's own count saying nothing of what they have for a
+  thread; EVAL and LOAD that never reach the compiler, either of the two
+  files not loaded a second time, a macro handed its subforms, a DEFMACRO
+  that makes a function, the clause of a condition kept. The compiler, 18
+  ways, each tried by the host tests and then by a boot: an instruction
+  for any number of arguments, with one value where its function may give
+  several, with the wrong count of what it takes off the stack; a macro
+  that takes its own name apart, that has no block, that does not see the
+  variables or the macros around it, that says DESTRUCTURING-BIND where
+  it is the one that fails; the compiler not saying that it can evaluate.
+  Twelve got through at first. Four of them were two holes in the new
+  texts, which are closed. The texts that give `svref` another function
+  called it with something that is no vector, which the instruction hands
+  to the function whatever its bit says, so the bit was never what was
+  tried: they call it with a vector now. And nothing looked at what an
+  instruction leaves on the stack when it has called its function in the
+  middle of a form. The other eight change nothing that can be seen and
+  stay as they are: a stop, a thread that queues and a turn that waits,
+  which are seen a tick later through the timer; a collection less in
+  each text of the boot that collects at the safe points of compiled
+  code; the look at an exit under way that a safe point still takes,
+  which nothing comes to; an instruction that always calls its function,
+  which is only slower; and two words of an exit that is over, the clause
+  in compiled code and the place of a GO in the evaluator's, which hold a
+  few conses until the next exit and no function.
 
 Shortcuts and loose ends, under the milestone that settles each one. A
 session reads its own group before it starts, and whatever it leaves open
 is added here in the same change.
-
-M14b, a compiled world:
-
-- Nothing is compiled unless `compile` is called: `defun`, `load` and the
-  listener make functions for the evaluator as before, and so does every
-  file of the world, the compiler itself among them. A function of
-  lisp/boot.lisp that compiled code calls, `mapcar` or `evenp`, is walked
-  as it always was, which is why a function that leans on those gains
-  little (measured under hvf: `(fib 30)` 390 ms walked and 110 ms
-  compiled; a loop of five million additions 590 and 130; a million items
-  pushed, reversed and mapped over 700 and 460). CLARA.COMPILER:EVALUATE is
-  the piece that M14b builds on: it takes a form a part at a time, as a
-  file has to be taken.
-- Macros are the evaluator's. DEFMACRO in compiled code makes a macro
-  whose body the evaluator walks, in no environment: a macro that is
-  defined inside a function and uses that function's variables does not
-  see them. MACROLET makes its macros the same way, under names of its
-  own, and such a macro does not see the macros of a MACROLET around it.
-  The way to compile them is there: DESTRUCTURING-BIND is compiled, by
-  being rewritten as a LET* of CARs and CDRs, and a macro is a function of
-  a form with one of those around its body.
-- The compiler is walked by the evaluator, so compiling costs what walking
-  some thousands of forms costs: half a millisecond for a small function
-  under hvf, some twenty times that where the machine is emulated. The
-  compiled pass over the 400 texts takes 0.4 s and 1.4 s. Once the
-  compiler compiles itself that is paid at every boot from the files,
-  unless the build does it: the compiler would have to run under SBCL with
-  ClaraOS's macros and not SBCL's, which is a cross-compiler and was left
-  alone.
-- A call of a function in C goes straight to it, and still costs the look
-  at the symbol, the row of the table, the count of the arguments and the
-  function's own look at their types: `(+ a b)` is a call. A call of a
-  function in Lisp goes through `lisp_apply` and its safe point, three
-  calls in C that find nothing to do most of the time. Those two are where
-  the time of compiled code goes now.
-- A function that the compiler cannot take stays as it is, and COMPILE
-  says why: one that was made where variables were in sight, a macro. When
-  DEFUN compiles, a function that fails to compile has to stay the
-  evaluator's without a word, or with one, which is to be decided there.
-- The boot with the collector at work, and what the compiled texts cost
-  it. With a collection at every safe point while a compiled form ran, it
-  took three times as long on CI as before, 435 s of its 600, where it had
-  been 145 s, and the whole run 11 minutes of its 15. Nearly all of those
-  24000 collections were the machine's own safe points, and more than half
-  of them in the three texts that call themselves until the stack is full,
-  which show nothing at the six thousandth call that they did not show at
-  the first. So the collector runs before the first two hundred safe points
-  that compiled code comes to in each text (`lisp_compiled_watched`): 1600
-  collections. Measured on the Mac with the machine emulated, the whole
-  of that boot takes 133 s where main took 110 s: some 8 s are the
-  compiled texts, and the rest is the session that is typed with the
-  collector at work once the world is loaded, tools/stress.txt, which is
-  most of that boot (some 95 s of the 133) and goes through a world that
-  the compiler has made a fifth larger at every safe point. On CI the boot
-  took 215 s of its 600 in one run and 328 s and 327 s in the next two, of
-  code that is the same where it matters, and the runs 7 minutes and then
-  9: the runners differ by that much. It was 145 s and 162 s for M13. A
-  world that grows makes that session slower in proportion, and a compiled
-  world will be a larger one: before M14b adds to it, the forms that
-  tools/stress.txt types with the collector on, the one on the keyboard
-  above all, are where to take time out.
-  Two mistakes were planted to see that this still finds what it is for:
-  the arguments of a call taken off the stack before the call, which every
-  boot notices, and those of a MULTIPLE-VALUE-CALL, which only this one
-  does. A collection at every safe point of everything while compiled code
-  runs is still to be had at the prompt, `(cl::%collect-every 1)`, and was
-  what the first run of this milestone passed. Compiling under the
-  collector was not tried and would take hours: the compiler is the
-  evaluator's business there.
 
 M15a, an upgrade in place:
 
@@ -1250,8 +1258,9 @@ M15c, a world made again:
   when somebody asks for it is open.
 - Until this milestone a world that is refused is lost, and the user's
   definitions with it. The number in image.c went from 1 to 2 with M14a
-  and will go up again when M14b adds instructions: a slice that raises it
-  says so in its pull request.
+  and to 3 with M14b, which added instructions and changed what a macro
+  is: a world that 0.0.19 saved is refused by 0.0.20. A slice that raises
+  it says so in its pull request.
 - What only the heap has: the value that a variable came to, a list that
   was built by hand. A converter from each layout to the next would keep
   those, and is a piece of work for every change of layout, too many while
@@ -1362,6 +1371,36 @@ No milestone yet, to be picked up when they start to matter:
   the words and says so, the kernel's does not. A RETURN-FROM or a GO from
   one thread to a block of another's leaves that thread by its top, which
   is a panic for compiled code as it is for the evaluator's.
+  Since M14b. The call is where the time of compiled code goes: a function
+  is entered through some thirty lines of C that look at its lambda list
+  each time, so a function of two lines, the reader of a structure's slot
+  or `cadr`, costs as much to call as a long one. Putting such a function
+  into its caller needs an answer to what happens when it is defined
+  again, as the twenty instructions have one. Those twenty are a list in
+  vm.c and in lisp/compiler.lisp: `length`, `list`, `logand`, `ash` and
+  `char` are still calls, and a function of the twenty that is defined
+  again is a call for everybody from then on. lisp/boot.lisp and
+  lisp/compiler.lisp are loaded twice when a machine starts from the
+  files, so nothing at their top level may count on being said once, and
+  such a start takes a quarter of a second longer than it did, four
+  seconds where the machine is emulated: compiling in the build would
+  save that and wants a cross-compiler (DESIGN.md). EVAL compiles whatever
+  it is given, also `(+ 1 2)` at the prompt, and TIME counts that in. The
+  evaluator is still there, for the two files, for the substrate's own
+  forms and for `(cl::%self-test)`, which evaluates its texts on top of a
+  compiled boot.lisp in a world that was resumed; its DEFUN and DEFMACRO
+  make what they always made, so a macro is one of two things, a lambda
+  list with a body or a function of a form, and `expand` in eval.c looks
+  which. A macro of MACROLET cannot use the variables of the function it
+  is written in, where the evaluator let it. There is no `macro-function`,
+  so nothing lists the instructions of a macro. The boot with a collection
+  at every safe point now compiles each form that tools/stress.txt types
+  under the collector, compiler and all, which nothing did before, and is
+  quicker all the same: emulated on the Mac it takes 61 s, where it took
+  110 s before M14a and 133 s after. On CI it took 127 s of its 600, in a
+  run of five and a half minutes of its fifteen, where the runs of M14a
+  took seven to nine minutes and that boot 215 to 328 s; a start from the
+  files spends 3 s there on the two files and 1.1 s on the world.
 
 - Applications. An application that fails, in its file as it is loaded or
   later, says so on the console, which is the serial port while the windows

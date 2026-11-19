@@ -449,9 +449,19 @@ void lisp_evaluator_reach(const struct lisp_evaluator *e)
  * not to go on. In the middle of a cleanup of UNWIND-PROTECT a thread is
  * neither stopped nor interrupted: what the cleanup is there to give back,
  * a lock for one, would stay taken. It is stopped at the first safe point
- * after the cleanup. */
-COLD int safe_point(void)
+ * after the cleanup.
+ *
+ * This is the part of it that is a call (safe_point, eval.h): it is come
+ * to when lisp_attention says that there is something to look at. The
+ * word is cleared before anything is looked at, so that what comes up
+ * meanwhile is not lost, and whatever is still to be looked at when this
+ * returns, a thread that waits for its turn, a stop that could not be
+ * acted on yet, sets it again (thread.c, heap.c). */
+volatile int lisp_attention = 1;
+
+COLD int attend(void)
 {
+    lisp_attention = 0;
     thread_safe_point();
     switch (lisp_thread_safe_point(!g_cleaning)) {
     case LISP_STOP:
@@ -476,7 +486,7 @@ COLD int safe_point(void)
  * the runtime meanwhile, and this one may have been told to stop. */
 int lisp_safe_point(void)
 {
-    return safe_point();
+    return attend();
 }
 
 /* The value stack. lisp_push looks whether there is room; the evaluator's
@@ -641,7 +651,7 @@ static void bind_parameter(lisp f, lisp parameter, lisp value, lisp *e, lisp *pa
     for (lisp v = value; lisp_is_cons(v); v = lisp_as_cons(v)->cdr, argc++)
         if (!lisp_push(lisp_as_cons(v)->car))
             return;
-    bind(f, parameter, argc, argv, value, e, 1, LISP_NIL);
+    bind(f, parameter, argc, argv, value, e, 1, value);
     g_sp = pairs;
 }
 
@@ -836,6 +846,13 @@ static lisp expand(lisp macro, lisp form)
     unsigned argc = 0;
 
     *g_sp++ = macro;
+    if (lisp_is(lisp_as_function(macro)->code, LISP_FUNCTION)) {
+        /* A macro that the compiler made (DEFMACRO, vm.c): its code is a function of the whole form,
+         * which takes the form apart for itself. */
+        *g_sp++ = form;
+        value = lisp_apply(lisp_as_function(macro)->code, 1, base + 1);
+        goto out;
+    }
     for (lisp a = cdr(form); lisp_is_cons(a); a = lisp_as_cons(a)->cdr, argc++)
         if (!lisp_push(lisp_as_cons(a)->car))
             goto out;
@@ -1043,6 +1060,7 @@ static lisp sf_tagbody(lisp args, lisp env)
             /* A GO to one of these tags: on from there. */
             at = g_unwind.tag;
             g_unwind.to = 0;
+            g_unwind.tag = LISP_NIL;
         } else if (g_unwind.to)
             break;
     }
@@ -1295,7 +1313,7 @@ static lisp define(lisp args, lisp env, enum lisp_function_kind kind)
     old = lisp_as_symbol(name)->function;
     if (old != LISP_UNBOUND && lisp_function_kind(old) == LISP_SPECIAL_OPERATOR)
         return lisp_fail("~S is a special operator, and stays one", name);
-    lisp_as_symbol(name)->function = make_function(kind, name, cdr(args), env);
+    lisp_set_function(name, make_function(kind, name, cdr(args), env));
     return name;
 }
 
@@ -1487,11 +1505,19 @@ static lisp sf_handler_case(lisp args, lisp env)
     value = eval_car(args, env);
     g_handlers = here.outer;
     if (g_unwind.to == HANDLING && g_unwind.handler == &here) {
+        lisp condition = g_unwind.tag;
+
+        /* The exit is over, and nothing of it is kept: the collector looks at these, and a clause
+         * that stayed here would hold on to the function it is part of, and to all that its
+         * symbols lead to, for as long as no other condition is taken. The clause itself hangs
+         * from the form that is being evaluated. */
         clause = g_unwind.clause;
         g_unwind.to = 0;
+        g_unwind.tag = g_unwind.clause = LISP_NIL;
+        g_unwind.handler = NULL;
         *g_sp++ = env;
         if (lisp_is_cons(car(cdr(clause)))) {
-            bind_variable(car(car(cdr(clause))), g_unwind.tag);
+            bind_variable(car(car(cdr(clause))), condition);
             flush(base, base + 1);
         }
         body = declarations(cdr(cdr(clause)));
@@ -1682,6 +1708,32 @@ lisp lisp_eval(lisp form, lisp env)
     return value;
 }
 
+/* The function that evaluates a form by compiling it and running what that
+ * made, once a compiler has said that it is there: the third of what
+ * CLARA:PROVIDE-COMPILER keeps (lisp/boot.lisp). NIL until then. */
+lisp lisp_compiler(void)
+{
+    return car(cdr(cdr(lisp_as_symbol(S.compiler)->value)));
+}
+
+/* A form that somebody wants the value of: EVAL, and every form of a text
+ * that LOAD reads. With a compiler there it is compiled and then run, so
+ * that whatever is typed or loaded from then on is the machine's (vm.c).
+ * Until then the evaluator walks it, as it goes on walking the forms that
+ * the substrate itself has evaluated (lisp_evaluate). */
+lisp lisp_eval_form(lisp form)
+{
+    lisp *base = g_sp, evaluate = lisp_compiler(), value;
+
+    if (evaluate == LISP_NIL)
+        return lisp_eval(form, LISP_NIL);
+    *g_sp++ = evaluate;
+    *g_sp++ = form;
+    value = lisp_apply(evaluate, 1, base + 1);
+    g_sp = base;
+    return value;
+}
+
 /* LOAD: the forms of a text, evaluated one after the other. *PACKAGE* is
  * bound meanwhile, so that an IN-PACKAGE in the text ends with it. An
  * error says where in the text it was, and of which file: its name is a
@@ -1704,7 +1756,7 @@ void lisp_load_text(const void *data, size_t size, lisp name)
             lisp_fail("~Z, at line ~A, column ~A of ~A", r.error, lisp_fixnum(line), lisp_fixnum(column), name);
             break;
         }
-        lisp_eval(form, LISP_NIL);
+        lisp_eval_form(form);
         /* A condition on its way out of the text, to a handler or to the top level: what it says
          * from here on says where it was, since whoever prints it is outside the text. */
         if (g_unwind.to == FAILING || g_unwind.to == HANDLING)
@@ -1921,6 +1973,7 @@ void lisp_eval_init(const struct boot_file *files)
     S.allow = lisp_symbol_in(lisp_roots.keyword, "ALLOW-OTHER-KEYS", 1);
     S.no_error = lisp_symbol_in(lisp_roots.keyword, "NO-ERROR", 1);
     S.condition = lisp_symbol_in(cl, "%CONDITION", 0);
+    S.compiler = lisp_symbol_in(cl, "%COMPILER", 0);
     for (unsigned i = 0; i < sizeof specials / sizeof specials[0]; i++) {
         symbol = lisp_symbol_in(cl, specials[i].name, specials[i].fn != sf_quasiquote);
         if (lisp_as_symbol(symbol)->function == LISP_UNBOUND)
@@ -1940,6 +1993,7 @@ void lisp_eval_init(const struct boot_file *files)
     symbol = lisp_symbol_in(cl, "INTERNAL-TIME-UNITS-PER-SECOND", 1);
     lisp_as_symbol(symbol)->value = lisp_fixnum(TIMER_HZ);
     lisp_symbol_flag(symbol, LISP_SPECIAL | LISP_CONSTANT);
+    lisp_vm_init();
     kprintf("lisp: an evaluator with %u special forms and %u functions in C\n",
             (unsigned)(sizeof specials / sizeof specials[0]), lisp_primitive_count);
 }
