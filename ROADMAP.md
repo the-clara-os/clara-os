@@ -1397,7 +1397,10 @@ No milestone yet, to be picked up when they start to matter:
   at every safe point now compiles each form that tools/stress.txt types
   under the collector, compiler and all, which nothing did before, and is
   quicker all the same: emulated on the Mac it takes 61 s, where it took
-  110 s before M14a and 133 s after.
+  110 s before M14a and 133 s after. On CI it took 127 s of its 600, in a
+  run of five and a half minutes of its fifteen, where the runs of M14a
+  took seven to nine minutes and that boot 215 to 328 s; a start from the
+  files spends 3 s there on the two files and 1.1 s on the world.
 
 - Applications. An application that fails, in its file as it is loaded or
   later, says so on the console, which is the serial port while the windows
