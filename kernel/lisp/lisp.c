@@ -1225,6 +1225,72 @@ static const struct {
       " 16 bits, and 65536 is not one" },
     /* Ctrl-C on a keyboard is Ctrl-C */
     { "(handler-case (progn (clara.unsafe:keyboard-break) (loop)) (clara:keyboard-interrupt () 'stopped))", "STOPPED" },
+    /* &WHOLE in a list inside the lambda list is that list */
+    { "(destructuring-bind (&whole all a (&whole inner b c)) '(1 (2 3)) (list a inner b c all))",
+      "(1 (2 3) 2 3 (1 (2 3)))" },
+    /* a macro inside a function sees the variables there, and one of MACROLET the macros of the one around it */
+    { "(let ((n 5)) (defmacro five-more (x) (list '+ x n))) (five-more 1)", "6" },
+    { "(macrolet ((make-form (op) (list 'quote (list op 1 2)))) (macrolet ((sum () (make-form +))) (sum)))", "3" },
+    { "(handler-case (macrolet ((needs-one (a) a)) (needs-one)) (program-error () 'a-program-error))",
+      "A-PROGRAM-ERROR" },
+    /* a macro takes its form apart, and says what is wrong with one, the same walked and compiled */
+    { "(defmacro taken (&whole all (a b) &optional (c 3) &rest more) (list 'quote (list a b c more all)))"
+      " (list (taken (1 2)) (taken (1 2) 4 5 6))",
+      "((1 2 3 NIL (TAKEN (1 2))) (1 2 4 (5 6) (TAKEN (1 2) 4 5 6)))" },
+    { "(mapcar (lambda (form) (handler-case (macroexpand-1 form) (program-error (c) (princ-to-string c))))"
+      " '((taken) (taken (1)) (taken (1 2 3))))",
+      "(\"#<MACRO TAKEN> got too few arguments\" \"#<MACRO TAKEN> got too few arguments\""
+      " \"#<MACRO TAKEN> got too many arguments\")" },
+    { "(defmacro keyed (&key a (b 2)) (list 'quote (list a b)))"
+      " (list (keyed) (keyed :b 5 :a 1) (handler-case (macroexpand-1 '(keyed :c 1)) (error (c) (princ-to-string c)))"
+      " (handler-case (macroexpand-1 '(keyed :a)) (error (c) (princ-to-string c))))",
+      "((NIL 2) (1 5) \"#<MACRO KEYED> does not take the keyword argument :C\""
+      " \"#<MACRO KEYED> got an odd number of keyword arguments\")" },
+    /* the functions that compiled code has instructions for: what they give, with any number of arguments, */
+    { "(defun known (a b) (car a) (list (car a) (cdr a) (cons b a) (not a) (null b) (consp a) (atom a) (eq a a)"
+      " (+ b 1) (- b 1) (* b 3) (1+ b) (1- b) (< b 3) (> b 3) (<= b 2) (>= b 3) (= b 2)"
+      " (aref (vector 5 6) 1) (svref (vector 7 8) 0))) (known '(1 2) 2)",
+      "(1 (2) (2 1 2) NIL NIL T NIL T 3 1 6 3 1 T NIL T NIL T 6 7)" },
+    { "(list (+) (+ 1) (+ 1 2 3) (- 5) (- 9 1 2) (* 2 3 4) (< 1 2 3) (= 2 2 2) (>= 3 3 1) (car nil) (cdr nil))",
+      "(0 1 6 -5 6 24 T T T NIL NIL)" },
+    /* as the one value of a form, whatever the form before it left behind, */
+    { "(defun last-is-known (x) (floor 7 2) (car x)) (list (multiple-value-list (last-is-known '(1 2)))"
+      " (multiple-value-list (progn (floor 7 2) (+ 1 2))) (multiple-value-call #'list (floor 7 2) (car '(a)) (1+ 2)))",
+      "((1) (3) (3 1 A 3))" },
+    /* at the ends of what an integer can be, */
+    { "(list (+ 4611686018427387902 1) (- -4611686018427387903 1) (* 2305843009213693951 2) (* -4611686018427387904 1)"
+      " (1+ 4611686018427387902) (1- -4611686018427387903) (< -4611686018427387904 4611686018427387903))",
+      "(4611686018427387903 -4611686018427387904 4611686018427387902 -4611686018427387904 4611686018427387903"
+      " -4611686018427387904 T)" },
+    { "(mapcar (lambda (f) (handler-case (funcall f) (arithmetic-error () 'too-large)))"
+      " (list (lambda () (+ 4611686018427387903 1)) (lambda () (- -4611686018427387904 1))"
+      " (lambda () (* 4611686018427387903 2)) (lambda () (1+ 4611686018427387903)) (lambda () (1- -4611686018427387904))))",
+      "(TOO-LARGE TOO-LARGE TOO-LARGE TOO-LARGE TOO-LARGE)" },
+    /* with arguments that they do not take, in the words of the function, */
+    { "(mapcar (lambda (f) (handler-case (funcall f) (error (c) (princ-to-string c))))"
+      " (list (lambda () (cdr 5)) (lambda () (+ 1 'a)) (lambda () (- 'a 1)) (lambda () (* nil 1)) (lambda () (< 'a 1))"
+      " (lambda () (>= 1 \"2\")) (lambda () (= 1 'a)) (lambda () (1+ nil)) (lambda () (1- 'a))))",
+      "(\"CDR wants a list, and 5 is not one\" \"+ wants an integer, and A is not one\""
+      " \"- wants an integer, and A is not one\" \"* wants an integer, and NIL is not one\""
+      " \"< wants an integer, and A is not one\" \">= wants an integer, and \\\"2\\\" is not one\""
+      " \"= wants an integer, and A is not one\" \"1+ wants an integer, and NIL is not one\""
+      " \"1- wants an integer, and A is not one\")" },
+    { "(mapcar (lambda (f) (handler-case (funcall f) (error (c) (princ-to-string c))))"
+      " (list (lambda () (aref 5 0)) (lambda () (svref (vector 1) 3)) (lambda () (aref (vector 1) -1))"
+      " (lambda () (aref \"abc\" 1)) (lambda () (svref (vector 1 2) 'a)) (lambda () (aref (vector 1 2) 2))"
+      " (lambda () (svref (vector 1 2) 1))))",
+      "(\"AREF wants a vector, and 5 is not one\""
+      " \"SVREF wants an index that is inside what it is given, and 3 is not one\""
+      " \"AREF wants an index that is inside what it is given, and -1 is not one\" #\\b"
+      " \"SVREF wants an index that is inside what it is given, and A is not one\""
+      " \"AREF wants an index that is inside what it is given, and 2 is not one\" 2)" },
+    /* in the middle of a form, where what the function gave is one of several things on the stack, */
+    { "(let ((s \"abc\") (v (vector 1 2))) (list (aref s 0) (aref v 1) (aref s 1) (+ 1 2 3) (aref s 2) (svref v 0)))",
+      "(#\\a 2 #\\b 6 #\\c 1)" },
+    /* and under their names, when the name means something else where the form stands */
+    { "(list (flet ((car (x) (list 'mine x))) (car 5)) (macrolet ((cdr (x) (list 'quote x))) (cdr (a b)))"
+      " (funcall #'car '(1)) (apply '+ '(1 2)))",
+      "((MINE 5) (A B) 1 3)" },
 };
 
 /* The texts above that mean something else once they are compiled, with
@@ -1288,7 +1354,7 @@ static const struct {
       "3" },
     /* the listing */
     { "(with-output-to-string (*standard-output*) (disassemble (compile nil '(lambda (x) (car x)))))",
-      "\"(LAMBDA (X)): 1 local variable, 2 words of stack\n0   CONST CAR\n1   LOCAL 0\n2   CALL 1\n3   RETURN\n\"" },
+      "\"(LAMBDA (X)): 1 local variable, 1 word of stack\n0   LOCAL 0\n1   CAR\n2   RETURN\n\"" },
     { "(with-output-to-string (*standard-output*) (disassemble 'car))",
       "\"#<FUNCTION CAR> is written in C, and there is no listing of it here\n\"" },
     { "(with-output-to-string (*standard-output*) (disassemble '(lambda (x) (lambda () x))))",
@@ -1362,6 +1428,44 @@ static const struct {
       " \"its last instruction lets the machine run on past the end\")" },
     { "(let ((code (clara.unsafe:compiled-function-code (compile nil '(lambda (x) (lambda () x)))))) (setf (aref (aref (aref code 1) 0) 11) 2) (handler-case (clara.unsafe:make-compiled-function code) (error (c) (subseq (princ-to-string c) 34))))",
       "\"a function inside it is not given the values that it closes over\"" },
+    /* with a compiler there, what EVAL is given is compiled, and so is what LOAD reads */
+    { "(progn (eval '(defun through-eval (n) (* n 2)))"
+      " (list (compiled-function-p #'through-eval) (through-eval 4) (compiled-function-p (eval '(lambda () 1)))))",
+      "(T 8 T)" },
+    { "(progn (eval '(let ((n 0)) (defun counter () (setq n (+ n 1))))) (list (compiled-function-p #'counter) (counter) (counter)))",
+      "(T 1 2)" },
+    { "(progn (cl::%load-text \"(defun from-a-text (n) (+ n 1))\n(defmacro twice-it (x) (list '* 2 x))\n"
+      "(defvar *loaded* (lambda () 'loaded))\" \"a text\")"
+      " (list (compiled-function-p #'from-a-text) (from-a-text 1) (twice-it 4) (compiled-function-p *loaded*)))",
+      "(T 2 8 T)" },
+    { "(let ((form (list 'when t (list 'when t 1)))) (list (eval form) form))",
+      "(1 (WHEN T (WHEN T 1)))" },
+    /* a macro of each kind, used from the other side */
+    { "(defmacro walked-twice (x) (list '* 2 x)) (eval '(defmacro compiled-twice (x) (list '* 2 x)))"
+      " (list (funcall (compile nil '(lambda (n) (walked-twice n))) 4) (compiled-twice 5) (macroexpand-1 '(compiled-twice y)))",
+      "(8 10 (* 2 Y))" },
+    /* a function that the machine has an instruction for is defined again, in each of the ways there are,
+     * and is the one that compiled code calls, with arguments that the instruction would have taken for
+     * itself; put back, it is the function in C again */
+    { "(defun peek (v) (svref v 0)) (defvar *svref* #'svref) (list (compile 'peek) (peek (vector 9)))",
+      "(PEEK 9)" },
+    { "(unwind-protect (progn (setf (symbol-function 'svref) (lambda (v i) (values (list 'set (length v) i) 'and-more)))"
+      " (multiple-value-list (peek (vector 5)))) (setf (symbol-function 'svref) *svref*))",
+      "((SET 1 0) AND-MORE)" },
+    { "(unwind-protect (progn (defun svref (v i) (list 'walked (length v) i)) (peek (vector 6)))"
+      " (setf (symbol-function 'svref) *svref*))",
+      "(WALKED 1 0)" },
+    { "(unwind-protect (progn (setf (symbol-function 'svref) #'list) (cdr (peek (vector 4))))"
+      " (setf (symbol-function 'svref) *svref*))",
+      "(0)" },
+    { "(unwind-protect (progn (eval '(defun svref (v i) (list 'compiled (length v) i))) (peek (vector 7)))"
+      " (setf (symbol-function 'svref) *svref*))",
+      "(COMPILED 1 0)" },
+    { "(unwind-protect (progn (eval '(defmacro svref (v i) (list 'list v i)))"
+      " (handler-case (peek (vector 8)) (error (c) (princ-to-string c)))) (setf (symbol-function 'svref) *svref*))",
+      "\"#<MACRO SVREF> is not a function, and cannot be called like one\"" },
+    { "(list (peek (vector 3)) (eq #'svref *svref*) (handler-case (peek 5) (error (c) (princ-to-string c))))",
+      "(3 T \"SVREF wants a vector, and 5 is not one\")" },
     /* how long a form took goes to where things are written, and its values come back */
     { "(let* ((values nil) (said (with-output-to-string (*standard-output*) (setq values (multiple-value-list (time (floor 7 2))))))) (list values (subseq said (- (length said) 14))))",
       "((3 1) \" milliseconds\n\")" },
@@ -1454,9 +1558,13 @@ static unsigned eval_texts(int64_t *deep, lisp compiler, unsigned watched)
     if (depth < 1000)
         panic("lisp self-test: to %s, a function could call itself only %lld deep", who, (long long)depth);
 
-    /* The packages the texts made go with the self-test's own. */
+    /* The packages the texts made go with the self-test's own, and so does what the last texts gave:
+     * a value that is left there holds on to its package, and to every function in it. */
     package->value = user;
     lisp_roots.packages = packages;
+    lisp_values.count = 1;
+    for (unsigned i = 0; i < LISP_VALUES_MAX; i++)
+        lisp_values.value[i] = LISP_NIL;
     *deep = depth;
     return texts;
 }
@@ -1475,6 +1583,7 @@ unsigned lisp_eval_texts(void)
 static void heap_report(void)
 {
     uint64_t count[LISP_TYPES], bytes;
+    struct lisp_functions functions;
     struct lisp_heap heap;
 
     lisp_collect();
@@ -1487,6 +1596,9 @@ static void heap_report(void)
             count[LISP_CONDITION]);
     kprintf("lisp:   %llu threads, %llu locks and %llu events\n", count[LISP_THREAD], count[LISP_LOCK],
             count[LISP_EVENT]);
+    lisp_heap_functions(&functions);
+    kprintf("lisp:   of the functions %llu are in C, %llu are compiled, %llu of them macros, and %llu are walked\n",
+            functions.in_c, functions.compiled + functions.macros, functions.macros, functions.walked);
 }
 
 /* The evaluator's self-test, and then what the heap holds once the
@@ -1674,7 +1786,12 @@ static void new_world(void)
     static const char *const world[] = { "compiler.lisp", "font.lisp",     "console.lisp", "draw.lisp",
                                          "pci.lisp",      "virtio.lisp",   "input.lisp",   "disk.lisp",
                                          "fat.lisp",      "listener.lisp", "windows.lisp", "terminal.lisp" };
-    uint64_t before[LISP_TYPES], after[LISP_TYPES];
+    uint64_t before[LISP_TYPES], after[LISP_TYPES], ticks, collections;
+    struct lisp_functions functions;
+    struct lisp_heap heap;
+    struct text printed;
+    unsigned texts;
+    int64_t depth;
     int more;
 
     collector_selftest();
@@ -1694,12 +1811,10 @@ static void new_world(void)
      * one of its machines (tools/session.txt writes the file). */
     more = lisp_boot_file("stress");
     if (more) {
-        struct lisp_heap heap;
-        uint64_t before, between;
-        unsigned texts;
+        uint64_t between;
 
         lisp_heap_state(&heap);
-        before = heap.collections;
+        collections = heap.collections;
         lisp_collect_every(1);
         load("boot.lisp");
         lisp_heap_state(&heap);
@@ -1708,18 +1823,62 @@ static void new_world(void)
         lisp_collect_every(0);
         lisp_heap_state(&heap);
         kprintf("lisp: a collection at every safe point: boot.lisp once more in %llu, %u texts once more in %llu\n",
-                between - before, texts, heap.collections - between);
+                between - collections, texts, heap.collections - between);
     }
     /* The compiler, and its self-test at once, while the heap is small: with more asked for, every
      * safe point of compiled code is a collection there. */
     load(world[0]);
     compiler_selftest(more);
+    /* The compiler has said that it is there, so from here on LOAD compiles
+     * every form that it reads, and EVAL the form that it is given
+     * (lisp_eval_form, eval.c). The two files that the evaluator has walked
+     * until now are loaded once more, the compiler first: the compiler that
+     * the evaluator walks compiles itself, a definition at a time, and what
+     * comes of that compiles boot.lisp. Both files bear being loaded twice:
+     * a DEFVAR leaves what the first one made alone, and everything else
+     * in them is said again to the same effect. Then the texts a third
+     * time: what compiles them now is compiled code, and so are the
+     * functions of boot.lisp that they call, and the answers are the same. */
+    ticks = timer_ticks();
+    load(world[0]);
+    load("boot.lisp");
+    ticks = timer_ticks() - ticks;
+    texts = eval_texts(&depth, own_form("clara.compiler:evaluate"), 0);
+    kprintf("lisp: the compiler compiled itself and boot.lisp in %llu ms, and then the %u texts as before\n",
+            ticks * (1000 / TIMER_HZ), texts);
+    /* A safe point of compiled code is a look at a word (safe_point, eval.h), and whoever has something
+     * for the thread says so there. The allocator does when enough has been made: a loop of compiled
+     * code that makes lists and calls nothing in Lisp has to stop and collect all the same. */
+    lisp_collect();
+    lisp_heap_state(&heap);
+    collections = heap.collections;
+    evaluate_text("(funcall (compile nil '(lambda () (dotimes (i 20000) (list i i i)))))", &printed, 0);
+    lisp_heap_state(&heap);
+    if (heap.collections == collections)
+        panic("lisp self-test: compiled code made 20000 lists and did not once stop to collect");
+    /* The same for code that never jumps backwards: a function that calls itself twice at every level,
+     * some thirty thousand calls, each a safe point of the machine's own (call, vm.c). */
+    collections = heap.collections;
+    evaluate_text("(funcall (compile nil '(lambda () (labels ((grow (n) (if (= n 0) (list 1 2 3)"
+                  " (progn (grow (- n 1)) (grow (- n 1)))))) (grow 15)))))",
+                  &printed, 0);
+    lisp_heap_state(&heap);
+    if (heap.collections == collections)
+        panic("lisp self-test: a compiled function called itself 60000 times and did not once stop to collect");
+    ticks = timer_ticks();
     for (unsigned i = 1; i < sizeof world / sizeof world[0]; i++)
         load(world[i]);
-    lisp_collect(); /* what the compiler's self-test made, and nobody holds any more */
-    lisp_heap_census(before);
-    kprintf("lisp: the world is loaded, from the compiler to the windows: %llu more functions\n",
-            before[LISP_FUNCTION] - after[LISP_FUNCTION]);
+    ticks = timer_ticks() - ticks;
+    /* What the self-tests made, and the forms of the functions that were compiled, nobody holds any
+     * more. Whatever the evaluator would still have to walk after that was not compiled, and a world
+     * that is saved is to be the machine's through and through. */
+    lisp_collect();
+    lisp_heap_functions(&functions);
+    if (functions.walked)
+        panic("lisp: the world is loaded, and %llu of its functions and macros are still the evaluator's to walk",
+              functions.walked);
+    kprintf("lisp: the world is loaded and compiled in %llu ms, from the console to the windows: %llu functions, %llu macros\n",
+            ticks * (1000 / TIMER_HZ), functions.compiled, functions.macros);
 }
 
 /* What the first thread of the Lisp world does. The world is made, unless

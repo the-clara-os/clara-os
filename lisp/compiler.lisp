@@ -47,14 +47,26 @@
     (:values-restore 0) (:block 6 :number :number) (:tagbody 6 :number :number) (:catch 5 :number)
     (:handler 6 :number :constant) (:protect 6 :number) (:unlink 0 :number) (:return-to -2 :constant)
     (:go-to -1 :number :constant) (:throw -2) (:cleanup 24) (:cleanup-end 0) (:dispatch -1 :number)
-    (:fset 0 :constant) (:defmacro 1 :constant) (:defvar 1 :constant) (:defconstant 0 :constant)
-    (:fail 0 :number :constant)))
+    (:fset 0 :constant) (:defmacro 0 :constant) (:defvar 1 :constant) (:defconstant 0 :constant)
+    (:fail 0 :number :constant)
+    ;; and the ones that stand for a function in C, each under the name of that function
+    (:car 0) (:cdr 0) (:cons -1) (:not 0) (:null 0) (:consp 0) (:atom 0) (:eq -1) (:+ -1) (:- -1) (:* -1) (:1+ 0)
+    (:1- 0) (:< -1) (:> -1) (:<= -1) (:>= -1) (:= -1) (:aref -1) (:svref -1)))
 
 (let ((number 0))
   (dolist (row *operations*)
     (setf (get (car row) 'number) number
           (get (car row) 'effect) (cadr row))
     (setq number (1+ number))))
+
+;;; The functions in C that the machine has an instruction for, the
+;;; commonest ones, each with that instruction. A call of one of them with
+;;; as many arguments as the instruction takes is the instruction, which
+;;; does what the function does and calls nothing; it looks first whether
+;;; the name still means that function, so that one of these that is defined
+;;; again is still the one that is called (kernel/lisp/vm.c).
+(dolist (name '(car cdr cons not null consp atom eq + - * 1+ 1- < > <= >= = aref svref))
+  (setf (get name 'instruction) (intern (symbol-name name) (find-package "KEYWORD"))))
 
 ;;; What the first pass keeps.
 
@@ -90,8 +102,8 @@
 (defstruct tb fn barrier (dynamic nil) (tag nil) (count 0) (places nil) (depth 0) (records 0) (bound 0))
 
 ;; What is in sight where a form stands: the variables and the functions by
-;; their names, a function being a variable too or (:MACRO . symbol) for one
-;; of MACROLET; the blocks; the tags, each as (tag tagbody number); the
+;; their names, a function being a variable too or (:MACRO . function) for
+;; one of MACROLET; the blocks; the tags, each as (tag tagbody number); the
 ;; function that the form is part of; and the barrier, which is another
 ;; object wherever a jump out would leave something undone.
 (defstruct env (variables nil) (functions nil) (blocks nil) (tags nil) (fn nil) (barrier nil))
@@ -159,6 +171,11 @@
   (handler-case (macroexpand-1 form)
     (error (condition) (values (list '%raise condition) t))))
 
+;; The same for a macro of MACROLET, which is the function that makes it.
+(defun expand-with (expander form)
+  (handler-case (funcall expander form)
+    (error (condition) (list '%raise condition))))
+
 (defun convert-all (forms env)
   (mapcar (lambda (form) (convert form env)) forms))
 
@@ -167,12 +184,21 @@
         ((atom (cdr forms)) (convert (car forms) env))
         (t (list :progn (convert-all forms env)))))
 
+;; A call of the function that a name has for everybody: an instruction of
+;; its own when the machine has one for that function and that many
+;; arguments, and otherwise the name, the arguments and a call.
+(defun convert-call (name arguments env)
+  (let ((instruction (get name 'instruction)))
+    (if (and instruction (= (count-parts arguments) (- 1 (get instruction 'effect))))
+        (list :known instruction (convert-all arguments env))
+        (list :call (list :const name) (convert-all arguments env)))))
+
 (defun convert-cons (form env)
   (let ((operator (car form)))
     (cond ((symbolp operator)
            (let ((local (assoc operator (env-functions env))))
              (cond ((and local (consp (cdr local)))
-                    (convert (expand (cons (cddr local) (cdr form))) env))
+                    (convert (expand-with (cddr local) form) env))
                    (local
                     (use (cdr local) env)
                     (list :call (list :ref (cdr local)) (convert-all (cdr form) env)))
@@ -189,7 +215,7 @@
                               (t (multiple-value-bind (expansion expanded) (expand form)
                                    (if expanded
                                        (convert expansion env)
-                                       (list :call (list :const operator) (convert-all (cdr form) env)))))))))))
+                                       (convert-call operator (cdr form) env))))))))))
           ((and (consp operator) (eq (car operator) 'lambda))
            (list :call (list :closure (convert-function nil (cadr operator) (cddr operator) env))
                  (convert-all (cdr form) env)))
@@ -476,16 +502,21 @@
       (setq variables (cdr variables)))
     (list :labels (reverse bindings) (convert-progn (body-forms (cddr form)) inner))))
 
-;; MACROLET: each macro is a macro of the evaluator's, under a name that
-;; nobody else has, and a call is expanded by putting that name in the
-;; place of the macro's.
+;; MACROLET: each macro is compiled where it stands, as the function of a
+;; form that a macro is, and a call is expanded by calling it. It runs
+;; while the forms around it are compiled: of what is in sight there it
+;; sees the macros of the MACROLETs outside and nothing else, no variable
+;; and no function, which have no values yet.
 (defun c-macrolet (form env)
-  (let ((inner (copy-env env)))
+  (let ((inner (copy-env env))
+        (outside (make-env :functions (remove-if-not (lambda (entry) (consp (cdr entry))) (env-functions env)))))
     (dolist (definition (cadr form))
-      (let ((name (function-name definition)) (expander (gensym)))
-        (eval (list 'defmacro expander (cadr definition)
-                    (list* 'block name (body-forms (cddr definition)))))
-        (setf (env-functions inner) (cons (list* name :macro expander) (env-functions inner)))))
+      (let ((name (function-name definition)))
+        (setf (env-functions inner)
+              (cons (list* name :macro
+                           (clara.unsafe:make-compiled-function
+                            (generate (convert-expander name (cadr definition) (cddr definition) outside))))
+                    (env-functions inner)))))
     (convert-progn (body-forms (cddr form)) inner)))
 
 ;; Where the stack is as deep as the values of a form are many, no jump
@@ -540,12 +571,23 @@
   (list :fset (function-name (cdr form))
         (list :closure (convert-function (cadr form) (caddr form) (cdddr form) env))))
 
-;; A macro stays the evaluator's: its body runs when a call of it is
-;; expanded, and a call in compiled code was expanded by the compiler.
+;; A macro is a function of the form that calls it: the form whole, of
+;; which the function takes the subforms apart as the lambda list says, and
+;; what it gives is the form to evaluate instead. A lambda list that cannot
+;; be taken is said when the macro is called, as the evaluator says it.
+(defun convert-expander (name lambda-list body env)
+  (let* ((form (gensym))
+         (bindings (handler-case (destructure-bindings lambda-list (list '%call 'cdr form) form
+                                                       (format nil "#<MACRO ~S>" name))
+                     (problem (condition)
+                       (list (list (gensym) (list '%fail (problem-kind condition) (problem-text condition))))))))
+    (convert-function name (list form) (list (list* 'let* bindings body)) env)))
+
+;; DEFMACRO: the function is made where the form stands, so that it sees
+;; the variables there, and becomes the macro of the name.
 (defun c-defmacro (form env)
-  (declare (ignore env))
-  (function-name (cdr form))
-  (list :defmacro (cdr form)))
+  (let ((name (function-name (cdr form))))
+    (list :defmacro name (list :closure (convert-expander name (caddr form) (cdddr form) env)))))
 
 (defun convert-defvar (form env always)
   (unless (symbolp (cadr form))
@@ -606,20 +648,22 @@
 
 ;; A list taken apart, the way the arguments of a macro are: the bindings
 ;; of a LET* that give every variable of PATTERN its part of the list that
-;; WHOLE is bound to.
-(defun bind-pattern (parameter form bindings)
+;; the form SOURCE gives. WHOLE is the form for what a variable after
+;; &WHOLE gets, and WHO is what takes the list apart, as an error names it:
+;; DESTRUCTURING-BIND, or a macro.
+(defun bind-pattern (parameter form bindings who)
   (if (consp parameter)
       (let ((inner (gensym)))
-        (append (reverse (destructure-bindings parameter inner)) (cons (list inner form) bindings)))
+        (append (reverse (destructure-bindings parameter inner inner who)) (cons (list inner form) bindings)))
       (cons (list parameter form) bindings)))
 
-(defun destructure-bindings (pattern whole)
+(defun destructure-bindings (pattern source whole who)
   (let ((rest (gensym)) (stage 0) (bindings nil) (keys nil) (keyed nil) (allow nil) (all nil))
-    (push (list rest whole) bindings)
+    (push (list rest source) bindings)
     (do ((list pattern (cdr list)))
         ((atom list)
          (when list
-           (setq bindings (bind-pattern list rest bindings)
+           (setq bindings (bind-pattern list rest bindings who)
                  all t)))
       (let ((parameter (car list)))
         (cond ((eq parameter '&optional) (setq stage 1))
@@ -629,7 +673,7 @@
               ((eq parameter '&aux) (setq stage 4))
               ((eq parameter '&whole)
                (setq list (cdr list))
-               (setq bindings (bind-pattern (car list) whole bindings)))
+               (setq bindings (bind-pattern (car list) whole bindings who)))
               ((eq parameter '&environment)
                (problem :error "&ENVIRONMENT in a lambda list, which the evaluator does not know yet"))
               ((= stage 0)
@@ -637,8 +681,8 @@
                      (bind-pattern parameter
                                    (list 'if (list '%call 'consp rest)
                                          (list '%call 'car rest)
-                                         (list '%fail :program "DESTRUCTURING-BIND got too few arguments"))
-                                   bindings))
+                                         (list '%fail :program (format nil "~A got too few arguments" who)))
+                                   bindings who))
                (push (list rest (list '%call 'cdr rest)) bindings))
               ((= stage 1)
                (let ((given (gensym)))
@@ -646,12 +690,12 @@
                  (setq bindings
                        (bind-pattern (if (consp parameter) (car parameter) parameter)
                                      (list 'if given (list '%call 'car rest) (if (consp parameter) (cadr parameter)))
-                                     bindings))
+                                     bindings who))
                  (push (list rest (list 'if given (list '%call 'cdr rest) rest)) bindings)
                  (when (and (consp parameter) (caddr parameter))
                    (push (list (caddr parameter) given) bindings))))
               ((= stage 2)
-               (setq bindings (bind-pattern parameter rest bindings)
+               (setq bindings (bind-pattern parameter rest bindings who)
                      all t))
               ((= stage 3)
                (let* ((spec (if (consp parameter) (car parameter) parameter))
@@ -663,28 +707,30 @@
                        (bind-pattern (if (consp spec) (cadr spec) spec)
                                      (list 'if found (list '%call 'car (list '%call 'cdr found))
                                            (if (consp parameter) (cadr parameter)))
-                                     bindings))
+                                     bindings who))
                  (when (and (consp parameter) (caddr parameter))
                    (push (list (caddr parameter) (list 'if found t nil)) bindings))))
               (t (push (if (consp parameter) (list (car parameter) (cadr parameter)) (list parameter nil))
                        bindings)))))
     (cond (keyed
            (push (list (gensym)
-                       (list 'if (list '%call 'check-keys rest (list 'quote (reverse keys)) (list 'quote allow))
-                             (list '%fail :program "DESTRUCTURING-BIND got an odd number of keyword arguments")
+                       (list 'if (list '%call 'check-keys rest (list 'quote (reverse keys)) (list 'quote allow) who)
+                             (list '%fail :program (format nil "~A got an odd number of keyword arguments" who))
                              nil))
                  bindings))
           ((not all)
            (push (list (gensym)
                        (list 'if (list '%call 'consp rest)
-                             (list '%fail :program "DESTRUCTURING-BIND got too many arguments")
+                             (list '%fail :program (format nil "~A got too many arguments" who))
                              nil))
                  bindings)))
     (reverse bindings)))
 
 (defun c-destructuring-bind (form env)
   (let ((whole (gensym)))
-    (convert (list* 'let* (cons (list whole (caddr form)) (destructure-bindings (cadr form) whole)) (cdddr form))
+    (convert (list* 'let* (cons (list whole (caddr form))
+                                (destructure-bindings (cadr form) whole whole "DESTRUCTURING-BIND"))
+                    (cdddr form))
              env)))
 
 ;; What the code that takes a list apart calls while it runs: the rest of a
@@ -695,7 +741,7 @@
     (when (eq (car rest) key)
       (return rest))))
 
-(defun check-keys (plist keys allow)
+(defun check-keys (plist keys allow who)
   (cond ((oddp (count-parts plist)) t)
         (t (do ((rest plist (cddr rest))) ((atom rest))
              (when (and (eq (car rest) :allow-other-keys) (cadr rest))
@@ -703,7 +749,7 @@
            (unless allow
              (do ((rest plist (cddr rest))) ((atom rest))
                (unless (or (member (car rest) keys) (eq (car rest) :allow-other-keys))
-                 (error "DESTRUCTURING-BIND does not take the keyword argument ~S" (car rest)))))
+                 (error "~A does not take the keyword argument ~S" who (car rest)))))
            nil)))
 
 ;; Three forms that only the compiler writes: a call of the function that a
@@ -711,7 +757,7 @@
 ;; form stands; an error of a kind, in words; and a condition that is
 ;; there already, signalled.
 (defun c-call (form env)
-  (list :call (list :const (cadr form)) (convert-all (cddr form) env)))
+  (convert-call (cadr form) (cddr form) env))
 
 (defun c-fail (form env)
   (declare (ignore env))
@@ -903,6 +949,14 @@
   (dolist (argument (caddr node))
     (gen argument :one))
   (emit :call (length (caddr node)))
+  (done mode t))
+
+;; A function in C that the machine has an instruction for: its arguments,
+;; and the instruction.
+(defun g-known (node mode)
+  (dolist (argument (caddr node))
+    (gen argument :one))
+  (emit (cadr node))
   (done mode t))
 
 ;; A function inside this one is made: what it closes over is pushed, each
@@ -1166,6 +1220,7 @@
   (done mode nil))
 
 (defun g-defmacro (node mode)
+  (gen (caddr node) :one)
   (emit :defmacro (constant (cadr node)))
   (done mode nil))
 
@@ -1190,7 +1245,8 @@
   (done mode nil))
 
 (dolist (row '((:const g-const) (:ref g-ref) (:special g-special) (:function g-function) (:setq g-setq)
-               (:set-special g-set-special) (:if g-if) (:progn g-progn) (:call g-call) (:closure g-closure)
+               (:set-special g-set-special) (:if g-if) (:progn g-progn) (:call g-call) (:known g-known)
+               (:closure g-closure)
                (:let g-let) (:labels g-labels) (:block g-block) (:return-from g-return-from)
                (:return-to g-return-to) (:tagbody g-tagbody) (:go g-go) (:go-to g-go-to) (:catch g-catch)
                (:throw g-throw) (:unwind-protect g-unwind-protect) (:values-call g-values-call)
@@ -1324,4 +1380,4 @@
         (format t "~S is written in C, and there is no listing of it here~%" function))
     nil))
 
-(clara:provide-compiler :compile 'compile-lambda :list 'list-function)
+(clara:provide-compiler :compile 'compile-lambda :list 'list-function :evaluate 'evaluate)

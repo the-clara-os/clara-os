@@ -68,11 +68,11 @@ extern const struct lisp_primitive *g_primitive; /* the function in C that was c
  * the packages hold them. */
 struct known {
     lisp lambda, declare, special, optional, rest, body, key, allow_other_keys, aux, whole, environment;
-    lisp execute, eval, allow, no_error, condition, destructuring_bind;
+    lisp execute, eval, allow, no_error, condition, destructuring_bind, compiler;
 };
 extern struct known S;
 
-int  safe_point(void);                      /* 0: an exit is under way, and the evaluation is not to go on */
+int  attend(void);                          /* the safe point, when there is something to look at */
 void bind_special(lisp symbol, lisp value);
 void unbind(unsigned to);                   /* back to that many bindings */
 lisp make_function(enum lisp_function_kind kind, lisp name, lisp code, lisp env);
@@ -99,6 +99,15 @@ static inline int special(lisp symbol)
 static inline int constant(lisp symbol)
 {
     return lisp_symbol_flags(symbol) & LISP_CONSTANT;
+}
+
+/* A safe point: every object that the thread holds is where the collector
+ * finds it. Says 0 when an exit is under way and the evaluation is not to
+ * go on. Most of the time nobody wants anything of the thread, and this is
+ * a look at a word and no call. */
+static inline int safe_point(void)
+{
+    return __builtin_expect(lisp_attention, 0) ? attend() : !g_unwind.to;
 }
 
 /* vm.c: compiled code, called. The arguments are on the value stack. */

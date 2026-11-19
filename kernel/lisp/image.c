@@ -42,7 +42,7 @@
  * items of enum lisp_code and the instructions of vm.c, since a world that
  * was saved holds its compiled functions. A change to any of them is a new
  * number here, and no older image is taken after it. */
-#define FORMAT 2
+#define FORMAT 3
 
 struct image {
     char     magic[8];    /* "CLARAIMG" */

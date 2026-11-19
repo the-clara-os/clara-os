@@ -130,7 +130,7 @@
                (a (logand (ash word -8) #xffffff))
                (b (ash word -32)))
           (incf pc)
-          (ecase (aref *names* (logand word 255))
+          (case (aref *names* (logand word 255))
             (:const (push-value (aref constants a)))
             (:local (push-value (aref locals a)))
             (:set-local (setf (aref locals a) (pop-value)))
@@ -280,8 +280,12 @@
             (:fset (let ((function (pop-value)))
                      (setf (fdefinition (aref constants a)) function)
                      (push-value (aref constants a))))
-            (:defmacro (eval (cons 'defmacro (aref constants a)))
-                       (push-value (car (aref constants a))))
+            (:defmacro (let ((expander (pop-value)) (name (aref constants a)))
+                         (setf (macro-function name)
+                               (lambda (form environment)
+                                 (declare (ignore environment))
+                                 (funcall expander form)))
+                         (push-value name)))
             (:defvar (let ((symbol (aref constants a)))
                        (proclaim (list 'special symbol))
                        (push-value (not (boundp symbol)))))
@@ -289,7 +293,15 @@
                             (eval (list 'defconstant (aref constants a) (list 'quote value)))
                             (push-value (aref constants a))))
             (:fail (fail (aref #(compiled-error compiled-program-error compiled-control-error) a)
-                         "~A" (aref constants b)))))))))
+                         "~A" (aref constants b)))
+            ;; An instruction that stands for a function in C: here the function is SBCL's, and is
+            ;; called. What the kernel's machine does instead, and how it knows that the name still
+            ;; means that function, is tested there (kernel/lisp/lisp.c).
+            (t (let* ((name (aref *names* (logand word 255)))
+                      (function (find-symbol (symbol-name name) "COMMON-LISP")))
+                 (unless (and function (eq (get function 'clara.compiler::instruction) name))
+                   (error "~S is no instruction of the machine's" name))
+                 (call (fdefinition function) (pop-values (- 1 (get name 'clara.compiler::effect))))))))))))
 
 ;; Code, called: the arguments go into its first local variables as
 ;; kernel/lisp/vm.c puts them there.

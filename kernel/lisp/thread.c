@@ -75,6 +75,7 @@ static void enter(struct context *me)
             at = &(*at)->wants;
         me->wants = NULL;
         *at = me;
+        lisp_attention = 1; /* for the one that has it: somebody waits */
     } else
         g_running = me;
     if (on)
@@ -83,6 +84,7 @@ static void enter(struct context *me)
         thread_wait(THREAD_FOREVER);
     g_turn = timer_ticks();
     lisp_evaluator_in(me->evaluator);
+    lisp_attention = 1; /* and for this one: what it was told while it waited is looked at first */
 }
 
 /* The thread that has the runtime gives it to the one that has waited
@@ -130,12 +132,18 @@ enum lisp_turn lisp_thread_safe_point(int may_stop)
 
     if (!me)
         return LISP_GO_ON;
-    if (g_wanting && timer_ticks() != g_turn) {
-        leave();
-        enter(me);
+    if (g_wanting) {
+        if (timer_ticks() != g_turn) {
+            leave();
+            enter(me);
+        } else
+            lisp_attention = 1; /* its turn comes with the next tick: look again */
     }
-    if (!may_stop)
+    if (!may_stop) {
+        if (me->stop || me->interrupt || (me == g_first && g_break && console_break))
+            lisp_attention = 1; /* still to be answered, as soon as the thread may stop */
         return LISP_GO_ON;
+    }
     if (me->stop) {
         me->stop = 0;
         return LISP_STOP;
@@ -455,6 +463,7 @@ LISP_PRIMITIVE(lisp_p_destroy_thread)
     if (!c)
         return NIL;
     c->stop = 1;
+    lisp_attention = 1;
     thread_wake(c->thread);
     return T;
 }
@@ -475,6 +484,7 @@ LISP_PRIMITIVE(lisp_p_interrupt_thread)
     if (!c)
         return NIL;
     c->interrupt = 1;
+    lisp_attention = 1;
     thread_wake(c->thread);
     return T;
 }
@@ -637,6 +647,7 @@ LISP_PRIMITIVE(lisp_p_serial_break)
 
     (void)argc;
     g_break = argv[0] != NIL;
+    lisp_attention = 1;
     return before ? T : NIL;
 }
 
@@ -651,6 +662,11 @@ static const char *const sources[LISP_INTERRUPT_MESSAGE] = { "TIMER", "SERIAL" }
 void lisp_interrupt(enum lisp_interrupt source)
 {
     lisp event = lisp_roots.interrupts[source];
+
+    /* A tick, bytes on the serial port, a device: a thread that waited may be ready, a turn may be
+     * over, Ctrl-C may have been typed. The timer comes by here a hundred times a second, so
+     * whatever nobody said in so many words is looked at within a tick all the same. */
+    lisp_attention = 1;
 
     if (lisp_is(event, LISP_EVENT)) {
         struct lisp_event *e = lisp_as_event(event);

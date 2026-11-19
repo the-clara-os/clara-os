@@ -66,7 +66,10 @@ enum {
     OP_JUMP, OP_JUMP_IF_NIL, OP_JUMP_IF_TRUE, OP_JUMP_IF_SUPPLIED, OP_SUPPLIED, OP_VALUES_PUSH, OP_VALUES_CALL,
     OP_VALUES_SPREAD, OP_VALUES_SAVE, OP_VALUES_RESTORE, OP_BLOCK, OP_TAGBODY, OP_CATCH, OP_HANDLER, OP_PROTECT,
     OP_UNLINK, OP_RETURN_TO, OP_GO_TO, OP_THROW, OP_CLEANUP, OP_CLEANUP_END, OP_DISPATCH, OP_FSET, OP_DEFMACRO,
-    OP_DEFVAR, OP_DEFCONSTANT, OP_FAIL, OPERATIONS
+    OP_DEFVAR, OP_DEFCONSTANT, OP_FAIL,
+    /* and the ones that stand for a function in C, each under that function's name (g_known) */
+    OP_CAR, OP_CDR, OP_CONS, OP_NOT, OP_NULL, OP_CONSP, OP_ATOM, OP_EQ, OP_ADD, OP_SUBTRACT, OP_MULTIPLY, OP_ADD_ONE,
+    OP_SUBTRACT_ONE, OP_LESS, OP_GREATER, OP_AT_MOST, OP_AT_LEAST, OP_SAME, OP_AREF, OP_SVREF, OPERATIONS
 };
 
 static const struct operation {
@@ -116,11 +119,100 @@ static const struct operation {
     { "CLEANUP-END", NONE, NONE },
     { "DISPATCH", COUNT, NONE },
     { "FSET", SYMBOL, NONE },
-    { "DEFMACRO", CONSTANT, NONE },
+    { "DEFMACRO", SYMBOL, NONE },
     { "DEFVAR", SYMBOL, NONE },
     { "DEFCONSTANT", SYMBOL, NONE },
     { "FAIL", KIND, CONSTANT },
+    { "CAR", NONE, NONE },
+    { "CDR", NONE, NONE },
+    { "CONS", NONE, NONE },
+    { "NOT", NONE, NONE },
+    { "NULL", NONE, NONE },
+    { "CONSP", NONE, NONE },
+    { "ATOM", NONE, NONE },
+    { "EQ", NONE, NONE },
+    { "+", NONE, NONE },
+    { "-", NONE, NONE },
+    { "*", NONE, NONE },
+    { "1+", NONE, NONE },
+    { "1-", NONE, NONE },
+    { "<", NONE, NONE },
+    { ">", NONE, NONE },
+    { "<=", NONE, NONE },
+    { ">=", NONE, NONE },
+    { "=", NONE, NONE },
+    { "AREF", NONE, NONE },
+    { "SVREF", NONE, NONE },
 };
+
+/* The functions in C that have an instruction of their own, the commonest
+ * ones: the instructions from OP_CAR on, each under the name of its
+ * function. Such an instruction does what the function does with the
+ * arguments that it usually gets, and no call is made. With any others, a
+ * CAR of what is no list, a sum that is too large, it calls the function,
+ * which says what is wrong in its own words. And it calls whatever the
+ * name means when the name has been given another function since: a
+ * function that is defined again is the one that is called, whoever calls
+ * it. A bit of g_original says for each of them whether its symbol still
+ * has the function in C that the instruction stands for, and
+ * lisp_set_function, the one place where a symbol is given a function,
+ * keeps the bits right. */
+enum { KNOWN = OPERATIONS - OP_CAR };
+
+static struct {
+    lisp symbol; /* in COMMON-LISP, which holds it */
+    lisp code;   /* what its function in C has for code: the row of lisp_primitives */
+} g_known[KNOWN];
+static uint64_t g_original;
+
+#define ORIGINAL(operation) (g_original >> ((operation) - OP_CAR) & 1)
+
+static void look(unsigned k)
+{
+    lisp f = lisp_as_symbol(g_known[k].symbol)->function;
+
+    if (f != LISP_UNBOUND && lisp_function_kind(f) == LISP_PRIMITIVE && lisp_as_function(f)->code == g_known[k].code)
+        g_original |= 1ULL << k;
+    else
+        g_original &= ~(1ULL << k);
+}
+
+/* A symbol gets a function: from DEFUN and DEFMACRO, walked or compiled,
+ * and from (SETF SYMBOL-FUNCTION). Nothing else writes that word of a
+ * symbol once the evaluator has its functions (lisp_eval_init). */
+void lisp_set_function(lisp symbol, lisp function)
+{
+    lisp_as_symbol(symbol)->function = function;
+    for (unsigned k = 0; k < KNOWN; k++)
+        if (g_known[k].symbol == symbol)
+            look(k);
+}
+
+static int same_name(const char *a, const char *b)
+{
+    while (*a && *a == *b)
+        a++, b++;
+    return *a == *b;
+}
+
+/* Once the symbols have their functions, in a new world and in one that
+ * came as an image, where a name may have been given another function
+ * before the world was saved. */
+void lisp_vm_init(void)
+{
+    for (unsigned k = 0; k < KNOWN; k++) {
+        const char *name = operations[OP_CAR + k].name;
+        unsigned i = 0;
+
+        while (i < lisp_primitive_count && !same_name(lisp_primitives[i].name, name))
+            i++;
+        if (i == lisp_primitive_count)
+            panic("lisp: the machine has an instruction for %s, and no function in C has that name", name);
+        g_known[k].symbol = lisp_symbol_in(lisp_roots.common_lisp, name, 1);
+        g_known[k].code = lisp_fixnum(i);
+        look(k);
+    }
+}
 
 /* The types of the errors that FAIL makes, by its first operand. */
 static const char *const failures[] = { "ERROR", "PROGRAM-ERROR", "CONTROL-ERROR" };
@@ -150,6 +242,34 @@ static inline void watched(void)
         g_watched--;
         lisp_collect();
     }
+}
+
+/* A function, or the symbol that names one, called with arguments that are
+ * on the stack: its first value. A function in C is called from here,
+ * without the safe point that lisp_apply is: it does not last, and the next
+ * call of a function in Lisp, or the next turn of a loop, is one. A
+ * compiled function is called from here as well, behind its safe point.
+ * Any other, and whatever is wrong with the call, is lisp_apply's. */
+static inline lisp call(lisp f, unsigned argc, lisp *argv)
+{
+    lisp function = lisp_is_symbol(f) ? lisp_as_symbol(f)->function : f;
+
+    if (lisp_is(function, LISP_FUNCTION)) {
+        if (lisp_function_kind(function) == LISP_PRIMITIVE) {
+            const struct lisp_primitive *p = &lisp_primitives[lisp_fixnum_value(lisp_as_function(function)->code)];
+
+            if (argc >= p->min && (argc <= p->max || p->max == LISP_MANY)) {
+                lisp_values.count = 1;
+                g_primitive = p;
+                return p->fn(argc, argv);
+            }
+        } else if (lisp_function_kind(function) == LISP_COMPILED) {
+            watched();
+            return safe_point() ? lisp_call_compiled(function, argc, argv) : LISP_NIL;
+        }
+    }
+    watched();
+    return lisp_apply(f, argc, argv);
 }
 
 /* A record is made, on top of the stack: the innermost of this call. */
@@ -225,8 +345,9 @@ lisp lisp_call_compiled(lisp f, unsigned argc, lisp *argv)
     unsigned required = small(code[LISP_CODE_REQUIRED]), positional = required + small(code[LISP_CODE_OPTIONAL]);
     unsigned variables = small(code[LISP_CODE_LOCALS]), depth = small(code[LISP_CODE_DEPTH]);
     unsigned bound = g_bound, extra, i, j, k, a, b, n;
-    lisp *base = g_sp, *locals = base + 1, *records = NULL, *r, *args, value = LISP_NIL, tag, symbol;
+    lisp *base = g_sp, *locals = base + 1, *records = NULL, *r, *args, value = LISP_NIL, other, tag, symbol;
     uint64_t pc = 0, word;
+    int64_t sum;
     struct unwind exit;
 
     if (lisp_out_of_stack())
@@ -355,25 +476,7 @@ lisp lisp_call_compiled(lisp f, unsigned argc, lisp *argv)
             break;
         case OP_CALL: /* function, a arguments -> its first value; the others are in lisp_values */
             args = g_sp - a;
-            value = args[-1];
-            if (lisp_is_symbol(value))
-                value = lisp_as_symbol(value)->function;
-            if (lisp_is(value, LISP_FUNCTION) && lisp_function_kind(value) == LISP_PRIMITIVE) {
-                /* A function in C is called from here, without the safe point that lisp_apply is:
-                 * it does not last, and the next call of a function in Lisp, or the next turn of
-                 * a loop, is one. A wrong number of arguments is lisp_apply's to say. */
-                const struct lisp_primitive *p = &lisp_primitives[lisp_fixnum_value(lisp_as_function(value)->code)];
-
-                if (a >= p->min && (a <= p->max || p->max == LISP_MANY)) {
-                    lisp_values.count = 1;
-                    g_primitive = p;
-                    value = p->fn(a, args);
-                } else
-                    value = lisp_apply(args[-1], a, args);
-            } else {
-                watched();
-                value = lisp_apply(args[-1], a, args);
-            }
+            value = call(args[-1], a, args);
             g_sp = args - 1;
             if (g_unwind.to)
                 goto unwind;
@@ -439,8 +542,7 @@ lisp lisp_call_compiled(lisp f, unsigned argc, lisp *argv)
         case OP_VALUES_CALL: /* function, as many arguments as the local variable a counted -> its first value */
             n = small(locals[a]);
             args = g_sp - n;
-            watched();
-            value = lisp_apply(args[-1], n, args);
+            value = call(args[-1], n, args);
             g_sp = args - 1;
             if (g_unwind.to)
                 goto unwind;
@@ -590,18 +692,19 @@ lisp lisp_call_compiled(lisp f, unsigned argc, lisp *argv)
                 lisp_fail("~S is a special operator, and stays one", symbol);
                 goto unwind;
             }
-            lisp_as_symbol(symbol)->function = g_sp[-1];
+            lisp_set_function(symbol, g_sp[-1]);
             g_sp[-1] = symbol;
             break;
-        case OP_DEFMACRO: /* -> the name; the constant a is (name lambda-list form...), a macro for the evaluator */
-            symbol = lisp_as_cons(constants[a])->car;
+        case OP_DEFMACRO: /* function -> the symbol a, a macro from now on: the function is given a form that calls
+                             the macro, whole, and makes the form to evaluate in its place */
+            symbol = constants[a];
             value = lisp_as_symbol(symbol)->function;
             if (value != LISP_UNBOUND && lisp_function_kind(value) == LISP_SPECIAL_OPERATOR) {
                 lisp_fail("~S is a special operator, and stays one", symbol);
                 goto unwind;
             }
-            lisp_as_symbol(symbol)->function = make_function(LISP_MACRO, symbol, lisp_as_cons(constants[a])->cdr, LISP_NIL);
-            *g_sp++ = symbol;
+            lisp_set_function(symbol, make_function(LISP_MACRO, symbol, g_sp[-1], LISP_NIL));
+            g_sp[-1] = symbol;
             break;
         case OP_DEFVAR: /* -> T when the symbol a has no value yet; it is a special variable from here on */
             symbol = constants[a];
@@ -629,6 +732,68 @@ lisp lisp_call_compiled(lisp f, unsigned argc, lisp *argv)
         case OP_FAIL: /* an error of the type a that says the constant b: a form that is not what it should be */
             lisp_fail_as(failures[a], NULL, 0, "~A", constants[b]);
             goto unwind;
+
+        /* The instructions that stand for a function in C, of one argument and of two: argument... ->
+         * the value. Each says which arguments it takes and what it gives for them; the function itself
+         * (builtin.c) does the same with those and is not called. */
+#define ONE(operation, takes, gives) \
+        case operation: \
+            value = g_sp[-1]; \
+            if (ORIGINAL(operation) && (takes)) { \
+                g_sp[-1] = (gives); \
+                lisp_values.count = 1; \
+                break; \
+            } \
+            n = 1; \
+            goto known;
+#define TWO(operation, takes, gives) \
+        case operation: \
+            value = g_sp[-2]; \
+            other = g_sp[-1]; \
+            if (ORIGINAL(operation) && (takes)) { \
+                g_sp--; \
+                g_sp[-1] = (gives); \
+                lisp_values.count = 1; \
+                break; \
+            } \
+            n = 2; \
+            goto known;
+#define TRUTH(test) ((test) ? lisp_roots.t : LISP_NIL)
+#define INTEGERS (lisp_is_fixnum(value) && lisp_is_fixnum(other))
+#define INSIDE (lisp_is(value, LISP_VECTOR) && lisp_is_fixnum(other) && \
+                (uint64_t)lisp_fixnum_value(other) < lisp_length(lisp_as_vector(value)->header))
+        ONE(OP_CAR, lisp_is_cons(value) || value == LISP_NIL, value == LISP_NIL ? LISP_NIL : lisp_as_cons(value)->car)
+        ONE(OP_CDR, lisp_is_cons(value) || value == LISP_NIL, value == LISP_NIL ? LISP_NIL : lisp_as_cons(value)->cdr)
+        TWO(OP_CONS, 1, lisp_cons(value, other))
+        ONE(OP_NOT, 1, TRUTH(value == LISP_NIL))
+        ONE(OP_NULL, 1, TRUTH(value == LISP_NIL))
+        ONE(OP_CONSP, 1, TRUTH(lisp_is_cons(value)))
+        ONE(OP_ATOM, 1, TRUTH(!lisp_is_cons(value)))
+        TWO(OP_EQ, 1, TRUTH(value == other))
+        TWO(OP_ADD, INTEGERS && !__builtin_add_overflow((int64_t)value, (int64_t)other, &sum), (lisp)sum)
+        TWO(OP_SUBTRACT, INTEGERS && !__builtin_sub_overflow((int64_t)value, (int64_t)other, &sum), (lisp)sum)
+        TWO(OP_MULTIPLY, INTEGERS && !__builtin_mul_overflow((int64_t)value, lisp_fixnum_value(other), &sum), (lisp)sum)
+        ONE(OP_ADD_ONE, lisp_is_fixnum(value) && !__builtin_add_overflow((int64_t)value, (int64_t)lisp_fixnum(1), &sum),
+            (lisp)sum)
+        ONE(OP_SUBTRACT_ONE,
+            lisp_is_fixnum(value) && !__builtin_sub_overflow((int64_t)value, (int64_t)lisp_fixnum(1), &sum), (lisp)sum)
+        TWO(OP_LESS, INTEGERS, TRUTH((int64_t)value < (int64_t)other))
+        TWO(OP_GREATER, INTEGERS, TRUTH((int64_t)value > (int64_t)other))
+        TWO(OP_AT_MOST, INTEGERS, TRUTH((int64_t)value <= (int64_t)other))
+        TWO(OP_AT_LEAST, INTEGERS, TRUTH((int64_t)value >= (int64_t)other))
+        TWO(OP_SAME, INTEGERS, TRUTH(value == other))
+        TWO(OP_AREF, INSIDE, lisp_as_vector(value)->items[lisp_fixnum_value(other)])
+        TWO(OP_SVREF, INSIDE, lisp_as_vector(value)->items[lisp_fixnum_value(other)])
+        known:
+            /* The name has been given another function since, or the arguments are not the usual ones:
+             * the function of the name is called, like any other. */
+            args = g_sp - n;
+            value = call(g_known[(word & 0xff) - OP_CAR].symbol, n, args);
+            g_sp = args;
+            if (g_unwind.to)
+                goto unwind;
+            *g_sp++ = value;
+            break;
         }
         continue;
 
@@ -675,6 +840,8 @@ lisp lisp_call_compiled(lisp f, unsigned argc, lisp *argv)
                 g_sp = r;
                 *g_sp++ = g_unwind.tag; /* the condition, and under DISPATCH's eyes which clause takes it */
                 *g_sp++ = lisp_as_cons(g_unwind.clause)->cdr;
+                g_unwind.tag = g_unwind.clause = LISP_NIL; /* nothing of an exit that is over is held on to */
+                g_unwind.handler = NULL;
                 pc = pad;
                 break;
             } else
@@ -797,10 +964,6 @@ static const char *check(lisp code, unsigned nesting)
         }
         if ((word & 0xff) == OP_DISPATCH && pc + operand[0] >= count)
             return "an instruction jumps past the end";
-        if ((word & 0xff) == OP_DEFMACRO && !lisp_is_symbol(lisp_is_cons(constants->items[operand[0]])
-                                                                  ? lisp_as_cons(constants->items[operand[0]])->car
-                                                                  : 0))
-            return "a macro has no symbol for a name";
         if (pc + 1 == count && (word & 0xff) != OP_RETURN && (word & 0xff) != OP_RETURN_ONE && (word & 0xff) != OP_JUMP &&
             (word & 0xff) != OP_FAIL && (word & 0xff) != OP_RETURN_TO && (word & 0xff) != OP_GO_TO && (word & 0xff) != OP_THROW)
             return "its last instruction lets the machine run on past the end";

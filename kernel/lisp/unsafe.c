@@ -524,6 +524,7 @@ LISP_PRIMITIVE(lisp_p_keyboard_break)
     (void)argc;
     (void)argv;
     console_break_now();
+    lisp_attention = 1;
     return NIL;
 }
 

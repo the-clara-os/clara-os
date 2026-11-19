@@ -934,19 +934,24 @@ architectures (kernel/vm.c).
   not mean one thing here and another there. So a function is found by its
   name at every call, and one that is defined again is the one that is
   called; nothing is put in the place of a call, however small the
-  function. The errors are the evaluator's, in its words and of its types.
+  function, without a look whether the name still means what it meant (the
+  instructions of M14b, below). The errors are the evaluator's, in its
+  words and of its types.
   A form that is not what it should be does not stop the compiler: the
   code fails when it comes to the form, as the evaluator would. And the
   test is that rule: every text of the evaluator's self-test is compiled
   and run at every boot, and has to give the answer that the evaluator
   gave. The differences that remain are few and are written down: a
   DEFVAR counts for the forms that are compiled after it has been
-  evaluated, as in a file under any Common Lisp, and a macro that is
-  defined again does not reach the functions that were compiled before.
+  evaluated, as in a file under any Common Lisp, a macro that is defined
+  again does not reach the functions that were compiled before, and the
+  macros of a MACROLET run while their form is compiled, where the
+  variables around them have no values yet.
 - It is Lisp, in the world, in the part of the language that the evaluator
-  has, and the evaluator runs it. That makes compiling slow by a
-  compiler's standards, half a millisecond for a small function, and is no
-  obstacle: the 400 texts are compiled in under half a second. It works in
+  has, and the evaluator runs it, until it has compiled itself (M14b,
+  below). Walked, it takes half a millisecond for a small function, which
+  is slow by a compiler's standards and was no obstacle: the 400 texts are
+  compiled in under half a second. It works in
   two passes. The first makes a tree of a form in which nothing is left to
   look up: macros are expanded, a name is the variable, the block or the
   tag that it stands for, and what a function inside a function uses of
@@ -973,11 +978,10 @@ architectures (kernel/vm.c).
   function in C is called without one: it does not last, and the turn of a
   loop or the next call in Lisp is near. That is where compiled code gains
   most of what it gains after the variables.
-- Macros are the evaluator's. A macro's body runs when a call is expanded,
-  and for compiled code that is while it is compiled; DEFMACRO in compiled
-  code makes a macro of the usual kind. Nothing is compiled unless
-  somebody asks: DEFUN makes a function for the evaluator, and COMPILE
-  makes it a compiled one. A world that compiles what it loads is M14b.
+- A macro's body runs when a call is expanded, and for compiled code that
+  is while it is compiled. In M14a macros were the evaluator's and nothing
+  was compiled unless somebody asked: DEFUN made a function for the
+  evaluator, and COMPILE made it a compiled one. Both changed with M14b.
 - Code is looked at before it is made a function: every operand has to
   name a constant, a variable or an instruction that is there. That the
   instructions use the stack as they say is the compiler's word, and not
@@ -992,6 +996,103 @@ architectures (kernel/vm.c).
   says what a form means, and what the compiler makes of the form has to
   give the same, for some 180 forms that were written and four hundred
   that are put together at random.
+
+## A compiled world (decided in M14b, 2026-11-18)
+
+- Whatever is typed or loaded is compiled before it runs. EVAL, and LOAD
+  for every form that it reads, hand the form to the compiler once a
+  compiler has said that it is there (`lisp_eval_form`, eval.c;
+  CLARA.COMPILER:EVALUATE): the form is compiled and what that made is
+  run. The listener, the editor and the launcher go through those two, so
+  they needed no change. The other way would have been for DEFUN to
+  compile and for everything else to stay with the evaluator. It was not
+  taken, because a function is not only made by DEFUN: a closure made at
+  the top of a file, a LAMBDA kept in a table, a loop typed at the prompt
+  would have gone on being walked, and a world would have been compiled
+  in parts. Evaluating a form by compiling it is also the path that the
+  400 texts had been through since M14a.
+- The evaluator stays. It runs lisp/boot.lisp and lisp/compiler.lisp when
+  a machine starts from the files, since something has to run the
+  compiler before the compiler has compiled itself; it evaluates the few
+  forms that the substrate writes itself (`lisp_evaluate`); and it is the
+  witness of the self-test, which holds compiled code against it. Nothing
+  that a user types reaches it any more.
+- The compiler compiles itself by being loaded a second time. A new world
+  is made in this order: boot.lisp, walked, and the evaluator's texts;
+  compiler.lisp, walked, and the same texts compiled by it; then
+  compiler.lisp again, which LOAD now hands to the compiler form by form,
+  so that the walked compiler puts a compiled definition in the place of
+  each of its own as it goes; then boot.lisp again, compiled by a compiler
+  that is compiled; the texts a third time; and the files of the world,
+  which were never walked. So the two files are written to bear a second
+  load, which is little to ask: a DEFVAR leaves alone what the first one
+  made, and the rest says the same things again. The other way, to compile
+  every function where it is from the form it was made of, needs a walk
+  over all the symbols and leaves behind whatever a file put into a table
+  as it was loaded. Doing it in the build, under SBCL, was looked at in
+  M14a and left alone: it wants ClaraOS's macros under SBCL, which is a
+  cross-compiler. Measured: the two files take 150 ms and the world 70 ms
+  where the processor runs the code itself, 1.9 to 2.7 s and 0.8 to 1.2 s
+  where it is emulated. A machine that starts from an image pays none of
+  it.
+- "Through and through" is checked and not hoped. When the world is
+  loaded, the heap is gone through, and a function or a macro that the
+  evaluator would still have to walk is a panic. The first run of that
+  found two, of the self-test's own and held by nothing in the heap: the
+  evaluator kept the clause that had last taken a condition, and the place
+  that the last GO went to, where the collector looks, and the clause held
+  on to a symbol, and the symbol to its package and every function in it.
+  That had been so since M6c, and the heap had held 27 functions more
+  than boot.lisp defines after every self-test. An exit that is over
+  leaves nothing there now.
+- A macro is a function of a form. DEFMACRO in compiled code makes a
+  compiled function of one argument, the form that calls the macro, which
+  takes the subforms apart itself by the way the compiler has for
+  DESTRUCTURING-BIND, and fails in the words that the evaluator has for a
+  macro that is called wrongly. It is made where the DEFMACRO stands, so
+  it sees the variables there. The object is still a function of the kind
+  LISP_MACRO; its code is that function where the evaluator's has a lambda
+  list and a body, and whoever expands a call looks which it is. The
+  macros of a MACROLET are compiled when the compiler comes to the form,
+  and it calls them: they see the macros of the MACROLETs around them and
+  no variable, as in any Common Lisp.
+- The commonest functions in C have an instruction each, twenty of them
+  (`car` to `svref`, vm.c). Such an instruction does the function's work
+  for the arguments that it usually gets and calls the function for any
+  others, so an error is the function's own, in its words. It does not
+  look the name up, and still a function of that name that is defined
+  again is the one that is called: a word has a bit for each of the twenty
+  that says whether its name still means the function in C, and the one
+  place where a symbol is given a function keeps the bits right
+  (`lisp_set_function`). The dearer way was to look at the symbol's
+  function at every such instruction, five loads where this is one. The
+  price is a rule, that nothing else writes the function of a symbol, and
+  the host tests read the sources to see that it holds. A world that was
+  saved with one of the twenty defined again comes back with its bit off,
+  which a session of the boot test does with `svref`.
+- A safe point is a look at a word (`lisp_attention`, `safe_point` in
+  eval.h). Whoever has something for a thread to look at there says so:
+  the allocator when enough has been made for a collection, a thread that
+  wants the runtime, whoever stops or interrupts a thread, Ctrl-C, and
+  every interrupt, the timer's among them, so that what nobody said in so
+  many words is seen within a tick. The call behind it clears the word
+  before it looks, so nothing that comes up meanwhile is lost, and sets it
+  again for what is still to be answered. And compiled code calls compiled
+  code without the detour through `lisp_apply`.
+- What it gained, where the processor runs the code itself: `(fib 30)` 100
+  ms before and 80 after, five million additions in a loop 150 and 70, a
+  million items pushed, reversed and mapped over 530 and 120, a small
+  function compiled in 0.7 ms and in 0.1. The boot that collects at every
+  safe point, emulated, took 110 s before M14a, 133 s after it and takes
+  61 s now, because compiled code comes to a safe point at a call of a
+  function in Lisp and at a jump backwards, where the evaluator came to
+  one at every call. What is left is the call itself: a function is
+  entered through some thirty lines of C that look at its lambda list
+  every time, and a function of two lines, the reader of a structure's
+  slot or `cadr`, costs as much to call as a long one. Putting such a
+  function into its caller is the next thing to gain from, and wants an
+  answer to what happens when it is defined again, as the instructions
+  have one.
 
 ## Conventions
 

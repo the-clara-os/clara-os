@@ -8,6 +8,12 @@ error: CAR wants a list, and 5 is not one
 30
 > (destructuring-bind (first (second) &rest others) (list 1 (list 2) 3) (list first second others))
 (1 2 (3))
+> (defun gather (n) (let ((kept nil)) (dotimes (i n) (push (list i (* i i)) kept)) (reverse kept)))
+GATHER
+> (defmacro twice (form) `(progn ,form ,form))
+TWICE
+> (let ((n 0)) (twice (setq n (+ n 1))) (list (gather n) (handler-case (car n) (type-error () 'not-a-list))))
+(((0 0) (1 1)) NOT-A-LIST)
 ^K
 > (+ 40 2)
 42

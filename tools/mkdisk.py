@@ -350,12 +350,17 @@ def volume_of(image, out):
 
 
 def spoil(image):
-    """One byte of the saved world is turned over: where the file begins is
-    known by how an image begins, at the start of some sector."""
+    """One byte of the saved world is turned over. Where the file begins is
+    known by how an image begins (kernel/lisp/image.c): eight letters at the
+    start of some sector, and after them the number of its format, which is
+    small and not zero. The letters alone will not do. The kernels on the
+    disk have them among their constants, and when a build happens to put
+    those at the start of a sector, the byte that is turned over is one of
+    the kernel's: the boot that was to refuse the world then resumes it."""
     with open(image, "r+b") as f:
         disk = f.read()
         at = disk.find(b"CLARAIMG")
-        while at >= 0 and at % SECTOR:
+        while at >= 0 and (at % SECTOR or not 0 < struct.unpack_from("<Q", disk, at + 8)[0] < 65536):
             at = disk.find(b"CLARAIMG", at + 1)
         if at < 0:
             sys.exit("tools/mkdisk.py: %s holds no world that a kernel saved" % image)

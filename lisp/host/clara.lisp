@@ -236,8 +236,8 @@
 
 (defvar *compiler* nil)
 
-(defun provide-compiler (&key compile list)
-  (setq *compiler* (if compile (list compile list)))
+(defun provide-compiler (&key compile list evaluate)
+  (setq *compiler* (if compile (list compile list evaluate)))
   nil)
 
 ;;; CLARA.HOST: the machine that is not there
