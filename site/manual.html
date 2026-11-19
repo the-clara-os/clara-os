@@ -523,9 +523,9 @@ T
     <p>A file of yours that loads all the others makes that the only line to type after an update. What to know about such a disk:</p>
     <ul>
       <li>The volumes are found anew at every start, so ask <code>(clara.fat:volumes)</code> for yours each time, as <code>work</code> does. A volume that a variable has kept since before the machine was started again, in a world that was saved, is refused.</li>
-      <li>Directories cannot be made on it either. Make them on the host: on macOS the disk opens with a double click, like the system's. That is also the way to carry files in and out, and the whole disk is one file, which is easy to keep a copy of.</li>
-      <li>The host and the machine must not have it at the same time, since each would write without knowing of the other. Eject it on the host before you start the machine: on macOS, QEMU does not start until you have. The other way round nothing stops you, so stop the machine before you open the disk on the host.</li>
-      <li>Any FAT volume will do, as large as you like, made with whatever the host has for that. The one above has 33 MiB, which is room for a great many texts.</li>
+      <li>Directories cannot be made on it either. Make them on the host: on macOS the disk opens with a double click, like the system's. That is also the way to <a href="#outside">carry files in and out</a>, and the whole disk is one file, which is easy to keep a copy of.</li>
+      <li>The host and the machine must not have it at the same time, since each would write without knowing of the other. On macOS, <code>make run-aarch64</code> ejects a disk that is still open in the Finder before it starts the machine, and says so in the terminal; when something on the Mac is still using the disk, it says that and starts nothing. The other way round nothing stops you, so stop the machine before you open the disk on the host.</li>
+      <li>Any FAT volume will do, as large as you like, made with whatever the host has for that. A disk image that macOS made is one, a <code>.dmg</code> as well, as long as it is a plain read/write image and not a compressed or a sparse one: <code>WORK=~/clara-work.dmg make run-aarch64</code>. The one above has 33 MiB, which is room for a great many texts.</li>
     </ul>
   </section>
 
@@ -961,7 +961,7 @@ NIL
     </table>
 
     <h3 id="outside">Files from outside, and to it</h3>
-    <p>The disk is an ordinary disk image with a FAT volume on it, and the computer that the virtual machine runs on can open it, while the machine is stopped. On macOS, double-click <code>build/disk-aarch64.img</code> in the Finder, or <code>build/claraos.img</code> for the one UTM was given. Put files there or take them, eject it, and start the machine. macOS leaves a few files of its own on such a volume, whose names begin with a dot. On Linux:</p>
+    <p>The disk is an ordinary disk image with a FAT volume on it, and the computer that the virtual machine runs on can open it, while the machine is stopped. On macOS, double-click <code>build/disk-aarch64.img</code> in the Finder, or <code>build/claraos.img</code> for the one UTM was given, or <a href="#work">a disk of your own</a>. Put files there or take them, eject it, and start the machine; <code>make run-aarch64</code> ejects one that was left open. macOS leaves a few files of its own on such a volume, whose names begin with a dot. On Linux:</p>
 <pre><code>sudo mount -o loop,offset=1048576 build/disk-x86_64.img /mnt</code></pre>
 
     <h3 id="unsafe">Memory and devices by hand</h3>
@@ -989,7 +989,9 @@ error: nothing is mapped at #x0</pre>
       <tr><td>Boxes on the screen where characters should be.</td><td>The screen's font has the characters of ASCII. The characters themselves are right, and show on the serial port.</td></tr>
       <tr><td>A picture that was shown has text over it, or is no longer where it was put.</td><td>The console writes on the same screen, and moves everything on it up with every new line: <a href="#showing">Showing what has changed</a>. Show the picture again.</td></tr>
       <tr><td><code>error: this surface is of a machine that was switched off</code></td><td>The surface was made before the world was saved, and its pixels were not saved with it. Make a new one and draw on that: <a href="#surfaces">Memory</a>.</td></tr>
-      <tr><td>A file that was written is gone after <code>make</code>.</td><td>Under QEMU the disk is made again whenever a build changed something. Keep what matters outside <code>build/</code>, by way of <a href="#outside">the host</a>.</td></tr>
+      <tr><td>A file that was written is gone after <code>make</code>.</td><td>Under QEMU the disk is made again whenever a build changed something. Keep what matters on <a href="#work">a disk of your own</a>, which no build touches.</td></tr>
+      <tr><td><code>error: the volume in CLARA.FAT:*VOLUME* is from an earlier start</code></td><td>A variable kept a volume while the machine was started again, in a world that was saved. Take the volume from <code>(clara.fat:volumes)</code> anew: <a href="#work">A disk of your own</a>.</td></tr>
+      <tr><td>QEMU does not start, and says that it failed to get a lock.</td><td>Something else has one of the machine's disks. A machine that is still running from it, for one: there is one machine to a disk. Or the host: <code>make run-aarch64</code> ejects a disk that is open in the Finder by itself, and QEMU started in any other way needs it ejected first.</td></tr>
       <tr><td>A window is gone that nobody closed, or an application's window never comes.</td><td>The application failed, and its thread ended. The serial port has the reason, in a line that begins with <code>error in #&lt;THREAD</code>. When the reason is in the application's file, mend the file and launch it again: <a href="#installed">Applications in files</a>.</td></tr>
       <tr><td>The arrow keys do nothing at a prompt.</td><td>A line at a prompt is edited with <kbd>Backspace</kbd> alone. The arrows are for the <a href="#editor">editor</a> and the <a href="#browser">browser</a>.</td></tr>
       <tr><td><code>lisp: clara.image is not resumed</code> in the report.</td><td>A saved world could not be used, and the reason follows on the same line: <a href="#refused">An image that is not taken</a>.</td></tr>

@@ -16,10 +16,13 @@
 #        INPUT= gives a machine with none of them)
 #        WORK=~/clara-work.img (a second disk, the user's own: a raw image with a
 #        FAT volume, for the files that are to outlive the disk above, which is
-#        made again for every newer system. Nothing here makes that file or
-#        makes it again; the kernel finds its volume after the boot volume, and
-#        the manual says how to make one and how to reach it, under "A disk of
-#        your own".)
+#        made again for every newer system. A .dmg that macOS made is such an
+#        image too, when it is a plain read/write one. Nothing here makes that
+#        file or makes it again; the kernel finds its volume after the boot
+#        volume, and the manual says how to make one and how to reach it, under
+#        "A disk of your own".)
+#        Either disk that is still open on the Mac, in the Finder, is ejected
+#        there first, which is said: QEMU does not start with one that is.
 set -eu
 arch=${1:?usage: tools/run.sh <x86_64|aarch64> [qemu args]}
 shift
@@ -29,6 +32,38 @@ serial=${SERIAL:-mon:stdio}
 mem=${MEM:-512M}
 input=${INPUT--device virtio-keyboard-pci -device virtio-mouse-pci -device virtio-tablet-pci}
 mkdir -p build
+
+# A disk that the host has open as well is no disk for a machine: the two
+# would write to it without knowing of each other, and QEMU does not start
+# with one, saying no more than that it failed to get a lock. On macOS a
+# double click on such a file opens it in the Finder, and it stays open
+# until it is ejected, so that is done here, and said: the machine is what
+# was asked for. A disk that cannot be ejected is in use over there, and
+# the machine is not started.
+release() {
+    command -v hdiutil > /dev/null 2>&1 || return 0
+    [ -f "$1" ] || return 0
+    # What is open there, as its device and the file it is: the file is
+    # written as it was named when it was opened, so the two are held
+    # against each other as files, and not as names.
+    device=$(hdiutil info 2> /dev/null | awk '
+        /^image-path/ { path = $0; sub(/^image-path[ \t]*:[ \t]*/, "", path) }
+        /^\/dev\/disk[0-9]+[ \t]/ { print $1 "\t" path }' |
+        while IFS="$(printf '\t')" read -r open file; do
+            if [ "$file" -ef "$1" ]; then
+                echo "$open"
+                break
+            fi
+        done)
+    [ -n "$device" ] || return 0
+    if diskutil eject "$device" > /dev/null 2>&1; then
+        echo "tools/run.sh: $1 was open on this Mac, and has been ejected there: the machine has it now" >&2
+    else
+        echo "tools/run.sh: $1 is open on this Mac and cannot be ejected: something there is using it." >&2
+        echo "    Close that, eject the disk in the Finder, and start the machine again." >&2
+        exit 1
+    fi
+}
 
 # The user's own disk goes in front of whatever else was asked for, which
 # puts it behind the boot disk and the keyboard and pointers: the kernel
@@ -44,6 +79,7 @@ if [ -n "${WORK:-}" ]; then
         echo "    mkdir -p build/empty && python3 tools/mkdisk.py build/empty \"$WORK\"" >&2
         exit 1
     fi
+    release "$WORK"
     set -- -drive "if=none,id=work,format=raw,file=$WORK" -device virtio-blk-pci,drive=work "$@"
 fi
 
@@ -68,8 +104,10 @@ firmware() {
 
 if [ -n "${DISK:-}" ]; then
     disk=$DISK
+    release "$disk"
 else
     disk=build/disk-$arch.img
+    release "$disk"
     if [ ! -f "$disk" ] || [ -n "$(find "$esp" -newer "$disk" -print | head -1)" ]; then
         python3 -I tools/mkdisk.py "$esp" "$disk"
     fi

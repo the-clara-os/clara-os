@@ -152,7 +152,15 @@ Rules:
   and which the host's checker looks at with the boot volume. `make test`
   clears the variable (`test: export WORK :=`), so a work disk that the
   environment names stays out of it, and gives one to the manual's two
-  boots, where the manual's section is typed.
+  boots, where the manual's section is typed. A disk of either kind that
+  is open on the Mac, in the Finder, is ejected by tools/run.sh before
+  QEMU is started (`release`), because QEMU does not start with one and
+  says only that it failed to get a lock. hdiutil lists an open file as it
+  was named when it was opened, so the script asks whether that is the
+  same file (`-ef`) and does not hold the names against each other. No
+  boot of `make test` comes that way: after a change there, try it by
+  hand with a scratch disk in /tmp, opened with `hdiutil attach`, and
+  never with a disk of Julio's that is mounted.
 - Disks and files. lisp/disk.lisp is the driver for virtio's disks:
   sectors of 512 bytes, into and out of page frames, one request at a
   time. lisp/fat.lisp reads FAT volumes on them, and hands the language
