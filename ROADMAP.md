@@ -398,7 +398,14 @@ The compiler:
   of a sector, which the kernel has among its own constants: this build
   put those at the start of a sector, a byte of the kernel was turned over
   in place of one of the world, and the boot that has to refuse the world
-  resumed it. The tool looks at what follows the letters now.
+  resumed it. The tool looks at what follows the letters now. And under
+  SBCL a thread that was stopped before it had begun to run, with nobody
+  waiting for it, stayed on the list of threads for good. Closing a window
+  stops its thread in just that way, and the runner of CI was slow enough,
+  on the first run of this milestone, for one such thread not to have had
+  a turn yet: the last check of the host tests, which wants every thread
+  gone, failed there and nowhere else. Tried by itself it happened 2991
+  times in 3000. The list lets go of a thread that SBCL no longer has.
 
 Upgrades:
 

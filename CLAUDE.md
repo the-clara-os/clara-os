@@ -484,7 +484,11 @@ Rules:
   running: one run in three of the host tests on CI, and every run in the
   container, whose SBCL is older and slower. A test that stops a thread
   waits for what says how far the thread has come, not for the thread to
-  be there.
+  be there. Under SBCL a thread can be stopped before it has run at all,
+  and on CI one is: lisp/host/clara.lisp lets go of a thread that SBCL no
+  longer has when the list of threads is asked for, since such a thread
+  never took itself off, and the last check of the tests wants that list
+  to hold the one thread that runs them.
 - A window that is opened with `:events t` keeps what it is told, and its
   program takes it with `clara.windows:next-event`, in its own thread:
   `(:key code)`, `(:pointer x y buttons)`, `(:close)`. That is how an

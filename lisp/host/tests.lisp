@@ -4861,6 +4861,18 @@
   (clara:destroy-thread thread)               ; stopped, perhaps before it began
   (check-condition error (clara:join-thread thread))
   (check nil (clara:thread-alive-p thread)))
+;; A thread that is stopped before it has begun, and that nobody waits for,
+;; is gone all the same: closing a window stops its thread in that way, and
+;; on a machine that is slow enough the thread has not yet had its turn.
+(dotimes (i 200)
+  (clara:destroy-thread (clara:make-thread (lambda () (loop (sleep 0.01))))))
+(check t (eventually (lambda () (= (length (clara:all-threads)) 1))))
+;; And one that is stopped a second time while it is ending.
+(dotimes (i 200)
+  (let ((thread (clara:make-thread (lambda () nil))))
+    (clara:destroy-thread thread)
+    (clara:destroy-thread thread)))
+(check t (eventually (lambda () (= (length (clara:all-threads)) 1))))
 (check 1 (length (clara:all-threads)))
 
 (format t "host tests: ~D checks under ~A ~A, ~D failed~%"
