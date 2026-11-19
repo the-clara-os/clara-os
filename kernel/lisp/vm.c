@@ -163,7 +163,7 @@ static struct {
     lisp symbol; /* in COMMON-LISP, which holds it */
     lisp code;   /* what its function in C has for code: the row of lisp_primitives */
 } g_known[KNOWN];
-static uint64_t g_original;
+#define g_original lisp_machine.original /* where code for the processor looks at it too (lisp.h) */
 
 #define ORIGINAL(operation) (g_original >> ((operation) - OP_CAR) & 1)
 
@@ -212,12 +212,17 @@ void lisp_vm_init(void)
         g_known[k].code = lisp_fixnum(i);
         look(k);
     }
+    lisp_machine.t = lisp_roots.t;
 }
 
 /* The types of the errors that FAIL makes, by its first operand. */
 static const char *const failures[] = { "ERROR", "PROGRAM-ERROR", "CONTROL-ERROR" };
 
-static unsigned g_watched; /* the self-test wants a collection at so many more safe points of compiled code */
+static unsigned g_watched; /* the self-test wants a collection at so many more safe points of compiled code, */
+static unsigned g_watched_native; /* and at so many more of code for the processor */
+static uint64_t g_entered; /* how often C has sent the processor into code of its own, */
+static uint64_t g_stepped; /* how often such code has left an instruction to the machine, */
+static uint64_t g_slow;    /* and how often a call to C: what it is quick for not doing */
 
 static inline unsigned small(lisp x)
 {
@@ -234,6 +239,38 @@ static inline unsigned small(lisp x)
 void lisp_compiled_watched(unsigned points)
 {
     g_watched = points;
+    if (points)
+        lisp_attention = 1; /* code for the processor comes to its safe points by looking at that word */
+}
+
+/* The same for the safe points that code for the processor comes to, which
+ * are counted apart: what compiles and translates a text is the machine's
+ * code, and would have used the collections up before the text ran. */
+void lisp_native_watched(unsigned points)
+{
+    g_watched_native = points;
+    if (points)
+        lisp_attention = 1;
+}
+
+int lisp_compiled_watching(void)
+{
+    return g_watched || g_watched_native;
+}
+
+void lisp_native_counts(uint64_t *entered, uint64_t *stepped, uint64_t *slow)
+{
+    *entered = g_entered;
+    *stepped = g_stepped;
+    *slow = g_slow;
+}
+
+static inline void watched_native(void)
+{
+    if (g_watched_native) {
+        g_watched_native--;
+        lisp_collect();
+    }
 }
 
 static inline void watched(void)
@@ -333,40 +370,40 @@ static lisp *cleanup(lisp *outer)
     return r;
 }
 
-/* A compiled function, called with arguments that are on the value stack. */
-lisp lisp_call_compiled(lisp f, unsigned argc, lisp *argv)
+/* The arguments of a call go into its first local variables: the required
+ * parameters, the optional ones, a list of the rest if the function asked
+ * for one, and the keyword parameters in the order of the code's list of
+ * keywords. A parameter that got no argument is LISP_UNBOUND, for the
+ * instructions to put the value of its default there, and the variables
+ * that are no parameters are NIL. Says 0 when the arguments are not what
+ * the function takes, with the error made.
+ *
+ * ARGV may be the local variables themselves: code for the processor is
+ * called with its arguments where its variables are. The arguments after
+ * the positional ones are then in the way of what is put there, and go to
+ * SPARE first, where the caller has seen to the room for them. */
+static int arguments(lisp f, const lisp *code, unsigned argc, const lisp *argv, lisp *locals, lisp *spare)
 {
-    const struct lisp_function *fn = lisp_as_function(f);
-    const lisp *code = lisp_as_vector(fn->code)->items;
-    const lisp *instructions = lisp_as_vector(code[LISP_CODE_INSTRUCTIONS])->items;
-    const lisp *constants = lisp_as_vector(code[LISP_CODE_CONSTANTS])->items;
-    const lisp *closed = fn->env == LISP_NIL ? NULL : lisp_as_vector(fn->env)->items;
-    const lisp *more;
     unsigned required = small(code[LISP_CODE_REQUIRED]), positional = required + small(code[LISP_CODE_OPTIONAL]);
-    unsigned variables = small(code[LISP_CODE_LOCALS]), depth = small(code[LISP_CODE_DEPTH]);
-    unsigned bound = g_bound, extra, i, j, k, a, b, n;
-    lisp *base = g_sp, *locals = base + 1, *records = NULL, *r, *args, value = LISP_NIL, other, tag, symbol;
-    uint64_t pc = 0, word;
-    int64_t sum;
-    struct unwind exit;
+    unsigned variables = small(code[LISP_CODE_LOCALS]), extra, i, j, k, n;
+    const lisp *more;
 
-    if (lisp_out_of_stack())
-        return LISP_NIL;
-    if (base + 1 + variables + depth > g_stack + STACK_SLOTS)
-        return stack_is_full();
-
-    /* The arguments go into the first local variables: the required parameters, the optional ones, a
-     * list of the rest if the function asked for one, and the keyword parameters in the order of the
-     * code's list of keywords. A parameter that got no argument is LISP_UNBOUND, for the instructions
-     * to put the value of its default there. */
-    if (argc < required)
-        return program_error("~S got too few arguments", f);
-    if (argc > positional && code[LISP_CODE_REST] == LISP_NIL && code[LISP_CODE_KEYS] == LISP_NIL)
-        return program_error("~S got too many arguments", f);
-    for (i = 0; i < positional; i++)
-        locals[i] = i < argc ? argv[i] : LISP_UNBOUND;
+    if (argc < required) {
+        program_error("~S got too few arguments", f);
+        return 0;
+    }
+    if (argc > positional && code[LISP_CODE_REST] == LISP_NIL && code[LISP_CODE_KEYS] == LISP_NIL) {
+        program_error("~S got too many arguments", f);
+        return 0;
+    }
     more = argv + positional;
     extra = argc > positional ? argc - positional : 0;
+    if (argv == locals && extra) {
+        memmove(spare, more, extra * sizeof(lisp));
+        more = spare;
+    }
+    for (i = 0; i < positional; i++)
+        locals[i] = i < argc ? argv[i] : LISP_UNBOUND;
     if (code[LISP_CODE_REST] != LISP_NIL) {
         lisp list = LISP_NIL;
 
@@ -379,8 +416,10 @@ lisp lisp_call_compiled(lisp f, unsigned argc, lisp *argv)
         int allow = code[LISP_CODE_ALLOW] != LISP_NIL;
 
         n = (unsigned)lisp_length(keys->header);
-        if (extra & 1)
-            return program_error("~S got an odd number of keyword arguments", f);
+        if (extra & 1) {
+            program_error("~S got an odd number of keyword arguments", f);
+            return 0;
+        }
         for (k = 0; k < extra; k += 2)
             if (more[k] == S.allow && more[k + 1] != LISP_NIL)
                 allow = 1;
@@ -392,18 +431,95 @@ lisp lisp_call_compiled(lisp f, unsigned argc, lisp *argv)
         for (k = 0; k < extra && !allow; k += 2) {
             for (j = 0; j < n && keys->items[j] != more[k]; j++)
                 ;
-            if (j == n && more[k] != S.allow)
-                return program_error("~S does not take the keyword argument ~S", f, more[k]);
+            if (j == n && more[k] != S.allow) {
+                program_error("~S does not take the keyword argument ~S", f, more[k]);
+                return 0;
+            }
         }
         i += n;
     }
     for (; i < variables; i++)
         locals[i] = LISP_NIL;
-    base[0] = f; /* in use for as long as it runs, whatever its name comes to mean meanwhile */
-    g_sp = locals + variables;
+    return 1;
+}
+
+/* What the machine is asked for. CALL: a compiled function is called, with
+ * arguments that are on the value stack, and this is the call from its
+ * first instruction to its return. The other two are for a call that code
+ * for the processor is in the middle of (lisp/native.lisp), whose local
+ * variables are at ARGV. STEP: one instruction, GIVEN, which that code
+ * leaves to the machine, as it does with all but the plainest. UNWIND: an
+ * exit is under way, and the records of the call are gone through for one
+ * that takes it. Both say where the code is to go on: 0 for its next
+ * instruction, or an address in it, the place that a record names or the
+ * place where the call ends (NATIVE_LEAVE, machine.h).
+ *
+ * So the instructions are written once, here, whoever runs the function,
+ * and the two cannot come to mean different things. Such a call keeps its
+ * records and its count of bindings in two words of the value stack
+ * after its local variables, where this finds them and leaves them
+ * (LISP_NATIVE_HIDDEN, eval.h), and the place that one of its records
+ * names is counted in bytes from the beginning of its code. */
+enum { CALL, STEP, UNWIND };
+
+static inline __attribute__((always_inline)) uint64_t machine(lisp f, unsigned argc, lisp *argv, const int mode,
+                                                              uint64_t given)
+{
+    lisp *base = mode == CALL ? g_sp : argv - 1, *locals = base + 1;
+    const struct lisp_function *fn = lisp_as_function(mode == CALL ? f : base[0]);
+    const lisp *code = lisp_as_vector(fn->code)->items;
+    const lisp *instructions = lisp_as_vector(code[LISP_CODE_INSTRUCTIONS])->items;
+    const lisp *constants = lisp_as_vector(code[LISP_CODE_CONSTANTS])->items;
+    const lisp *closed = fn->env == LISP_NIL ? NULL : lisp_as_vector(fn->env)->items;
+    unsigned variables = small(code[LISP_CODE_LOCALS]), depth = small(code[LISP_CODE_DEPTH]);
+    unsigned hidden = fn->entry ? small(lisp_as_native(code[LISP_CODE_NATIVE])->hidden) : 0;
+    unsigned bound = g_bound, i, a, b, n;
+    lisp *records = NULL, *state = locals + variables, *r, *args, value = LISP_NIL, other, tag, symbol;
+    uint64_t pc = 0, word, block = fn->entry ? (uint64_t)fn->entry - NATIVE_FAST : 0;
+    int stepped = 0, landed = 0;
+    int64_t sum;
+    struct unwind exit;
+
+    if (mode == CALL) {
+        if (lisp_out_of_stack())
+            return LISP_NIL;
+        if (state + hidden + depth > g_stack + STACK_SLOTS)
+            return stack_is_full();
+        if (!arguments(f, code, argc, argv, locals, NULL))
+            return LISP_NIL;
+        base[0] = f; /* in use for as long as it runs, whatever its name comes to mean meanwhile */
+        g_sp = state;
+        if (fn->entry) {
+            /* The processor runs it. This is the way in for everybody who is not such code himself:
+             * the evaluator, a function in C, the machine below. */
+            if (hidden) {
+                state[0] = 0;
+                state[1] = lisp_fixnum(g_bound);
+                g_sp += LISP_NATIVE_HIDDEN;
+            }
+            g_entered++;
+            value = lisp_native_enter((const void *)(uintptr_t)block, locals, f, &lisp_machine, LISP_NIL);
+            g_sp = base;
+            return value;
+        }
+    } else if (hidden) {
+        records = (lisp *)(uintptr_t)state[0];
+        bound = small(state[1]);
+    }
 
     for (;;) {
-        word = (uint64_t)lisp_fixnum_value(instructions[pc++]);
+        if (mode != CALL) {
+            if (stepped) {
+                if (hidden)
+                    state[0] = (lisp)(uintptr_t)records;
+                return landed ? block + pc : 0;
+            }
+            stepped = 1;
+            if (mode == UNWIND)
+                goto unwind;
+            word = given;
+        } else
+            word = (uint64_t)lisp_fixnum_value(instructions[pc++]);
         a = (unsigned)(word >> 8) & 0xffffff;
         b = (unsigned)(word >> 32);
         switch (word & 0xff) {
@@ -815,6 +931,7 @@ lisp lisp_call_compiled(lisp f, unsigned argc, lisp *argv)
                 g_sp = r + RECORD;
                 *g_sp++ = value; /* which tag, for DISPATCH */
                 pc = pad;
+                landed = 1;
                 break;
             }
             records = retire(r);
@@ -825,6 +942,7 @@ lisp lisp_call_compiled(lisp f, unsigned argc, lisp *argv)
                 g_sp = r;
                 records = cleanup(records);
                 pc = pad;
+                landed = 1;
                 break;
             }
             if (kind == R_BLOCK && g_unwind.to == r[3]) {
@@ -843,6 +961,7 @@ lisp lisp_call_compiled(lisp f, unsigned argc, lisp *argv)
                 g_unwind.tag = g_unwind.clause = LISP_NIL; /* nothing of an exit that is over is held on to */
                 g_unwind.handler = NULL;
                 pc = pad;
+                landed = 1;
                 break;
             } else
                 continue;
@@ -850,6 +969,7 @@ lisp lisp_call_compiled(lisp f, unsigned argc, lisp *argv)
             g_sp = r;
             *g_sp++ = value;
             pc = pad;
+            landed = 1;
             break;
         }
         if (!g_unwind.to)
@@ -859,9 +979,113 @@ lisp lisp_call_compiled(lisp f, unsigned argc, lisp *argv)
         while (records)
             records = retire(records);
         unbind(bound);
+        if (mode != CALL)
+            return block + NATIVE_LEAVE; /* the code gives the stack back itself, and says NIL */
         g_sp = base;
         return value;
     }
+}
+
+lisp lisp_call_compiled(lisp f, unsigned argc, lisp *argv)
+{
+    return machine(f, argc, argv, CALL, 0);
+}
+
+/* The same machine for code for the processor: the instructions that it
+ * does not do itself, and the records. One copy of it serves both, which
+ * is why the mode is no constant here. */
+static uint64_t native(lisp *locals, int mode, uint64_t word)
+{
+    return machine(0, 0, locals, mode, word);
+}
+
+uint64_t lisp_native_step(lisp *locals, uint64_t word)
+{
+    g_stepped++;
+    return native(locals, STEP, word);
+}
+
+uint64_t lisp_native_unwinding(lisp *locals)
+{
+    return native(locals, UNWIND, 0);
+}
+
+/* A safe point of code for the processor, when there is something to look
+ * at: a jump backwards. (A call that finds the word set goes the long way,
+ * through lisp_native_slow_call, and comes to its safe point there.) */
+uint64_t lisp_native_safe_point(lisp *locals)
+{
+    watched_native();
+    return safe_point() ? 0 : native(locals, UNWIND, 0);
+}
+
+/* Code for the processor returns from a function that made records or
+ * bound special variables: whatever of either is still there is undone,
+ * as the machine does when it leaves. */
+uint64_t lisp_native_finish(lisp *locals)
+{
+    const lisp *code = lisp_as_vector(lisp_as_function(locals[-1])->code)->items;
+    lisp *state = locals + small(code[LISP_CODE_LOCALS]);
+
+    for (lisp *records = (lisp *)(uintptr_t)state[0]; records;)
+        records = retire(records);
+    unbind(small(state[1]));
+    return 0;
+}
+
+uint64_t lisp_native_stack_full(void)
+{
+    stack_is_full();
+    return 0;
+}
+
+/* Code for the processor was called by other such code, with ARGC
+ * arguments on top of the value stack and itself, F, under them, and it
+ * cannot take them as they lie: the count is wrong, or its lambda list has
+ * more to it than required parameters. The arguments become the local
+ * variables where they are, with the rest of the call's words after them.
+ * Says 0 when the call can go on, and otherwise where it ends, with the
+ * error made. */
+uint64_t lisp_native_arguments(lisp f, uint64_t argc)
+{
+    const struct lisp_function *fn = lisp_as_function(f);
+    const lisp *code = lisp_as_vector(fn->code)->items;
+    unsigned hidden = small(lisp_as_native(code[LISP_CODE_NATIVE])->hidden);
+    lisp *locals = g_sp - argc, *state = locals + small(code[LISP_CODE_LOCALS]);
+    uint64_t leave = (uint64_t)fn->entry - NATIVE_FAST + NATIVE_LEAVE;
+
+    if (lisp_out_of_stack())
+        return leave;
+    if (state + hidden + small(code[LISP_CODE_DEPTH]) + argc > g_stack + STACK_SLOTS) {
+        stack_is_full();
+        return leave;
+    }
+    if (!arguments(f, code, (unsigned)argc, locals, locals, state + hidden))
+        return leave;
+    if (hidden) {
+        state[0] = 0;
+        state[1] = lisp_fixnum(g_bound);
+    }
+    g_sp = state + hidden;
+    return 0;
+}
+
+/* The call that lisp_native_call (entry.S) does not do alone: the function
+ * is none that the processor runs, it is no function at all, or a safe
+ * point has something to look at. The function and its ARGC arguments are
+ * on top of the value stack, and go from it. */
+lisp lisp_native_slow_call(uint64_t argc)
+{
+    lisp *args = g_sp - argc, f = args[-1], function = lisp_is_symbol(f) ? lisp_as_symbol(f)->function : f, value;
+
+    /* A call of anything but a function in C is a safe point, here as for the machine. */
+    if (!lisp_is(function, LISP_FUNCTION) || lisp_function_kind(function) != LISP_PRIMITIVE) {
+        watched_native();
+        g_slow++;
+    }
+    value = call(f, (unsigned)argc, args);
+    g_sp = args - 1;
+    return value;
 }
 
 /* Code, looked at before it is made a function: whether the machine can run

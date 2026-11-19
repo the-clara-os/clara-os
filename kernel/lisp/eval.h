@@ -10,6 +10,7 @@
  * and an exit, a condition or a THROW passes through both. */
 #pragma once
 #include "lisp.h"
+#include "machine.h"
 
 enum {
     STACK_SLOTS = 65536, /* of the value stack */
@@ -38,16 +39,8 @@ struct handler {
                      compiled code */
 };
 
-/* The collector looks at every lisp here whether or not an exit is under
- * way, so each of them is a Lisp value at all times. */
-struct unwind {
-    lisp to;     /* 0, or where control is on its way to: a BLOCK or TAGS frame, the tag of a block or a tagbody of
-                    compiled code, THROWING, HANDLING, FAILING, STOPPING */
-    lisp tag;    /* GO: the place in the body, or which of the tags it is. THROW: the tag. HANDLING and FAILING: the
-                    condition */
-    lisp clause; /* HANDLING: the clause that takes the condition, */
-    struct handler *handler; /* and the HANDLER-CASE it belongs to */
-};
+/* The exit that is under way is a struct unwind, which lisp.h has: code
+ * for the processor looks at it too. */
 
 /* A CATCH that is waiting, in the same two ways as a handler. */
 struct catch {
@@ -55,11 +48,13 @@ struct catch {
     lisp *tag; /* on the value stack */
 };
 
+/* Three of these are words of lisp_machine, where code for the processor
+ * finds them (lisp.h). */
+#define g_sp     lisp_machine.sp
+#define g_bound  lisp_machine.bound
+#define g_unwind lisp_machine.unwind
 extern lisp *g_stack; /* STACK_SLOTS + STACK_SPARE words: the running thread's */
-extern lisp *g_sp;
-extern unsigned g_bound;
 extern struct handler *g_handlers;
-extern struct unwind g_unwind;
 extern struct catch *g_catches;
 extern unsigned g_cleaning; /* the cleanups of UNWIND-PROTECT that the thread is in the middle of: none is cut short */
 extern const struct lisp_primitive *g_primitive; /* the function in C that was called last: an error names it */
@@ -112,3 +107,25 @@ static inline int safe_point(void)
 
 /* vm.c: compiled code, called. The arguments are on the value stack. */
 lisp lisp_call_compiled(lisp function, unsigned argc, lisp *argv);
+
+/* A call of code for the processor keeps so many words between its local
+ * variables and its stack, when its instructions make records or bind
+ * special variables: the innermost record in force, and how many special
+ * variables were bound when it began. The machine of vm.c has both in
+ * variables of its own. */
+#define LISP_NATIVE_HIDDEN 2
+
+/* vm.c: what code for the processor calls, by way of lisp_machine. Each
+ * says 0 for "go on", or the address in that code to go on at. */
+uint64_t lisp_native_step(lisp *locals, uint64_t word);    /* one instruction of the machine's, done by the machine */
+uint64_t lisp_native_unwinding(lisp *locals);              /* an exit is under way: which record takes it, if any */
+uint64_t lisp_native_safe_point(lisp *locals);             /* there is something to look at */
+uint64_t lisp_native_arguments(lisp function, uint64_t argc); /* the arguments are not simply the parameters */
+uint64_t lisp_native_finish(lisp *locals);                 /* the function returns with records in force, or bindings */
+uint64_t lisp_native_stack_full(void);
+lisp     lisp_native_slow_call(uint64_t argc);             /* from lisp_native_call: any call that it cannot do alone */
+
+/* arch/<arch>/entry.S: the way into code for the processor from C, and the
+ * way that such code calls a function. */
+lisp lisp_native_enter(const void *code, lisp *locals, lisp function, struct lisp_machine *machine, lisp nil);
+void lisp_native_call(void);

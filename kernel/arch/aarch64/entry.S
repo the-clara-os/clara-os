@@ -6,6 +6,7 @@
  * SP_EL0. An exception switches to SP_EL1, so a handler always has a stack
  * to run on, even when the exception is the first stack overflowing. */
 #include "arch.h"
+#include "lisp/machine.h"
 
     .text
 
@@ -141,6 +142,77 @@ arch_probe_nothing:
     .globl probe_failed
 probe_failed:
     mov x0, #1
+    ret
+
+/* Code for the processor (kernel/lisp/native.c, lisp/native.lisp): what the
+ * Lisp world makes of its functions, and what the two routines here stand
+ * between C and. Such code keeps five registers for itself, which a
+ * function in C leaves as it found them:
+ *
+ *   x19  the address of lisp_machine: everything of the kernel's is reached from it
+ *   x20  the top of the value stack, while the code runs; lisp_machine has it across a call into C
+ *   x21  the local variables of the call that is running
+ *   x22  the constants of its function
+ *   x23  NIL
+ *
+ * and passes what it has in hand in x0 to x3. A function of such code is
+ * entered with itself in x0. It returns its first value there, with the
+ * value stack cut back to where the function stood on it. */
+
+/* lisp lisp_native_enter(const void *code, lisp *locals, lisp function, struct lisp_machine *machine, lisp nil)
+ * From C into such code: a call whose local variables are made already
+ * (lisp_call_compiled). */
+    .globl lisp_native_enter
+lisp_native_enter:
+    stp x29, x30, [sp, #-64]!
+    stp x19, x20, [sp, #16]
+    stp x21, x22, [sp, #32]
+    stp x23, x24, [sp, #48]
+    mov x9, x0
+    mov x21, x1
+    mov x0, x2
+    mov x19, x3
+    mov x23, x4
+    ldr x20, [x19, #MACHINE_SP]
+    blr x9
+    ldp x23, x24, [sp, #48]
+    ldp x21, x22, [sp, #32]
+    ldp x19, x20, [sp, #16]
+    ldp x29, x30, [sp], #64
+    ret
+
+/* How such code calls a function: the function, or the symbol that names
+ * it, and after it x1 arguments are on top of the value stack. When what
+ * is called is such code too, and no safe point has anything to look at,
+ * this goes straight on into it, and it returns to whoever called this.
+ * Everything else is C's to sort out: another kind of function, something
+ * that is no function, a safe point (lisp_native_slow_call). */
+    .globl lisp_native_call
+lisp_native_call:
+    sub x9, x20, x1, lsl #3         /* the first argument */
+    ldur x0, [x9, #-8]
+    and x10, x0, #7
+    cmp x10, #TAG_SYMBOL
+    b.ne 1f
+    ldur x0, [x0, #SYMBOL_FUNCTION]
+    and x10, x0, #7
+1:  cmp x10, #TAG_OBJECT
+    b.ne 2f
+    ldurb w10, [x0, #OBJECT_TYPE]
+    cmp w10, #TYPE_FUNCTION
+    b.ne 2f
+    ldur x10, [x0, #FUNCTION_ENTRY]
+    cbz x10, 2f
+    ldr w11, [x19, #MACHINE_ATTENTION]
+    cbnz w11, 2f
+    stur x0, [x9, #-8]              /* the function itself, in use for as long as it runs */
+    br x10
+2:  stp x29, x30, [sp, #-16]!
+    str x20, [x19, #MACHINE_SP]
+    mov x0, x1
+    bl lisp_native_slow_call
+    ldr x20, [x19, #MACHINE_SP]
+    ldp x29, x30, [sp], #16
     ret
 
     .bss

@@ -9,8 +9,10 @@
  * nothing in it has to be moved or put right for where it lies.
  *
  * What an image is: a few words that say what it is, the substrate's own
- * hold on the world (lisp_roots), and the heap from its first object, NIL,
- * to the end of its last. It is made in one go, by a function in C that
+ * hold on the world (lisp_roots), the heap from its first object, NIL, to
+ * the end of its last, and the code that the world has made for the
+ * processor, which lies in a region of its own at addresses that are as
+ * fixed as the heap's (native.c). It is made in one go, by a function in C that
  * comes to no safe point, so no other thread has the runtime meanwhile and
  * the heap is caught between two moments (HEAP-IMAGE, below). Writing it
  * to a file is Lisp's part (lisp/boot.lisp, SAVE-IMAGE).
@@ -40,9 +42,12 @@
 /* What the objects of an image are in memory: the tags and the types of
  * lisp.h, each struct there, and lisp_roots; and what compiled code is, the
  * items of enum lisp_code and the instructions of vm.c, since a world that
- * was saved holds its compiled functions. A change to any of them is a new
+ * was saved holds its compiled functions. And what code for the processor
+ * leans on, since the world holds that too: the order of the words of
+ * struct lisp_machine, what the functions that it names there take and
+ * give, and the numbers of machine.h. A change to any of them is a new
  * number here, and no older image is taken after it. */
-#define FORMAT 3
+#define FORMAT 4
 
 struct image {
     char     magic[8];    /* "CLARAIMG" */
@@ -51,8 +56,9 @@ struct image {
     char     version[16]; /* CLARA_VERSION of that kernel, for the boot report */
     uint64_t base;        /* VM_HEAP_BASE: where the heap of the image begins */
     uint64_t roots;       /* how many bytes of lisp_roots follow these words, */
-    uint64_t heap;        /* and how many of the heap follow those */
-    uint64_t checksum;    /* of both */
+    uint64_t heap;        /* how many of the heap follow those, */
+    uint64_t code;        /* and how many of code for the processor follow those */
+    uint64_t checksum;    /* of all three */
 };
 
 static const char magic[8] = { 'C', 'L', 'A', 'R', 'A', 'I', 'M', 'G' };
@@ -89,13 +95,14 @@ LISP_PRIMITIVE(lisp_p_heap_image)
     struct lisp_heap heap;
     struct image *image;
     struct lisp_roots *roots;
-    uint64_t bytes, pages, memory;
+    uint64_t bytes, pages, memory, code;
 
     (void)argc;
     (void)argv;
     lisp_collect();
     lisp_heap_state(&heap);
-    bytes = sizeof *image + sizeof *roots + heap.size;
+    code = lisp_code_bytes();
+    bytes = sizeof *image + sizeof *roots + heap.size + code;
     pages = (bytes + PAGE_SIZE - 1) / PAGE_SIZE;
     if (!lisp_heap_room(pages * PAGE_SIZE / sizeof(lisp)) || !(memory = pmm_alloc(pages)))
         return lisp_fail_as("STORAGE-CONDITION", NULL, 0,
@@ -111,6 +118,7 @@ LISP_PRIMITIVE(lisp_p_heap_image)
     memcpy(roots, &lisp_roots, sizeof *roots);
     memcpy(roots + 1, (const void *)(uintptr_t)VM_HEAP_BASE, heap.size);
     lisp_bindings_in();
+    lisp_code_save((uint8_t *)(roots + 1) + heap.size);
 
     /* The interrupts of this boot are not those of the next. */
     memset(roots->interrupts, 0, sizeof roots->interrupts);
@@ -121,7 +129,8 @@ LISP_PRIMITIVE(lisp_p_heap_image)
     image->base = VM_HEAP_BASE;
     image->roots = sizeof *roots;
     image->heap = heap.size;
-    image->checksum = checksum(checksum(SUM, roots, sizeof *roots), roots + 1, heap.size);
+    image->code = code;
+    image->checksum = checksum(checksum(SUM, roots, sizeof *roots), roots + 1, heap.size + code);
 
     lisp_values.count = 3;
     lisp_values.value[0] = lisp_fixnum((int64_t)memory);
@@ -162,6 +171,17 @@ static int settle(const char *name, uint64_t bytes)
                 kprintf("lisp: %s is not resumed: it has the function ", name);
                 lisp_princ(lisp_as_function(tagged)->name, put, NULL);
                 kprintf(" in C, and this kernel has none of that name\n");
+                return 0;
+            }
+            if (lisp_as_function(tagged)->entry && !lisp_code_holds((uint64_t)lisp_as_function(tagged)->entry)) {
+                kprintf("lisp: %s is not resumed: a function of its heap has code for the processor where none is\n",
+                        name);
+                return 0;
+            }
+            break;
+        case LISP_NATIVE:
+            if (!lisp_code_holds((uint64_t)lisp_as_native(tagged)->address)) {
+                kprintf("lisp: %s is not resumed: its heap holds code for the processor where none is\n", name);
                 return 0;
             }
             break;
@@ -216,8 +236,8 @@ int lisp_image_load(const struct boot_file *file)
                 arch_feature);
         return 0;
     }
-    if (image->heap % sizeof(lisp) || image->heap > VM_HEAP_SIZE ||
-        file->size != sizeof *image + sizeof *roots + image->heap) {
+    if (image->heap % sizeof(lisp) || image->heap > VM_HEAP_SIZE || image->code > VM_CODE_SIZE ||
+        file->size != sizeof *image + sizeof *roots + image->heap + image->code) {
         kprintf("lisp: %s is not resumed: it is %llu bytes long, and not as long as it says it is\n", file->name,
                 file->size);
         return 0;
@@ -228,10 +248,18 @@ int lisp_image_load(const struct boot_file *file)
         return 0;
     }
     /* The sum is taken of the heap where it lies now: it says that the file is what was saved, and
-     * that what was copied is what the file held. */
-    if (checksum(checksum(SUM, roots, sizeof *roots), (const void *)(uintptr_t)VM_HEAP_BASE, image->heap) !=
-        image->checksum) {
+     * that what was copied is what the file held. The code is summed in the file: only code that is
+     * what was saved goes where the processor can run it. */
+    if (checksum(checksum(checksum(SUM, roots, sizeof *roots), (const void *)(uintptr_t)VM_HEAP_BASE, image->heap),
+                 (const uint8_t *)(roots + 1) + image->heap, image->code) != image->checksum) {
         kprintf("lisp: %s is not resumed: it is not what was saved, by its checksum\n", file->name);
+        lisp_heap_empty();
+        return 0;
+    }
+    if (!lisp_code_restore((const uint8_t *)(roots + 1) + image->heap, image->code)) {
+        kprintf("lisp: %s is not resumed: its %llu KiB of code for the processor are not in order, or the machine "
+                "has no memory for them\n",
+                file->name, image->code >> 10);
         lisp_heap_empty();
         return 0;
     }
@@ -240,9 +268,12 @@ int lisp_image_load(const struct boot_file *file)
     if (!settle(file->name, image->heap)) {
         memset(&lisp_roots, 0, sizeof lisp_roots);
         lisp_heap_empty();
+        lisp_code_empty();
         return 0;
     }
     kprintf("lisp: the heap is an image: %llu KiB that ClaraOS %s saved, from %s on the boot volume\n",
             image->heap >> 10, version, file->name);
+    if (image->code)
+        kprintf("lisp: and with it %llu KiB of code for the processor\n", (image->code + 1023) >> 10);
     return 1;
 }

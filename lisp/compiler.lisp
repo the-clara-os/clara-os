@@ -1301,7 +1301,7 @@
     (vector (apply #'vector (reverse words)) (apply #'vector (reverse *constants*))
             (fn-name fn) (fn-lambda-list fn) (fn-required fn) (fn-optional fn) (fn-rest fn)
             (if (fn-keyed fn) (apply #'vector (fn-keys fn)) nil) (fn-allow fn)
-            (fn-slots fn) *deepest* (length (fn-closed fn)))))
+            (fn-slots fn) *deepest* (length (fn-closed fn)) nil)))
 
 (defun generate (fn)
   (let ((*fn* fn) (*code* nil) (*constants* nil) (*depth* 0) (*deepest* 0) (*records* 0) (*bound* 0))
@@ -1311,14 +1311,21 @@
 
 ;;; What the compiler is to the rest of the system
 
+;; What makes code for the processor of what the compiler has made, once
+;; there is such a thing (lisp/native.lisp): a function of the code, which
+;; decides for itself whether to, or NIL.
+(defvar *translator* nil)
+
 ;; A compiled function of a LAMBDA form that stands by itself: no variable
 ;; and no function around it is in sight. NAME is the function's own, and
 ;; that of a block around its body.
 (defun compile-lambda (form &optional name)
   (unless (and (consp form) (eq (car form) 'lambda) (consp (cdr form)))
     (error "the compiler takes a LAMBDA form, and ~S is not one" form))
-  (clara.unsafe:make-compiled-function
-   (generate (convert-function name (cadr form) (cddr form) (make-env)))))
+  (let ((code (generate (convert-function name (cadr form) (cddr form) (make-env)))))
+    (when *translator*
+      (funcall *translator* code))
+    (clara.unsafe:make-compiled-function code)))
 
 ;; The values of a form, like EVAL, with the form compiled first. A PROGN
 ;; is taken a form at a time, and so is what a macro makes of the form:
@@ -1357,8 +1364,9 @@
 ;; in the same way.
 (defun list-code (code)
   (let ((instructions (aref code 0)) (constants (aref code 1)) (inner nil))
-    (format t "~S: ~D local variable~A, ~D word~A of stack~%" (code-title code)
-            (aref code 9) (if (= (aref code 9) 1) "" "s") (aref code 10) (if (= (aref code 10) 1) "" "s"))
+    (format t "~S: ~D local variable~A, ~D word~A of stack~A~%" (code-title code)
+            (aref code 9) (if (= (aref code 9) 1) "" "s") (aref code 10) (if (= (aref code 10) 1) "" "s")
+            (if (clara.unsafe:native-code-bytes code) ", translated for the processor" ""))
     (dotimes (at (length instructions))
       (let* ((word (aref instructions at))
              (row (nth (logand word 255) *operations*))

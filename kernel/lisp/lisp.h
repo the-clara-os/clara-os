@@ -54,6 +54,7 @@ enum lisp_type {
     LISP_THREAD,
     LISP_LOCK,
     LISP_EVENT,
+    LISP_NATIVE, /* code for the processor, which lies outside the heap: this is what holds on to it (native.c) */
     LISP_FREE, /* no object: memory that the collector found unused, as long as its length says */
     LISP_TYPES
 };
@@ -111,6 +112,7 @@ struct lisp_functions {
     uint64_t compiled; /* functions that the machine runs the code of, */
     uint64_t macros;   /* and macros whose function is one of those */
     uint64_t walked;   /* functions and macros whose forms the evaluator walks */
+    uint64_t native;   /* of the compiled ones, those that the processor runs the code of itself */
 };
 
 struct lisp_function {
@@ -119,6 +121,9 @@ struct lisp_function {
     lisp code; /* a fixnum for the two kinds in C, never an address: an image has to outlive the kernel that saved it */
     lisp env;  /* the environment a closure or a macro was made in (eval.c); of a compiled function, the values it
                   closes over, in a vector, or NIL */
+    lisp entry; /* 0, or where the processor goes on when code for the processor calls this function: an address in
+                   the region of such code (native.c), which is the same on every boot, and even, so a fixnum to
+                   the collector */
 };
 
 /* The code of a compiled function: a vector with these items, which the
@@ -136,7 +141,21 @@ enum lisp_code {
     LISP_CODE_LOCALS,       /* how many local variables a call has, the parameters among them, */
     LISP_CODE_DEPTH,        /* how many more words of stack its instructions use, */
     LISP_CODE_CLOSED,       /* and how many values a function of this code closes over */
+    LISP_CODE_NATIVE,       /* NIL, or what holds the code for the processor that was made of the instructions */
     LISP_CODE_ITEMS
+};
+
+/* Code for the processor, as the heap has it: the code itself is in a
+ * region of its own, where memory can be run (native.c), and this object
+ * is what the collector sees of it. When nothing holds the object any
+ * more, the code is freed with it. Its words are an address and two small
+ * numbers, fixnums all three to the collector. */
+struct lisp_native {
+    lisp header;
+    lisp address; /* where the code begins, a multiple of 16 */
+    lisp bytes;   /* how long it is, a fixnum */
+    lisp hidden;  /* a fixnum: the words that a call of it keeps between its local variables and its stack, for
+                     the records in force and the bindings that it began with (vm.c). None, when it makes neither */
 };
 
 struct lisp_structure {
@@ -305,6 +324,11 @@ static inline struct lisp_event *lisp_as_event(lisp x)
     return lisp_object(x);
 }
 
+static inline struct lisp_native *lisp_as_native(lisp x)
+{
+    return lisp_object(x);
+}
+
 static inline unsigned lisp_symbol_flags(lisp symbol)
 {
     return (unsigned)lisp_length(lisp_as_symbol(symbol)->header);
@@ -454,11 +478,58 @@ void lisp_princ(lisp x, void (*put)(void *to, char c), void *to);
  * slot if slot is not NULL; the innermost HANDLER-CASE that asks for such
  * a type takes it, and with none it goes to the top level. */
 #define LISP_VALUES_MAX 20
-struct lisp_values {
+struct lisp_multiple {
     unsigned count;
     lisp value[LISP_VALUES_MAX];
 };
-extern struct lisp_values lisp_values;
+
+/* A non-local exit that is under way (eval.h says what the words are). The
+ * collector looks at every lisp here whether or not an exit is under way,
+ * so each of them is a Lisp value at all times. */
+struct handler;
+struct unwind {
+    lisp to;     /* 0, or where control is on its way to: a BLOCK or TAGS frame, the tag of a block or a tagbody of
+                    compiled code, THROWING, HANDLING, FAILING, STOPPING */
+    lisp tag;    /* GO: the place in the body, or which of the tags it is. THROW: the tag. HANDLING and FAILING: the
+                    condition */
+    lisp clause; /* HANDLING: the clause that takes the condition, */
+    struct handler *handler; /* and the HANDLER-CASE it belongs to */
+};
+
+/* The words of the running thread that code for the processor reads and
+ * writes itself, side by side, so that one register reaches them all, and
+ * after them the functions of the kernel that such code calls (native.c,
+ * vm.c). The kernel is somewhere else in memory on every boot, and code
+ * that a saved world holds must not know where: it is handed the address
+ * of this when it is entered, and finds everything from there. So the
+ * order of these words is part of what an image is (FORMAT, image.c), and
+ * lisp/native.lisp is told where each is (NATIVE-LAYOUT).
+ *
+ * The rest of the runtime knows the words by the names that they had when
+ * each was a variable of its own. */
+struct lisp_machine {
+    lisp *sp;                    /* g_sp: the top of the value stack */
+    struct unwind unwind;        /* g_unwind */
+    volatile int attention;      /* lisp_attention */
+    unsigned bound;              /* g_bound: how many special variables are bound */
+    struct lisp_multiple values; /* lisp_values */
+    uint64_t original;           /* g_original (vm.c): which functions in C still have the names that the
+                                    instructions for them go by */
+    lisp *stack_end;             /* where the value stack is full */
+    uintptr_t c_limit;           /* the lowest address that the thread's own stack may reach while it evaluates */
+    lisp t;                      /* the symbol T */
+    /* What code for the processor calls: the first is its own way of calling a function (entry.S), the others are
+       functions in C, which take up to two arguments and give a word back. */
+    void (*call)(void);
+    uint64_t (*step)(lisp *locals, uint64_t word);
+    uint64_t (*unwinding)(lisp *locals);
+    uint64_t (*safe_point)(lisp *locals);
+    uint64_t (*arguments)(lisp function, uint64_t argc);
+    uint64_t (*finish)(lisp *locals);
+    uint64_t (*stack_full)(void);
+};
+extern struct lisp_machine lisp_machine;
+#define lisp_values lisp_machine.values
 
 void lisp_eval_init(const struct boot_file *files); /* the files that LOAD can find */
 int  lisp_boot_file(const char *name);              /* is there one of that name among them? */
@@ -479,7 +550,7 @@ int  lisp_call(lisp function, unsigned argc, const lisp *argv); /* the same for 
  * one was told to stop, Ctrl-C was typed, an interrupt came in. Whoever
  * brings one of those about says so here, and the safe point itself is a
  * look at this and nothing more for as long as nobody has (eval.h). */
-extern volatile int lisp_attention;
+#define lisp_attention lisp_machine.attention
 int  lisp_safe_point(void);                 /* for C that has waited: the evaluator's safe point. 0: return, an exit is
                                                under way */
 int  lisp_unwinding(void);
@@ -529,6 +600,30 @@ void lisp_unsafe_init(const struct framebuffer *fb);    /* the screen, for a dri
 /* vm.c: the machine that compiled code runs on */
 void lisp_compiled_watched(unsigned points);            /* for the self-test: a collection before each of the next so
                                                            many safe points that compiled code comes to */
+void lisp_native_watched(unsigned points);              /* the same for the safe points of code for the processor */
+int  lisp_compiled_watching(void);                      /* is the self-test still waiting for some of either? */
+void lisp_native_counts(uint64_t *entered, uint64_t *stepped, uint64_t *slow); /* how often the processor has
+                                                           been sent into code of its own, and how often that code
+                                                           left an instruction, and a call of a function in Lisp,
+                                                           to C */
+
+/* native.c: code for the processor, the region of memory that it lies in,
+ * and how the heap holds on to it */
+struct lisp_code_state {
+    uint64_t size;   /* bytes, from the first piece of code to the end of the last */
+    uint64_t free;   /* of those, the bytes that hold none any more */
+    uint64_t pieces; /* how many functions' code there is */
+    uint64_t made;   /* and how many were ever made, on this boot */
+};
+void     lisp_native_init(void);                        /* what code for the processor calls is put where it finds it */
+uint64_t lisp_native_entry(lisp code);                  /* where a function of that code is entered by such code, or 0 */
+void     lisp_code_free(lisp address);                  /* from the collector: nothing holds that code any more */
+void     lisp_code_state(struct lisp_code_state *state);
+uint64_t lisp_code_bytes(void);                         /* for an image: how many bytes the code takes, as it lies, */
+void     lisp_code_save(void *to);                      /* those bytes, */
+int      lisp_code_restore(const void *from, uint64_t bytes); /* and an empty region made a copy of them; 0: no memory */
+void     lisp_code_empty(void);                         /* and empty again */
+int      lisp_code_holds(uint64_t address);             /* is that an address in code that is there? */
 
 /* image.c: the heap as a file, and a file as the heap */
 int  lisp_image_load(const struct boot_file *file);     /* 1: the heap and the roots are what that file holds. 0: they
@@ -601,6 +696,10 @@ LISP_PRIMITIVE(lisp_p_compiled_function_code);
 LISP_PRIMITIVE(lisp_p_compiled_function_p);
 LISP_PRIMITIVE(lisp_p_function_lambda_expression);
 LISP_PRIMITIVE(lisp_p_variable_kind);
+LISP_PRIMITIVE(lisp_p_native_layout);
+LISP_PRIMITIVE(lisp_p_install_native_code);
+LISP_PRIMITIVE(lisp_p_native_code_bytes);
+LISP_PRIMITIVE(lisp_p_native_function);
 extern const struct lisp_primitive lisp_primitives[];
 extern const unsigned lisp_primitive_count;
 

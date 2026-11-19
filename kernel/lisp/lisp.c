@@ -1284,6 +1284,19 @@ static const struct {
       " \"AREF wants an index that is inside what it is given, and -1 is not one\" #\\b"
       " \"SVREF wants an index that is inside what it is given, and A is not one\""
       " \"AREF wants an index that is inside what it is given, and 2 is not one\" 2)" },
+    /* the variables of a call begin as NIL, whatever lay there before. Here it is what a call that is over
+       left behind, a list that has been freed since, and the collector comes by before the variables
+       have their values: it would follow the old words into memory that holds no object any more */
+    { "(defun leaves-lists () (list (list 1 2 3) 4) nil)"
+      " (defun has-variables () (let ((a (progn (cl::%collect) 1)) (b 2)) (list a b)))"
+      " (defun over-old-words () (leaves-lists) (cl::%collect) (has-variables))"
+      " (list (over-old-words) (over-old-words))",
+      "((1 2) (1 2))" },
+    /* a character is a small number to whoever forgets to ask what it is: small enough to pass for a place
+       in a vector as long as this one */
+    { "(let ((v (make-array 20000))) (list (svref v 19999) (handler-case (svref v #\\a) (error (c) (princ-to-string c)))"
+      " (handler-case (aref v #\\a) (error () 'refused))))",
+      "(0 \"SVREF wants an index that is inside what it is given, and #\\\\a is not one\" REFUSED)" },
     /* in the middle of a form, where what the function gave is one of several things on the stack, */
     { "(let ((s \"abc\") (v (vector 1 2))) (list (aref s 0) (aref v 1) (aref s 1) (+ 1 2 3) (aref s 2) (svref v 0)))",
       "(#\\a 2 #\\b 6 #\\c 1)" },
@@ -1469,6 +1482,60 @@ static const struct {
     /* how long a form took goes to where things are written, and its values come back */
     { "(let* ((values nil) (said (with-output-to-string (*standard-output*) (setq values (multiple-value-list (time (floor 7 2))))))) (list values (subseq said (- (length said) 14))))",
       "((3 1) \" milliseconds\n\")" },
+    /* whatever a form does, it leaves the stack of its function as deep as it found it: what it took for
+       a record, for the values of a form or for arguments that were never used is given back, whichever way
+       control went. The compiler counts those words as it writes the code, and here they are counted again. */
+    { "(defun left-behind (form) (funcall (compile nil (list 'lambda nil (list 'let '((before (cl::%stack-depth))) form '(- (cl::%stack-depth) before))))))",
+      "LEFT-BEHIND" },
+    { "(mapcar #'left-behind '((tagbody (funcall (lambda () (go out))) out)"
+      " (block b (funcall (lambda () (return-from b 1))))"
+      " (block b (let ((f (lambda () (return-from b 1)))) (if (car (list nil)) (funcall f)) 2))"
+      " (tagbody (let ((f (lambda () (go out)))) (if (car (list nil)) (funcall f))) out)"
+      " (block b (list 1 2 (if (car (list t)) (return-from b 3) 4)))"
+      " (tagbody (list 1 2 (if (car (list t)) (go out) 4)) out)"
+      " (dotimes (i 3) (list i (if (= i 1) (return 5))))))",
+      "(0 0 0 0 0 0 0)" },
+    { "(mapcar #'left-behind '((catch 'c (list 1 2 (throw 'c 3))) (catch 'c 1)"
+      " (handler-case (list 1 2 (error \"no\")) (error (c) c)) (handler-case 1 (error (c) c))"
+      " (handler-case (values 1 2) (error (c) c) (:no-error (a b) (list a b)))"
+      " (handler-case (list 1 (car 5)) (program-error () 1) (type-error () 2) (error () 3))"
+      " (unwind-protect (list 1 2) (list 3)) (catch 'c (unwind-protect (list 1 (throw 'c 1)) (list 3)))"
+      " (let ((*package* *package*)) (catch 'c (list 1 (throw 'c 1))))))",
+      "(0 0 0 0 0 0 0 0 0)" },
+    { "(mapcar #'left-behind '((multiple-value-call #'list (values 1 2) (values) (values 3 4 5))"
+      " (multiple-value-list (multiple-value-prog1 (values 1 2) (list 3)))"
+      " (multiple-value-bind (a b c) (values 1 2) (list a b c))"
+      " (list 1 (multiple-value-call #'+ (values 1 2) 3))"
+      " (funcall (lambda (a &optional (b 2) &rest c &key d) (list a b c d)) 1 5 :d 2)))",
+      "(0 0 0 0 0)" },
+    /* a function that makes a record, called by compiled code that has a special variable bound: when it
+       returns, it undoes what it bound itself and nothing of its caller's */
+    { "(defvar *kept* 0) (defvar *within* nil) (defun inner (x) (catch 'c (let ((*within* x)) (+ x *kept*))))"
+      " (compile 'inner)"
+      " (funcall (compile nil '(lambda () (let ((*kept* 1)) (list (inner 5) *kept* (let ((*kept* 2)) (list (inner 6) *kept*)) *kept*)))))",
+      "(6 1 (8 2) 1)" },
+    /* the same for one whose arguments C has to sort out, which is where its record of them begins */
+    { "(defun keyed (x &optional (y 1) &key z) (catch 'c (let ((*within* x)) (list x y z *kept*))))"
+      " (compile 'keyed)"
+      " (funcall (compile nil '(lambda () (let ((*kept* 1)) (list (keyed 5) (keyed 5 2 :z 3) *kept*"
+      " (handler-case (keyed 5 2 :w 3) (error () 'refused)) (handler-case (keyed) (error () 'refused)) *kept*)))))",
+      "((5 1 NIL 1) (5 2 3 1) 1 REFUSED REFUSED 1)" },
+};
+
+/* The texts of the table above that give something else when what is
+ * compiled is made code for the processor as well (native_selftest): a
+ * listing says so. */
+static const struct {
+    const char *text, *printed;
+} translated[] = {
+    { "(with-output-to-string (*standard-output*) (disassemble (compile nil '(lambda (x) (car x)))))",
+      "\"(LAMBDA (X)): 1 local variable, 1 word of stack, translated for the processor\n0   LOCAL 0\n1   CAR\n"
+      "2   RETURN\n\"" },
+    { "(with-output-to-string (*standard-output*) (disassemble '(lambda (x) (lambda () x))))",
+      "\"(LAMBDA (X)): 1 local variable, 1 word of stack, translated for the processor\n0   LOCAL 0\n"
+      "1   CLOSURE (LAMBDA NIL) 1\n2   RETURN-ONE\n"
+      "(LAMBDA NIL): 0 local variables, 1 word of stack, translated for the processor\n0   CLOSED 0\n"
+      "1   RETURN-ONE\n\"" },
 };
 
 /* Texts that give one thing on a machine of one kind and something else on
@@ -1503,12 +1570,25 @@ static const struct {
  * puts all of it through a collection at every safe point. */
 enum { WATCHED = 200 }; /* the safe points of compiled code that begin with a collection, to a text */
 
+static int g_translating; /* what is compiled is made code for the processor as well: for what the self-test says */
+
+/* A collection before each of the next so many safe points that the code of
+ * a text comes to: the processor's, when the texts are translated, and the
+ * machine's otherwise. */
+static void watch(unsigned points)
+{
+    if (g_translating)
+        lisp_native_watched(points);
+    else
+        lisp_compiled_watched(points);
+}
+
 static unsigned eval_texts(int64_t *deep, lisp compiler, unsigned watched)
 {
     struct lisp_symbol *package = lisp_as_symbol(lisp_roots.package);
     lisp user = package->value, packages = lisp_roots.packages;
     unsigned texts = sizeof evaluations / sizeof evaluations[0], others = sizeof either / sizeof either[0], wrong = 0;
-    const char *who = compiler ? "compiled code" : "the evaluator";
+    const char *who = g_translating ? "the processor" : compiler ? "compiled code" : "the evaluator";
     struct text printed;
     int64_t depth;
 
@@ -1519,7 +1599,7 @@ static unsigned eval_texts(int64_t *deep, lisp compiler, unsigned watched)
         for (unsigned k = 0; compiler && k < sizeof compiled / sizeof compiled[0]; k++)
             if (same(evaluations[i].text, compiled[k].text))
                 expected = compiled[k].printed;
-        lisp_compiled_watched(watched);
+        watch(watched);
         evaluate_text(evaluations[i].text, &printed, compiler);
         if (!same(printed.chars, expected)) {
             kprintf("lisp self-test: to %s, %s gave %s, not %s\n", who, evaluations[i].text, printed.chars, expected);
@@ -1527,7 +1607,7 @@ static unsigned eval_texts(int64_t *deep, lisp compiler, unsigned watched)
         }
     }
     for (unsigned i = 0; i < others; i++) {
-        lisp_compiled_watched(watched);
+        watch(watched);
         evaluate_text(either[i].text, &printed, compiler);
         if (!same(printed.chars, either[i].printed) && !same(printed.chars, either[i].otherwise)) {
             kprintf("lisp self-test: to %s, %s gave %s, not %s or %s\n", who, either[i].text, printed.chars,
@@ -1537,26 +1617,36 @@ static unsigned eval_texts(int64_t *deep, lisp compiler, unsigned watched)
     }
     texts += others;
     for (unsigned i = 0; compiler && i < sizeof compilations / sizeof compilations[0]; i++, texts++) {
-        lisp_compiled_watched(watched);
+        const char *expected = compilations[i].printed;
+
+        for (unsigned k = 0; g_translating && k < sizeof translated / sizeof translated[0]; k++)
+            if (same(compilations[i].text, translated[k].text))
+                expected = translated[k].printed;
+        watch(watched);
         evaluate_text(compilations[i].text, &printed, 0);
-        if (!same(printed.chars, compilations[i].printed)) {
+        if (!same(printed.chars, expected)) {
             kprintf("lisp self-test: with a compiler, %s gave %s, not %s\n", compilations[i].text, printed.chars,
-                    compilations[i].printed);
+                    expected);
             wrong++;
         }
     }
     if (wrong)
         panic("lisp self-test: %s gave %u wrong answers out of %u", who, wrong, texts);
 
-    lisp_compiled_watched(watched);
+    watch(watched);
     evaluate_text("(defvar *depth* 0) (defun dive (n) (setq *depth* n) (+ 1 (dive (+ n 1)))) (dive 1)", &printed, compiler);
-    lisp_compiled_watched(0);
+    watch(0);
     if (!same(printed.chars, STACK_FULL))
         panic("lisp self-test: to %s, a function that calls itself without end gave %s", who, printed.chars);
     evaluate_text("*depth*", &printed, 0);
     depth = lisp_fixnum_value(lisp_values.value[0]);
     if (depth < 1000)
         panic("lisp self-test: to %s, a function could call itself only %lld deep", who, (long long)depth);
+    /* And one that keeps nothing in hand while it does: its calls take the least of the value stack that a
+     * call can take, so what stops it is how deep the thread's own stack may go, where that is used. */
+    evaluate_text("(defun deeper (n) (deeper n)) (deeper 1)", &printed, compiler);
+    if (!same(printed.chars, STACK_FULL))
+        panic("lisp self-test: to %s, a function that only calls itself gave %s", who, printed.chars);
 
     /* The packages the texts made go with the self-test's own, and so does what the last texts gave:
      * a value that is left there holds on to its package, and to every function in it. */
@@ -1584,6 +1674,7 @@ static void heap_report(void)
 {
     uint64_t count[LISP_TYPES], bytes;
     struct lisp_functions functions;
+    struct lisp_code_state code;
     struct lisp_heap heap;
 
     lisp_collect();
@@ -1599,6 +1690,9 @@ static void heap_report(void)
     lisp_heap_functions(&functions);
     kprintf("lisp:   of the functions %llu are in C, %llu are compiled, %llu of them macros, and %llu are walked\n",
             functions.in_c, functions.compiled + functions.macros, functions.macros, functions.walked);
+    lisp_code_state(&code);
+    kprintf("lisp:   the processor runs %llu of the compiled ones itself, from %llu KiB of code for it\n",
+            functions.native, (code.size - code.free) >> 10);
 }
 
 /* The evaluator's self-test, and then what the heap holds once the
@@ -1755,6 +1849,107 @@ static void compiler_selftest(int more)
             WATCHED, texts, heap.collections - before);
 }
 
+/* Code for the processor, once lisp/native.lisp and the file of this
+ * machine's processor are loaded: the same texts a fourth time. Each form
+ * is compiled as before, and what the compiler made is then translated,
+ * every function of it, so that the processor runs the text itself, with
+ * the functions of the world that it calls still the machine's: the two
+ * kinds call each other all the way through. The answers are the
+ * evaluator's. Then what a loop and a function that calls itself have to
+ * do without being asked, stop for the collector, and with more asked for
+ * the texts once again with a collection at the safe points of this code.
+ *
+ * Nothing of it may be left when it is over. The code lies outside the
+ * heap, in pieces that are freed when the collector frees what holds them
+ * (native.c): once the texts' functions are gone, no piece is in use. */
+static void native_selftest(int more)
+{
+    struct lisp_code_state code;
+    struct lisp_heap heap;
+    struct text printed;
+    struct lisp_symbol *package = lisp_as_symbol(lisp_roots.package);
+    lisp user = package->value, packages = lisp_roots.packages;
+    uint64_t collections, ticks, entered, stepped, slow, now;
+    unsigned texts;
+    int64_t depth;
+
+    if (!lisp_evaluate(own_form("(setq clara.native:*translate* (clara.native:start))")))
+        panic("lisp self-test: what makes code for the processor did not start");
+    g_translating = 1;
+    lisp_native_counts(&entered, &stepped, &slow);
+    ticks = timer_ticks();
+    texts = eval_texts(&depth, own_form("clara.compiler:evaluate"), 0);
+    ticks = timer_ticks() - ticks;
+    lisp_code_state(&code);
+    /* The answers would be right, too, if the machine had run the texts as before: so the code has to
+     * have been made, and the processor has to have been sent into it. */
+    lisp_native_counts(&now, &stepped, &slow);
+    if (code.made < texts || now - entered < texts)
+        panic("lisp self-test: the processor was to run %u texts itself: code was made for %llu functions, and "
+              "it was entered %llu times",
+              texts, code.made, now - entered);
+    /* And they would be right if the processor left everything to C after all, which is what this code
+     * falls back on at every turn. What it is there for is what it does alone: a function that calls
+     * itself by its name, twenty thousand times, with a comparison, an addition and two subtractions to
+     * a call, and a loop that adds, are C's business a few times at most, when a safe point has
+     * something to look at. */
+    package->value = lisp_make_package("CLARA.SELF-TEST", NULL, lisp_cons(lisp_roots.common_lisp, LISP_NIL));
+    evaluate_text("(defun alone (n) (if (< n 2) n (+ (alone (- n 1)) (alone (- n 2)))))"
+                  " (let ((sum 0)) (dotimes (i 10000) (setq sum (+ sum i))) (list (alone 20) sum))",
+                  &printed, own_form("clara.compiler:evaluate"));
+    package->value = user; /* and its package goes, with the function in it */
+    lisp_roots.packages = packages;
+    lisp_values.count = 1;
+    lisp_values.value[0] = LISP_NIL;
+    lisp_native_counts(&entered, &now, &collections);
+    if (!same(printed.chars, "(6765 49995000)") || now - stepped > 100 || collections - slow > 100)
+        panic("lisp self-test: the processor gave %s, and left %llu instructions and %llu calls to C that are its own",
+              printed.chars, now - stepped, collections - slow);
+    kprintf("lisp: code for the processor passed: %u texts in %llu functions and %llu ms, one called itself %lld deep\n",
+            texts, code.made, ticks * (1000 / TIMER_HZ), (long long)depth);
+    lisp_collect();
+    lisp_heap_state(&heap);
+    collections = heap.collections;
+    evaluate_text("(funcall (compile nil '(lambda () (dotimes (i 20000) (list i i i)))))", &printed, 0);
+    lisp_heap_state(&heap);
+    if (heap.collections == collections)
+        panic("lisp self-test: code for the processor made 20000 lists and did not once stop to collect");
+    collections = heap.collections;
+    evaluate_text("(funcall (compile nil '(lambda () (labels ((grow (n) (if (= n 0) (list 1 2 3)"
+                  " (progn (grow (- n 1)) (grow (- n 1)))))) (grow 15)))))",
+                  &printed, 0);
+    lisp_heap_state(&heap);
+    if (heap.collections == collections)
+        panic("lisp self-test: code for the processor called itself 60000 times and did not once stop to collect");
+    if (more) {
+        collections = heap.collections;
+        texts = eval_texts(&depth, own_form("clara.compiler:evaluate"), WATCHED);
+        lisp_heap_state(&heap);
+        kprintf("lisp: a collection at the safe points of code for the processor, %u to a text: %u texts in %llu\n",
+                WATCHED, texts, heap.collections - collections);
+        /* Most of those were calls. A loop that calls nothing comes to its safe points by jumping
+         * backwards, and each of the first fifty turns has to have had its collection. */
+        collections = heap.collections;
+        lisp_native_watched(50);
+        evaluate_text("(funcall (compile nil '(lambda () (let ((n 0)) (dotimes (i 100) (setq n (+ n i))) n))))",
+                      &printed, 0);
+        lisp_native_watched(0);
+        lisp_heap_state(&heap);
+        if (!same(printed.chars, "4950") || heap.collections - collections < 50)
+            panic("lisp self-test: a loop of code for the processor gave %s, and stopped for the collector %llu times "
+                  "in its first fifty turns",
+                  printed.chars, heap.collections - collections);
+    }
+    g_translating = 0;
+    if (!lisp_evaluate(own_form("(setq clara.native:*translate* nil)")))
+        panic("lisp self-test: what makes code for the processor did not stop");
+    lisp_collect();
+    lisp_code_state(&code);
+    if (code.pieces || code.size)
+        panic("lisp self-test: nothing holds code for the processor any more, and %llu pieces of it are left in %llu bytes",
+              code.pieces, code.size);
+}
+
 static void console_put(void *to, char c)
 {
     (void)to;
@@ -1785,8 +1980,10 @@ static void new_world(void)
 {
     static const char *const world[] = { "compiler.lisp", "font.lisp",     "console.lisp", "draw.lisp",
                                          "pci.lisp",      "virtio.lisp",   "input.lisp",   "disk.lisp",
-                                         "fat.lisp",      "listener.lisp", "windows.lisp", "terminal.lisp" };
+                                         "fat.lisp",      "listener.lisp", "windows.lisp", "terminal.lisp",
+                                         "native.lisp" };
     uint64_t before[LISP_TYPES], after[LISP_TYPES], ticks, collections;
+    char processor[16] = { 0 };
     struct lisp_functions functions;
     struct lisp_heap heap;
     struct text printed;
@@ -1868,6 +2065,12 @@ static void new_world(void)
     ticks = timer_ticks();
     for (unsigned i = 1; i < sizeof world / sizeof world[0]; i++)
         load(world[i]);
+    /* And of the files that say how a processor's instructions are written, the one for this machine's:
+     * it has the name that *FEATURES* has for the machine, in small letters. */
+    for (size_t i = 0; arch_feature[i] && i + 6 < sizeof processor; i++)
+        processor[i] = arch_feature[i] >= 'A' && arch_feature[i] <= 'Z' ? (char)(arch_feature[i] | 0x20) : arch_feature[i];
+    memcpy(processor + strlen(processor), ".lisp", 6);
+    load(processor);
     ticks = timer_ticks() - ticks;
     /* What the self-tests made, and the forms of the functions that were compiled, nobody holds any
      * more. Whatever the evaluator would still have to walk after that was not compiled, and a world
@@ -1879,6 +2082,7 @@ static void new_world(void)
               functions.walked);
     kprintf("lisp: the world is loaded and compiled in %llu ms, from the console to the windows: %llu functions, %llu macros\n",
             ticks * (1000 / TIMER_HZ), functions.compiled, functions.macros);
+    native_selftest(more);
 }
 
 /* What the first thread of the Lisp world does. The world is made, unless
@@ -1903,6 +2107,11 @@ static void lisp_main(void)
         heap_report();
     else
         new_world();
+    /* What makes code for the processor asks the kernel where its words lie, at every start: a world
+     * that an older kernel saved has no such thing. */
+    if (!lisp_evaluate(own_form("(let ((native (find-package \"CLARA.NATIVE\")))"
+                                "  (if native (funcall (intern \"START\" native))))")))
+        panic("lisp: what makes code for the processor did not start");
     if (!lisp_evaluate(own_form("(clara.console:start)")))
         panic("lisp: the console did not start");
     /* A machine without a PCI bus, or without a keyboard or a disk on it,

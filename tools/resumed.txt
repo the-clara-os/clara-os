@@ -6,6 +6,8 @@
 (3628800 (1 2 6) NOT-ZERO)
 > (list (compiled-function-p #'fact) (fact 20) (funcall (compile nil '(lambda (n) (* n n))) 12))
 (T 2432902008176640000 144)
+> (list (clara.native:translated-p 'fact) (clara.native:translated-p 'quick) (quick 1000 3) clara.native:*translate*)
+(T T 1498500 NIL)
 > (let ((before *asked*)) (list (first-of (vector 'c 'd)) (> *asked* before) (compiled-function-p #'svref)))
 (C T T)
 > (progn (setf (symbol-function 'svref) *svref*) (let ((before *asked*)) (list (first-of (vector 'e)) (= *asked* before))))

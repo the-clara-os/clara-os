@@ -167,6 +167,8 @@ static void report(const struct frame *f, const struct mem_fault *mf)
     kprintf("  at %p", (void *)(uintptr_t)f->rip);
     if (vm_image_offset(f->rip))
         kprintf(", kernel image +0x%llx", vm_image_offset(f->rip));
+    else if (f->rip - VM_CODE_BASE < VM_CODE_SIZE)
+        kputs(", code that the Lisp world made for the processor");
     kprintf(", in thread %s", thread_name());
     kprintf("\n  rax %016llx  rbx %016llx  rcx %016llx  rdx %016llx\n", f->rax, f->rbx, f->rcx, f->rdx);
     kprintf("  rsi %016llx  rdi %016llx  rbp %016llx  rsp %016llx\n", f->rsi, f->rdi, f->rbp, f->rsp);

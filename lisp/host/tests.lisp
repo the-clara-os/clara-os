@@ -62,6 +62,9 @@
 (load-source "lisp/host/clara.lisp")
 (load-source "lisp/compiler.lisp")
 (load-source "lisp/host/vm.lisp")              ; the machine that runs what the compiler makes
+(load-source "lisp/native.lisp")               ; what makes code for the processor of that, and the two processors,
+(load-source "lisp/arm64.lisp")                ; of which a kernel loads its own
+(load-source "lisp/x86-64.lisp")
 (load-source "lisp/font.lisp")
 (load-source "lisp/console.lisp")
 (load-source "lisp/draw.lisp")
@@ -180,6 +183,54 @@
   (incf *checks*)
   (unless (or (string= name "QUASIQUOTE") (external-p name "COMMON-LISP"))
     (failed "the evaluator has the special form ~A, which Common Lisp does not have" name)))
+
+;;; Whatever the compiler makes from here on is translated for the two
+;;; processors as well (lisp/native.lisp), each function for both, and the
+;;; code is looked at as far as that can be done without a processor to
+;;; run it: further down, where the rest about such code is.
+(defvar *translations* 0)
+
+(defun code-p (object)
+  (and (vectorp object) (= (length object) 13) (vectorp (aref object 0)) (vectorp (aref object 1))))
+
+(defun translation-labels (items)
+  (let ((placed nil) (named nil))
+    (dolist (item items)
+      (cond ((eq (car item) :label) (push (cadr item) placed))
+            ((member (car item) '(:jump :jump-if :jump-tag :jump-not-tag :jump-odd :jump-bit-clear :add-over
+                                  :sub-over :word))
+             (push (car (last item)) named))))
+    (cond ((/= (length placed) (length (remove-duplicates placed :test #'eq))) "a label is put in two places")
+          ((notevery (lambda (label) (member label placed :test #'eq)) named) "a jump goes to a label that is nowhere"))))
+
+(defun check-translation (code)
+  (dolist (machine '(:arm64 :x86-64))
+    (let ((clara.native::*machine* machine))
+      (multiple-value-bind (items leave fast hidden) (clara.native::lower code)
+        (let ((words (clara.native::assemble items (get machine 'clara.native::writer)
+                                             (get machine 'clara.native::unit)))
+              (title (clara.compiler::code-title code)))
+          (incf *checks*)
+          (incf *translations*)
+          (cond ((null words) (failed "no code for ~A was made of ~S" machine title))
+                ((notevery (lambda (word) (typep word '(unsigned-byte 32))) words)
+                 (failed "the code for ~A of ~S is not words of 32 bits" machine title))
+                ((not (and (eql (car leave) 12) (eql (car fast) 20)))
+                 (failed "the code for ~A of ~S begins with ~S and ~S bytes, and not the 12 and 20 of machine.h"
+                         machine title (car leave) (car fast)))
+                ((translation-labels items)
+                 (failed "in the code for ~A of ~S, ~A" machine title (translation-labels items)))
+                ((not (eql hidden (if (clara.native::plain-p (aref code 0)) 0 2)))
+                 (failed "a call of ~S hides ~S words" title hidden)))))))
+  (loop for constant across (aref code 1)
+        when (code-p constant) do (check-translation constant)))
+
+(clara.native:start)
+(setq clara.native:*translate* t
+      clara.compiler::*translator* (lambda (code)
+                                     (when clara.native:*translate*
+                                       (check-translation code))
+                                     (clara.native::translate-compiled code)))
 
 ;;; The compiler. What it makes of a form runs here on the machine of
 ;;; host/vm.lisp, and SBCL says what the form means: every form below is
@@ -559,11 +610,13 @@
                                 "3   +"
                                 "4   CALL 1"
                                 "5   RETURN"))
-       (with-output-to-string (*standard-output*)
-         (clara.compiler::list-function (clara.compiler::compile-lambda '(lambda (x) (list (+ x 1))) 'listed))))
-(check t (let ((text (with-output-to-string (*standard-output*)
-                       (clara.compiler::list-function
-                        (clara.compiler::compile-lambda '(lambda (x) (lambda () x)))))))
+       (let ((clara.native:*translate* nil))  ; a listing says when a function is translated: further down
+         (with-output-to-string (*standard-output*)
+           (clara.compiler::list-function (clara.compiler::compile-lambda '(lambda (x) (list (+ x 1))) 'listed)))))
+(check t (let* ((clara.native:*translate* nil)
+                (text (with-output-to-string (*standard-output*)
+                        (clara.compiler::list-function
+                         (clara.compiler::compile-lambda '(lambda (x) (lambda () x)))))))
            (and (search "CLOSURE (LAMBDA ()) 1" text)
                 (search (format nil "~%(LAMBDA ()): 0 local variables, 1 word of stack~%0   CLOSED 0~%") text)
                 t)))
@@ -612,6 +665,169 @@
       (incf *checks*)
       (unless (equal wanted got)
         (failed "compiled, ~S gave ~S, and it means ~S" form got wanted)))))
+
+;;; Code for the processor (lisp/native.lisp). SBCL runs none of it, and
+;;; the kernels run all of it: every text of the self-test at every boot
+;;; from the files, on both processors, with the evaluator's answers
+;;; (kernel/lisp/lisp.c). What is looked at here is what a boot does not
+;;; say. Every function that the compiler made above was translated for
+;;; both processors, whichever of them this host has, and each time the
+;;; code had to begin as the kernel counts on, every label had to be
+;;; somewhere, and a call had to hide its two words exactly when the
+;;; function makes records or binds special variables.
+(setq clara.native:*translate* nil
+      clara.compiler::*translator* 'clara.native::translate-compiled)
+(incf *checks*)
+(when (< *translations* 2000)
+  (failed "the compiler's forms were to be translated for both processors, and ~D translations were made"
+          *translations*))
+(check '(nil t t "QUICK: 1 local variable, 2 words of stack, translated for the processor")
+       (let* ((before (clara.compiler::compile-lambda '(lambda (x) (+ x 1)) 'slow))
+              (clara.native:*translate* t)
+              (after (clara.compiler::compile-lambda '(lambda (x) (+ x 1)) 'quick)))
+         (list (clara.native:translated-p before)
+               (clara.native:translated-p after)
+               (progn (clara.native:translate before) (clara.native:translated-p before))
+               (let ((listing (with-output-to-string (*standard-output*) (clara.compiler::list-function after))))
+                 (subseq listing 0 (position #\Newline listing))))))
+(check-condition error (clara.native:translate #'car))
+
+;; Where the words lie that such code reads is the kernel's to say
+;; (NATIVE-LAYOUT, kernel/lisp/native.c). The stand-in here has to say
+;; something for every name that the kernel has, and nothing else, and the
+;; two places where code begins are machine.h's.
+(check (let ((names nil) (inside nil))
+         (dolist (line (lines (file-text "kernel/lisp/native.c")) (sort names #'string<))
+           (cond ((search "} layout[] = {" line) (setq inside t))
+                 ((and inside (starts-with "    };" line)) (setq inside nil))
+                 ((and inside (starts-with "        { \"" line))
+                  (push (subseq line 11 (position #\" line :start 11)) names)))))
+       (sort (loop for (name) on (clara.unsafe:native-layout) by #'cddr collect (symbol-name name)) #'string<))
+(dolist (pair '(("NATIVE_LEAVE" :leave) ("NATIVE_FAST" :fast)))
+  (check (list (first pair) (getf (clara.unsafe:native-layout) (second pair)))
+         (let ((line (find-if (lambda (line) (starts-with (format nil "#define ~A " (first pair)) line))
+                              (lines (file-text "kernel/lisp/machine.h")))))
+           (list (first pair) (and line (parse-integer (second (words (subseq line 8)))))))))
+
+;; Each instruction of the processor that lisp/native.lisp makes up, as
+;; the two real ones write it: the bytes here are what LLVM's assembler
+;; writes for the same instruction (llvm-mc 21, by hand, once), so an
+;; instruction that is written another way has to be shown to mean the
+;; same before the bytes are changed. L is a label 1000 bytes into the
+;; code, and the instruction is at its beginning, or 2000 bytes in when it
+;; says :BACK.
+(defun written (machine item at)
+  (let* ((clara.native::*final* t)
+         (pieces (funcall (get machine 'clara.native::writer) item at)))
+    (format nil "~{~2,'0X~}"
+            (if (= (get machine 'clara.native::unit) 4)
+                (loop for word in pieces append (loop for i below 4 collect (ldb (byte 8 (* 8 i)) word)))
+                pieces))))
+
+(dolist (row '(
+           ((:load :a :vsp -8) "80825FF8" "488B4BF8")
+           ((:load :e :rt 216) "696E40F9" "4D8B97D8000000")
+           ((:load :e :consts 32760) "C9FE7FF9" "4D8B96F87F0000")
+           ((:load :e :consts 32768) "100090D2C96A70F8" "4D8B9600800000")
+           ((:load :e :consts 0) "C90240F9" "4D8B16")
+           ((:load :a :e 3) "203140F8" "498B4A03")
+           ((:load :e :locals -8) "A9825FF8" "4C8B56F8")
+           ((:load :consts :a 11) "16B040F8" "4C8B710B")
+           ((:load :b :vsp -4096) "F0FF8192816A70F8" "488B9300F0FFFF")
+           ((:store :f :vsp -8) "8A821FF8" "4C895BF8")
+           ((:store :vsp :rt 0) "740200F9" "49891F")
+           ((:store :e :locals 800) "A99201F9" "4C899620030000")
+           ((:store :f :e 3) "2A3100F8" "4D895A03")
+           ((:load32 :e :rt 40) "692A40B9" "458B5728")
+           ((:load32 :e :rt 44) "692E40B9" "458B572C")
+           ((:store32 :e :rt 48) "693200B9" "45895730")
+           ((:load8 :e :a -5) "09B05F38" "440FB651FB")
+           ((:push :e) "898600F8" "4C89134883C308")
+           ((:push :nil) "978600F8" "48893B4883C308")
+           ((:push :a) "808600F8" "48890B4883C308")
+           ((:pop :e) "898E5FF8" "4883EB084C8B13")
+           ((:pop :a) "808E5FF8" "4883EB08488B0B")
+           ((:move :a :locals) "E00315AA" "4889F1")
+           ((:move :f :nil) "EA0317AA" "4989FB")
+           ((:move :locals :vsp) "F50314AA" "4889DE")
+           ((:move :e :b) "E90301AA" "4989D2")
+           ((:const :b 0) "010080D2" "BA00000000")
+           ((:const :b 5) "A10080D2" "BA05000000")
+           ((:const :e 1) "290080D2" "41BA01000000")
+           ((:const :b 65536) "2100A0D2" "BA00000100")
+           ((:const :b 4886718345) "21F18CD2A168A4F22100C0F2" "48BA8967452301000000")
+           ((:const :b -5) "81008092" "48C7C2FBFFFFFF")
+           ((:const :b -1) "01008092" "48C7C2FFFFFFFF")
+           ((:const :b -65536) "E1FF9F92" "48C7C20000FFFF")
+           ((:const :b -100000) "E1D39092C1FFBFF2" "48C7C26079FEFF")
+           ((:word :b 42 l) "41059DD26100A0F20100C0F20100E0F2" "48BA2AE8030000000000")
+           ((:add :vsp -16) "944200D1" "4883C3F0")
+           ((:add :vsp 8) "94220091" "4883C308")
+           ((:add :consts 3) "D60E0091" "4983C603")
+           ((:add :vsp -8000) "94023DD1940640D1" "4881C3C0E0FFFF")
+           ((:lea :e :vsp 4096) "89064091" "4C8D9300100000")
+           ((:lea :e :vsp 4104) "8922009129054091" "4C8D9308100000")
+           ((:lea :e :vsp 32) "89820091" "4C8D5320")
+           ((:lea :locals :vsp -8) "952200D1" "488D73F8")
+           ((:lea :vsp :locals -8) "B42200D1" "488D5EF8")
+           ((:lea :locals :vsp 0) "95020091" "488D33")
+           ((:add-reg :e :a) "2901008B" "4901CA")
+           ((:sub-reg :locals :e) "B50209CB" "4C29D6")
+           ((:or-reg :e :b) "290101AA" "4909D2")
+           ((:shl :e 3) "29F17DD3" "49C1E203")
+           ((:shl :e 1) "29F97FD3" "49D1E2")
+           ((:shl :e 2) "29F57ED3" "49C1E202")
+           ((:shr :e 16) "29FD50D3" "49C1EA10")
+           ((:add-over :a :b l) "000001AB261F0054" "4801D10F80DF030000")
+           ((:sub-over :a :b l) "000001EB261F0054" "4829D10F80DF030000")
+           ((:jump l) "FA000014" "E9E3030000")
+           ((:jump l) :back "06FFFF17" "E913FCFFFF")
+           ((:jump-reg :a) "00001FD6" "FFE1")
+           ((:jump-if :eq :a 0 l) "1F0000F1201F0054" "4883F9000F84DE030000")
+           ((:jump-if :ne :e :nil l) :back "3F0117EBA1E0FF54" "4939FA0F850FFCFFFF")
+           ((:jump-if :eq :e :nil l) "3F0117EB201F0054" "4939FA0F84DF030000")
+           ((:jump-if :lt :a :b l) "1F0001EB2B1F0054" "4839D10F8CDF030000")
+           ((:jump-if :ge :a :b l) "1F0001EB2A1F0054" "4839D10F8DDF030000")
+           ((:jump-if :gt :a :b l) "1F0001EB2C1F0054" "4839D10F8FDF030000")
+           ((:jump-if :le :a :b l) "1F0001EB2D1F0054" "4839D10F8EDF030000")
+           ((:jump-if :hs :b :e l) "3F0009EB221F0054" "4C39D20F83DF030000")
+           ((:jump-if :hi :e :f l) "3F010AEB281F0054" "4D39DA0F87DF030000")
+           ((:jump-if :ls :e :f l) "3F010AEB291F0054" "4D39DA0F86DF030000")
+           ((:jump-if :lo :csp :f l) "FF632AEB231F0054" "4C39DC0F82DF030000")
+           ((:jump-if :ne :b 3 l) "3F0C00F1211F0054" "4883FA030F85DE030000")
+           ((:jump-if :ne :b 5000 l) "107182D23F0010EB011F0054" "4881FA881300000F85DB030000")
+           ((:jump-if :ne :e 15 l) "3F3D00F1211F0054" "4983FA0F0F85DE030000")
+           ((:jump-if :eq :e 6 l) "3F1900F1201F0054" "4983FA060F84DE030000")
+           ((:jump-tag :a 1 l) "100840921F0600F1001F0054" "89C883E00783F8010F84DA030000")
+           ((:jump-not-tag :a 5 l) "100840921F1600F1011F0054" "89C883E00783F8050F85DA030000")
+           ((:jump-not-tag :e 1 l) :back "300940921F0600F181E0FF54" "4489D083E00783F8010F8509FCFFFF")
+           ((:jump-odd :e l) "3F0140F2211F0054" "41F7C2010000000F85DB030000")
+           ((:jump-odd :a l) "1F0040F2211F0054" "F7C1010000000F85DC030000")
+           ((:jump-odd :b l) "3F0040F2211F0054" "F7C2010000000F85DC030000")
+           ((:jump-bit-clear :e 0 l) "3F0140F2201F0054" "490FBAE2000F83DD030000")
+           ((:jump-bit-clear :e 13 l) "3F0173F2201F0054" "490FBAE20D0F83DD030000")
+           ((:jump-bit-clear :e 19 l) :back "3F016DF2A0E0FF54" "490FBAE2130F830DFCFFFF")
+           ((:call-c 256) "708240F900023FD6" "41FF97000100004889C1")
+           ((:call-lisp 248) "707E40F900023FD6" "41FF97F8000000")
+           ((:save) "FD7BBEA9F55B01A9" "5641564883EC28")
+           ((:restore-return) "F55B41A9FD7BC2A8C0035FD6" "4883C428415E5EC3")
+               ))
+  (let* ((back (eq (second row) :back))
+         (item (subst (list 1000) 'l (first row)))
+         (bytes (if back (cddr row) (cdr row))))
+    (check bytes (list (written :arm64 item (if back 2000 0)) (written :x86-64 item (if back 2000 0))))))
+
+;; A jump of AArch64's that depends on a condition reaches a megabyte and
+;; no further, and code that is longer than that is not to be had: the
+;; machine of the kernel goes on running such a function. x86-64 reaches
+;; two gigabytes.
+(let ((far (list nil)) (items nil))
+  (dotimes (i 270000)
+    (push '(:const :a 0) items))
+  (setq items (append (list (list :jump-if :eq :a 0 far)) items (list (list :label far))))
+  (check '(nil t)
+         (list (clara.native::assemble items 'clara.native::write-arm64 4)
+               (vectorp (clara.native::assemble items 'clara.native::write-x86-64 1)))))
 
 ;;; The console, on a machine that is made up for the purpose.
 

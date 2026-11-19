@@ -109,3 +109,27 @@ void arch_tlb_flush(uint64_t va)
                      : "r"(va >> PAGE_SHIFT)
                      : "memory");
 }
+
+/* Memory that is run was written to, by way of the address that the same
+ * page frames have as data. The processor keeps what it has fetched in a
+ * cache of its own, which knows nothing of that: the lines of the data
+ * cache are written back as far as the two caches share, and the lines of
+ * the instruction cache are dropped (Arm ARM, B2.7.4, the sequence for
+ * self-modifying code). CTR_EL0 says how long the lines are. */
+void arch_code_written(uint64_t va, uint64_t bytes)
+{
+    uint64_t ctr, data, code;
+
+    __asm__("mrs %0, ctr_el0" : "=r"(ctr));
+    data = 4ULL << ((ctr >> 16) & 0xf);
+    code = 4ULL << (ctr & 0xf);
+    for (uint64_t at = va & ~(data - 1); at < va + bytes; at += data)
+        __asm__ volatile("dc cvau, %0" : : "r"(at) : "memory");
+    __asm__ volatile("dsb ish" ::: "memory");
+    for (uint64_t at = va & ~(code - 1); at < va + bytes; at += code)
+        __asm__ volatile("ic ivau, %0" : : "r"(at) : "memory");
+    __asm__ volatile("dsb ish\n"
+                     "isb" ::: "memory");
+}
+
+const uint32_t arch_code_trap = 0; /* UDF #0, permanently undefined (Arm ARM, C6.2) */

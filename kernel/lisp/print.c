@@ -334,6 +334,11 @@ static void print_object(struct printer *p, lisp x)
         print_named(p, "LOCK", lisp_as_lock(x)->name);
     else if (lisp_is(x, LISP_EVENT))
         print_named(p, "EVENT", lisp_as_event(x)->name);
+    else if (lisp_is(x, LISP_NATIVE)) {
+        put_text(p, "#<CODE of ");
+        put_number(p, (uint64_t)lisp_fixnum_value(lisp_as_native(x)->bytes), 10);
+        put_text(p, " bytes for the processor>");
+    }
     else if (x == LISP_UNBOUND)
         put_text(p, "#<unbound>");
     else {

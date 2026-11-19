@@ -63,3 +63,13 @@ void arch_tlb_flush(uint64_t va)
 {
     __asm__ volatile("invlpg (%0)" : : "r"(va) : "memory");
 }
+
+/* Memory that is run was written to. This processor looks for that itself
+ * (Intel SDM volume 3, 9.1.3), and one processor is all there is. */
+void arch_code_written(uint64_t va, uint64_t bytes)
+{
+    (void)va;
+    (void)bytes;
+}
+
+const uint32_t arch_code_trap = 0xcccccccc; /* INT3, four times */

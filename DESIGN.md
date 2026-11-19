@@ -121,6 +121,12 @@ architectures (kernel/vm.c).
 - The only memory that can be run is the kernel image's code. All other
   RAM is data, the firmware's old code included, and on AArch64 the
   processor is also told that whatever can be written cannot be run.
+  Since M16a there is a second kind, the code that the Lisp world makes
+  for the processor: 1 GiB starting at 32 TiB (`VM_CODE_BASE`) are
+  reserved for it, mapped to be run and never to be written. It is
+  written through the addresses that its page frames have as RAM, so the
+  rule holds as it stands, that no address is both (Code for the
+  processor, below).
 
 ## Exceptions and interrupts (decided in M4, 2026-11-13)
 
@@ -920,6 +926,8 @@ architectures (kernel/vm.c).
   written and then run, a way for the collector to know what a register
   and a frame of the processor's hold, and code in the heap that must not
   name where the kernel is. It can come later, behind the same first pass.
+  (It came with M16a, behind the second pass and not the first, and most
+  of the four did not have to be paid: Code for the processor, below.)
 - The machine works on a stack, and the stack is the evaluator's value
   stack: a call of a compiled function is the function, its local
   variables and what its instructions push and pop, in one stretch of it.
@@ -1093,6 +1101,110 @@ architectures (kernel/vm.c).
   function into its caller is the next thing to gain from, and wants an
   answer to what happens when it is defined again, as the instructions
   have one.
+
+## Code for the processor (decided in M16a, 2026-11-18)
+
+- The processor runs a compiled function itself, when it is asked to:
+  lisp/native.lisp makes of the function's instructions the instructions
+  of AArch64 or of x86-64. What is translated is what the compiler's
+  second pass wrote, the machine's instructions one after the other, and
+  not the tree of the first pass a second time, which is what "behind the
+  first pass" had meant. A second generator from the tree would have been
+  the compiler's second pass again, twice over: every special form with
+  its records, its barriers and its counting of the stack, once for each
+  processor, and three things to keep in step from then on. The machine's
+  instructions are the place where all of that has been decided already.
+  What the tree knows and they do not is little: that a value on the stack
+  is about to be taken off again, and that a comparison is only wanted for
+  a jump. Both can be seen in the instructions themselves by looking one
+  ahead, and are left to be gained later.
+- The processor does alone what a function spends its time on: its
+  variables, constants and closed-over values, the stack, the jumps, calls
+  and returns, and the instructions that stand for the commonest functions
+  in C (`car`, `<`, `+`, `svref` and the rest, without `cons` and `*`) for
+  the arguments that they usually get. Every other instruction is left to
+  the machine of vm.c, which is called for that one instruction
+  (`lisp_native_step`) and says where to go on. So records, exits,
+  cleanups, bindings, the values of forms and every error are written
+  once, in C, for both ways of running a function, and the two cannot
+  come to mean different things. The price is a call into the kernel for
+  such an instruction, which costs about what the machine spends on any
+  instruction.
+- A call keeps on the value stack what the machine's call keeps there, in
+  the same places: the function, its local variables, then what its
+  instructions push and pop. The machine's own two variables, the
+  innermost record and the count of bindings, are two words after the
+  local variables, in a function that makes records or binds special
+  variables, and nowhere in one that does not. Nothing that the collector
+  has to find is in a register across a call or a jump backwards, and the
+  processor's own stack holds return addresses and no value. That is how
+  the third of the four costs was not paid: the collector looks where it
+  looked, and a safe point is what it was. The registers that such code
+  keeps for itself are ones that a function in C leaves alone, so a call
+  into the kernel saves nothing.
+- One function of such code calls another without the kernel: a routine
+  in entry.S looks at what is called, the function or the symbol that
+  names it at that moment, and when it is such code too, and no safe point
+  has anything to look at, goes straight on into it. The arguments stay
+  where they were pushed and are the callee's first local variables as
+  they lie. A function object has a word for where it is entered that way
+  (`entry`), which is why a function is five words now. Anything else is
+  C's: another kind of function, something that is no function, a safe
+  point with something to look at, and the arguments of a lambda list
+  with more to it than required parameters, which C sorts into the local
+  variables in place.
+- The code is not in the heap. Memory that is written cannot be run here,
+  on AArch64 by the processor's own rule, and that rule was worth more
+  than having one allocator. Code lies in a region of its own at fixed
+  addresses, 1 GiB at 32 TiB, in pieces, mapped to be run and not to be
+  written; the one function that writes there goes through the address
+  that the same page frame has as RAM, where it can be written and not
+  run. The heap has a small object for each piece (`LISP_NATIVE`), which
+  the code vector of the function holds, and when the collector's sweep
+  frees that object the piece is free. A piece that is freed is filled
+  with what the processor refuses to run. On AArch64 the processor is
+  told to forget what it remembers of memory that was written
+  (`arch_code_written`).
+- Code names no address of the kernel's, which is somewhere else on every
+  boot. One register holds the address of `lisp_machine`, a struct with
+  the words of the running thread that such code reads and writes itself,
+  the top of the value stack, the exit under way, the word that a safe
+  point looks at, the count of values, and after them the functions that
+  it calls. The words were variables of eval.c and vm.c before, and are
+  known there by the names they had. Where each lies the kernel tells the
+  translator (`clara.unsafe:native-layout`), so the numbers are written
+  once, in C. A world that is saved holds its code, word for word after
+  the heap, and it is good on the next boot as it is; the order of those
+  words is therefore part of what an image is (`FORMAT`, image.c).
+- The translation is written once, for a processor that lisp/native.lisp
+  makes up: eleven registers and some two dozen instructions. Each real
+  processor has a file that writes those, lisp/arm64.lisp and
+  lisp/x86-64.lisp, about a hundred lines, and a machine loads its own.
+  What they write is held against LLVM's assembler, byte for byte, in the
+  host tests.
+- SBCL cannot run such code, so the witness is the kernel's: at every
+  boot from the files the texts of the self-test are compiled, translated
+  and run by the processor, on all three machines of `make test`, and
+  have to give the evaluator's answers; one boot has the collector run at
+  the safe points of such code; and when the texts are over no piece of
+  code may be left. Under SBCL every function that the compiler's tests
+  compile is translated for both processors and looked at as far as that
+  goes without running it.
+- In M16a nothing is translated unless somebody asks:
+  `clara.native:translate` for a function, `clara.native:*translate*`
+  for whatever is compiled from then on. The world itself is still the
+  machine's, which is M16b.
+- What it gained, where the processor runs the code itself: `(fib 32)`
+  takes 210 ms on the machine and 30 translated, five million additions
+  in a loop 70 and 20, `(tak 22 16 8)` 30 and 10. A million items pushed,
+  reversed and mapped over take 100 ms either way: the time goes into
+  `mapcar` and `reverse`, which are the world's and not translated, and
+  into making conses, which is left to the machine. The code is four to
+  five times as long as the instructions that it was made of, 732 bytes
+  on AArch64 and 828 on x86-64 for the 18 instructions of `fib`, because
+  every instruction is translated by itself: a value is pushed and taken
+  off again at once, and every instruction that can fail has its own way
+  to the machine written out.
 
 ## Conventions
 

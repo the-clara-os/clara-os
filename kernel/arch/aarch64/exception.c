@@ -93,6 +93,8 @@ static void report(const struct frame *f, uint64_t esr, uint64_t far, const stru
     kprintf("  at %p", (void *)(uintptr_t)f->pc);
     if (vm_image_offset(f->pc))
         kprintf(", kernel image +0x%llx", vm_image_offset(f->pc));
+    else if (f->pc - VM_CODE_BASE < VM_CODE_SIZE)
+        kputs(", code that the Lisp world made for the processor");
     kprintf(", in thread %s", thread_name());
     for (unsigned i = 0; i < 31; i++) /* four to a line, and sp completes the last */
         kprintf("%sx%u%s %016llx", i % 4 ? "  " : "\n  ", i, i < 10 ? " " : "", f->x[i]);

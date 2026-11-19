@@ -61,17 +61,18 @@ enum {
 /* What a frame of an environment holds: its second item. */
 enum { VARIABLES, FUNCTIONS, BLOCK, TAGS };
 
-struct lisp_values lisp_values;
+/* The running thread's words that code for the processor reads and writes
+ * too (lisp.h): the top of the value stack, the exit that is under way,
+ * the values of the last form, how many special variables are bound, and
+ * the word that a safe point looks at, which begins as "look". */
+struct lisp_machine lisp_machine = { .attention = 1 };
+#define g_c_limit lisp_machine.c_limit /* the lowest address the thread's own stack may reach while it evaluates */
 
 /* The running thread's, all of them; eval.h says what each is. */
 lisp *g_stack;
-lisp *g_sp;
 static struct binding *g_bindings; /* BINDINGS of them */
-unsigned g_bound;
 struct handler *g_handlers;
-struct unwind g_unwind;
 struct catch *g_catches;
-static uintptr_t g_c_limit; /* the lowest address the thread's own stack may reach while it evaluates */
 const struct lisp_primitive *g_primitive;
 unsigned g_cleaning;
 
@@ -87,7 +88,7 @@ struct lisp_evaluator {
     uintptr_t c_limit;
     const struct lisp_primitive *primitive;
     unsigned cleaning;
-    struct lisp_values values;
+    struct lisp_multiple values;
 };
 static const struct boot_file *g_files;
 struct known S;
@@ -395,6 +396,7 @@ void lisp_evaluator_out(struct lisp_evaluator *e)
 void lisp_evaluator_in(const struct lisp_evaluator *e)
 {
     g_stack = e->stack;
+    lisp_machine.stack_end = g_stack + STACK_SLOTS;
     g_sp = e->sp;
     g_bindings = e->bindings;
     g_bound = e->bound;
@@ -413,7 +415,7 @@ void lisp_evaluator_in(const struct lisp_evaluator *e)
  * and the words that stay: the values of the last form, and the exit that
  * is under way or was. */
 static void reach(const lisp *stack, const lisp *sp, const struct binding *bindings, unsigned bound,
-                  const struct lisp_values *values, const struct unwind *unwind)
+                  const struct lisp_multiple *values, const struct unwind *unwind)
 {
     for (const lisp *p = stack; p < sp; p++)
         lisp_reach(*p);
@@ -457,8 +459,6 @@ void lisp_evaluator_reach(const struct lisp_evaluator *e)
  * meanwhile is not lost, and whatever is still to be looked at when this
  * returns, a thread that waits for its turn, a stop that could not be
  * acted on yet, sets it again (thread.c, heap.c). */
-volatile int lisp_attention = 1;
-
 COLD int attend(void)
 {
     lisp_attention = 0;
@@ -479,6 +479,8 @@ COLD int attend(void)
     if (!lisp_heap_safe_point())
         lisp_fail_as("STORAGE-CONDITION", NULL, 0,
                      "the heap is full: what the collector could free is not enough to go on");
+    if (lisp_compiled_watching())
+        lisp_attention = 1; /* the self-test wants the next safe point of compiled code looked at as well */
     return !g_unwind.to;
 }
 
@@ -606,6 +608,8 @@ lisp make_function(enum lisp_function_kind kind, lisp name, lisp code, lisp env)
     f->name = name;
     f->code = code;
     f->env = env;
+    if (kind == LISP_COMPILED)
+        f->entry = (lisp)lisp_native_entry(code); /* where the processor runs it itself, if there is such code */
     return (lisp)(uintptr_t)f | LISP_TAG_OBJECT;
 }
 
@@ -1993,6 +1997,7 @@ void lisp_eval_init(const struct boot_file *files)
     symbol = lisp_symbol_in(cl, "INTERNAL-TIME-UNITS-PER-SECOND", 1);
     lisp_as_symbol(symbol)->value = lisp_fixnum(TIMER_HZ);
     lisp_symbol_flag(symbol, LISP_SPECIAL | LISP_CONSTANT);
+    lisp_native_init();
     lisp_vm_init();
     kprintf("lisp: an evaluator with %u special forms and %u functions in C\n",
             (unsigned)(sizeof specials / sizeof specials[0]), lisp_primitive_count);

@@ -162,6 +162,8 @@ uint64_t lisp_object_words(lisp header)
         return sizeof(struct lisp_lock) / sizeof(lisp);
     case LISP_EVENT:
         return sizeof(struct lisp_event) / sizeof(lisp);
+    case LISP_NATIVE:
+        return sizeof(struct lisp_native) / sizeof(lisp);
     case LISP_FREE:
         return length;
     }
@@ -338,6 +340,7 @@ void lisp_heap_functions(struct lisp_functions *count)
                 break;
             case LISP_COMPILED:
                 count->compiled++;
+                count->native += f->entry != 0;
                 break;
             case LISP_MACRO:
                 if (lisp_is(f->code, LISP_FUNCTION)) {
@@ -373,7 +376,7 @@ static lisp *object_of(lisp x)
         [LISP_CONS] = LISP_TAG_CONS,        [LISP_SYMBOL] = LISP_TAG_SYMBOL,   [LISP_STRING] = LISP_TAG_OBJECT,
         [LISP_VECTOR] = LISP_TAG_OBJECT,    [LISP_PACKAGE] = LISP_TAG_OBJECT,  [LISP_FUNCTION] = LISP_TAG_OBJECT,
         [LISP_STRUCTURE] = LISP_TAG_OBJECT, [LISP_CONDITION] = LISP_TAG_OBJECT, [LISP_THREAD] = LISP_TAG_OBJECT,
-        [LISP_LOCK] = LISP_TAG_OBJECT,      [LISP_EVENT] = LISP_TAG_OBJECT,
+        [LISP_LOCK] = LISP_TAG_OBJECT,      [LISP_EVENT] = LISP_TAG_OBJECT,    [LISP_NATIVE] = LISP_TAG_OBJECT,
     };
     lisp *object = lisp_object(x);
     uint64_t type;
@@ -480,6 +483,9 @@ static uint64_t sweep(void)
         } else {
             if (!run)
                 run = at;
+            /* Code for the processor lies outside the heap, and goes with the object that held it. */
+            if ((header & 0xff) == LISP_NATIVE)
+                lisp_code_free(((const struct lisp_native *)object)->address);
             /* A block that was free holds LISP_FREED already, except where its header and its link are. */
             for (uint64_t i = 0; i < ((header & 0xff) == LISP_FREE && words > 2 ? 2 : words); i++)
                 object[i] = LISP_FREED;
