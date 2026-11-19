@@ -1568,7 +1568,10 @@ static const struct {
  *
  * %SELF-TEST runs this again from the prompt, which is how the boot test
  * puts all of it through a collection at every safe point. */
-enum { WATCHED = 200 }; /* the safe points of compiled code that begin with a collection, to a text */
+enum {
+    WATCHED = 200,      /* the safe points of compiled code that begin with a collection, to a text, */
+    WATCHED_NATIVE = 50 /* and those of code for the processor, where a collection goes through the whole world */
+};
 
 static int g_translating; /* what is compiled is made code for the processor as well: for what the self-test says */
 
@@ -1923,10 +1926,10 @@ static void native_selftest(int more)
         panic("lisp self-test: code for the processor called itself 60000 times and did not once stop to collect");
     if (more) {
         collections = heap.collections;
-        texts = eval_texts(&depth, own_form("clara.compiler:evaluate"), WATCHED);
+        texts = eval_texts(&depth, own_form("clara.compiler:evaluate"), WATCHED_NATIVE);
         lisp_heap_state(&heap);
         kprintf("lisp: a collection at the safe points of code for the processor, %u to a text: %u texts in %llu\n",
-                WATCHED, texts, heap.collections - collections);
+                WATCHED_NATIVE, texts, heap.collections - collections);
         /* Most of those were calls. A loop that calls nothing comes to its safe points by jumping
          * backwards, and each of the first fifty turns has to have had its collection. */
         collections = heap.collections;

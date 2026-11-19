@@ -356,14 +356,21 @@ Rules:
   LLVM.
 - The processor's self-test is `native_selftest` (lisp.c): the texts once
   more with `clara.native:*translate*` true, which has to make code and
-  has to send the processor into it; a loop and a function that calls
-  itself, which have to stop for the collector; on the stress boot a
-  collection before the first two hundred safe points of such code in
-  each text (`lisp_native_watched`: a new place where code for the
-  processor comes to a safe point gets a `watched_native()`); and at the
-  end no piece of code left. Under SBCL nothing of it runs: the tests
-  there translate every function that the compiler's forms make, for
-  both processors, and look at what can be seen without running it.
+  has to send the processor into it; a function that calls itself and a
+  loop that adds, of which next to nothing may be left to C (the answers
+  are right, too, when every call and every instruction goes the long
+  way, and then it is no quicker than the machine); a loop and a function
+  that calls itself, which have to stop for the collector; and at the end
+  no piece of code left. On the stress boot there is a collection before
+  the first fifty safe points of such code in each text
+  (`lisp_native_watched`), and a loop without a call has to have one at
+  each of its first fifty turns. Fifty and not the machine's two hundred,
+  because a collection goes through the whole world by then: with two
+  hundred that boot took 237 s of its 600 on CI. A new place where code
+  for the processor comes to a safe point gets a `watched_native()`.
+  Under SBCL nothing of it runs: the tests there translate every function
+  that the compiler's forms make, for both processors, and look at what
+  can be seen without running it.
 - A fault in such code says "code that the Lisp world made for the
   processor" where the kernel's would name a place in the image. On
   AArch64 x19 is `lisp_machine`, x20 the top of the value stack, x21 the

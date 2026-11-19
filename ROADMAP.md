@@ -1537,6 +1537,15 @@ M16b, a world for the processor:
 - Not tried: UTM. Under QEMU's hvf the code runs on the Mac's own
   processor, which is what UTM uses; the emulated machines of `make test`
   run it too.
+- What it costs CI, where both machines are emulated. A boot from the
+  files takes 4.5 s more on AArch64 and 7.4 s more on x86-64, for the
+  texts compiled, translated and run once more. The first run took 7m56s,
+  where the one before the milestone took 5m25s, and its stress boot 237 s
+  of its 600, where it had taken 127: most of that was a collection at
+  two hundred safe points of translated code in each text, 1641 of them,
+  each through the whole world. It is fifty to a text now. When the world
+  itself is translated, every safe point of that boot's session is one of
+  this kind, and its cost is the first thing to measure.
 
 No milestone yet, to be picked up when they start to matter:
 
