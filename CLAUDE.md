@@ -188,7 +188,11 @@ Rules:
   image or not. A change to what an object is in memory, to the tags, to
   `enum lisp_type`, to a struct of lisp.h or to `lisp_roots`, raises
   `FORMAT` in image.c in the same change, or an older image is taken for
-  a heap that it is not. A row can go anywhere in `lisp_primitives` and
+  a heap that it is not. So does a change to what code for the processor
+  leans on, since a world holds its code: the order of the words of
+  `struct lisp_machine`, what the functions that it names take and give,
+  the numbers of machine.h, and how such code begins and what it keeps
+  in which register (lisp/native.lisp, entry.S). A row can go anywhere in `lisp_primitives` and
   in the table of special forms: an image finds its functions in C by
   their names, so it is a name that must not change, and a function that
   is taken out makes older images refused. A new word in an object that
@@ -225,10 +229,13 @@ Rules:
   is given once the compiler is loaded. A new special form in eval.c gets
   a converter in `*special-forms*` and a generator, with the same count of
   parts: the host tests hold the two tables against each other. The texts
-  are gone through three times at such a boot: by the evaluator; compiled
-  by the compiler while the evaluator still walks it; and compiled by the
-  compiler once it has compiled itself and boot.lisp (`new_world`), with
-  `compilations` in the last two. So a text leaves nothing behind that
+  are gone through four times at such a boot: by the evaluator; compiled
+  by the compiler while the evaluator still walks it; compiled by the
+  compiler once it has compiled itself and boot.lisp (`new_world`); and
+  compiled and then translated, so that the processor runs them itself
+  (`native_selftest`), with `compilations` in the last three. A text of
+  `compilations` whose answer is another once it is translated, a listing,
+  has a row in `translated`. So a text leaves nothing behind that
   the next round trips over: one that gives a function of the system's
   another meaning puts the old one back in an UNWIND-PROTECT.
 - A compiled world. Once lisp/compiler.lisp has said that it is there
@@ -268,7 +275,9 @@ Rules:
   operands are; lisp/host/vm.lisp is the same machine a second time, in
   Lisp. A new instruction goes into all of them in the same change, at the
   end, and raises `FORMAT` in image.c: a world that was saved holds its
-  code. `check` in vm.c looks at every operand of code before it is made a
+  code. Code for the processor leaves a new instruction to the machine
+  without being told (below), unless it makes a record or binds a special
+  variable: then its name goes into `plain-p` of lisp/native.lisp. `check` in vm.c looks at every operand of code before it is made a
   function, by the kinds that the table gives them; it looks at an
   instruction's number before it uses it for anything.
 - The instructions from `OP_CAR` on stand for a function in C, each under
@@ -290,6 +299,92 @@ Rules:
   compiled code, so that whatever does is found. A record on the stack is six words that
   the collector takes for values, so an address in one is a multiple of
   eight.
+- Code for the processor (lisp/native.lisp, kernel/lisp/native.c, the two
+  routines at the end of each entry.S). What the compiler made is
+  translated an instruction at a time, and an instruction is the machine's
+  unless `instruction` or `known` in lisp/native.lisp writes it out:
+  `machine-step` has vm.c do that one instruction (`lisp_native_step`). So
+  a new instruction is right there without a line, and gets one only to
+  be quick. What is written out does what the case in vm.c does, to the
+  word: the same test of the arguments, the same count of values, the
+  stack as deep afterwards. Where it finds arguments that it cannot do,
+  it goes to the machine (`later`) with the stack as the instruction found
+  it, so nothing is changed before the last test has passed. Nothing that
+  the collector has to find is in a register across `:call-lisp`,
+  `:call-c` or a jump backwards: :A to :F mean nothing after any of them.
+  Every word of the kernel's is reached through :RT, by a number from
+  `where`, and never by an address: a saved world's code has to be good
+  for a kernel that lies somewhere else.
+- `machine` in vm.c is the machine three ways: a call from its arguments
+  to its return (CALL), and for a call that the processor is in the
+  middle of one instruction (STEP) or the way out when an exit is under
+  way (UNWIND), each of which says where the code goes on. The place that
+  a record names, `pad`, is the number of an instruction to the machine
+  and a count of bytes into the code to the processor, which
+  lisp/native.lisp writes into the instruction's word (`:word`); wherever
+  the machine sets `pc` to one, it sets `landed`. A call of the
+  processor's keeps the innermost record and the count of bindings in two
+  words after its local variables, when its code makes either, and has
+  no such words otherwise (`hidden`, `LISP_NATIVE_HIDDEN`): whoever makes
+  such a call's variables, `machine` for a call from C, the code itself
+  for a function of required parameters, `lisp_native_arguments` for any
+  other, makes those two.
+- `struct lisp_machine` (lisp.h) is all that such code knows of the
+  kernel. `g_sp`, `g_unwind`, `g_bound`, `lisp_values`, `lisp_attention`
+  and `g_original` are words of it under the names they always had. A
+  word that the code is to read goes there, into the table of
+  NATIVE-LAYOUT in native.c and into the stand-in of lisp/host/vm.lisp
+  with the same number: the host tests hold the names of the two against
+  each other. The two routines in entry.S take their few numbers from
+  machine.h, which native.c holds against the structs.
+- The code lies outside the heap (native.c): pieces in a region that is
+  mapped to be run, written only by `put`, through the address that a
+  page frame has as RAM. The heap's object for a piece is a LISP_NATIVE,
+  and the collector's sweep frees the piece with it. What is written is
+  followed by `arch_code_written`, or AArch64 goes on running what was
+  there before.
+- The two processors (lisp/arm64.lisp, lisp/x86-64.lisp) write the
+  instructions of the processor that lisp/native.lisp makes up and lists
+  at its top. A new one of those is written in both files, and gets a row
+  in the host tests with the bytes that LLVM's assembler writes for it,
+  for both: `echo 'add x9, x20, #32' | llvm-mc -triple=aarch64
+  -show-encoding`, and `-triple=x86_64` with `leaq 32(%rbx), %r10`. How
+  long an instruction is must not depend on where a label lies, and the
+  first twenty bytes of a function's code are the same count on both
+  (`NATIVE_LEAVE`, `NATIVE_FAST`). `sh tools/processor-code.sh arm64
+  '(lambda (n) (+ n 1))'` shows what is made of a form, read back by
+  LLVM.
+- The processor's self-test is `native_selftest` (lisp.c): the texts once
+  more with `clara.native:*translate*` true, which has to make code and
+  has to send the processor into it; a function that calls itself and a
+  loop that adds, of which next to nothing may be left to C (the answers
+  are right, too, when every call and every instruction goes the long
+  way, and then it is no quicker than the machine); a loop and a function
+  that calls itself, which have to stop for the collector; and at the end
+  no piece of code left. On the stress boot there is a collection before
+  the first fifty safe points of such code in each text
+  (`lisp_native_watched`), and a loop without a call has to have one at
+  each of its first fifty turns. A new place where code for the processor
+  comes to a safe point gets a `watched_native()`. What that boot costs
+  is mostly elsewhere, and was guessed wrongly before it was measured
+  (ROADMAP.md, under M16b): to see where its time goes, start it with
+  `NO_HVF=1` and print the time whenever build/boot-<name>.log has a new
+  line.
+  Under SBCL nothing of it runs: the tests there translate every function
+  that the compiler's forms make, for both processors, and look at what
+  can be seen without running it.
+- A fault in such code says "code that the Lisp world made for the
+  processor" where the kernel's would name a place in the image. On
+  AArch64 x19 is `lisp_machine`, x20 the top of the value stack, x21 the
+  call's local variables, with the function itself in the word under
+  them, x22 its constants and x23 NIL; on x86_64 those are r15, rbx, rsi,
+  r14 and rdi.
+- Two things of the kernel's Lisp that lisp/native.lisp ran into. A file
+  of the world is compiled a form at a time, so a DEFVAR has to stand
+  before the first function that binds the variable, or the function
+  binds a variable of its own and nobody sees the value. And a call takes
+  a word of the stack for each argument: `(apply #'vector items)` is not
+  how a vector of thousands is made.
 - The compiler counts the stack: every `emit` moves `*depth*` by what the
   table says, and `gen` puts it right after a form, whichever way the
   form's branches went. What code says it needs of stack is the deepest
@@ -335,7 +430,8 @@ Rules:
   with one at every safe point, that boot took three times as long on CI,
   435 s of its 600, most of it in the texts that call themselves until
   the stack is full. A new place where vm.c comes to a safe point gets a
-  `watched()` before it. tools/stress.txt then types a few forms with the
+  `watched()` before it. That boot then has the texts translated and run
+  by the processor, with the same done at the safe points of its code. tools/stress.txt then types a few forms with the
   collector still at it, one of them on the keyboard. Each of those forms
   is compiled under the collector, by a compiler that is compiled code,
   and read by a console that is: that session is where the machine is
@@ -384,7 +480,9 @@ Rules:
   no name of Common Lisp's given a new meaning (LISTEN is one), and the
   substrate only through CLARA and CLARA.UNSAFE. The kernel loads them
   in the order of `world` in lisp.c (the compiler, then the console, draw,
-  pci, virtio, input, disk, fat, the listener, windows, terminal), and
+  pci, virtio, input, disk, fat, the listener, windows, terminal, native,
+  and after it the file of the machine's own processor, arm64.lisp or
+  x86-64.lisp, whose name is the machine's in `*features*`), and
   lisp/host/tests.lisp loads the same files: a new one goes into both, and what its package exports goes into
   a list of names in the manual, or `make site` stops. A file that is an
   application is not in `world`, and the launcher loads it (below). What `lisp_main`

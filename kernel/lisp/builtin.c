@@ -1494,6 +1494,16 @@ PRIMITIVE(p_self_test)
     return lisp_fixnum(lisp_eval_texts());
 }
 
+/* (%stack-depth): where the top of the value stack is, in words. For the
+ * self-test: compiled code that calls this twice, from the same place in
+ * a form, has to get the same number when what it did in between left the
+ * stack as it found it. */
+PRIMITIVE(p_stack_depth)
+{
+    (void)argv;
+    return lisp_fixnum((int64_t)((uintptr_t)lisp_stack() / sizeof(lisp)));
+}
+
 /* Time, as far as there is any: the ticks since the timer was started. */
 PRIMITIVE(p_get_internal_real_time)
 {
@@ -1633,6 +1643,7 @@ const struct lisp_primitive lisp_primitives[] = {
     { "%ROOM", p_room, 0, 0 },
     { "%COLLECT", p_collect, 0, 0 },
     { "%COLLECT-EVERY", p_collect_every, 1, 1 },
+    { "%STACK-DEPTH", p_stack_depth, 0, 0 },
     { "%SELF-TEST", p_self_test, 0, 0 },
     /* threads, locks and events (thread.c) */
     { "SLEEP", lisp_p_sleep, 1, 1 },
@@ -1689,6 +1700,10 @@ const struct lisp_primitive lisp_primitives[] = {
     { "CLARA.UNSAFE:HEAP-IMAGE", lisp_p_heap_image, 0, 0 },
     { "CLARA.UNSAFE:MAKE-COMPILED-FUNCTION", lisp_p_make_compiled_function, 1, 1 },
     { "CLARA.UNSAFE:COMPILED-FUNCTION-CODE", lisp_p_compiled_function_code, 1, 1 },
+    { "CLARA.UNSAFE:NATIVE-LAYOUT", lisp_p_native_layout, 0, 0 },
+    { "CLARA.UNSAFE:INSTALL-NATIVE-CODE", lisp_p_install_native_code, 3, 3 },
+    { "CLARA.UNSAFE:NATIVE-CODE-BYTES", lisp_p_native_code_bytes, 1, 1 },
+    { "CLARA.UNSAFE:NATIVE-FUNCTION", lisp_p_native_function, 1, 2 },
     { "CLARA.UNSAFE:FRAMEBUFFER", lisp_p_framebuffer, 0, 0 },
     { "CLARA.UNSAFE:SERIAL-DEVICE", lisp_p_serial_device, 0, 0 },
     { "CLARA.UNSAFE:SERIAL-BYTE", lisp_p_serial_byte, 0, 0 },

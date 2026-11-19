@@ -345,9 +345,40 @@
 (in-package "CLARA.UNSAFE")
 
 (defun make-compiled-function (code)
-  (unless (and (vectorp code) (= (length code) 12) (eql (aref code 11) 0))
+  (unless (and (vectorp code) (= (length code) 13) (eql (aref code 11) 0))
     (error "~S is not code that the machine can run" code))
   (clara.host::make-function code nil))
 
 (defun compiled-function-code (function)
   (values (gethash function clara.host::*codes*)))
+
+;;; Code for the processor (lisp/native.lisp). SBCL runs none of it: what
+;;; the translation makes is kept beside the code that it was made of, for
+;;; a test to look at, and the machine above goes on running the function.
+;;; The numbers are the ones that the kernel gives for its own structs
+;;; (kernel/lisp/native.c), so that what is looked at here is what a kernel
+;;; would be handed.
+
+(defun native-layout ()
+  (list :sp 0 :unwind 8 :attention 40 :bound 44 :count 48 :original 216 :stack-end 224 :c-limit 232 :t 240
+        :call 248 :step 256 :unwinding 264 :safe-point 272 :arguments 280 :finish 288 :stack-full 296
+        :leave 12 :fast 20 :car 7 :cdr 15 :value 21 :header -5 :items 3 :code 11 :env 19 :constants 1
+        :tag-cons 1 :tag-object 5 :type-vector 4 :unbound 15 :hidden 2))
+
+(defun install-native-code (code words hidden)
+  (unless (and (vectorp code) (= (length code) 13) (null (aref code 12)))
+    (error "~S is not code that can be given code for the processor" code))
+  (unless (and (vectorp words) (> (length words) 5) (every (lambda (word) (typep word '(unsigned-byte 32))) words))
+    (error "~S is not the words of code for the processor" words))
+  (unless (member hidden '(0 2))
+    (error "~S is not the number of words that a call hides" hidden))
+  (setf (aref code 12) (list :native words hidden))
+  (* 4 (length words)))
+
+(defun native-code-bytes (code)
+  (and (aref code 12) (* 4 (length (cadr (aref code 12))))))
+
+(defun native-function (function &optional refresh)
+  (declare (ignore refresh))
+  (let ((code (gethash function clara.host::*codes*)))
+    (and code (aref code 12) t)))

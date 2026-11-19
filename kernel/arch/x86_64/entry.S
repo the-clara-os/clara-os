@@ -5,6 +5,7 @@
  * This is the 64-bit Microsoft calling convention, like the rest of the
  * kernel: the first two arguments arrive in rcx and rdx, the result leaves
  * in rax, and a caller keeps 32 bytes free above the return address. */
+#include "lisp/machine.h"
 
     .text
 
@@ -113,6 +114,87 @@ arch_probe_nothing:
     .globl probe_failed
 probe_failed:
     mov $1, %eax
+    ret
+
+/* Code for the processor (kernel/lisp/native.c, lisp/native.lisp): what the
+ * Lisp world makes of its functions, and what the two routines here stand
+ * between C and. Such code keeps five registers for itself, which a
+ * function in C leaves as it found them:
+ *
+ *   r15  the address of lisp_machine: everything of the kernel's is reached from it
+ *   rbx  the top of the value stack, while the code runs; lisp_machine has it across a call into C
+ *   rsi  the local variables of the call that is running
+ *   r14  the constants of its function
+ *   rdi  NIL
+ *
+ * and passes what it has in hand in rcx, rdx, r8 and r9, which is where a
+ * function in C takes its arguments. A function of such code is entered
+ * with itself in rcx. It returns its first value there, with the value
+ * stack cut back to where the function stood on it. */
+
+/* lisp lisp_native_enter(const void *code, lisp *locals, lisp function, struct lisp_machine *machine, lisp nil)
+ * From C into such code: a call whose local variables are made already
+ * (lisp_call_compiled). Five registers are pushed, which leaves the stack
+ * as a call wants it. */
+    .globl lisp_native_enter
+lisp_native_enter:
+    push %rbx
+    push %rsi
+    push %rdi
+    push %r14
+    push %r15
+    mov 80(%rsp), %rdi              /* the fifth argument, above the five and the return address */
+    mov %rcx, %rax
+    mov %rdx, %rsi
+    mov %r8, %rcx
+    mov %r9, %r15
+    mov MACHINE_SP(%r15), %rbx
+    call *%rax
+    mov %rcx, %rax
+    pop %r15
+    pop %r14
+    pop %rdi
+    pop %rsi
+    pop %rbx
+    ret
+
+/* How such code calls a function: the function, or the symbol that names
+ * it, and after it edx arguments are on top of the value stack. When what
+ * is called is such code too, and no safe point has anything to look at,
+ * this goes straight on into it, and it returns to whoever called this.
+ * Everything else is C's to sort out: another kind of function, something
+ * that is no function, a safe point (lisp_native_slow_call). */
+    .globl lisp_native_call
+lisp_native_call:
+    lea (,%rdx,8), %r10
+    mov %rbx, %r11
+    sub %r10, %r11                  /* the first argument */
+    mov -8(%r11), %rcx
+    mov %ecx, %eax
+    and $7, %eax
+    cmp $TAG_SYMBOL, %eax
+    jne 1f
+    mov SYMBOL_FUNCTION(%rcx), %rcx
+    mov %ecx, %eax
+    and $7, %eax
+1:  cmp $TAG_OBJECT, %eax
+    jne 2f
+    cmpb $TYPE_FUNCTION, OBJECT_TYPE(%rcx)
+    jne 2f
+    mov FUNCTION_ENTRY(%rcx), %rax
+    test %rax, %rax
+    jz 2f
+    cmpl $0, MACHINE_ATTENTION(%r15)
+    jne 2f
+    mov %rcx, -8(%r11)              /* the function itself, in use for as long as it runs */
+    jmp *%rax
+2:  mov %rbx, MACHINE_SP(%r15)
+    mov %rdx, %rcx
+    sub $40, %rsp                   /* 32 bytes for the callee, and 8 that put the stack right for a call */
+    call lisp_native_slow_call
+    add $40, %rsp
+    mov MACHINE_SP(%r15), %rbx
+    mov %rax, %rcx
     ret
 
     .bss

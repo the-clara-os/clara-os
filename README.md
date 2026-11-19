@@ -69,7 +69,12 @@ instruction, several times as quick as the evaluator walks the same forms
 and with the same meaning, and `(disassemble 'name)` shows the
 instructions. The evaluator is still there to run the compiler until it
 has compiled itself, and every such start holds the two against each
-other. The same Lisp files load
+other. A function can be translated once more, into the instructions of
+the processor itself, AArch64's or x86-64's (lisp/native.lisp, and
+lisp/arm64.lisp or lisp/x86-64.lisp): `(clara.native:translate 'name)`,
+after which the processor runs it with nothing in between, several times
+as quick again where the time went into calls and arithmetic. The world
+itself is not translated yet. The same Lisp files load
 under SBCL on the host, where they are tested against a machine that is
 made up for the purpose.
 [ROADMAP.md](ROADMAP.md) has what comes next, [DESIGN.md](DESIGN.md) the

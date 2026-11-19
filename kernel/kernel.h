@@ -5,7 +5,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define CLARA_VERSION "0.0.20"
+#define CLARA_VERSION "0.0.21"
 
 #define PAGE_SHIFT 12
 #define PAGE_SIZE  (1ULL << PAGE_SHIFT)
@@ -104,6 +104,8 @@ uint64_t pmm_free_frames(void);      /* how many frames are free */
 #define VM_DEVICE 4u /* device registers: not cached, not reordered */
 #define VM_HEAP_BASE 0x0000400000000000ULL /* reserved for the Lisp heap: */
 #define VM_HEAP_SIZE 0x0000400000000000ULL /* 64 TiB, starting at 64 TiB */
+#define VM_CODE_BASE 0x0000200000000000ULL /* and for the code that the Lisp world makes for the processor: */
+#define VM_CODE_SIZE 0x0000000040000000ULL /* 1 GiB, starting at 32 TiB */
 void     vm_init(const struct boot_info *bi);
 void     vm_map(uint64_t va, uint64_t pa, uint64_t pages, unsigned flags); /* read-only data unless flags say more */
 void     vm_unmap(uint64_t va, uint64_t pages);
@@ -240,6 +242,9 @@ uint64_t arch_pte_table(uint64_t pa);                /* an entry that points at 
 uint64_t arch_pte_page(uint64_t pa, unsigned flags); /* an entry that maps a page, flags as for vm_map */
 void     arch_mmu_switch(uint64_t root);             /* use the tables under root from now on */
 void     arch_tlb_flush(uint64_t va);                /* after changing va's entry in tables in use */
+void     arch_code_written(uint64_t va, uint64_t bytes); /* code was written there, through another address: the
+                                                        processor forgets what it remembers of the old */
+extern const uint32_t arch_code_trap;                /* four bytes that the processor refuses to run */
 
 /* main.c */
 void kmain(struct boot_info *bi) __attribute__((noreturn));

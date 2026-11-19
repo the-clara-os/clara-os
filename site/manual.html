@@ -362,6 +362,40 @@ NIL</pre>
     <p>A function is found by its name at the moment it is called: define <code>fact</code> again, and compiled code calls the new one. The commonest functions of the kernel have an instruction each, which does the work without a call: <code>car</code>, <code>cdr</code>, <code>not</code>, <code>null</code>, <code>consp</code>, <code>atom</code>, <code>1+</code> and <code>1-</code> of one argument, and <code>cons</code>, <code>eq</code>, <code>+</code>, <code>-</code>, <code>*</code>, <code>&lt;</code>, <code>&gt;</code>, <code>&lt;=</code>, <code>&gt;=</code>, <code>=</code>, <code>aref</code> and <code>svref</code> of two. Such an instruction looks first whether its name still means the kernel's function. If you have defined <code>*</code> again, it calls yours.</p>
     <p>Given a <code>lambda</code> form, <code>disassemble</code> shows what compiling it makes. A function that is part of the kernel has no listing.</p>
 
+    <h3 id="processor">For the processor itself</h3>
+    <p>The instructions that the compiler leaves are for a machine that the kernel plays: it takes them one at a time, and finds out for each what it asks for. ClaraOS can also make of a function the instructions of the processor itself, AArch64's or x86-64's, which the processor then carries out with nothing in between. In this version it does that when you ask:</p>
+<pre class="session">&gt; (clara.native:translated-p 'fact)
+NIL
+&gt; (clara.native:translate 'fact)
+FACT
+&gt; (list (clara.native:translated-p 'fact) (fact 10))
+(T 3628800)
+&gt; (setq clara.native:*translate* t)
+T
+&gt; (defun square (n) (* n n))
+SQUARE
+&gt; (list (clara.native:translated-p 'square) (square 12))
+(T 144)
+&gt; (setq clara.native:*translate* nil)
+NIL</pre>
+    <p><code>clara.native:translate</code> takes a function, or the name of one, and has the processor run it from then on. While <code>clara.native:*translate*</code> is true, whatever is compiled is translated as well, and that is everything you define. <code>clara.native:translated-p</code> says whether a function is.</p>
+    <p>A translated function means what it meant. Its mistakes are reported in the same words, it is found by its name at every call, it calls functions that are not translated and they call it. <code>disassemble</code> lists the compiler's instructions as before, since those are what the processor's were made of, and says <code>translated for the processor</code> on the first line.</p>
+    <p>How much quicker it is depends on what the function does. On one machine:</p>
+<pre><code>&gt; (time (fib 32))
+210 milliseconds
+2178309
+&gt; (clara.native:translate 'fib)
+FIB
+&gt; (time (fib 32))
+30 milliseconds
+2178309</code></pre>
+    <p>What gains is what the processor now does alone: the calls from one translated function to another, the variables and the jumps, and adding, subtracting and comparing small numbers. Five million additions in a loop took 70 milliseconds there and take 20. A function that spends its time in the system's own functions gains little, because <code>mapcar</code>, <code>reverse</code> and the rest of the system are not translated yet, and making a list costs what it cost: a million items pushed, reversed and mapped over took 100 milliseconds both ways.</p>
+    <ul>
+      <li>Translating a function does not reach back: a closure that was made of it before goes on as it was. The ones that are made afterwards are translated.</li>
+      <li>The processor's instructions take four to five times the memory of the compiler's, and a translated function keeps both.</li>
+      <li>They are part of the <a href="#image">world that is saved</a>, and come back with it.</li>
+    </ul>
+
     <h3 id="mind">What to keep in mind</h3>
     <ul>
       <li>A macro runs when a call of it is expanded, and for a compiled function that happened once, when the function was compiled. Define a macro again, and the functions that were compiled with the old one go on as they were until they are defined again. Macros are compiled like functions.</li>
@@ -381,12 +415,12 @@ NIL</pre>
 <pre class="session">&gt; (directory "/*")
 ("/clara/" "/EFI/")
 &gt; (directory "/clara/*.lisp")
-("/clara/boot.lisp" "/clara/compiler.lisp" "/clara/console.lisp" "/clara/disk.lisp" "/clara/draw.lisp" "/clara/editor.lisp" "/clara/fat.lisp" "/clara/files.lisp" "/clara/font.lisp" "/clara/input.lisp" "/clara/listener.lisp" "/clara/pci.lisp" "/clara/self-test.lisp" "/clara/terminal.lisp" "/clara/virtio.lisp" "/clara/windows.lisp")
+("/clara/arm64.lisp" "/clara/boot.lisp" "/clara/compiler.lisp" "/clara/console.lisp" "/clara/disk.lisp" "/clara/draw.lisp" "/clara/editor.lisp" "/clara/fat.lisp" "/clara/files.lisp" "/clara/font.lisp" "/clara/input.lisp" "/clara/listener.lisp" "/clara/native.lisp" "/clara/pci.lisp" "/clara/self-test.lisp" "/clara/terminal.lisp" "/clara/virtio.lisp" "/clara/windows.lisp" "/clara/x86-64.lisp")
 &gt; (probe-file "/CLARA/Boot.Lisp")
 "/CLARA/boot.lisp"
 &gt; (probe-file "/clara/nothing.lisp")
 NIL</pre>
-    <p><code>directory</code> takes a pattern, in which <code>*</code> stands for any characters in the last part of the name, and gives the names that fit, a directory's with a slash at its end. <code>probe-file</code> gives the name of a file as the disk spells it, or <code>NIL</code> when there is none. The files in <code>/clara</code> are the system's own Lisp: the language's part that is written in Lisp, the console, the drivers, the file system and the window manager, and two that are not loaded until they are wanted, the <a href="#applications">applications</a> <code>editor.lisp</code> and <code>files.lisp</code>. <code>/EFI</code> holds the kernels.</p>
+    <p><code>directory</code> takes a pattern, in which <code>*</code> stands for any characters in the last part of the name, and gives the names that fit, a directory's with a slash at its end. <code>probe-file</code> gives the name of a file as the disk spells it, or <code>NIL</code> when there is none. The files in <code>/clara</code> are the system's own Lisp: the language's part that is written in Lisp, the compiler, the console, the drivers, the file system and the window manager, and two that are not loaded until they are wanted, the <a href="#applications">applications</a> <code>editor.lisp</code> and <code>files.lisp</code>. <code>native.lisp</code> is what <a href="#processor">translates for the processor</a>, with a file for each kind of processor, <code>arm64.lisp</code> and <code>x86-64.lisp</code>, of which a machine loads its own. <code>/EFI</code> holds the kernels.</p>
 
     <h3 id="reading">Reading and loading</h3>
 <pre class="session">&gt; (with-open-file (in "/clara/listener.lisp") (list (read-line in) (read-line in)))
@@ -441,10 +475,11 @@ NIL</pre>
 <pre class="session">&gt; (clara:save-image)
 "/clara/clara.image"</pre>
     <p>The next time the machine starts, it finds that file and takes it for its world, in place of loading the Lisp files. The report says so:</p>
-<pre><code>lisp: the heap is an image: 1542 KiB that ClaraOS {{version}} saved, from clara.image on the boot volume</code></pre>
-    <p>And at the prompt, what was defined is defined:</p>
-<pre class="session again">&gt; (list (fact 10) (compiled-function-p #'fact))
-(3628800 T)
+<pre><code>lisp: the heap is an image: 1889 KiB that ClaraOS {{version}} saved, from clara.image on the boot volume
+lisp: and with it 1 KiB of code for the processor</code></pre>
+    <p>The second line is there when the world holds functions that were <a href="#processor">translated for the processor</a>. And at the prompt, what was defined is defined:</p>
+<pre class="session again">&gt; (list (fact 10) (compiled-function-p #'fact) (clara.native:translated-p 'fact))
+(3628800 T T)
 &gt; (hello)
 hello from a file
 NIL
@@ -455,7 +490,7 @@ NIL
 
     <h3 id="saved">What comes back, and what does not</h3>
     <ul>
-      <li>Functions, macros, structures, packages and conditions that were defined, and the values of variables, come back. So does the package that names were being read in. All of it is <a href="#compiler">compiled</a>, and comes back compiled.</li>
+      <li>Functions, macros, structures, packages and conditions that were defined, and the values of variables, come back. So does the package that names were being read in. All of it is <a href="#compiler">compiled</a>, and comes back compiled, and what was <a href="#processor">translated for the processor</a> comes back translated.</li>
       <li>A special variable comes back with the value it has outside every <code>let</code>, also when it was saved from inside one.</li>
       <li>Threads do not come back. The world starts again at the prompt, and does not go on in the middle of what it was doing. A thread that was running is one that has been stopped, and a lock that was held is free.</li>
       <li>The <a href="#windows">window manager</a> is running again when it was running, with one Listener window. The windows that were open do not come back.</li>
@@ -959,6 +994,10 @@ error: nothing is mapped at #x0</pre>
     <p><a href="#compiler">The compiler</a> is a file of Lisp as well. What it is used by are Common Lisp's own names, <code>eval</code>, <code>load</code>, <code>compile</code> and <code>disassemble</code>; the one name of its own is the function that <code>eval</code> calls.</p>
     <p class="names" data-package="CLARA.COMPILER"><code>clara.compiler:evaluate</code></p>
 
+    <h3>The package CLARA.NATIVE</h3>
+    <p>What makes <a href="#processor">the processor's own instructions</a> of a compiled function. <code>start</code> is the system's: it asks the kernel, at every start, which processor this is and where the kernel keeps what such code reads.</p>
+    <p class="names" data-package="CLARA.NATIVE"><code>clara.native:*translate*</code> <code>clara.native:translate</code> <code>clara.native:translated-p</code> <code>clara.native:start</code></p>
+
     <h3>The packages CLARA.EDITOR and CLARA.FILES</h3>
     <p>The two <a href="#applications">applications</a> that are files. Each package is there once its application has been launched, and gone again when it is unloaded; the one name of each is the function that <code>clara.windows:launch</code> calls.</p>
     <p class="names" data-package="CLARA.EDITOR"><code>clara.editor:edit</code></p>
@@ -976,8 +1015,8 @@ error: nothing is mapped at #x0</pre>
     <p class="names" data-package="CLARA.LISTENER"><code>clara.listener:run</code> <code>clara.listener:answer</code> <code>clara.listener:read-and-answer</code> <code>clara.listener:answer-lines</code></p>
 
     <h3>The package CLARA.UNSAFE</h3>
-    <p>For drivers. What can be read with one of the first seven can be written with <code>setf</code>. The last two are the compiler's: a function made of code, and the code of a function. Code is looked at before it is made a function, and refused when it points where it should not; that it uses its stack as it says is taken on trust, which is why the two are here.</p>
-    <p class="names" data-package="CLARA.UNSAFE"><code>clara.unsafe:memory-8</code> <code>clara.unsafe:memory-16</code> <code>clara.unsafe:memory-32</code> <code>clara.unsafe:memory-64</code> <code>clara.unsafe:port-8</code> <code>clara.unsafe:port-16</code> <code>clara.unsafe:port-32</code> <code>clara.unsafe:fill-memory-32</code> <code>clara.unsafe:copy-memory</code> <code>clara.unsafe:expand-bits-32</code> <code>clara.unsafe:fill-rectangle-32</code> <code>clara.unsafe:copy-rectangle-32</code> <code>clara.unsafe:allocate-memory</code> <code>clara.unsafe:free-memory</code> <code>clara.unsafe:map-memory</code> <code>clara.unsafe:memory-string</code> <code>clara.unsafe:string-bytes</code> <code>clara.unsafe:string-memory</code> <code>clara.unsafe:heap-image</code> <code>clara.unsafe:interrupt-event</code> <code>clara.unsafe:message-interrupt</code> <code>clara.unsafe:pci-configuration</code> <code>clara.unsafe:framebuffer</code> <code>clara.unsafe:serial-device</code> <code>clara.unsafe:serial-byte</code> <code>clara.unsafe:serial-break</code> <code>clara.unsafe:keyboard-break</code> <code>clara.unsafe:take-screen</code> <code>clara.unsafe:give-screen</code> <code>clara.unsafe:make-compiled-function</code> <code>clara.unsafe:compiled-function-code</code></p>
+    <p>For drivers. What can be read with one of the first seven can be written with <code>setf</code>. The six after <code>give-screen</code> are the compiler's and the translator's. The first two are a function made of code, and the code of a function: code is looked at before it is made a function, and refused when it points where it should not; that it uses its stack as it says is taken on trust, which is why the two are here. The other four are for <a href="#processor">the processor's own instructions</a>: where the kernel keeps what they read, the instructions of a function handed to the kernel, how many bytes of them a function has, and whether the processor runs a function. Those instructions are run as they are given, and nothing looks at them first.</p>
+    <p class="names" data-package="CLARA.UNSAFE"><code>clara.unsafe:memory-8</code> <code>clara.unsafe:memory-16</code> <code>clara.unsafe:memory-32</code> <code>clara.unsafe:memory-64</code> <code>clara.unsafe:port-8</code> <code>clara.unsafe:port-16</code> <code>clara.unsafe:port-32</code> <code>clara.unsafe:fill-memory-32</code> <code>clara.unsafe:copy-memory</code> <code>clara.unsafe:expand-bits-32</code> <code>clara.unsafe:fill-rectangle-32</code> <code>clara.unsafe:copy-rectangle-32</code> <code>clara.unsafe:allocate-memory</code> <code>clara.unsafe:free-memory</code> <code>clara.unsafe:map-memory</code> <code>clara.unsafe:memory-string</code> <code>clara.unsafe:string-bytes</code> <code>clara.unsafe:string-memory</code> <code>clara.unsafe:heap-image</code> <code>clara.unsafe:interrupt-event</code> <code>clara.unsafe:message-interrupt</code> <code>clara.unsafe:pci-configuration</code> <code>clara.unsafe:framebuffer</code> <code>clara.unsafe:serial-device</code> <code>clara.unsafe:serial-byte</code> <code>clara.unsafe:serial-break</code> <code>clara.unsafe:keyboard-break</code> <code>clara.unsafe:take-screen</code> <code>clara.unsafe:give-screen</code> <code>clara.unsafe:make-compiled-function</code> <code>clara.unsafe:compiled-function-code</code> <code>clara.unsafe:native-layout</code> <code>clara.unsafe:install-native-code</code> <code>clara.unsafe:native-code-bytes</code> <code>clara.unsafe:native-function</code></p>
   </section>
 </main>
 

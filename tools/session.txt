@@ -29,6 +29,25 @@ FACT: 1 local variable, 4 words of stack
 NIL
 > (fact 21)
 error: the result is an integer too large for a fixnum, and there are no larger integers yet
+> (list (clara.native:translated-p 'fact) (clara.native:translate 'fact) (clara.native:translated-p 'fact) (fact 20))
+(NIL FACT T 2432902008176640000)
+> (list (handler-case (fact 21) (error () 'too-large)) (handler-case (fact 'one) (type-error () 'not-a-number)))
+(TOO-LARGE NOT-A-NUMBER)
+> (setq clara.native:*translate* t)
+T
+> (defun quick (n &optional (step 1)) (let ((sum 0)) (dotimes (i n) (setq sum (+ sum (* i step)))) sum))
+QUICK
+> (list (clara.native:translated-p 'quick) (quick 1000) (quick 1000 2) (handler-case (quick 'a) (error () 'not-a-number)))
+(T 499500 999000 NOT-A-NUMBER)
+> (defun spin (n) (loop (setq n (+ n 1))))
+SPIN
+> (spin 0)
+^C
+error: interrupted from the keyboard
+> (list (clara.native:translated-p 'spin) (quick 10))
+(T 45)
+> (setq clara.native:*translate* nil)
+NIL
 > (defmacro unless-zero (n &body body) `(if (= ,n 0) nil (progn ,@body)))
 UNLESS-ZERO
 > (macroexpand-1 '(unless-zero x (/ 100 x)))
