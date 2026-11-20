@@ -136,6 +136,13 @@
                              #x41 #x5e                                    ; POP r14
                              #x5e                                         ; POP rsi
                              #xc3))                                       ; RET
+      (:call-local (cons #xe8 (x86-reach x (+ at 5))))                    ; CALL rel32: where it came from is on
+                                                                          ; the processor's stack
+      (:enter-local (list #x48 #x83 #xec #x28))                           ; SUB rsp, 40: for a function in C, and
+                                                                          ; the stack right again, as in (:save)
+      (:leave-local (list #x48 #x83 #xc4 #x28))                           ; ADD rsp, 40
+      (:return-local (list #xc3))                                         ; RET
+      (:forget-local (list #x48 #x83 #xc4 #x08))                          ; ADD rsp, 8: past where it came from
       (t (error "~S is no instruction that this file can write" item)))))
 
 (setf (get :x86-64 'writer) 'write-x86-64

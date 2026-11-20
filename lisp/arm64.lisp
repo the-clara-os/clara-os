@@ -68,12 +68,13 @@
           (t (append (a64-number 16 size nil)
                      (list (+ (if minus #xcb000000 #x8b000000) (ash 16 16) (ash rn 5) rd)))))))
 
-;; B: as far as 128 MiB either way.
-(defun a64-jump (label at)
+;; B, and BL, which leaves in x30 where it came from: as far as 128 MiB
+;; either way.
+(defun a64-jump (label at &optional link)
   (let ((words (truncate (- (place-of label) at) 4)))
     (unless (and (>= words (- (ash 1 25))) (< words (ash 1 25)))
       (too-far))
-    (+ #x14000000 (logand words #x3ffffff))))
+    (+ (if link #x94000000 #x14000000) (logand words #x3ffffff))))
 
 ;; B.cond: as far as 1 MiB either way.
 (defun a64-jump-if (how label at)
@@ -141,6 +142,12 @@
       (:restore-return (list #xa9415bf5                                   ; LDP x21, x22, [sp, #16]
                              #xa8c27bfd                                   ; LDP x29, x30, [sp], #32
                              #xd65f03c0))                                 ; RET
+      (:call-local (list (a64-jump x at t)))                              ; BL
+      (:enter-local (list #xa9bf7bfd))                                    ; STP x29, x30, [sp, #-16]!: a function in
+                                                                          ; C is about to use x30 for itself
+      (:leave-local (list #xa8c17bfd))                                    ; LDP x29, x30, [sp], #16
+      (:return-local (list #xd65f03c0))                                   ; RET
+      (:forget-local nil)                                                 ; x30 is simply not gone back to
       (t (error "~S is no instruction that this file can write" item)))))
 
 (setf (get :arm64 'writer) 'write-arm64

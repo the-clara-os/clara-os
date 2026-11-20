@@ -362,6 +362,7 @@
 (defun native-layout ()
   (list :sp 0 :unwind 8 :attention 40 :bound 44 :count 48 :original 216 :stack-end 224 :c-limit 232 :t 240
         :call 248 :step 256 :unwinding 264 :safe-point 272 :arguments 280 :finish 288 :stack-full 296
+        :cons 304 :cell 312 :closure 320
         :leave 12 :fast 20 :car 7 :cdr 15 :value 21 :header -5 :items 3 :code 11 :env 19 :constants 1
         :tag-cons 1 :tag-object 5 :type-vector 4 :unbound 15 :hidden 2))
 
@@ -382,3 +383,21 @@
   (declare (ignore refresh))
   (let ((code (gethash function clara.host::*codes*)))
     (and code (aref code 12) t)))
+
+;; What the compiler made of every function that has no code for the
+;; processor: here, of every function that was made and that SBCL has not
+;; let go of since.
+(defun untranslated-code ()
+  (let ((codes nil))
+    (maphash (lambda (function code)
+               (declare (ignore function))
+               (unless (aref code 12)
+                 (push code codes)))
+             clara.host::*codes*)
+    (coerce codes 'vector)))
+
+;; The kernel's functions each have a word for where the processor enters
+;; them, and this is what puts those right. Here a function is asked for
+;; its code every time, so there is nothing to put right.
+(defun native-functions ()
+  0)

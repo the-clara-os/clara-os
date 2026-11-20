@@ -123,6 +123,9 @@ uint64_t lisp_native_safe_point(lisp *locals);             /* there is something
 uint64_t lisp_native_arguments(lisp function, uint64_t argc); /* the arguments are not simply the parameters */
 uint64_t lisp_native_finish(lisp *locals);                 /* the function returns with records in force, or bindings */
 uint64_t lisp_native_stack_full(void);
+lisp     lisp_native_cell(lisp value);                     /* the three that make an object: a cell, */
+lisp     lisp_native_closure(lisp code, uint64_t count, const lisp *top); /* a function that closes over values, */
+                                                           /* and lisp_cons */
 lisp     lisp_native_slow_call(uint64_t argc);             /* from lisp_native_call: any call that it cannot do alone */
 
 /* arch/<arch>/entry.S: the way into code for the processor from C, and the

@@ -327,21 +327,56 @@ Rules:
   the collector takes for values, so an address in one is a multiple of
   eight.
 - Code for the processor (lisp/native.lisp, kernel/lisp/native.c, the two
-  routines at the end of each entry.S). What the compiler made is
-  translated an instruction at a time, and an instruction is the machine's
-  unless `instruction` or `known` in lisp/native.lisp writes it out:
-  `machine-step` has vm.c do that one instruction (`lisp_native_step`). So
-  a new instruction is right there without a line, and gets one only to
-  be quick. What is written out does what the case in vm.c does, to the
+  routines at the end of each entry.S). Translating is the rule
+  (`clara.native:*translate*` is true): whatever the compiler makes is
+  translated before it is run, and a world is the processor's through and
+  through. lisp/native.lisp and the processor's file are loaded right
+  after the compiler has compiled itself, as code for the machine; then
+  `clara.native:translate-all` goes through the heap for every function
+  that the machine still runs (`clara.unsafe:untranslated-code`),
+  translates it, its own first, and has every function entered by the
+  processor (`clara.unsafe:native-functions`). Nothing has to be done for a
+  new file of the world: it is translated a form at a time as it is
+  compiled. What must not be is a compiled function in the heap that the
+  machine runs once the world is loaded: `new_world` panics at that, as
+  it does at one that the evaluator would walk. The machine of vm.c stays:
+  it does the instructions that this code leaves to it, it runs what is
+  compiled while the variable is NIL, and the texts are run on it twice
+  before the translator is loaded.
+- What the compiler made is translated an instruction at a time, and an
+  instruction is the machine's unless `instruction` or `known` in
+  lisp/native.lisp writes it out: `(flush)` and `machine-step` have vm.c
+  do that one instruction (`lisp_native_step`), by the piece of code that
+  every function has for that behind it (`step-piece`). So a new
+  instruction is right there without a line, and gets one only to be
+  quick. What is written out does what the case in vm.c does, to the
   word: the same test of the arguments, the same count of values, the
-  stack as deep afterwards. Where it finds arguments that it cannot do,
-  it goes to the machine (`later`) with the stack as the instruction found
-  it, so nothing is changed before the last test has passed. Nothing that
-  the collector has to find is in a register across `:call-lisp`,
-  `:call-c` or a jump backwards: :A to :F mean nothing after any of them.
+  stack as deep afterwards. Where it finds arguments that it cannot do, it
+  goes to the machine (`to-machine`) with the arguments on the stack as
+  the machine would have found them, so nothing is changed before the
+  last test has passed, and a sum that did not fit is taken back first.
   Every word of the kernel's is reached through :RT, by a number from
   `where`, and never by an address: a saved world's code has to be good
   for a kernel that lies somewhere else.
+- A value that the machine would push is not pushed until it has to be
+  (`*pending*`): `(:local n)`, `(:const n)` and `(:closed n)` are still to
+  be fetched, and `(:reg)`, always the oldest, is in :A and nowhere else.
+  An instruction that is written out takes its arguments with
+  `arguments`, which brings them into :A and :B and pushes the rest, and
+  says `result` when what it made is in :A. Everything else begins with
+  `(flush)`. Nothing is pending where two ways through the code meet,
+  which is at the instructions that `targets` finds, at a call, at a jump,
+  or anywhere that the collector can look: nothing that it has to find is
+  in a register across `:call-lisp`, a jump backwards or an instruction of
+  the machine's, and :A to :F mean nothing after `:call-lisp`. The three
+  functions in C that make an object (`:cons`, `:cell`, `:closure`) are
+  no safe point and are called with what is in the registers. A
+  comparison whose value only the next instruction wants, a JUMP-IF-NIL
+  that nothing else jumps to, is written with it as one (`jump-after`,
+  `*taken*`); and an instruction that stands for a function in C does not
+  write that it made one value when the next one takes the value off the
+  stack for itself (`value-made`): an instruction that reads the count of
+  values, or leaves the value where it is, must not be put on that list.
 - `machine` in vm.c is the machine three ways: a call from its arguments
   to its return (CALL), and for a call that the processor is in the
   middle of one instruction (STEP) or the way out when an exit is under
@@ -381,22 +416,39 @@ Rules:
   (`NATIVE_LEAVE`, `NATIVE_FAST`). `sh tools/processor-code.sh arm64
   '(lambda (n) (+ n 1))'` shows what is made of a form, read back by
   LLVM.
-- The processor's self-test is `native_selftest` (lisp.c): the texts once
-  more with `clara.native:*translate*` true, which has to make code and
-  has to send the processor into it; a function that calls itself and a
-  loop that adds, of which next to nothing may be left to C (the answers
-  are right, too, when every call and every instruction goes the long
-  way, and then it is no quicker than the machine); a loop and a function
-  that calls itself, which have to stop for the collector; and at the end
-  no piece of code left. On the stress boot there is a collection before
-  the first fifty safe points of such code in each text
-  (`lisp_native_watched`), and a loop without a call has to have one at
-  each of its first fifty turns. A new place where code for the processor
-  comes to a safe point gets a `watched_native()`. What that boot costs
-  is mostly elsewhere, and was guessed wrongly before it was measured
-  (ROADMAP.md, under M16b): to see where its time goes, start it with
-  `NO_HVF=1` and print the time whenever build/boot-<name>.log has a new
-  line.
+- The processor's self-test is `native_selftest` (lisp.c), which runs
+  when the language, the compiler and the translator are translated and
+  before the rest of the world is loaded: the texts once more, which has
+  to make code and has to send the processor into it; a function that
+  calls itself and a loop that adds, of which next to nothing may be left
+  to C (the answers are right, too, when every call and every instruction
+  goes the long way, and then it is no quicker than the machine);
+  functions of the machine's and of the processor's that call each other,
+  with exits through both, and one of the machine's made the processor's
+  with a closure that was made of it before; a loop and a function that
+  calls itself, which have to stop for the collector; and at the end as
+  many pieces of code in use as before the texts. On the stress boot
+  there is a collection before the first fifty safe points that such code
+  comes to after a function has been made of what the compiler made
+  (`lisp_native_watched`, `lisp_p_make_compiled_function`): the compiler
+  is such code too, and would use them up before a text had run. A loop
+  without a call has to have one at each of its first fifty turns. A new
+  place where code for the processor comes to a safe point gets a
+  `watched_native()`. What that boot costs was guessed wrongly three
+  times before it was measured (ROADMAP.md, "What a translated world costs
+  CI"): to see where its time goes, start it with `NO_HVF=1` and print the
+  time whenever build/boot-<name>.log has a new line. A form that is
+  typed with a collection at every safe point is translated with one at
+  every call of the translator's, which is seconds: tools/stress.txt
+  types one translation and compiles its other forms for the machine.
+- The way to the machine of an instruction that is written out, when its
+  name was given another function, comes back with a value: for a
+  comparison that was written with its jump, the jump is made there
+  (`to-machine`). Only a text that gives such a name another function
+  comes that way, since a comparison of what are no numbers is an error:
+  `compilations` has one, which puts the names right with
+  `cl::%set-symbol-function` and not with SETF, which is Lisp and
+  compares while it expands.
   Under SBCL nothing of it runs: the tests there translate every function
   that the compiler's forms make, for both processors, and look at what
   can be seen without running it.
@@ -406,12 +458,21 @@ Rules:
   call's local variables, with the function itself in the word under
   them, x22 its constants and x23 NIL; on x86_64 those are r15, rbx, rsi,
   r14 and rdi.
-- Two things of the kernel's Lisp that lisp/native.lisp ran into. A file
+- Four things of the kernel's Lisp that lisp/native.lisp ran into. A file
   of the world is compiled a form at a time, so a DEFVAR has to stand
   before the first function that binds the variable, or the function
-  binds a variable of its own and nobody sees the value. And a call takes
-  a word of the stack for each argument: `(apply #'vector items)` is not
-  how a vector of thousands is made.
+  binds a variable of its own and nobody sees the value. A call takes a
+  word of the stack for each argument: `(apply #'vector items)` is not
+  how a vector of thousands is made. `make-array` fills a vector with 0,
+  here and under SBCL, and 0 is true: a vector of flags is made with
+  `:initial-element nil`. (Without it every instruction counted as one
+  that something jumps to, nothing stayed pending, the code was as long
+  as before and every test passed: the host tests now hold the code of
+  `fib` to a length.) And a variable that the compiler or the translator
+  looks at counts when a form is compiled, which for a form that is typed
+  is before any of it runs: `(let ((clara.native:*translate* nil)) (defun
+  ...))` translates the function, and a SETQ on a line of its own, or the
+  LET around a COMPILE or a LOAD, does not.
 - The compiler counts the stack: every `emit` moves `*depth*` by what the
   table says, and `gen` puts it right after a form, whichever way the
   form's branches went. What code says it needs of stack is the deepest
@@ -458,12 +519,14 @@ Rules:
   435 s of its 600, most of it in the texts that call themselves until
   the stack is full. A new place where vm.c comes to a safe point gets a
   `watched()` before it. That boot then has the texts translated and run
-  by the processor, with the same done at the safe points of its code. tools/stress.txt then types a few forms with the
-  collector still at it, one of them on the keyboard. Each of those forms
-  is compiled under the collector, by a compiler that is compiled code,
-  and read by a console that is: that session is where the machine is
-  tried with a collection at every one of its safe points in code that
-  nobody wrote for the test. Both lines of the
+  by the processor, with the same done at the safe points of its code.
+  tools/stress.txt then types a few forms with the collector still at it,
+  one of them on the keyboard. Each of those forms is compiled under the
+  collector, by a compiler that the processor runs, and read by a console
+  that it runs: that session is where the processor's code is tried with
+  a collection at every one of its safe points in code that nobody wrote
+  for the test. One of its forms translates a function there; the others
+  are compiled for the machine, which runs them among the processor's. Both lines of the
   boot report are asked for with `EXPECT=`, whose patterns have `;;`
   between them. That boot runs the kernel that is on its disk, which is
   the one the first AArch64 session booted: to try a change there by
@@ -501,15 +564,19 @@ Rules:
   second time, compiled, once there is a compiler (a compiled world,
   above). Its last two parts are read in CLARA and in CLARA.UNSAFE. The host tests
   read the file as text and hold its names against SBCL's: keep a
-  definition's `(defun ` and its like at the start of a line.
+  definition's `(defun ` and its like at the start of a line. CASE there
+  compares a key that is a symbol or an integer with EQ, which compiled
+  code does without a call; what a macro of this file expands into is
+  what every file of the world runs, so it is worth a look at the
+  instructions (`disassemble`).
 - The other files in lisp/ are the world, and each has to load under
   SBCL as it stands: the subset of Common Lisp that the evaluator has,
   no name of Common Lisp's given a new meaning (LISTEN is one), and the
   substrate only through CLARA and CLARA.UNSAFE. The kernel loads them
-  in the order of `world` in lisp.c (the compiler, then the console, draw,
-  pci, virtio, input, disk, fat, the listener, windows, terminal, native,
-  and after it the file of the machine's own processor, arm64.lisp or
-  x86-64.lisp, whose name is the machine's in `*features*`), and
+  in the order of `world` in lisp.c (the compiler, then native and the file
+  of the machine's own processor, arm64.lisp or x86-64.lisp, whose name
+  is the machine's in `*features*`, and then the console, draw, pci,
+  virtio, input, disk, fat, the listener, windows and terminal), and
   lisp/host/tests.lisp loads the same files: a new one goes into both, and what its package exports goes into
   a list of names in the manual, or `make site` stops. A file that is an
   application is not in `world`, and the launcher loads it (below). What `lisp_main`

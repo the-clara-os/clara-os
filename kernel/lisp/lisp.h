@@ -387,6 +387,8 @@ uint64_t lisp_object_words(lisp header);                   /* how long the objec
 int      lisp_heap_room(uint64_t words);                   /* can an object that long be made, and memory be left over? */
 uint64_t lisp_heap_census(uint64_t count[LISP_TYPES]);     /* walk the heap, count by type; bytes in use */
 void     lisp_heap_functions(struct lisp_functions *count); /* how many functions of each kind are in the heap */
+void     lisp_heap_compiled(void (*each)(struct lisp_function *f, void *with), void *with); /* every function in the
+                                                               heap that the compiler made, one after the other */
 void     lisp_heap_state(struct lisp_heap *state);
 uint64_t lisp_collect(void);                               /* free what is not in use; how many bytes that was */
 void     lisp_reach(lisp x);                               /* from the collector's helpers: x is in use */
@@ -527,6 +529,10 @@ struct lisp_machine {
     uint64_t (*arguments)(lisp function, uint64_t argc);
     uint64_t (*finish)(lisp *locals);
     uint64_t (*stack_full)(void);
+    /* And three that make an object for it, which is all that they do: nothing of the value stack is theirs. */
+    lisp (*cons)(lisp car, lisp cdr);
+    lisp (*cell)(lisp value);
+    lisp (*closure)(lisp code, uint64_t count, const lisp *top);
 };
 extern struct lisp_machine lisp_machine;
 #define lisp_values lisp_machine.values
@@ -700,6 +706,8 @@ LISP_PRIMITIVE(lisp_p_native_layout);
 LISP_PRIMITIVE(lisp_p_install_native_code);
 LISP_PRIMITIVE(lisp_p_native_code_bytes);
 LISP_PRIMITIVE(lisp_p_native_function);
+LISP_PRIMITIVE(lisp_p_untranslated_code);
+LISP_PRIMITIVE(lisp_p_native_functions);
 extern const struct lisp_primitive lisp_primitives[];
 extern const unsigned lisp_primitive_count;
 

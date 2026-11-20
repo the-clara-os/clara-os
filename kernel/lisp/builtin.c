@@ -1704,6 +1704,8 @@ const struct lisp_primitive lisp_primitives[] = {
     { "CLARA.UNSAFE:INSTALL-NATIVE-CODE", lisp_p_install_native_code, 3, 3 },
     { "CLARA.UNSAFE:NATIVE-CODE-BYTES", lisp_p_native_code_bytes, 1, 1 },
     { "CLARA.UNSAFE:NATIVE-FUNCTION", lisp_p_native_function, 1, 2 },
+    { "CLARA.UNSAFE:UNTRANSLATED-CODE", lisp_p_untranslated_code, 0, 0 },
+    { "CLARA.UNSAFE:NATIVE-FUNCTIONS", lisp_p_native_functions, 0, 0 },
     { "CLARA.UNSAFE:FRAMEBUFFER", lisp_p_framebuffer, 0, 0 },
     { "CLARA.UNSAFE:SERIAL-DEVICE", lisp_p_serial_device, 0, 0 },
     { "CLARA.UNSAFE:SERIAL-BYTE", lisp_p_serial_byte, 0, 0 },
