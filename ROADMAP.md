@@ -1825,6 +1825,17 @@ M15d, upgrades over the network, what it left:
   bytes of a signature's point against what it worked out would still
   refuse every signature that a test can make, since the point goes
   into the sum that the rest is worked out from.
+- What the five milestones cost CI, on the first green run of each: the
+  whole job 7m54s, 10m33s, 14m10s, 14m40s and 15m28s, of a limit that went
+  from 15 minutes to 25. The boot that fetches takes 47 s there. The
+  stress boot took 202 s, 249 s, 423 s, 371 s and 382 s of its 600: it
+  grows with the world, since every form that its session types is
+  compiled with a collection at every safe point, and a collection goes
+  through a heap that now has the network and twice the system in it.
+  The 423 s were the writing down, which that session no longer does. It
+  is the boot to watch when more goes into the world. Twice that day a
+  run stood in its first step, installing packages on the runner at 46
+  kB/s, until the limit ended it: started again, each passed.
 - The made-up network of the host tests answered every repeated
   acknowledgement by sending a whole window again, which made thirty
   thousand pieces of one lost piece in a second and looked like a fault
