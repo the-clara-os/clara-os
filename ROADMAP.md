@@ -483,15 +483,27 @@ Upgrades:
   the world that was made in its place. The language has `do-symbols`. No
   converter from one layout of the heap to another was needed: the old
   system writes text, and the new one reads it.
-- [ ] **M15d upgrades over the network.** The newer system is fetched and
-  not carried: the running system asks where ClaraOS is published which
-  version is the newest, fetches it when it is newer than its own, sees
-  that what came is what was published, and hands it to the upgrade of
-  M15a, which then takes a system from a second disk or from the network.
-  Where it is published is perhaps the releases of the repository on
-  GitHub, the kernels and the Lisp files of a version being the files of
-  its release. It waits for two things that are not there: a network,
-  which is under "Later" and is work of its own, and releases.
+- [x] **M15d upgrades over the network** (2026-11-20, version 0.0.29). A
+  newer ClaraOS is fetched, and not carried on a disk. ClaraOS has a
+  network for that, as much of one as fetching takes: a driver for
+  virtio's network card, and over it ARP, IPv4, UDP, DHCP, DNS, TCP and
+  HTTP, each as far as a machine needs it that asks and does not serve
+  (lisp/net.lisp). `(clara.net:fetch-text "http://...")` fetches a file,
+  and the machine asks the network for its address the first time
+  something wants one. A release is a system's directory on a web server
+  with a signature of its manifest beside it; `(clara.system:upgrade :from
+  "http://.../")` asks which system is the newest there, takes it when it
+  is newer than the one that runs, holds the manifest against the
+  signature with the key that the system has, and every file against the
+  manifest, and from there on it is the upgrade of M15a: tried at the
+  next start, and the old system there until the new one has come to its
+  prompt. There is no TLS: what arrives is believed for its signature and
+  not for the road it came by, and the kernel checks Ed25519 signatures,
+  in C. `tools/release.py` makes a key, signs, and lays a release out.
+  `make run-*` gives every machine a network card. Two things are not
+  decided here and are empty: where ClaraOS is published, and the key
+  that it is signed with, without which nothing is taken over the
+  network.
 - [x] **M15e shutting down** (2026-11-20, version 0.0.25). A machine that
   runs ClaraOS was stopped from outside, by leaving QEMU or with UTM's
   button, and that was the plug pulled: the system was not told, and what
@@ -605,9 +617,9 @@ Code for the processor:
   files. CASE compares symbols and integers with EQ, an instruction, where
   it called EQL and MEMBER, which the translator spent its time in.
 
-Later, in no order: virtio-net and TCP/IP; outline fonts; sound; CLOS; a
-USB keyboard and mouse, which is what UTM gives a machine that is not told
-otherwise.
+Later, in no order: the rest of a network, a machine that listens, IPv6,
+TLS; outline fonts; sound; CLOS; a USB keyboard and mouse, which is what
+UTM gives a machine that is not told otherwise.
 
 The website, <https://claraos.org>, is built from this file by
 site/build.py: the milestone list above, with its version numbers, is what
@@ -1721,46 +1733,103 @@ M15c, a world made again, what it left:
 - Once, the host tests ended with SBCL's "unhandled condition in
   --disable-debugger mode, quitting" and no line of their own, right
   after a test was edited, and passed when they were run again as they
-  were. What it was is not known.
+  were, and in the two hundred runs after that, eighty of them one after
+  the other for no other reason. What it was is not known.
 
-M15d, upgrades over the network:
+M15d, upgrades over the network, what it left:
 
-- What it stands on. There is no network: no driver for a network device,
-  no addresses, no TCP. "virtio-net and TCP/IP" is under "Later" and has
-  no milestones of its own, and this is the first thing on the roadmap
-  that needs them: a driver for virtio-net, an address by DHCP, a name
-  looked up by DNS, TCP, and HTTP as far as fetching a file goes. The
-  device is there on most machines: QEMU's AArch64 machine has a
-  virtio-net device without being asked (1af4:1000 in the boot report),
-  and so has the machine in UTM, on a network that it shares with the
-  host. QEMU's x86_64 machine has one of Intel's (8086:10d3), so
-  tools/run.sh would give it a virtio one.
-- HTTPS. GitHub sends a request over plain HTTP on to HTTPS, and so does
-  the website, which GitHub serves as well. HTTPS in ClaraOS is the
-  largest piece of all of this: TLS with its exchange of keys and its
-  ciphers, certificates and their chain to a root that is trusted, the
-  time of day to hold them against, which the system does not know (a
-  file that it writes is dated 1980), and under all of it arithmetic on
-  integers of hundreds of bits, where the language has fixnums and nothing
-  larger. The other way is to trust the file and not the road: a release
-  that is signed with a key whose public half is in the system, and
-  checked when it has arrived, by whatever road. That still needs the
-  arithmetic of one kind of signature, and a place that gives the files
-  over plain HTTP, which neither the releases nor the website are. Which
-  of the two it is to be is for the slice to decide, and decides how large
-  the slice is.
-- Releases. The repository has none, and no tags: a version is a number in
-  kernel/kernel.h and a merge. Publishing one is a workflow that builds
-  both kernels and puts them and the Lisp files where they can be fetched,
-  with the version and a sum of every file. Nothing in that needs a
-  network in ClaraOS, so it can come first, and M15a's second disk could
-  then be a file that is fetched on the host and not built there:
-  `make image` needs macOS, and tools/mkdisk.py, which does not, makes a
-  disk of the same kind.
-- What is fetched is what M15a takes from a second disk, behind one
-  function: the files, their version and their sums. A machine that stops
-  while it fetches has changed nothing on its disk. To begin with, the
-  system looks for a newer version when it is asked to, and not by itself.
+- Three things are Julio's to decide, and until then no machine takes a
+  release from anywhere without being given an address and a key by hand.
+  Where ClaraOS is published: `clara.system:*releases*` is NIL. It has to
+  be a place that answers plain HTTP, which GitHub's releases do not, and
+  which the website does only with "Enforce HTTPS" switched off for
+  claraos.org; `http://claraos.org/releases/` would then be it. The key:
+  `clara.system:*release-key*` is NIL. `python3 tools/release.py key
+  <file>` makes one and prints the public half, which goes into
+  lisp/system.lisp; the secret half stays with him, and with whatever
+  publishes for him as a secret. And publishing: nothing builds a release
+  when a version is merged. `python3 tools/release.py make
+  build/esp/clara/<system> <directory> <key file>` lays one out, and a
+  workflow that does it is not written, since it would need the key.
+- No TLS, by decision (DESIGN.md). An address that begins with https://
+  is refused with those words, and so is a web server that sends a
+  request on to one, which GitHub's does for everything.
+- The network is the client's half of each protocol, and of that the part
+  that fetching needs. One card, the first. IPv4, and no IPv6. No pieces
+  of packets, in either direction. No ICMP: the machine does not answer a
+  ping, and does not understand being told that a port is closed or a
+  packet too long, so such a thing ends in patience running out. DHCP is
+  asked once: the address is kept for as long as the machine runs,
+  whatever the server said about how long it lasts. DNS asks for
+  addresses of IPv4 by UDP, and knows no other server than the first that
+  the network named, or the one in `clara.net:*name-server*`; an answer
+  that is too long for one packet is not asked for again by TCP.
+- TCP: this side opens, and never listens. What it sends is one piece,
+  again every second without growing slower, to a patience of ten
+  seconds. It has no window above 64 KiB, no selective acknowledgement
+  and no time stamps, and the number that it counts its bytes from is
+  worked out from the clock, which somebody who wants to guess it can.
+  Pieces that come early are kept, sixty-four of them at most.
+- HTTP: one file to a connection, which is closed after it. An answer
+  that is sent in chunks is put together. Nothing is compressed, since
+  nothing says that it may be. An address is followed three times when a
+  server says that the file is somewhere else.
+- The machine does not know the time. A release cannot be too old, and a
+  key cannot have ended.
+- `latest` is believed as far as its name goes (DESIGN.md), so somebody
+  on the way can keep a machine from learning of a newer release, and
+  can offer it any release that was once published and is newer than the
+  one that runs.
+- A fetch says nothing while it runs, and a release is a few megabytes: on
+  a slow line the prompt stands still, and comes back with an error when
+  nothing has arrived for ten seconds (`clara.net:*patience*`).
+- Not tried: a web server on the Internet. Everything was fetched from
+  this computer, through QEMU's network, and from a network that the
+  tests make up. And UTM: its machine has a virtio network card on a
+  network that it shares with the host, which should be this one.
+- By hand, and in no test: tools/run.sh from the seat, with a web server
+  on the Mac (`python3 -m http.server`) handing out the release that
+  `make test` had laid out in build/releases: the machine asked for its
+  address, fetched, was given the key, took the release, started again
+  and came up as the other system. And `NET=`, which has to say `-nic
+  none` to QEMU: left to itself, QEMU gives the AArch64 machine a card of
+  its own.
+- The thread that takes what arrives must never ask the network anything.
+  It did: to answer a piece of a connection that it does not have, it
+  asked who has the sender's address, and the answer to that was its own
+  to take, so it stood still for ten seconds for every such piece. An
+  answer now goes to the card that the packet came from. A test found
+  it, and not a planted mistake.
+- What was broken on purpose: 129 mistakes in lisp/net.lisp,
+  lisp/system.lisp, kernel/ed25519.c, kernel/sha512.c and
+  kernel/lisp/unsafe.c, each run through the host tests, a first boot, or
+  the boot that fetches. One could not be built. Seventeen got through.
+  Thirteen became tests: a frame whose padding is not cleared, and one
+  that does not say whose it is; a question for an address that goes to
+  one card and not to all; a card of an earlier start that still sends;
+  a page that is written again while the card still has it; an answer to
+  the beginning of a connection that is none; a machine on the same
+  network that is reached by the way out; the end of a file that is not
+  counted; the memory of a connection that grows and forgets what had
+  come early; the end of an answer's head that falls between two pieces;
+  a frame that the thread cannot answer, which must not end the thread;
+  a disk that no longer goes before the network; and, in the kernel's
+  own tests, a sum taken of pieces that end in the middle of a block. One
+  was a line that did nothing, clearing twelve bytes that nothing ever
+  writes, and is gone. Three change nothing that can be seen: whoever
+  waits for something looks every twentieth of a second whether or not
+  it is told that something arrived, so not telling costs time only; a
+  signature whose number is exactly the order of the base point, which
+  the check takes for too large, cannot be made to pass the rest of the
+  check either; and a check that held only thirty-one of the thirty-two
+  bytes of a signature's point against what it worked out would still
+  refuse every signature that a test can make, since the point goes
+  into the sum that the rest is worked out from.
+- The made-up network of the host tests answered every repeated
+  acknowledgement by sending a whole window again, which made thirty
+  thousand pieces of one lost piece in a second and looked like a fault
+  of the machine's. A web server sends the one piece again, once, and so
+  does it now.
 
 M15e, shutting down, what it left:
 

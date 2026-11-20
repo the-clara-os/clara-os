@@ -54,13 +54,24 @@
 ;;;; saves the world without being asked, and says what did not come
 ;;;; across (REPORT).
 ;;;;
+;;;; A system can also be fetched, from where ClaraOS is published: a
+;;;; directory on a web server that holds a system as a disk does, its files
+;;;; and its manifest, and beside the manifest a signature of it, made with
+;;;; a key whose public half every system has in it. The road is plain
+;;;; HTTP, which anybody on the way can change, so nothing that arrives is
+;;;; believed for having arrived: the manifest is held against the
+;;;; signature, and every file against the manifest. What is taken that way
+;;;; goes into a directory beside the system that runs and is tried like a
+;;;; system from a disk.
+;;;;
 ;;;; This file loads under SBCL as well, where lisp/host/ stands in for the
 ;;;; machine, which there stays on whatever it is told.
 
 (defpackage "CLARA.SYSTEM"
   (:use "COMMON-LISP")
   (:export "START" "SHUT-DOWN" "START-AGAIN" "SYSTEM" "SYSTEM-FILE" "BOOT-VOLUME" "UPGRADE"
-           "HOME" "HOME-FILE" "LOAD-HOME" "*PATIENCE*" "REPORT"))
+           "HOME" "HOME-FILE" "LOAD-HOME" "*PATIENCE*" "REPORT"
+           "NEWEST" "*RELEASES*" "*RELEASE-KEY*"))
 (in-package "CLARA.SYSTEM")
 
 (defvar *lock* (clara:make-lock "system"))
@@ -75,6 +86,8 @@
 (defvar *known* nil)        ; the text that this world has of the files of /home, as ((file . text) ...)
 (defvar *follows* nil)      ; this world was given the text of /home, and takes what is new of it at every start
 (defvar *system-packages* nil) ; the names of the packages that were there when this world was made
+(defvar *releases* nil)     ; where ClaraOS is published: the address of a directory, as "http://claraos.org/releases/", or NIL
+(defvar *release-key* nil)  ; the public half of the key that what is published there is signed with: 64 digits, or NIL
 
 ;; A line for whoever is watching, on the console: the serial port, and the
 ;; screen once the window manager has given it back.
@@ -1067,27 +1080,30 @@
 (defun other-kernel ()
   (if (member :arm64 *features*) "BOOTX64.EFI" "BOOTAA64.EFI"))
 
-;; One file of a system, from the volume it is taken from to the one that
-;; the machine was started from, when it is what the manifest says: as long,
-;; and with that sum.
-(defun take-file (volume directory file)
-  (let ((name (concatenate 'string directory (first file))))
-    (multiple-value-bind (memory size pages) (on-volume (volume) (clara.fat:read-file name))
-      (unwind-protect
-           (progn
-             (unless (and (= size (second file)) (string= (clara.unsafe:sha-512 memory size) (third file)))
-               (error "the file ~A is not what the manifest of its system says it is" name))
-             (on-volume (*boot-volume*)
-               (clara.fat:write-file name memory size)))
-        (clara.unsafe:free-memory memory pages)))))
+;; One file of a system, from where the system is taken from to the volume
+;; that the machine was started from, when it is what the manifest says:
+;; as long, and with that sum. READ gives a file of the system by its name:
+;; the memory that it is in, how long it is, and how many page frames that
+;; memory is.
+(defun take-file (read directory file)
+  (multiple-value-bind (memory size pages) (funcall read (first file))
+    (unwind-protect
+         (progn
+           (unless (and (= size (second file)) (string= (clara.unsafe:sha-512 memory size) (third file)))
+             (error "the file ~A~A is not what the manifest of its system says it is" directory (first file)))
+           (on-volume (*boot-volume*)
+             (clara.fat:write-file (concatenate 'string directory (first file)) memory size)))
+      (clara.unsafe:free-memory memory pages))))
 
-;; The system that MANIFEST describes, taken from VOLUME: its directory is
-;; made on the volume that the machine was started from, its files are
-;; copied there, each held against the manifest, the manifest goes last,
-;; which is what says that the system is whole, and then /clara/next says
-;; that it is to be tried. Until that last file is written the machine
-;; starts as it did before, whatever became of the rest. Its name.
-(defun take (volume manifest)
+;; The system that MANIFEST describes, taken by READ, which gives a file of
+;; it by its name, from another volume or from another machine: its
+;; directory is made on the volume that the machine was started from, its
+;; files are copied there, each held against the manifest, the manifest
+;; goes last, which is what says that the system is whole, and then
+;; /clara/next says that it is to be tried. Until that last file is
+;; written the machine starts as it did before, whatever became of the
+;; rest. Its name.
+(defun take (read manifest)
   (let* ((name (car manifest)) (files (cdr manifest)) (directory (directory-of name)) (needed 65536))
     (unless (find-if (lambda (file) (string-equal (first file) (kernel-name))) files)
       (error "the system ~A has no kernel for this machine, which would be ~A" name (kernel-name)))
@@ -1100,9 +1116,8 @@
           (error "the disk has ~D KiB free, and the system ~A takes ~D" (floor free 1024) name (floor needed 1024))))
       (clara.fat:make-directory directory))
     (dolist (file files)
-      (take-file volume directory file))
-    (multiple-value-bind (memory size pages)
-        (on-volume (volume) (clara.fat:read-file (concatenate 'string directory "manifest")))
+      (take-file read directory file))
+    (multiple-value-bind (memory size pages) (funcall read "manifest")
       (unwind-protect
            (on-volume (*boot-volume*)
              (clara.fat:write-file (concatenate 'string directory "manifest") memory size))
@@ -1110,6 +1125,107 @@
     (on-volume (*boot-volume*)
       (write-text "/clara/next" (format nil "try ~A~%" name)))
     name))
+
+;; How the files of a system are read that another volume holds.
+(defun from-volume (volume name)
+  (lambda (file)
+    (on-volume (volume) (clara.fat:read-file (concatenate 'string (directory-of name) file)))))
+
+;;; A system from another machine
+
+;; The numbers of a system's version, as (0 0 28) of "0.0.28-41d0c97b", or
+;; NIL for a name that does not begin with such numbers.
+(defun version-of (name)
+  (let ((numbers nil) (number nil))
+    (dotimes (i (length name))
+      (let* ((character (char name i)) (code (char-code character)))
+        (cond ((<= 48 code 57)
+               (setq number (+ (* 10 (or number 0)) (- code 48))))
+              ((and number (or (char= character #\.) (char= character #\-)))
+               (setq numbers (cons number numbers)
+                     number nil)
+               (when (char= character #\-)
+                 (return)))
+              (t
+               (setq numbers nil
+                     number nil)
+               (return)))))
+    (reverse (if number (cons number numbers) numbers))))
+
+;; Is the system of one name a later version than that of another? Number
+;; by number; two builds of one version are neither newer than the other.
+(defun newer-p (name than)
+  (let ((new (version-of name)) (old (version-of than)))
+    (and new old
+         (loop
+           (cond ((and (null new) (null old)) (return nil))
+                 ((null new) (return nil))
+                 ((null old) (return t))
+                 ((> (car new) (car old)) (return t))
+                 ((< (car new) (car old)) (return nil)))
+           (setq new (cdr new)
+                 old (cdr old))))))
+
+;; The address of something that is published at BASE.
+(defun at-address (base &rest parts)
+  (apply #'concatenate 'string base
+         (if (and (> (length base) 0) (char= (char base (1- (length base))) #\/)) "" "/")
+         parts))
+
+;; Where ClaraOS is published, when nobody says: what the system knows of.
+(defun releases (from)
+  (or from *releases*
+      (error "this system knows of no place where ClaraOS is published: CLARA.SYSTEM:*RELEASES* names none")))
+
+;; The name of the newest system that is published at an address, which is
+;; what the file "latest" there says. That file is not signed: whoever
+;; changes it can name another release, and no more than that, since a
+;; release is held against its signature, and is taken unasked only when
+;; it is newer than the system that runs.
+(defun newest (&optional from)
+  (let* ((base (releases from))
+         (name (trimmed (clara.net:fetch-text (at-address base "latest") :limit 4096))))
+    (unless (and (plain-name-p name) (version-of name) (<= (length name) 39))
+      (error "~A names no system: what it says is ~S" (at-address base "latest") (brief name)))
+    name))
+
+;; The newest system that is published at an address, taken: its manifest
+;; is fetched, and held against its signature with the key that this system
+;; has; then its files, each held against the manifest. An error when it
+;; is the system that runs, and when it is no newer, unless ANY says that
+;; it is wanted whatever its version. Its name.
+(defun take-release (base any)
+  (let ((name (newest base)))
+    (when (string= name (system))
+      (error "the newest ClaraOS at ~A is ~A, which is the system that runs" base name))
+    (unless (or any (newer-p name (system)))
+      (error "the newest ClaraOS at ~A is ~A, which is no newer than this one, ~A: :ANY T takes it all the same"
+             base name (system)))
+    (unless *release-key*
+      (error "this system has no key to hold a release against: CLARA.SYSTEM:*RELEASE-KEY* is NIL"))
+    (let ((signature (trimmed (clara.net:fetch-text (at-address base name "/manifest.sig") :limit 4096)))
+          (kept nil))
+      (multiple-value-bind (memory size pages) (clara.net:fetch (at-address base name "/manifest") :limit 1048576)
+        (unwind-protect
+             (let ((manifest (progn
+                               (unless (clara.unsafe:ed25519 memory size signature *release-key*)
+                                 (error "the manifest of ~A at ~A is not signed with the key that this system has: nothing of it is taken"
+                                        name base))
+                               (read-manifest (clara.unsafe:memory-string memory size)))))
+               (unless (and manifest (string= (car manifest) name))
+                 (error "the manifest of ~A at ~A is that of another system, or of none" name base))
+               (say "system: ~A is published at ~A, and signed with the key that this system has: its files are fetched"
+                    name base)
+               (take (lambda (file)
+                       (if (string= file "manifest")
+                           ;; the very bytes that the signature is of, and once
+                           (progn
+                             (setq kept t)
+                             (values memory size pages))
+                           (clara.net:fetch (at-address base name "/" file))))
+                     manifest))
+          (unless kept
+            (clara.unsafe:free-memory memory pages)))))))
 
 ;; The first volume, other than the one that the machine was started from,
 ;; that holds another system: the volume and what the system's manifest
@@ -1122,28 +1238,40 @@
           (when manifest
             (setq found (cons volume manifest))))))))
 
-;; A newer ClaraOS, or any other, takes the place of this one: the system
-;; that another disk of the machine holds, or the volume FROM, is taken,
-;; and the machine is started again to try it, unless START-AGAIN is NIL.
-;; The system that was there stays until the new one has come to its
-;; prompt. The name of the system that was taken.
-(defun upgrade (&key from (start-again t))
+;; A newer ClaraOS, or any other, takes the place of this one. FROM says
+;; where it is taken from: a volume, for the system that another disk of
+;; the machine holds; the address of a place where ClaraOS is published,
+;; as "http://claraos.org/releases/"; or nothing, and then it is the first
+;; other disk that holds a system, and without one the place that this
+;; system knows of. From a disk any system is taken that is not the one
+;; that runs. From another machine it is the newest one that is published
+;; there, when it is signed with the key that this system has, and when it
+;; is newer than this system or ANY is true. The machine is started again
+;; to try it, unless START-AGAIN is NIL. The system that was there stays
+;; until the new one has come to its prompt. The name of the system that
+;; was taken.
+(defun upgrade (&key from (start-again t) any)
   (unless *boot-volume*
     (error "the machine was not started from a disk that is known here, so there is nowhere to put a system"))
-  (let ((source (if from
-                    (let ((manifest (system-on from)))
-                      (and manifest (cons from manifest)))
-                    (find-source))))
-    (unless source
-      (error (if from
-                 "that volume holds no ClaraOS other than this one, ~A"
-                 "no other disk of this machine holds a ClaraOS other than this one, ~A")
-             (system)))
-    (let ((name (take (car source) (cdr source))))
-      (say "system: ~A is on the disk, and is tried at the next start" name)
-      (when start-again
-        (leave :again t nil))
-      name)))
+  (let* ((source (cond ((stringp from) nil)
+                       (from (let ((manifest (system-on from)))
+                               (and manifest (cons from manifest))))
+                       (t (find-source))))
+         (name (cond (source
+                      (take (from-volume (car source) (car (cdr source))) (cdr source)))
+                     ((stringp from)
+                      (take-release from any))
+                     ((and (null from) *releases*)
+                      (take-release *releases* any))
+                     (t
+                      (error (if from
+                                 "that volume holds no ClaraOS other than this one, ~A"
+                                 "no other disk of this machine holds a ClaraOS other than this one, ~A")
+                             (system))))))
+    (say "system: ~A is on the disk, and is tried at the next start" name)
+    (when start-again
+      (leave :again t nil))
+    name))
 
 ;; A copy of a file on the same volume.
 (defun copy-file (from to)
@@ -1222,7 +1350,7 @@
       (catch-up))
     (let ((source (and (not (state :trial)) (at-once-source))))
       (when source
-        (take (car source) (cdr source))
+        (take (from-volume (car source) (car (cdr source))) (cdr source))
         (format t "system: ~A is taken from another disk, and the machine starts again to try it~%"
                 (car (cdr source)))
         (leave :again nil t)

@@ -78,6 +78,7 @@ td:first-child { white-space: nowrap; }
     <li><a href="#files">Files</a></li>
     <li><a href="#image">Saving the world</a></li>
     <li><a href="#home">What you define, kept as text</a></li>
+    <li><a href="#network">The network</a></li>
     <li><a href="#upgrade">A newer ClaraOS</a></li>
     <li><a href="#threads">Threads</a></li>
     <li><a href="#drawing">Drawing</a></li>
@@ -117,6 +118,7 @@ make run-x86_64    <span class="note"># emulated: the firmware takes a few secon
       <tr><td><kbd>Ctrl-A</kbd> <kbd>C</kbd></td><td>in the terminal: QEMU's own monitor, and back</td></tr>
       <tr><td><code>MEM=1G make run-aarch64</code></td><td>a machine with that much memory, where it has 512 MiB otherwise</td></tr>
       <tr><td><code>WORK=~/clara-work.img make run-aarch64</code></td><td>a machine with a second disk, <a href="#work">one of your own</a></td></tr>
+      <tr><td><code>NET= make run-aarch64</code></td><td>a machine without a <a href="#network">network card</a>, where it has one otherwise</td></tr>
     </table>
     <p>The machine starts from a disk image, <code>build/disk-aarch64.img</code> or <code>build/disk-x86_64.img</code>, which is made of the files in <code>build/esp</code> the first time and kept from then on. Files that you write are on it the next time, and so is a <a href="#image">world that you saved</a>. A newer build does not make the disk again: <code>make run-aarch64</code> hands the machine the build as a second disk, the system that is running takes it and starts the machine again, and the newer system comes up with your files where they were. <a href="#upgrade">A newer ClaraOS</a> says what happens there.</p>
     <table>
@@ -143,8 +145,9 @@ make run-x86_64    <span class="note"># emulated: the firmware takes a few secon
       <tr><td>A place to type</td><td>A serial port, a virtio keyboard, or both.</td></tr>
       <tr><td>A screen</td><td>The one the firmware sets up, if there is one. Without it everything is on the serial port.</td></tr>
       <tr><td>A pointer</td><td>A virtio mouse or tablet, for the <a href="#windows">window manager</a>. Nothing else has a use for one.</td></tr>
+      <tr><td>A network card</td><td>A virtio network card, for <a href="#network">fetching files</a> and <a href="#upgrade-network">a newer ClaraOS</a>. A machine without one starts and works all the same.</td></tr>
     </table>
-    <p>It has no use yet for a network, for sound, for USB or for a clock.</p>
+    <p>It has no use yet for sound, for USB or for a clock.</p>
 
     <h3 id="report">What it says as it starts</h3>
     <p>The kernel reports what it finds and tests each part of itself before it uses it. On AArch64 under QEMU the report begins and ends like this:</p>
@@ -162,11 +165,12 @@ pci: 7 devices, by the configuration space at #x4010000000
 input: 00:03.0 is a keyboard, QEMU Virtio Keyboard
 disk: 00:02.0 has 72081 sectors of 512 bytes, 35 MiB
 files: a FAT32 volume of 33 MiB on the disk 00:02.0, from its sector 2048 on
+net: 00:05.0 is a network card, 52:54:00:12:34:56 on the wire
 draw: a screen of 800 by 600 pixels
 system: this is ClaraOS {{version}}-41d0c97b
 clara: reading the serial port and the keyboard: a form is evaluated, Ctrl-C stops it, Ctrl-D ends
 &gt; </code></pre>
-    <p>The lines that begin with <code>pci:</code>, <code>input:</code>, <code>disk:</code>, <code>files:</code> and <code>draw:</code> say what the machine has: its devices, the keyboards and pointers among them, its disks, the volume that names of files are looked up on, and the screen that <a href="#drawing">pictures</a> are shown on. The line <code>system:</code> says which build of ClaraOS this is, its version and eight digits that are different for every build, and more lines follow it when <a href="#upgrade">a newer system</a> was taken. Lines that begin with <code>home:</code> say what was loaded of <a href="#home">your own text</a>, and lines that begin with <code>world:</code> what a world that was made again has of <a href="#across">the one before it</a>. A line that begins with <code>panic:</code> or <code>exception:</code> means the kernel has stopped. <a href="#trouble">When something goes wrong</a> has more about those.</p>
+    <p>The lines that begin with <code>pci:</code>, <code>input:</code>, <code>disk:</code>, <code>files:</code>, <code>net:</code> and <code>draw:</code> say what the machine has: its devices, the keyboards and pointers among them, its disks, the volume that names of files are looked up on, its network card, and the screen that <a href="#drawing">pictures</a> are shown on. The line <code>system:</code> says which build of ClaraOS this is, its version and eight digits that are different for every build, and more lines follow it when <a href="#upgrade">a newer system</a> was taken. Lines that begin with <code>home:</code> say what was loaded of <a href="#home">your own text</a>, and lines that begin with <code>world:</code> what a world that was made again has of <a href="#across">the one before it</a>. A line that begins with <code>panic:</code> or <code>exception:</code> means the kernel has stopped. <a href="#trouble">When something goes wrong</a> has more about those.</p>
 
     <h3 id="stop">Stopping it</h3>
     <p>The machine is shut down by asking it to:</p>
@@ -457,7 +461,7 @@ NIL</pre>
 &gt; (clara.system:system-file "boot.lisp")
 "/clara/{{version}}-8f3a1c2e/boot.lisp"</code></pre>
 <pre class="session">&gt; (clara.fat:names (clara.system:system-file ""))
-("arm64.lisp" "boot.lisp" "BOOTAA64.EFI" "BOOTX64.EFI" "compiler.lisp" "console.lisp" "disk.lisp" "draw.lisp" "editor.lisp" "fat.lisp" "files.lisp" "font.lisp" "input.lisp" "listener.lisp" "manifest" "native.lisp" "pci.lisp" "self-test.lisp" "system.lisp" "terminal.lisp" "virtio.lisp" "windows.lisp" "x86-64.lisp")</pre>
+("arm64.lisp" "boot.lisp" "BOOTAA64.EFI" "BOOTX64.EFI" "compiler.lisp" "console.lisp" "disk.lisp" "draw.lisp" "editor.lisp" "fat.lisp" "files.lisp" "font.lisp" "input.lisp" "listener.lisp" "manifest" "native.lisp" "net.lisp" "pci.lisp" "self-test.lisp" "system.lisp" "terminal.lisp" "virtio.lisp" "windows.lisp" "x86-64.lisp")</pre>
     <p>Those are the system's Lisp files: the language's part that is written in Lisp, the compiler, the console, the drivers, the file system, the window manager and what sees to <a href="#stop">the machine as a whole</a>, and two that are not loaded until they are wanted, the <a href="#applications">applications</a> <code>editor.lisp</code> and <code>files.lisp</code>. <code>native.lisp</code> is what <a href="#processor">translates for the processor</a>, with a file for each kind of processor, <code>arm64.lisp</code> and <code>x86-64.lisp</code>, of which a machine loads its own. Beside them are a second copy of the kernels and <code>manifest</code>, the list of what the system is made of, which is what <a href="#upgrade">another machine reads</a> when it takes this system from this disk. Everything outside <code>/clara</code> and <code>/EFI</code> is yours, and no system writes there but for one file in <code>/home</code>.</p>
 
     <h3 id="reading">Reading and loading</h3>
@@ -686,6 +690,40 @@ home:     there is no window manager to open a window with: (clara.windows:start
     </ul>
   </section>
 
+  <section id="network">
+    <h2>{{spleen:The network}}</h2>
+    <p>A machine with a network card can fetch a file from another machine. That is the network that ClaraOS has: it asks, and does not serve. The card is a VirtIO network card, which a machine under <code>make run-*</code> has unless it is told otherwise, and which UTM gives a machine by itself.</p>
+<pre class="session">&gt; (clara.net:station)
+"52:54:00:12:34:56"
+&gt; (clara.net:address)
+net: this machine is 10.0.2.15 on its network, 10.0.2.2 is the way out, 10.0.2.3 knows names
+"10.0.2.15"</pre>
+    <p><code>station</code> is the card's own address on the wire, which it has from the start. The machine's address on the network is another matter: it asks the network for one (DHCP) the first time that something wants the network, and says what it was told. A machine that fetches nothing sends nothing.</p>
+    <p>Under QEMU the network is one that QEMU makes up for the machine. The machine is 10.0.2.15 on it; 10.0.2.2 is the computer that QEMU runs on; and whatever that computer reaches, the machine reaches through it.</p>
+
+    <h3 id="fetch">Fetching a file</h3>
+    <p>To have something to fetch, start a web server on the computer that QEMU runs on, in a directory with a file <code>hello.txt</code> in it: <code>python3 -m http.server 8000</code>. Then, on the machine:</p>
+<pre><code>&gt; (clara.net:fetch-text "http://10.0.2.2:8000/hello.txt")
+"hello from the other side
+"
+&gt; (clara.net:resolve "claraos.org")
+"185.199.108.153"</code></pre>
+    <ul>
+      <li><code>clara.net:fetch-text</code> gives a file that is a text, as a string. An address is <code>http://</code>, the machine's name or its address, a port when it is not 80, and the file's name there.</li>
+      <li><code>clara.net:fetch</code> gives any file, as memory: three values, the address of page frames that hold it, how many bytes it is, and how many page frames those are, which are yours to give back with <code>clara.unsafe:free-memory</code>. <code>:limit</code> says how many bytes are taken at most, 16 MiB when nothing is said, and 1 MiB for a text.</li>
+      <li><code>clara.net:resolve</code> gives the address of a name, as the network's name server has it. <code>clara.net:*name-server*</code> names another one to ask, by its address, and <code>clara.net:*name-port*</code> the port to ask it at.</li>
+      <li>There is no HTTPS. What is fetched comes as the other side sends it, and anybody on the way can read it and change it. An address that begins with <code>https://</code> is refused with those words, and so is a web server that sends every request on to such an address, as many do.</li>
+      <li>The other side has ten seconds to say something, <code>clara.net:*patience*</code> in milliseconds, and what has no answer is asked again every second, <code>clara.net:*again*</code>. <code>clara.net:up</code> brings the machine onto the network without fetching anything.</li>
+    </ul>
+    <table class="wrap">
+      <tr><td><code>this machine has no network card that has a driver here</code></td><td>The machine has none, or one that is not VirtIO. Under QEMU, <code>-netdev user,id=net -device virtio-net-pci,netdev=net</code>, which <code>make run-*</code> gives it.</td></tr>
+      <tr><td><code>no DHCP server says which address this machine has on its network</code></td><td>Nothing on the network hands out addresses, or the card is connected to nothing.</td></tr>
+      <tr><td><code>... takes no connection at its port 8000</code></td><td>Nothing listens there: the web server is not running, or runs at another port.</td></tr>
+      <tr><td><code>... answers 404 to the request for /hello.txt</code></td><td>The web server is there and has no such file.</td></tr>
+      <tr><td><code>... is to be had by HTTPS, which this system does not speak</code></td><td>See above.</td></tr>
+    </table>
+  </section>
+
   <section id="upgrade">
     <h2>{{spleen:A newer ClaraOS}}</h2>
     <p>A system is one build of ClaraOS: its two kernels and its Lisp files. On a disk it is a directory, <code>/clara</code> and then its name, with a list in it of what it is made of. A newer ClaraOS is another such directory, and the system that is running puts it on its own disk, beside itself: that is an upgrade. The files that you wrote stay where they are, and nothing else on the disk is touched.</p>
@@ -707,7 +745,38 @@ clara: the world is saved
 clara: starting the machine again</code></pre></li>
       <li>When the newer system has come to its prompt, the second drive has done its work, and can be taken out again the next time the machine is stopped.</li>
     </ol>
-    <p><code>(clara.system:upgrade :start-again nil)</code> takes the system and leaves the machine running; the newer system is tried whenever the machine is next started. <code>:from</code> names the volume to take it from, one of <code>(clara.fat:volumes)</code>, where the first disk that holds another system is taken otherwise. It need not be a newer one: any ClaraOS that is not the one that runs is taken, an older one as well.</p>
+    <p><code>(clara.system:upgrade :start-again nil)</code> takes the system and leaves the machine running; the newer system is tried whenever the machine is next started. <code>:from</code> names the volume to take it from, one of <code>(clara.fat:volumes)</code>, where the first disk that holds another system is taken otherwise. From a disk it need not be a newer one: any ClaraOS that is not the one that runs is taken, an older one as well.</p>
+
+    <h3 id="upgrade-network">Over the network</h3>
+    <p>A newer ClaraOS can also be fetched, from a place where it is published: a directory on a web server that holds a system as a disk does, and beside the list of its files a signature of that list.</p>
+<pre><code>&gt; (clara.system:upgrade :from "http://10.0.2.2:8000/releases/")
+system: {{version}}-41d0c97b is published at http://10.0.2.2:8000/releases/, and signed with the key that this system has: its files are fetched
+system: {{version}}-41d0c97b is on the disk, and is tried at the next start
+clara: the world is saved
+clara: starting the machine again</code></pre>
+    <p>From there on it is the upgrade from a disk: the newer system is tried at the next start, and the old one is there until the new one has come to its prompt.</p>
+    <ul>
+      <li>Nothing is believed for having arrived. The <a href="#network">network</a> has no HTTPS, so anybody on the way could change what is fetched. The list of the system's files is held against its signature, with the public half of the key that the release was signed with, which the system has in <code>clara.system:*release-key*</code>; and every file is held against the list, by its length and its SHA-512. What fails either is not taken, and the machine starts as it did before.</li>
+      <li>Only a newer system is taken: one whose version is higher than that of the system that runs. <code>:any t</code> takes whatever is published there, an older one as well.</li>
+      <li><code>(clara.system:newest "http://...")</code> says which system is the newest that is published at an address, and fetches nothing else.</li>
+      <li><code>clara.system:*releases*</code> is the place that <code>(clara.system:upgrade)</code> looks at when no other disk of the machine holds a system.</li>
+      <li><strong>This version knows of no such place and has no key</strong>: both variables are <code>NIL</code>, so it takes nothing over the network until you give it both. ClaraOS is not published anywhere yet in this form.</li>
+    </ul>
+    <p>To publish a system yourself, on the computer that builds it:</p>
+<pre><code>python3 tools/release.py key my.key          <span class="note"># once: the secret half goes into my.key, the public half is printed</span>
+make
+python3 tools/release.py make build/esp/clara/{{version}}-41d0c97b releases my.key
+python3 -m http.server 8000                   <span class="note"># or any web server that hands out the directory</span></code></pre>
+    <p>and on the machine, with the 64 digits that the first line printed:</p>
+<pre><code>&gt; (setq clara.system:*release-key* "8c33f9eb730e625013b19d5ea0646d3dd45fa3a03e5977912319a1cee6529fbe")
+&gt; (clara.system:upgrade :from "http://10.0.2.2:8000/releases/")</code></pre>
+    <p>Whoever has <code>my.key</code> can publish a ClaraOS that every machine with that public half takes for the real one. It belongs to nobody but the one who publishes.</p>
+    <table class="wrap">
+      <tr><td><code>this system has no key to hold a release against</code></td><td><code>clara.system:*release-key*</code> is <code>NIL</code>.</td></tr>
+      <tr><td><code>the manifest of ... is not signed with the key that this system has</code></td><td>The release was signed with another key, or what arrived is not what was signed.</td></tr>
+      <tr><td><code>the file ... is not what the manifest of its system says it is</code></td><td>A file arrived damaged or changed. Nothing is tried; ask again.</td></tr>
+      <tr><td><code>... which is no newer than this one</code></td><td>The newest system there has the version of the one that runs, or a lower one. <code>:any t</code> takes it all the same.</td></tr>
+    </table>
 
     <h3 id="trial">What happens at the next start</h3>
     <p>The newer system is tried before it takes the old one's place. The firmware still starts the old kernel, which sees that a system is waiting, and starts that system's kernel in place of itself, once. The report of that start begins like any other and ends like this:</p>
@@ -1228,7 +1297,7 @@ error: nothing is mapped at #x0</pre>
 
     <h3>The package CLARA.SYSTEM</h3>
     <p>The machine as a whole: <a href="#stop">shutting it down and starting it again</a>, and <a href="#upgrade">taking a newer system</a>. <code>system</code> is the name of the system that runs, <code>system-file</code> the name of one of its files, and <code>boot-volume</code> the volume that the machine was started from. <code>home</code> is the directory where <a href="#home">your work is kept as text</a>, <code>home-file</code> the name of a file in it, and <code>load-home</code> loads its two files into the world. <code>report</code> says again <a href="#across">how the world was made</a> and what came into it since. <code>start</code> is called by the kernel as the machine comes up: it sees to a system that is on trial, and has a thread watch the power button from then on.</p>
-    <p class="names" data-package="CLARA.SYSTEM"><code>clara.system:shut-down</code> <code>clara.system:start-again</code> <code>clara.system:upgrade</code> <code>clara.system:system</code> <code>clara.system:system-file</code> <code>clara.system:boot-volume</code> <code>clara.system:home</code> <code>clara.system:home-file</code> <code>clara.system:load-home</code> <code>clara.system:*patience*</code> <code>clara.system:report</code> <code>clara.system:start</code></p>
+    <p class="names" data-package="CLARA.SYSTEM"><code>clara.system:shut-down</code> <code>clara.system:start-again</code> <code>clara.system:upgrade</code> <code>clara.system:system</code> <code>clara.system:system-file</code> <code>clara.system:boot-volume</code> <code>clara.system:home</code> <code>clara.system:home-file</code> <code>clara.system:load-home</code> <code>clara.system:*patience*</code> <code>clara.system:report</code> <code>clara.system:newest</code> <code>clara.system:*releases*</code> <code>clara.system:*release-key*</code> <code>clara.system:start</code></p>
 
     <h3>The package CLARA.COMPILER</h3>
     <p><a href="#compiler">The compiler</a> is a file of Lisp as well. What it is used by are Common Lisp's own names, <code>eval</code>, <code>load</code>, <code>compile</code> and <code>disassemble</code>; the one name of its own is the function that <code>eval</code> calls.</p>
@@ -1252,11 +1321,12 @@ error: nothing is mapped at #x0</pre>
     <p class="names" data-package="CLARA.INPUT"><code>clara.input:start</code> <code>clara.input:devices</code> <code>clara.input:pointer</code> <code>clara.input:pointer-changed</code> <code>clara.input:set-pointer-limits</code> <code>clara.input:key-character</code> <code>clara.input:send-keys-to</code> <code>clara.input:send-pointer-to</code> <code>clara.input:*repeat-delay*</code> <code>clara.input:*repeat-interval*</code> <code>clara.input:+up+</code> <code>clara.input:+down+</code> <code>clara.input:+left+</code> <code>clara.input:+right+</code> <code>clara.input:+home+</code> <code>clara.input:+end+</code> <code>clara.input:+page-up+</code> <code>clara.input:+page-down+</code> <code>clara.input:+insert+</code> <code>clara.input:+f1+</code> <code>clara.input:+alt+</code></p>
     <p class="names" data-package="CLARA.DISK"><code>clara.disk:start</code> <code>clara.disk:disks</code> <code>clara.disk:disk-p</code> <code>clara.disk:disk-name</code> <code>clara.disk:disk-sectors</code> <code>clara.disk:disk-read-only</code> <code>clara.disk:read-sectors</code> <code>clara.disk:write-sectors</code> <code>clara.disk:flush</code> <code>clara.disk:*patience*</code></p>
     <p class="names" data-package="CLARA.FAT"><code>clara.fat:start</code> <code>clara.fat:volumes</code> <code>clara.fat:*volume*</code> <code>clara.fat:*image-volume*</code> <code>clara.fat:volume-p</code> <code>clara.fat:volume-disk</code> <code>clara.fat:volume-kind</code> <code>clara.fat:volume-first</code> <code>clara.fat:entries</code> <code>clara.fat:entry-p</code> <code>clara.fat:entry-name</code> <code>clara.fat:entry-short</code> <code>clara.fat:entry-directory-p</code> <code>clara.fat:entry-size</code> <code>clara.fat:names</code> <code>clara.fat:file-text</code> <code>clara.fat:read-file</code> <code>clara.fat:write-file</code> <code>clara.fat:remove-file</code> <code>clara.fat:make-directory</code> <code>clara.fat:remove-directory</code> <code>clara.fat:free-bytes</code></p>
+    <p class="names" data-package="CLARA.NET"><code>clara.net:start</code> <code>clara.net:up</code> <code>clara.net:address</code> <code>clara.net:station</code> <code>clara.net:resolve</code> <code>clara.net:fetch</code> <code>clara.net:fetch-text</code> <code>clara.net:*patience*</code> <code>clara.net:*again*</code> <code>clara.net:*name-server*</code> <code>clara.net:*name-port*</code></p>
     <p class="names" data-package="CLARA.LISTENER"><code>clara.listener:run</code> <code>clara.listener:answer</code> <code>clara.listener:read-and-answer</code> <code>clara.listener:answer-lines</code> <code>clara.listener:*record*</code></p>
 
     <h3>The package CLARA.UNSAFE</h3>
     <p>For drivers. What can be read with one of the first seven can be written with <code>setf</code>. The eight after <code>give-screen</code> are the compiler's and the translator's. The first two are a function made of code, and the code of a function: code is looked at before it is made a function, and refused when it points where it should not; that it uses its stack as it says is taken on trust, which is why the two are here. The other six are for <a href="#processor">the processor's own instructions</a>: where the kernel keeps what they read, the instructions of a function handed to the kernel, how many bytes of them a function has, whether the processor runs a function, what the compiler made of every function that the processor does not run yet, and every function that has such instructions entered by them from then on. Those instructions are run as they are given, and nothing looks at them first. <code>power-off</code> and <code>reset</code> turn the machine off and start it again there and then, with nothing saved and nobody asked, which is what <a href="#stop">shutting down</a> sees to before it calls them; <code>power-button</code> says whether the machine's power button has been pressed since it was last asked. <code>sha-512</code> is the sum of some bytes of memory, by which a system's files are known to be what its list says, and <code>start-state</code> is what the kernel knows of this start and of the ones before it.</p>
-    <p class="names" data-package="CLARA.UNSAFE"><code>clara.unsafe:memory-8</code> <code>clara.unsafe:memory-16</code> <code>clara.unsafe:memory-32</code> <code>clara.unsafe:memory-64</code> <code>clara.unsafe:port-8</code> <code>clara.unsafe:port-16</code> <code>clara.unsafe:port-32</code> <code>clara.unsafe:fill-memory-32</code> <code>clara.unsafe:copy-memory</code> <code>clara.unsafe:expand-bits-32</code> <code>clara.unsafe:fill-rectangle-32</code> <code>clara.unsafe:copy-rectangle-32</code> <code>clara.unsafe:allocate-memory</code> <code>clara.unsafe:free-memory</code> <code>clara.unsafe:map-memory</code> <code>clara.unsafe:memory-string</code> <code>clara.unsafe:string-bytes</code> <code>clara.unsafe:string-memory</code> <code>clara.unsafe:heap-image</code> <code>clara.unsafe:interrupt-event</code> <code>clara.unsafe:message-interrupt</code> <code>clara.unsafe:pci-configuration</code> <code>clara.unsafe:framebuffer</code> <code>clara.unsafe:serial-device</code> <code>clara.unsafe:serial-byte</code> <code>clara.unsafe:serial-break</code> <code>clara.unsafe:keyboard-break</code> <code>clara.unsafe:power-off</code> <code>clara.unsafe:reset</code> <code>clara.unsafe:power-button</code> <code>clara.unsafe:sha-512</code> <code>clara.unsafe:start-state</code> <code>clara.unsafe:take-screen</code> <code>clara.unsafe:give-screen</code> <code>clara.unsafe:make-compiled-function</code> <code>clara.unsafe:compiled-function-code</code> <code>clara.unsafe:native-layout</code> <code>clara.unsafe:install-native-code</code> <code>clara.unsafe:native-code-bytes</code> <code>clara.unsafe:native-function</code> <code>clara.unsafe:untranslated-code</code> <code>clara.unsafe:native-functions</code></p>
+    <p class="names" data-package="CLARA.UNSAFE"><code>clara.unsafe:memory-8</code> <code>clara.unsafe:memory-16</code> <code>clara.unsafe:memory-32</code> <code>clara.unsafe:memory-64</code> <code>clara.unsafe:port-8</code> <code>clara.unsafe:port-16</code> <code>clara.unsafe:port-32</code> <code>clara.unsafe:fill-memory-32</code> <code>clara.unsafe:copy-memory</code> <code>clara.unsafe:expand-bits-32</code> <code>clara.unsafe:fill-rectangle-32</code> <code>clara.unsafe:copy-rectangle-32</code> <code>clara.unsafe:allocate-memory</code> <code>clara.unsafe:free-memory</code> <code>clara.unsafe:map-memory</code> <code>clara.unsafe:memory-string</code> <code>clara.unsafe:string-bytes</code> <code>clara.unsafe:string-memory</code> <code>clara.unsafe:heap-image</code> <code>clara.unsafe:interrupt-event</code> <code>clara.unsafe:message-interrupt</code> <code>clara.unsafe:pci-configuration</code> <code>clara.unsafe:framebuffer</code> <code>clara.unsafe:serial-device</code> <code>clara.unsafe:serial-byte</code> <code>clara.unsafe:serial-break</code> <code>clara.unsafe:keyboard-break</code> <code>clara.unsafe:power-off</code> <code>clara.unsafe:reset</code> <code>clara.unsafe:power-button</code> <code>clara.unsafe:sha-512</code> <code>clara.unsafe:ed25519</code> <code>clara.unsafe:internet-sum</code> <code>clara.unsafe:start-state</code> <code>clara.unsafe:take-screen</code> <code>clara.unsafe:give-screen</code> <code>clara.unsafe:make-compiled-function</code> <code>clara.unsafe:compiled-function-code</code> <code>clara.unsafe:native-layout</code> <code>clara.unsafe:install-native-code</code> <code>clara.unsafe:native-code-bytes</code> <code>clara.unsafe:native-function</code> <code>clara.unsafe:untranslated-code</code> <code>clara.unsafe:native-functions</code></p>
   </section>
 </main>
 

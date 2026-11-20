@@ -2106,7 +2106,7 @@ static void new_world(void)
 {
     static const char *const world[] = { "compiler.lisp", "native.lisp",   "font.lisp",    "console.lisp",
                                          "draw.lisp",     "pci.lisp",      "virtio.lisp",  "input.lisp",
-                                         "disk.lisp",     "fat.lisp",      "listener.lisp", "windows.lisp",
+                                         "disk.lisp",     "fat.lisp",      "net.lisp",      "listener.lisp", "windows.lisp",
                                          "terminal.lisp", "system.lisp" };
     uint64_t before[LISP_TYPES], after[LISP_TYPES], ticks, collections;
     char processor[16] = { 0 };
@@ -2270,6 +2270,11 @@ static void lisp_main(void)
      * there are the files that came with the kernel. */
     if (!lisp_evaluate(own_form("(progn (clara.pci:start) (clara.input:start) (clara.disk:start) (clara.fat:start))")))
         panic("lisp: the drivers did not start");
+    /* The network card, when the machine has one: it is found and opened,
+     * and asks nothing of the network until something wants it. */
+    if (!lisp_evaluate(own_form("(let ((net (find-package \"CLARA.NET\")))"
+                                "  (if net (funcall (intern \"START\" net))))")))
+        panic("lisp: the network did not start");
     /* What draws finds the screen. A world that was saved before there was
      * anything to draw with has no such package, and starts without it. */
     if (!lisp_evaluate(own_form("(let ((draw (find-package \"CLARA.DRAW\")))"

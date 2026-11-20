@@ -35,7 +35,7 @@
            "INTERRUPT-EVENT" "FRAMEBUFFER" "SERIAL-DEVICE" "SERIAL-BYTE" "SERIAL-BREAK"
            "TAKE-SCREEN" "GIVE-SCREEN"
            "MAP-MEMORY" "PCI-CONFIGURATION" "MESSAGE-INTERRUPT" "KEYBOARD-BREAK" "MEMORY-STRING"
-           "POWER-OFF" "RESET" "POWER-BUTTON" "SHA-512" "START-STATE"
+           "POWER-OFF" "RESET" "POWER-BUTTON" "SHA-512" "ED25519" "INTERNET-SUM" "START-STATE"
            "STRING-BYTES" "STRING-MEMORY" "HEAP-IMAGE"
            "MAKE-COMPILED-FUNCTION" "COMPILED-FUNCTION-CODE"
            "NATIVE-LAYOUT" "INSTALL-NATIVE-CODE" "NATIVE-CODE-BYTES" "NATIVE-FUNCTION"
@@ -48,7 +48,8 @@
            "TYPE-BYTES" "RAISE-INTERRUPT" "SERIAL-BREAK-P"
            "SET-PCI-CONFIGURATION" "SEND-MESSAGE" "MESSAGE-INTERRUPTS" "KEYBOARD-BREAKS"
            "ALLOCATED-PAGES" "PROVIDED-FILES" "SET-HEAP-IMAGE" "PROVIDED-COMPILER"
-           "POWER" "PRESS-POWER-BUTTON" "SET-START-STATE" "SHA-512-OF"))
+           "POWER" "PRESS-POWER-BUTTON" "SET-START-STATE" "SHA-512-OF"
+           "ED25519-PUBLIC" "ED25519-SIGN" "ED25519-VERIFY"))
 
 ;;; CLARA: threads
 
@@ -426,6 +427,100 @@
 (defun provided-files ()
   clara::*files*)
 
+;; Ed25519 (RFC 8032): a signature, made and checked, with big numbers. A
+;; point of the curve is its x and y, bytes are sequences of numbers, and
+;; a key's secret half is thirty-two bytes of anything. The kernel checks
+;; signatures in C, and nothing in ClaraOS makes one: these are for the
+;; tests, which sign what they then hold against the check.
+(defvar *ed-p* (- (expt 2 255) 19))
+(defvar *ed-l* (+ (expt 2 252) 27742317777372353535851937790883648493))
+
+(defun ed-power (x n)
+  (let ((result 1))
+    (loop while (plusp n)
+          do (when (oddp n)
+               (setq result (mod (* result x) *ed-p*)))
+             (setq x (mod (* x x) *ed-p*)
+                   n (ash n -1)))
+    result))
+
+(defun ed-inverse (x)
+  (ed-power x (- *ed-p* 2)))
+
+(defvar *ed-d* (mod (* -121665 (ed-inverse 121666)) *ed-p*))
+
+(defun ed-add (a b)
+  (if (null a)
+      b
+      (let* ((x1 (car a)) (y1 (cdr a)) (x2 (car b)) (y2 (cdr b))
+             (k (mod (* *ed-d* x1 x2 y1 y2) *ed-p*)))
+        (cons (mod (* (+ (* x1 y2) (* x2 y1)) (ed-inverse (+ 1 k))) *ed-p*)
+              (mod (* (+ (* y1 y2) (* x1 x2)) (ed-inverse (- 1 k))) *ed-p*)))))
+
+(defun ed-times (n point)
+  (let ((sum nil))
+    (loop while (plusp n)
+          do (when (oddp n)
+               (setq sum (ed-add sum point)))
+             (setq point (ed-add point point)
+                   n (ash n -1)))
+    (or sum (cons 0 1))))
+
+(defun ed-number (octets)
+  (let ((n 0))
+    (loop for i from (1- (length octets)) downto 0
+          do (setq n (+ (* 256 n) (elt octets i))))
+    n))
+
+(defun ed-octets (n count)
+  (loop for i below count collect (ldb (byte 8 (* 8 i)) n)))
+
+;; The point that thirty-two bytes stand for, or NIL.
+(defun ed-point (octets)
+  (let* ((n (ed-number octets)) (y (ldb (byte 255 0) n)) (odd (ldb (byte 1 255) n))
+         (x2 (mod (* (- (* y y) 1) (ed-inverse (+ 1 (* *ed-d* y y)))) *ed-p*))
+         (x (ed-power x2 (/ (+ *ed-p* 3) 8))))
+    (unless (zerop (mod (- (* x x) x2) *ed-p*))
+      (setq x (mod (* x (ed-power 2 (/ (- *ed-p* 1) 4))) *ed-p*)))
+    (and (< y *ed-p*) (zerop (mod (- (* x x) x2) *ed-p*))
+         (cons (if (= (logand x 1) odd) x (- *ed-p* x)) y))))
+
+(defun ed-bytes (point)
+  (ed-octets (logior (cdr point) (ash (logand (car point) 1) 255)) 32))
+
+(defvar *ed-base* (ed-point (ed-octets (mod (* 4 (ed-inverse 5)) *ed-p*) 32)))
+
+;; The sixty-four bytes of a SHA-512, of several sequences of bytes one after the other.
+(defun ed-sum (&rest parts)
+  (let ((digits (sha-512-of (apply #'concatenate 'vector parts))))
+    (loop for i from 0 below 128 by 2 collect (parse-integer digits :start i :end (+ i 2) :radix 16))))
+
+(defun ed-secret (secret)
+  (let* ((sum (ed-sum secret)) (a (ed-number (subseq sum 0 32))))
+    (values (logior (logand a (- (ash 1 254) 8)) (ash 1 254)) (subseq sum 32))))
+
+;; The public half of a key, thirty-two bytes, from its secret half.
+(defun ed25519-public (secret)
+  (ed-bytes (ed-times (ed-secret secret) *ed-base*)))
+
+;; The signature that a key gives a message: sixty-four bytes.
+(defun ed25519-sign (secret message)
+  (multiple-value-bind (a prefix) (ed-secret secret)
+    (let* ((public (ed-bytes (ed-times a *ed-base*)))
+           (r (mod (ed-number (ed-sum prefix message)) *ed-l*))
+           (first (ed-bytes (ed-times r *ed-base*)))
+           (h (mod (ed-number (ed-sum first public message)) *ed-l*)))
+      (append first (ed-octets (mod (+ r (* h a)) *ed-l*) 32)))))
+
+;; Is SIGNATURE the signature that the key whose public half is PUBLIC gives the message?
+(defun ed25519-verify (public message signature)
+  (and (= (length signature) 64) (= (length public) 32)
+       (let ((r (ed-point (subseq signature 0 32))) (a (ed-point public)) (s (ed-number (subseq signature 32))))
+         (and r a (< s *ed-l*)
+              (equal (ed-times s *ed-base*)
+                     (ed-add r (ed-times (mod (ed-number (ed-sum (subseq signature 0 32) public message)) *ed-l*) a)))
+              t))))
+
 ;; What the heap of this machine is, to whoever saves it.
 (defun set-heap-image (bytes)
   (setq *heap-image* (coerce bytes '(vector (unsigned-byte 8)))))
@@ -665,6 +760,23 @@
 (defun sha-512 (address bytes)
   (let ((index (clara.host::memory-index address bytes)))
     (clara.host:sha-512-of (subseq clara.host::*memory* index (+ index bytes)))))
+
+;; The check of a signature that the kernel has in C (kernel/ed25519.c):
+;; here by SBCL's big numbers (CLARA.HOST:ED25519-VERIFY).
+(defun ed25519 (address bytes signature key)
+  (flet ((octets (text count)
+           (and (stringp text) (= (length text) (* 2 count)) (every (lambda (c) (digit-char-p c 16)) text)
+                (loop for i from 0 below (length text) by 2 collect (parse-integer text :start i :end (+ i 2) :radix 16)))))
+    (let ((index (clara.host::memory-index address bytes)) (signature (octets signature 64)) (key (octets key 32)))
+      (and signature key
+           (clara.host:ed25519-verify key (subseq clara.host::*memory* index (+ index bytes)) signature)))))
+
+;; The bytes of memory added up two at a time, the first of each two being
+;; the higher half.
+(defun internet-sum (address bytes)
+  (let ((index (clara.host::memory-index address bytes)) (total 0))
+    (dotimes (i bytes total)
+      (setq total (+ total (ash (aref clara.host::*memory* (+ index i)) (if (evenp i) 8 0)))))))
 
 (defun start-state ()
   (copy-list clara.host::*start-state*))

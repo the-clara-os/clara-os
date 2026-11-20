@@ -1723,6 +1723,8 @@ const struct lisp_primitive lisp_primitives[] = {
     { "CLARA.UNSAFE:PCI-CONFIGURATION", lisp_p_pci_configuration, 0, 0 },
     { "CLARA.UNSAFE:KEYBOARD-BREAK", lisp_p_keyboard_break, 0, 0 },
     { "CLARA.UNSAFE:SHA-512", lisp_p_sha_512, 2, 2 },
+    { "CLARA.UNSAFE:ED25519", lisp_p_ed25519, 4, 4 },
+    { "CLARA.UNSAFE:INTERNET-SUM", lisp_p_internet_sum, 2, 2 },
     { "CLARA.UNSAFE:START-STATE", lisp_p_start_state, 0, 0 },
     { "CLARA.UNSAFE:POWER-OFF", lisp_p_power_off, 0, 0 },
     { "CLARA.UNSAFE:RESET", lisp_p_reset, 0, 0 },

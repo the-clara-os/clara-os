@@ -1513,6 +1513,77 @@ architectures (kernel/vm.c).
   into it by itself, then or at a later start, until the user has put the
   files right and asks (`clara.system:load-home`).
 
+## The network, and a system fetched over it (decided in M15d, 2026-11-20)
+
+- There is a network because a newer ClaraOS should be fetched and not
+  carried, and there is as much of it as that takes (lisp/net.lisp): a
+  machine that asks and does not serve, over IPv4, with one card. The
+  driver is for virtio's network card, on lisp/virtio.lisp like the disk's;
+  above it are ARP, IPv4 without pieces, UDP for DHCP and DNS, TCP, and
+  HTTP as far as fetching a file goes.
+- A frame is put together and taken apart where the card reads and writes
+  it, in page frames, a byte at a time, since the wire has its numbers the
+  other way round from the processor. One thread takes what arrives, hands
+  it up through the protocols and answers what is answered at once.
+  Whoever waits for something is told to look, looks, and asks again every
+  second until an answer comes or patience ends: nothing waits for one
+  particular packet. The sums that the protocols make of every byte are
+  added up in C (`clara.unsafe:internet-sum`), which is a loop and nothing
+  more.
+- The machine asks which address it has when something first wants the
+  network, and not as it starts. A machine that fetches nothing sends
+  nothing, and a boot is no slower for having a card.
+- TCP is the client's half. What arrives goes into one stretch of page
+  frames that grows, each piece where it belongs: a piece that comes
+  before the one that is missing is kept for when the gap is filled, so a
+  lost piece costs the other side one piece and not everything after it.
+  Every piece is answered with how far the bytes have come without a gap,
+  which is how the other side learns what to send again. What this side
+  sends is one request of a few hundred bytes, so it has no need of the
+  rules by which a sender finds out how fast it may send.
+- There is no encryption, and what replaces it is a signature. TLS would
+  be the largest thing in the system: an exchange of keys, ciphers,
+  certificates and their chain to a root, the time of day to hold them
+  against, which the machine does not know, and arithmetic on numbers of
+  thousands of bits. What an upgrade needs is less than what TLS gives:
+  not that nobody reads a system which is published for everybody, but
+  that what arrives is what was published. So a release is signed, and
+  the road is not trusted at all.
+- A release is a system as a disk holds it, a directory with its files
+  and its manifest, on a web server, and beside the manifest a signature
+  of it (tools/release.py): Ed25519, whose check is five hundred lines of
+  C that need nothing but SHA-512, which the kernel has (kernel/ed25519.c,
+  `clara.unsafe:ed25519`). The manifest has the sum of every file, so the
+  one signature covers all of them. The system that fetches holds the
+  manifest against the signature with the public half of the key, which
+  is in the system (`clara.system:*release-key*`), and every file against
+  the manifest as it arrives, exactly as it does with a system from a
+  disk: taking a system is one function, which is given a way of reading
+  a file by its name (`take`).
+- Which release is the newest is said by a file that is not signed. That
+  is enough: whoever changes it can name another release that was really
+  published, and no more, since any release is held against its
+  signature and its manifest names its system. A system that is no newer
+  than the one that runs is not taken unless somebody asks for it by
+  saying so (`:any t`), so nobody can send a machine back to an older
+  ClaraOS by changing that file. Withholding everything is what remains,
+  and nothing protects from that.
+- A system without a key takes nothing over the network, and a system
+  that knows of no place where ClaraOS is published looks nowhere: both
+  are variables that are empty until there is a key and a place.
+- Signatures are checked here and never made. The secret half of the key
+  is with whoever publishes, in no repository and on no machine that runs
+  ClaraOS.
+- The network is tested against a network. Under SBCL the tests make one
+  up at the other end of a made-up card's wire: it answers for ARP, DHCP
+  and DNS, serves files over a TCP of its own, holds every frame that the
+  machine sends against checksums that it works out another way, and
+  loses, spoils and mixes up what it sends when a test says so. On a real
+  kernel, QEMU's own network is at the other end, and a web server and a
+  name server on the host (tools/serve.py), from which a machine fetches a
+  signed release of another system and has to come up as it. The check
+  of signatures is held against the examples of RFC 8032 at every boot.
+
 ## Shutting down (decided in M15e, 2026-11-20)
 
 - Shutting down is something the system does, and not something that is

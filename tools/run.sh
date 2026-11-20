@@ -19,6 +19,11 @@
 #        INPUT="-device virtio-keyboard-pci ..." (the keyboard and the pointers the
 #        machine gets; the default is a virtio keyboard, mouse and tablet, and
 #        INPUT= gives a machine with none of them)
+#        NET="-netdev user,id=net -device virtio-net-pci,netdev=net" (the network
+#        card the machine gets, and what is at the other end of it; the default
+#        is a virtio card on a network that QEMU makes up, on which the machine
+#        is 10.0.2.15, this computer is 10.0.2.2, and whatever this computer
+#        reaches is reached through it. NET= gives a machine with no card)
 #        WORK=~/clara-work.img (a second disk, the user's own: a raw image with a
 #        FAT volume, for files that are to be apart from the machine's disk, and
 #        to outlive it. A .dmg that macOS made is such an image too, when it is
@@ -36,6 +41,10 @@ share=${QEMU_SHARE:-/opt/homebrew/share/qemu}
 serial=${SERIAL:-mon:stdio}
 mem=${MEM:-512M}
 input=${INPUT--device virtio-keyboard-pci -device virtio-mouse-pci -device virtio-tablet-pci}
+net=${NET--netdev user,id=net -device virtio-net-pci,netdev=net}
+# Left to itself QEMU gives some machines a card of its own choosing, so no
+# card has to be said.
+[ -n "$net" ] || net="-nic none"
 mkdir -p build
 
 # A disk that the host has open as well is no disk for a machine: the two
@@ -185,7 +194,7 @@ x86_64)
     exec qemu-system-x86_64 -machine q35 -m "$mem" \
         -drive if=pflash,format=raw,readonly=on,file="$code" \
         -drive if=pflash,format=raw,file="$vars" \
-        -drive if=none,id=esp,format=raw,file="$disk" -device virtio-blk-pci,drive=esp,bootindex=0 $input \
+        -drive if=none,id=esp,format=raw,file="$disk" -device virtio-blk-pci,drive=esp,bootindex=0 $input $net \
         -serial "$serial" "$@"
     ;;
 aarch64)
@@ -201,7 +210,7 @@ aarch64)
     exec qemu-system-aarch64 -machine virt -accel "$accel" -cpu "$cpu" -m "$mem" \
         -drive if=pflash,format=raw,readonly=on,file="$code" \
         -drive if=pflash,format=raw,file="$vars" \
-        -drive if=none,id=esp,format=raw,file="$disk" -device virtio-blk-pci,drive=esp,bootindex=0 $input \
+        -drive if=none,id=esp,format=raw,file="$disk" -device virtio-blk-pci,drive=esp,bootindex=0 $input $net \
         -device ramfb -serial "$serial" "$@"
     ;;
 *)

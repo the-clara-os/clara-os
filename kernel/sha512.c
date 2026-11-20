@@ -63,31 +63,67 @@ static void block(uint64_t h[8], const uint8_t *p)
     h[0] += a, h[1] += b, h[2] += c, h[3] += d, h[4] += e, h[5] += f, h[6] += g, h[7] += last;
 }
 
-/* The sum of that many bytes. After them comes a byte of 0x80, zeroes up
- * to sixteen bytes short of a block's end, and how many bits there were,
- * in those sixteen bytes, of which only the lower eight can be anything
- * but zero here (5.1.2). */
-void sha512(const void *data, uint64_t bytes, uint8_t sum[64])
+/* A sum can be taken of bytes that come in pieces: begun, added to as
+ * often as there is more, and ended. What does not fill a block waits in
+ * the state for the piece that does. */
+void sha512_begin(struct sha512_state *state)
+{
+    memcpy(state->h, initial, sizeof state->h);
+    state->bytes = 0;
+    state->held = 0;
+}
+
+void sha512_add(struct sha512_state *state, const void *data, uint64_t bytes)
 {
     const uint8_t *p = data;
-    uint64_t h[8], left = bytes;
-    uint8_t end[256] = {0};
-    unsigned length;
 
-    memcpy(h, initial, sizeof h);
-    for (; left >= 128; left -= 128, p += 128)
-        block(h, p);
-    memcpy(end, p, left);
+    state->bytes += bytes;
+    if (state->held) {
+        uint64_t fits = sizeof state->rest - state->held;
+
+        if (fits > bytes)
+            fits = bytes;
+        memcpy(state->rest + state->held, p, fits);
+        state->held += (unsigned)fits, p += fits, bytes -= fits;
+        if (state->held < sizeof state->rest)
+            return;
+        block(state->h, state->rest);
+        state->held = 0;
+    }
+    for (; bytes >= 128; bytes -= 128, p += 128)
+        block(state->h, p);
+    memcpy(state->rest, p, bytes);
+    state->held = (unsigned)bytes;
+}
+
+/* After the bytes comes a byte of 0x80, zeroes up to sixteen bytes short
+ * of a block's end, and how many bits there were, in those sixteen bytes,
+ * of which only the lower eight can be anything but zero here (5.1.2). */
+void sha512_end(struct sha512_state *state, uint8_t sum[64])
+{
+    uint8_t end[256] = {0};
+    unsigned left = state->held, length = left < 112 ? 128 : 256;
+
+    memcpy(end, state->rest, left);
     end[left] = 0x80;
-    length = left < 112 ? 128 : 256;
     for (unsigned i = 0; i < 8; i++)
-        end[length - 1 - i] = (uint8_t)(bytes << 3 >> (8 * i));
-    end[length - 9] = (uint8_t)(bytes >> 61);
-    block(h, end);
+        end[length - 1 - i] = (uint8_t)(state->bytes << 3 >> (8 * i));
+    end[length - 9] = (uint8_t)(state->bytes >> 61);
+    block(state->h, end);
     if (length == 256)
-        block(h, end + 128);
+        block(state->h, end + 128);
     for (unsigned i = 0; i < 64; i++)
-        sum[i] = (uint8_t)(h[i / 8] >> (56 - 8 * (i % 8)));
+        sum[i] = (uint8_t)(state->h[i / 8] >> (56 - 8 * (i % 8)));
+}
+
+/* The sum of that many bytes. */
+void sha512(const void *data, uint64_t bytes, uint8_t sum[64])
+{
+    struct sha512_state state;
+
+    sha512_begin(&state);
+    sha512_add(&state, data, bytes);
+    sha512_end(&state, sum);
 }
 
 /* The sums that the standard's own examples have: of nothing, of "abc",
@@ -122,5 +158,41 @@ void sha512_selftest(void)
         if (memcmp(sum, ends[i], 8))
             panic("sha-512 self-test: the sum of %u bytes is wrong, where the padding goes into a block of its own",
                   i ? 120u : 128u);
+    }
+    /* Three hundred bytes, which are more than two blocks, in pieces that end before a block does,
+     * at its end and after it: the sum is the one of all of them at once. */
+    {
+        static const unsigned pieces[] = { 1, 7, 100, 127, 128, 129, 200 };
+        uint8_t all[300], whole[64];
+
+        for (unsigned i = 0; i < sizeof all; i++)
+            all[i] = (uint8_t)(i * 7 + 3);
+        sha512(all, sizeof all, whole);
+        for (unsigned k = 0; k < sizeof pieces / sizeof pieces[0]; k++) {
+            struct sha512_state state;
+            unsigned at = 0;
+
+            sha512_begin(&state);
+            sha512_add(&state, all, 5); /* so that every piece after this one finds something waiting */
+            for (at = 5; at < sizeof all; at += pieces[k])
+                sha512_add(&state, all + at, sizeof all - at < pieces[k] ? sizeof all - at : pieces[k]);
+            sha512_end(&state, sum);
+            if (memcmp(sum, whole, 64))
+                panic("sha-512 self-test: the sum of 300 bytes in pieces of %u is not the sum of the 300", pieces[k]);
+        }
+    }
+    /* The same bytes in pieces of every length, each from an empty piece to a block and some more. */
+    for (unsigned piece = 1; piece < 131; piece += 13) {
+        struct sha512_state state;
+        const char *text = known[2].text;
+        uint64_t left = strlen(text);
+
+        sha512_begin(&state);
+        sha512_add(&state, text, 0);
+        for (; left; text += left < piece ? left : piece, left -= left < piece ? left : piece)
+            sha512_add(&state, text, left < piece ? left : piece);
+        sha512_end(&state, sum);
+        if (memcmp(sum, known[2].first, 8))
+            panic("sha-512 self-test: the sum of a text in pieces of %u bytes is not the sum of the text", piece);
     }
 }

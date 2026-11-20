@@ -32,8 +32,8 @@ starting one, say what it will take, and let Julio choose.
 Build with `make` (Homebrew's llvm and lld under /opt/homebrew/opt when they
 are there, otherwise clang and lld-link from the PATH; `LLVM=` and `LLD=`
 name other directories). `make test` runs the host tests of the Lisp
-files under SBCL (`make host-test`, ten seconds), then boots both
-architectures headless under QEMU, fourteen boots in about four minutes,
+files under SBCL (`make host-test`, twenty seconds), then boots both
+architectures headless under QEMU, fifteen boots in about five minutes,
 types a session at each kernel, and saves what each screen shows to
 build/screen-<name>.png; look at those images when a change touches the
 display. `make run-aarch64` and `make run-x86_64` open a QEMU window with
@@ -501,7 +501,7 @@ Rules:
 - What DISASSEMBLE writes is in a session and in the manual, and a line
   of a session that begins with two spaces is one that is typed: a line of
   a listing begins with its number.
-- `make test` boots fourteen times. Three machines, x86_64, AArch64 with GIC
+- `make test` boots fifteen times. Three machines, x86_64, AArch64 with GIC
   version 3, and AArch64 emulated with GIC version 2, whose files in build/
   are named aarch64-gic2, each from a disk of another kind, and each twice:
   the first boot is typed tools/session.txt, which ends by saving the world,
@@ -544,7 +544,9 @@ Rules:
   below, under shutting down), three for upgrades, x86_64-upgrade,
   aarch64-at-once and aarch64-trial (tools/upgrade.txt, tools/at-once.txt,
   tools/trial.txt), each with the disk of another system beside its own,
-  and two boots for the user
+  one that fetches a signed release of another system from a web server
+  on this computer and upgrades to it (aarch64-network,
+  tools/network.txt), and two boots for the user
   manual, named manual and manual-again: what the manual shows of the prompt
   is typed at them. The serial port of each is QEMU's standard input and
   output: the log is what the kernel printed, and a FIFO feeds it what the
@@ -649,6 +651,55 @@ Rules:
   line that a session waits for with `^W` comes once in the whole log, so
   the world of tools/trial.txt that stands still says a different thing
   the second time.
+- The network (lisp/net.lisp). A frame is put together in a page frame
+  of the card's by `send-frame`, which calls FILL with the address where
+  what the frame carries begins and wants its length back; each protocol
+  wraps the FILL of the one above it (`send-packet`, `send-datagram`,
+  `segment-out`). FILL runs with the card's lock held, so it writes bytes
+  and nothing else: whatever has to ask the network something first, who
+  has an address, does that before. Numbers on the wire have their
+  highest byte first (`two`, `four`, `put-two`), and a checksum is
+  `clara.unsafe:internet-sum`, folded. What arrives is handled in the
+  card's thread (`serve`), which never waits for an answer, since it is
+  the one that would have to take it: it answers what is answered at
+  once and goes on. Whoever waits for something does it with `ask-until`,
+  which looks, asks again every second and gives up after `*patience*`.
+  START forgets the card of an earlier start. Under SBCL the card is
+  `add-net` and the network at the other end of its wire `new-network`: a
+  thread that answers for ARP, DHCP and DNS and serves files, holds every
+  frame that the machine sends against checksums that it works out in
+  its own way, and has accidents when it is told to (`:drop`, `:spoil`,
+  `:swap`, `:lose-opening`, `:mute`). Whatever the machine learns to send
+  gets its check there, and a new way for the other side to go wrong an
+  option. That network must not answer every repeated acknowledgement
+  with everything again: it did, and one lost piece became thirty
+  thousand in a second, which looked like a fault of the machine's.
+- When the host tests end with SBCL's "unhandled condition in
+  --disable-debugger mode" and a reader's error about a package that does
+  not exist, somewhere far down lisp/host/tests.lisp, look for a
+  parenthesis that was left open further up: everything after it was read
+  as one form, and nothing of it was evaluated. A machine of the tests
+  that is made while a thread of the machine before it still runs gets
+  that thread's writes in its memory: `stop-network` ends the card's
+  thread and waits for it before the next machine is made.
+- A boot that fetches something: `SERVE=directory` has tools/boottest.sh
+  start tools/serve.py, a web server and a name server on one free port
+  of this computer, which a machine under QEMU reaches at 10.0.2.2.
+  `{{port}}` in the session is that port, and `{{key}}` what `KEY=`
+  says. tools/run.sh gives every machine a virtio network card on QEMU's
+  own network (`NET=` for none), so every boot of `make test` has one,
+  and the first session asks for the machine's address on all three
+  machines.
+- A release (tools/release.py, lisp/system.lisp). `take` copies a system
+  by way of a function that reads a file of it by name, from a volume or
+  from a web server (`from-volume`, `take-release`): what a system is
+  held against as it is taken is in `take`, once, for both. A signature
+  is checked in C (kernel/ed25519.c), which holds itself against the
+  examples of RFC 8032 at every boot; `python3 tools/release.py constants`
+  works out the numbers that are written there. Under SBCL
+  `clara.host:ed25519-sign` signs what a test then offers
+  (`release`, `machine-and-releases`). No key is in the repository:
+  `make test` makes one for the run, in build/.
 - A session can wait for the kernel to say something before it goes on:
   `^W pattern`, for a kernel that will say nothing more by itself, a panic
   for one, which `PANICS=1` allows the boot once. `^M system_reset` after

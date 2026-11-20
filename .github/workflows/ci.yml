@@ -12,7 +12,10 @@
 # more machine, before and after it is started again. Each kind of
 # processor is shut down, started again and turned off by its power button
 # (tools/power.txt), and takes another system from a second disk
-# (tools/upgrade.txt, tools/at-once.txt, tools/trial.txt). The
+# (tools/upgrade.txt, tools/at-once.txt, tools/trial.txt); one machine
+# fetches a signed release from a web server that the test starts on the
+# runner, over QEMU's own network, and upgrades to it (tools/network.txt,
+# tools/serve.py). The
 # runners have no hardware acceleration for QEMU, so every machine is
 # emulated. The website
 # is built as well: it reads ROADMAP.md, and stops building when a
@@ -37,7 +40,7 @@ concurrency:
 jobs:
   build-and-boot:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
 
     steps:
       - name: Checkout
@@ -46,8 +49,10 @@ jobs:
       # The list is the one at the top of the Makefile. netcat is how
       # tools/boottest.sh asks the QEMU monitor for a screenshot, SBCL runs
       # the tests of the Lisp files (lisp/host/tests.lisp), Python makes the
-      # disks that the machines boot from (tools/mkdisk.py), and fsck.fat,
-      # of the dosfstools, looks at what a kernel wrote to one.
+      # disks that the machines boot from (tools/mkdisk.py), is the web
+      # server that one of them fetches from (tools/serve.py) and signs what
+      # it fetches (tools/release.py), and fsck.fat, of the dosfstools,
+      # looks at what a kernel wrote to one.
       - name: Install the Toolchain, QEMU and the Firmware
         run: |
           sudo apt-get update
@@ -89,5 +94,6 @@ jobs:
             build/session-*.txt
             build/qemu-*.log
             build/fsck-*.log
+            build/serve-*.log
             build/screen-*.png
           if-no-files-found: ignore

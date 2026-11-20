@@ -30,6 +30,13 @@
 #        WORK=build/work.img (give the machine a copy of that disk as well, the
 #                 way tools/run.sh gives a user's machine a disk of the user's
 #                 own; afterwards the host looks at the volume on it too)
+#        SERVE=directory (the machine has somewhere to fetch from: the
+#                 directory, by HTTP, and a name server that knows every name
+#                 which ends in .test, both on this computer and on one port
+#                 (tools/serve.py). {{port}} in the session is that port,
+#                 which the machine reaches at 10.0.2.2, and {{key}} is what
+#                 KEY= says, the public half of the key that a release there
+#                 is signed with)
 #        plus what tools/run.sh reads
 set -eu
 arch=${1:?usage: tools/boottest.sh <arch> [qemu args]}
@@ -56,12 +63,36 @@ mkdir -p build
 rm -f "$shot" "$sock" "$keys" "$orders" "$heard" "$typing".* "$scratch"
 : > "$log"
 
+# A machine that is to fetch something gets somewhere to fetch it from,
+# which lasts as long as this script does.
+port=0
+if [ -n "${SERVE:-}" ]; then
+    rm -f "build/serve-$name.port"
+    python3 -I tools/serve.py "$SERVE" "build/serve-$name.port" > "build/serve-$name.log" 2>&1 &
+    server=$!
+    trap 'kill "$server" 2> /dev/null || true' EXIT
+    n=0
+    while [ ! -s "build/serve-$name.port" ] && [ "$n" -lt 100 ]; do
+        sleep 0.1
+        n=$((n + 1))
+    done
+    port=$(cat "build/serve-$name.port" 2> /dev/null || echo 0)
+    if [ "$port" = 0 ]; then
+        echo "boottest $name: FAILED, tools/serve.py did not start"
+        cat "build/serve-$name.log"
+        exit 1
+    fi
+fi
+
 # A session can name the system that was built and its version, which are
-# different for every build: they are written into a copy of it.
+# different for every build: they are written into a copy of it. And the
+# port that it fetches from, and the key that what it fetches is signed
+# with.
 if [ -n "$session" ]; then
     system=$(ls "${ESP:-build/esp}/clara" 2> /dev/null | head -1)
     version=$(sed -n 's/^#define CLARA_VERSION "\(.*\)"/\1/p' kernel/kernel.h)
-    sed -e "s/{{system}}/$system/g" -e "s/{{version}}/$version/g" "$session" > "build/typed-$name.txt"
+    sed -e "s/{{system}}/$system/g" -e "s/{{version}}/$version/g" -e "s/{{port}}/$port/g" -e "s/{{key}}/${KEY:-}/g" \
+        "$session" > "build/typed-$name.txt"
     session=build/typed-$name.txt
 fi
 

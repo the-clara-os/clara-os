@@ -1,0 +1,62 @@
+> (list (clara.net:station) (clara.net:address))
+net: this machine is 10.0.2.15 on its network, 10.0.2.2 is the way out, 10.0.2.3 knows names
+("52:54:00:12:34:56" "10.0.2.15")
+> (setq clara.net:*name-server* "10.0.2.2" clara.net:*name-port* {{port}})
+{{port}}
+> (defun complaint (function) (handler-case (funcall function) (error (condition) (princ-to-string condition))))
+COMPLAINT
+> (list (clara.net:resolve "releases.test") (clara.net:resolve "10.0.2.2") (complaint (lambda () (clara.net:resolve "nowhere.example"))))
+("10.0.2.2" "10.0.2.2" "there is no machine of the name nowhere.example")
+> (list (clara.net:fetch-text "http://releases.test:{{port}}/latest") (clara.net:fetch-text "http://10.0.2.2:{{port}}/moved/latest"))
+("{{version}}-other
+" "{{version}}-other
+")
+> (list (clara.net:fetch-text "http://releases.test:{{port}}/unsized/latest") (complaint (lambda () (clara.net:fetch-text "http://releases.test:{{port}}/nothing"))))
+("{{version}}-other
+" "releases.test answers 404 to the request for /nothing")
+> (subseq (complaint (lambda () (clara.net:fetch-text "http://releases.test:{{port}}/short/latest"))) 0 45)
+"releases.test ended the connection after 13 b"
+> (complaint (lambda () (clara.net:fetch-text "http://releases.test:{{port}}/secure/latest")))
+"https://claraos.org/latest is to be had by HTTPS, which this system does not speak: it fetches by plain HTTP"
+> (complaint (lambda () (clara.net:fetch-text "http://releases.test:{{port}}/round")))
+"http://releases.test:{{port}}/round is said to be somewhere else more often than is followed"
+> (complaint (lambda () (clara.net:fetch-text "http://10.0.2.2:1/latest")))
+"10.0.2.2 takes no connection at its port 1"
+> (let ((name (clara.system:system-file "boot.lisp")))
+    (multiple-value-bind (memory bytes pages) (clara.net:fetch "http://releases.test:{{port}}/{{version}}-other/compiler.lisp")
+      (prog1 (multiple-value-bind (mine size frames) (clara.fat:read-file (clara.system:system-file "compiler.lisp"))
+               (prog1 (list (> bytes 50000) (= bytes size) (equal (clara.unsafe:sha-512 memory bytes) (clara.unsafe:sha-512 mine size)) (stringp name))
+                 (clara.unsafe:free-memory mine frames)))
+        (clara.unsafe:free-memory memory pages))))
+(T T T T)
+> (clara.system:newest "http://releases.test:{{port}}/")
+"{{version}}-other"
+> (clara.system:upgrade :from "http://releases.test:{{port}}/")
+error: the newest ClaraOS at http://releases.test:{{port}}/ is {{version}}-other, which is no newer than this one, {{system}}: :ANY T takes it all the same
+> (clara.system:upgrade :from "http://releases.test:{{port}}/" :any t)
+error: this system has no key to hold a release against: CLARA.SYSTEM:*RELEASE-KEY* is NIL
+> (length (setq clara.system:*release-key* "0000000000000000000000000000000000000000000000000000000000000000"))
+64
+> (clara.system:upgrade :from "http://releases.test:{{port}}/" :any t)
+error: the manifest of {{version}}-other at http://releases.test:{{port}}/ is not signed with the key that this system has: nothing of it is taken
+> (list (clara.fat:names "/clara/") (length (setq clara.system:*release-key* "{{key}}")))
+(("{{system}}/") 64)
+> (clara.system:upgrade)
+error: no other disk of this machine holds a ClaraOS other than this one, {{system}}
+> (defvar *carried* 'nothing-yet)
+*CARRIED*
+> (setq *carried* (list 'across "the network"))
+(ACROSS "the network")
+> (setq clara.system:*releases* "http://releases.test:{{port}}/")
+"http://releases.test:{{port}}/"
+> (clara.system:upgrade :any t)
+system: {{version}}-other is published at http://releases.test:{{port}}/, and signed with the key that this system has: its files are fetched
+system: {{version}}-other is on the disk, and is tried at the next start
+clara: the world is saved
+clara: starting the machine again
+^R
+> (list (clara.system:system) (getf (clara.unsafe:start-state) :trial) *carried* clara.system:*releases*)
+("{{version}}-other" T (ACROSS "the network") NIL)
+> (list (clara.fat:names "/clara/") (clara.net:address))
+net: this machine is 10.0.2.15 on its network, 10.0.2.2 is the way out, 10.0.2.3 knows names
+(("{{version}}-other/" "clara.image") "10.0.2.15")

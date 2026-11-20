@@ -208,6 +208,9 @@ error: interrupted from the keyboard
 ("{{system}}" "/clara/{{system}}/boot.lisp" "/clara/" NIL)
 > (list (probe-file "/CLARA/{{system}}/Listener.lisp") (eq (clara.system:boot-volume) (car (clara.fat:volumes))))
 ("/CLARA/{{system}}/listener.lisp" T)
+> (list (clara.net:station) (clara.net:address))
+net: this machine is 10.0.2.15 on its network, 10.0.2.2 is the way out, 10.0.2.3 knows names
+("52:54:00:12:34:56" "10.0.2.15")
 > (with-open-file (in (clara.system:system-file "self-test.lisp")) (list (read-line in) (read-line in)))
 (";;;; self-test.lisp: a file with a mistake in it, for the evaluator's" ";;;; self-test to load")
 > (list (load (clara.system:system-file "listener.lisp")) (load "/clara/listener.lisp") (load "listener.lisp"))

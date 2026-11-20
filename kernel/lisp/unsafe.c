@@ -566,6 +566,66 @@ LISP_PRIMITIVE(lisp_p_sha_512)
     return lisp_string_from_utf8(text, sizeof text);
 }
 
+/* The bytes that a string of digits in base sixteen stands for, COUNT of
+ * them: 1, or 0 when the string is not twice that many such digits. */
+static int digits(lisp text, uint8_t *bytes, unsigned count)
+{
+    const struct lisp_string *s;
+
+    if (!lisp_is(text, LISP_STRING) || lisp_length(lisp_as_string(text)->header) != 2 * count)
+        return 0;
+    s = lisp_as_string(text);
+    for (unsigned i = 0; i < 2 * count; i++) {
+        uint32_t c = s->chars[i];
+        unsigned digit = c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : c >= 'A' && c <= 'F' ? c - 'A' + 10 : 16;
+
+        if (digit > 15)
+            return 0;
+        bytes[i / 2] = (uint8_t)(i % 2 ? bytes[i / 2] | digit : digit << 4);
+    }
+    return 1;
+}
+
+/* (ed25519 address bytes signature key): T when the signature is the one
+ * that the key gives those bytes of memory (kernel/ed25519.c). The
+ * signature is 128 digits in base sixteen and the key, its public half,
+ * 64; anything else is no signature and no key, and the answer is NIL. */
+LISP_PRIMITIVE(lisp_p_ed25519)
+{
+    uint64_t addr, bytes;
+    uint8_t signature[64], key[32];
+
+    (void)argc;
+    if (!number(argv[0], &addr) || !number(argv[1], &bytes) || !mapped(addr, bytes))
+        return NIL;
+    if (!digits(argv[2], signature, 64) || !digits(argv[3], key, 32))
+        return NIL;
+    return ed25519_verify(key, (const void *)(uintptr_t)addr, bytes, signature) ? T : NIL;
+}
+
+/* (internet-sum address bytes): the bytes of memory added up two at a
+ * time, the first of each two being the higher half, and a last one that
+ * is alone counting as a higher half: what the checksums of the Internet's
+ * protocols are made of (RFC 1071). The sum is not folded here, so that
+ * more can be added to it. */
+LISP_PRIMITIVE(lisp_p_internet_sum)
+{
+    uint64_t addr, bytes, total = 0;
+    const uint8_t *p;
+
+    (void)argc;
+    if (!number(argv[0], &addr) || !number(argv[1], &bytes) || !mapped(addr, bytes))
+        return NIL;
+    if (bytes > 1 << 24)
+        return lisp_fail("a checksum is of 16777216 bytes at most, and not of ~S", argv[1]);
+    p = (const uint8_t *)(uintptr_t)addr;
+    for (; bytes >= 2; bytes -= 2, p += 2)
+        total += (uint64_t)p[0] << 8 | p[1];
+    if (bytes)
+        total += (uint64_t)p[0] << 8;
+    return lisp_fixnum((int64_t)total);
+}
+
 /* (keyboard-break): Ctrl-C has been typed on a keyboard. The driver of a
  * keyboard is a thread in Lisp, and this is how it does what the serial
  * port's Ctrl-C does: it stops what the thread that reads from the console

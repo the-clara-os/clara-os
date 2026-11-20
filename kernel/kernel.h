@@ -5,7 +5,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define CLARA_VERSION "0.0.28"
+#define CLARA_VERSION "0.0.29"
 
 #define PAGE_SHIFT 12
 #define PAGE_SIZE  (1ULL << PAGE_SHIFT)
@@ -179,8 +179,20 @@ void lock_acquire(struct lock *l);   /* waits its turn; never in an interrupt ha
 void lock_release(struct lock *l);
 
 /* sha512.c: the sixty-four bytes that stand for any number of bytes (FIPS 180-4) */
+struct sha512_state {
+    uint64_t h[8], bytes; /* the sum so far, and of how many bytes */
+    uint8_t rest[128];    /* what has not filled a block yet, */
+    unsigned held;        /* and how much that is */
+};
 void sha512(const void *data, uint64_t bytes, uint8_t sum[64]);
+void sha512_begin(struct sha512_state *state);
+void sha512_add(struct sha512_state *state, const void *data, uint64_t bytes);
+void sha512_end(struct sha512_state *state, uint8_t sum[64]);
 void sha512_selftest(void);
+
+/* ed25519.c: whether a signature is that of a key (RFC 8032) */
+int ed25519_verify(const uint8_t key[32], const void *message, uint64_t bytes, const uint8_t signature[64]);
+void ed25519_selftest(void);
 
 /* string.c */
 void  *memset(void *dst, int c, size_t n);

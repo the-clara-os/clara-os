@@ -93,7 +93,15 @@ file after `/home/init.lisp`, which is the user's to write. The system
 that is leaving also writes down what its variables had come to, as far
 as that is text, and the one that comes gives those values back, saves
 the world that it made, and says by name what did not come across;
-`(clara.system:report)` says it again.
+`(clara.system:report)` says it again. And a newer ClaraOS can be fetched:
+there is a network (lisp/net.lisp), a driver for virtio's network card
+with ARP, IPv4, UDP, DHCP, DNS, TCP and HTTP over it, as far as fetching a
+file takes, `(clara.net:fetch-text "http://10.0.2.2:8000/hello.txt")`; and
+`(clara.system:upgrade :from "http://.../")` takes the newest release that
+is published at an address, when its manifest is signed with the key that
+the system has (Ed25519, checked in the kernel) and every file is what the
+manifest says. There is no TLS: what arrives is believed for its
+signature, and not for the road it came by.
 The same Lisp files load
 under SBCL on the host, where they are tested against a machine that is
 made up for the purpose.
@@ -129,7 +137,9 @@ Then, on either:
                       # turned off by its power button (tools/power.txt); a machine of each kind takes
                       # another system from a second disk and has to come up as it, and one takes a
                       # system that does not start and has to be the old one again (tools/upgrade.txt,
-                      # tools/at-once.txt, tools/trial.txt);
+                      # tools/at-once.txt, tools/trial.txt); one fetches a signed release of another
+                      # system from a web server on this computer, and has to come up as it
+                      # (tools/network.txt, tools/serve.py);
                       # and what the user manual shows of the prompt is typed at one more machine,
                       # which has a second disk, as WORK= below gives one
     make run-aarch64  # QEMU window, serial on the terminal: type a form in either; Ctrl-C stops a form
@@ -137,7 +147,9 @@ Then, on either:
                       # machine off, which ends QEMU, and Ctrl-A X in the terminal leaves QEMU as it is;
                       # hvf-accelerated on Apple silicon. The disk, build/disk-aarch64.img, is made once
                       # and kept, with the files and the world on it; a newer build goes to the machine
-                      # as a second disk, and the system on the disk takes it as it starts
+                      # as a second disk, and the system on the disk takes it as it starts. The machine
+                      # has a network card on a network that QEMU makes up, through which it reaches
+                      # this computer at 10.0.2.2 and whatever this computer reaches (NET= for none)
     FRESH=1 make run-aarch64
                       # the same with a new disk; the one that was there is kept under another name
     make run-x86_64   # same, emulated (TCG), so the firmware takes a few seconds
@@ -156,7 +168,7 @@ Layout:
     kernel/lisp/     the Lisp runtime: objects and the heap, symbols and packages, the reader, the printer,
                      the evaluator, and the machine that compiled code runs on (vm.c)
     lisp/            Lisp sources: the language's own part, the compiler, the console, drawing, the drivers, the
-                     file system, the listener, the window manager and the terminal in a window, which the kernel loads as it starts, and
+                     file system, the network, the listener, the window manager and the terminal in a window, which the kernel loads as it starts, and
                      the two applications, editor.lisp and files.lisp, which the launcher loads when they are picked;
                      the build copies them to the system's directory on the ESP, \clara\<its name>, read at boot
     fonts/           the console font, Spleen 8x16, which tools/bdf2c.py turns into kernel/font.c
@@ -165,8 +177,10 @@ Layout:
     tools/           run.sh (QEMU), mkdisk.py (the disk a machine boots from), system.py (the name of a build
                      and the list of its files), boottest.sh (headless check, typed session and
                      screenshot), session.txt and resumed.txt (what the check types and what must come
-                     back, at a new world and at one that was saved), power.txt, upgrade.txt, at-once.txt
-                     and trial.txt (the same for shutting down and for upgrades), mkimage.sh (UTM disk)
+                     back, at a new world and at one that was saved), power.txt, upgrade.txt, at-once.txt,
+                     trial.txt and network.txt (the same for shutting down and for upgrades), serve.py (the
+                     web server that a boot fetches from), release.py (a key, a signature, and a system
+                     laid out as a release), mkimage.sh (UTM disk)
 
 ## Running in UTM
 

@@ -1,6 +1,7 @@
 # ClaraOS build. Needs clang, lld and qemu with EDK2 firmware, SBCL for the
 # tests of the Lisp files on the host, Python for the disks that the
-# machines boot from, and the host's checker of FAT volumes for what a
+# machines boot from and for the web server that one of them fetches a
+# signed release from, and the host's checker of FAT volumes for what a
 # kernel has written to one: macOS has it, fsck_msdos, and elsewhere it is
 # fsck.fat of the dosfstools.
 #   macOS:  brew install llvm lld qemu sbcl
@@ -140,7 +141,15 @@ host-test:
 # come to its prompt (tools/trial.txt): it has to be the system from
 # before again when it is started the next time, and say so; and then it
 # saves a world that stands still before its prompt, which the start
-# after that one has to pass over. Then the user manual: what it shows of
+# after that one has to pass over, and the one after that, the second
+# time, has to replace. One more machine has no second disk and fetches:
+# the other system is laid out as a release, signed with a key that is
+# made for the run (tools/release.py), and handed out by a web server on
+# this computer, which also knows names (tools/serve.py, SERVE=); the
+# machine asks for its address, looks a name up, fetches files, has to
+# refuse the release while it has no key or another one, and then takes
+# it and comes up as the other system (tools/network.txt). Then the user
+# manual: what it shows of
 # the prompt (site/manual.html) is typed at a machine, which saves its
 # world, and at the same machine started again. That machine has a second
 # disk, with a volume that has nothing on it, given to it the way
@@ -194,6 +203,12 @@ test: all host-test $(BUILD)/system-other/stamp $(BUILD)/system-broken/stamp
 	NAME=aarch64-trial DISK=$(BUILD)/boot-aarch64.img SESSION=tools/trial.txt TIMEOUT=300 PANICS=1 \
 		EXPECT='^system: .*-broken was tried and did not come to its prompt;;^lisp: clara.image is passed over;;^world:   It is kept, and the next start tries it once more;;^world: the world that was saved did not come to its prompt a second time' \
 		tools/boottest.sh aarch64 -machine gic-version=3 $(call SECOND,broken)
+	rm -rf $(BUILD)/releases $(BUILD)/release-key
+	python3 -I tools/release.py key $(BUILD)/release-key > $(BUILD)/release-key.public
+	python3 -I tools/release.py make $(BUILD)/system-other/esp/clara/$(VERSION)-other $(BUILD)/releases $(BUILD)/release-key
+	NAME=aarch64-network SERVE=$(BUILD)/releases KEY=$$(cat $(BUILD)/release-key.public) SESSION=tools/network.txt TIMEOUT=300 \
+		EXPECT='^ClaraOS: starting the system that is to be tried;;^system: .*-other has come to its prompt;;^world: 1 variable has the value that it had come to;;^world: it is saved as it is now' \
+		tools/boottest.sh aarch64 -machine gic-version=3
 	python3 -I site/build.py --sessions $(BUILD)
 	rm -rf $(BUILD)/empty && mkdir -p $(BUILD)/empty && python3 -I tools/mkdisk.py $(BUILD)/empty $(BUILD)/work.img
 	NAME=manual WORK=$(BUILD)/work.img SESSION=$(BUILD)/manual-first.txt tools/boottest.sh aarch64 -machine gic-version=3
