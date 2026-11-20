@@ -1765,9 +1765,11 @@ M15d, upgrades over the network, what it left:
   slice had asked for, with "Enforce HTTPS" switched off for the website
   ("we don't do that here"). So it is to be a place that answers HTTPS,
   which M15f lets a machine fetch from: the website does, as it is, and
-  `https://claraos.org/releases/` would be the directory `releases` of
-  what the site's workflow publishes. That is still his to say. The key:
-  he is fine with one. `python3 tools/release.py key <file>` makes it, on
+  that is where he chose, the same day: `https://claraos.org/releases/`,
+  the directory `releases` of what the site's workflow publishes. The
+  address is not in lisp/system.lisp yet. It goes there with the key, in
+  one change: a system that knew the place and had no key would ask the
+  place and then take nothing. The key: he is fine with one. `python3 tools/release.py key <file>` makes it, on
   his computer, and prints the public half, which goes into
   lisp/system.lisp; the secret half stays with him, and with whatever
   publishes for him as a secret. The key says whose releases a machine
@@ -1776,8 +1778,14 @@ M15d, upgrades over the network, what it left:
   ClaraOS of their own gives the variable the public half of their own
   key. And publishing: nothing builds a release when a version is merged.
   `python3 tools/release.py make build/esp/clara/<system> <directory>
-  <key file>` lays one out, and a workflow that does it is not written,
-  since it needs the place and the key.
+  <key file>` lays one out, and the workflow that does it is not
+  written, since it needs the key. It is the website's own
+  (.github/workflows/site.yml), which would build both kernels as well,
+  lay the release out as the directory `releases` of what it publishes,
+  and sign it with the key, kept as a secret of the environment that the
+  site is deployed from, which only a deployment from main can read; and
+  it would have to run for every change to the system, where it now runs
+  for a change to the site.
 - No TLS was this slice's, and is M15f's. The entry had left two ways
   open, HTTPS in ClaraOS or a file that is trusted and a road that is
   not, and this slice took the second: what it built fetches by plain
