@@ -572,6 +572,18 @@ Infrastructure, done:
   is looked up on such a volume now, nor on what is no volume
   (`the-volume`, lisp/fat.lisp).
 
+- **A disk that is open on the Mac** (2026-11-19, version 0.0.23). A work
+  disk that macOS had made, a `.dmg` of a gibibyte, would not start with
+  `WORK=` once it had been opened in the Finder, which the manual invites:
+  QEMU does not start with a disk that the host has open, and says only
+  that it failed to get a lock, so the file looked like the wrong kind of
+  file. tools/run.sh now looks whether the boot disk or the work disk is
+  open there, ejects it, says so, and starts the machine; when the disk
+  cannot be ejected, because something on the Mac is using it, it says
+  that and starts nothing. The manual names a `.dmg` among the disks that
+  do, says that a disk left open is ejected, and has the lock in its table
+  of what goes wrong.
+
 Infrastructure, for sessions with budget left over:
 
 - Read the UART base from ACPI (SPCR or DBG2) instead of assuming
@@ -1330,7 +1342,17 @@ Infrastructure, for sessions with budget left over:
   (the host tests); no copy of the work disk for a boot, the copy made
   and not used, the work disk ahead of the boot disk on the bus, the disk
   not attached at all (the manual's two boots); and `make test` taking a
-  work disk from the environment.
+  work disk from the environment. From the disk that is open on the Mac
+  (0.0.23): a copy of a `.dmg` of a gibibyte that macOS had made, with a
+  file on it that 0.0.21 had written, which 0.0.22 listed, loaded, carried
+  across and wrote beside; tools/run.sh by hand with a work disk that the
+  Finder had open, which was ejected and the machine started, and the
+  same with the boot disk; a work disk that a process on the Mac had its
+  directory in, which stopped the script with what to do; and a disk that
+  was opened under another name of its directory, /tmp for /private/tmp,
+  which the first version missed because it held names against each
+  other and not files. None of this is in `make test`: it needs a Mac and
+  a disk in the Finder.
 
 Shortcuts and loose ends, under the milestone that settles each one. A
 session reads its own group before it starts, and whatever it leaves open
