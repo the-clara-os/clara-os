@@ -2057,7 +2057,7 @@ static void new_world(void)
     static const char *const world[] = { "compiler.lisp", "native.lisp",   "font.lisp",    "console.lisp",
                                          "draw.lisp",     "pci.lisp",      "virtio.lisp",  "input.lisp",
                                          "disk.lisp",     "fat.lisp",      "listener.lisp", "windows.lisp",
-                                         "terminal.lisp" };
+                                         "terminal.lisp", "system.lisp" };
     uint64_t before[LISP_TYPES], after[LISP_TYPES], ticks, collections;
     char processor[16] = { 0 };
     struct lisp_functions functions;
@@ -2233,6 +2233,12 @@ static void lisp_main(void)
     if (!lisp_evaluate(own_form("(let ((windows (find-package \"CLARA.WINDOWS\")))"
                                 "  (if windows (funcall (intern \"RESUME\" windows))))")))
         panic("lisp: the window manager did not start");
+    /* What shuts the machine down hears its power button from here on. A
+     * world that an older kernel saved has no such thing, and is stopped
+     * from outside as it always was. */
+    if (!lisp_evaluate(own_form("(let ((system (find-package \"CLARA.SYSTEM\")))"
+                                "  (if system (funcall (intern \"START\" system))))")))
+        panic("lisp: what shuts the machine down did not start");
     listen = own_form("clara.listener:run");
     while (!lisp_call(listen, told, &condition)) {
         condition = lisp_values.value[0];

@@ -448,16 +448,34 @@ Upgrades:
   GitHub, the kernels and the Lisp files of a version being the files of
   its release. It waits for two things that are not there: a network,
   which is under "Later" and is work of its own, and releases.
-- [ ] **M15e shutting down.** A machine that runs ClaraOS is stopped from
-  outside today, by leaving QEMU or with UTM's button, and that is the
-  plug pulled: the system is not told, and what the world holds that was
-  not saved is gone. Shutting down is something that the system does
-  itself. It is asked to at the prompt, in the window manager, or by the
-  machine's power button, which is what a host presses when it wants a
-  machine to stop. It tells the applications, stops the threads, saves the
-  world unless it is told not to, sees that what was written is on the
-  disk, and turns the machine off, or starts it again. Starting again is
-  how an upgrade ends, so M15a needs that half of it.
+- [x] **M15e shutting down** (2026-11-20, version 0.0.25). A machine that
+  runs ClaraOS was stopped from outside, by leaving QEMU or with UTM's
+  button, and that was the plug pulled: the system was not told, and what
+  the world held that was not saved was gone. Shutting down is now
+  something that the system does itself, and starting again with it. It is
+  asked to at a prompt, `(clara.system:shut-down)` and
+  `(clara.system:start-again)`; in the window manager, by `Shut Down` and
+  `Restart` at the end of the launcher's list; or by the machine's power
+  button, which is what a host presses when it wants a machine to stop,
+  `system_powerdown` to QEMU and Request power down in UTM. It asks the
+  windows whether their programs hold something that would be lost, and
+  goes no further while one says so, an editor whose text is not saved for
+  one: that window comes to the top, and whoever asked is told. Then it
+  saves the world unless it was told not to, stops the window manager and
+  with it the applications, has every disk put what it was given where it
+  lasts, and turns the machine off or starts it again. The substrate does
+  the last step by what ACPI's table of fixed hardware says of the machine:
+  PSCI on AArch64, the sleep state S5 and the reset register on x86_64,
+  with the two facts that only the DSDT has searched for in its bytes,
+  since nothing here interprets them. The firmware's own service for it is
+  not called, and DESIGN.md says why. The power button is looked at four
+  times a second, by a thread. A machine that has no way of being turned
+  off is told so in its boot report, and after a shutdown it is saved,
+  stopped and left for the host. `make test` has two more boots for it,
+  one for each kind of processor, which refuse to shut down over an
+  editor's text, start again into the world that was saved on the way, and
+  go by themselves when the power button is pressed. Starting again is how
+  an upgrade ends, so M15a has that half of it to stand on.
 
 Code for the processor:
 
@@ -1593,42 +1611,62 @@ M15d, upgrades over the network:
   while it fetches has changed nothing on its disk. To begin with, the
   system looks for a newer version when it is asked to, and not by itself.
 
-M15e, shutting down:
+M15e, shutting down, what it left:
 
-- Where things stand (2026-11-18). Nothing in the kernel turns a machine
-  off or starts it again. Ctrl-D at the first prompt ends the session, the
-  kernel says that it has nothing more to do and halts, and the machine
-  stands still until the host stops it; nothing in the window manager
-  stops the machine. A file is on the disk from the moment the form that
-  wrote it has answered, so no file is lost by stopping. What is lost is
-  the world as it has become since it was last saved. tools/run.sh starts
-  QEMU with `-no-reboot`, under which a machine that starts itself again
-  ends QEMU instead.
-- How a machine is turned off and started again. The firmware has a
-  service for both among its runtime services, ResetSystem, the same on
-  both architectures. The kernel has never called a runtime service, and
-  whether it still can from its own page tables was not looked into.
-  Without that it is PSCI on AArch64, and ACPI on x86_64, where the value
-  that turns a machine off is in AML, which the kernel does not read: the
-  tables it reads are XSDT, APIC, GTDT and MCFG. Where a machine cannot be
-  turned off, the system says that it can be now, and stands still.
-- The power button. A host asks a machine to stop by pressing its power
-  button (`system_powerdown` in QEMU's monitor), and that comes as an
-  event of ACPI, by another way on each architecture. The system does not
-  hear it. Which of UTM's ways of stopping a machine is that request, and
-  which the plug, was not looked at.
-- What a shutdown does with the world. That it is saved without anybody
-  asking is a call to be settled: a world that was broken is then saved
-  broken and starts like that, and there is no key that says "from the
-  files" (the loose end of M10). So the image before it is kept, or the
-  system asks. And what becomes of what is not finished: a thread that
-  runs, an editor with text that was not saved, a file that is open for
-  writing.
-- What is on the disk. The driver for virtio's disks never asks a disk to
-  flush: whether a write that the device has answered is in the host's
-  file when QEMU is ended a moment later was not tried.
-- The order. An upgrade ends by starting the machine again, so that half
-  comes before M15a, or with it.
+- UTM was not tried. Its Request power down sends QEMU the same
+  `system_powerdown` that the tests send, to the same kind of machine, and
+  a ClaraOS that turns itself off should end the virtual machine there as
+  it ends QEMU; that it does, and what UTM makes of a machine that starts
+  itself again, is for somebody at a UTM window to see.
+- The DSDT is searched and not read (kernel/acpi.c). "Off" is the first
+  number after the name `_S5_`, and the power button of a machine without
+  a PC's fixed hardware is in the first region of memory after the string
+  `ACPI0013`. QEMU writes both that way, on both machines and with either
+  version of the interrupt controller. A firmware that writes them another
+  way is said to have no way of being turned off, or no button. The type
+  of S5 is 0 on QEMU, so that the kernel shifts it to the right bits of
+  the control register is not something a boot can notice.
+- The button is asked for four times a second, by a thread. Its interrupt
+  comes by a line on both machines, and no line is wired here (Devices, in
+  DESIGN.md).
+- Ctrl-D at the first prompt halts the machine as it always did, with
+  nothing saved, and a machine that has halted is deaf to its power
+  button: the host has to stop it. The tests end their sessions that way
+  and look at the screen afterwards, which a machine that turned itself
+  off does not have.
+- What is asked before a shutdown is the windows, and of those only the
+  ones that were given a function for it (`:unfinished`), which the editor
+  is. A thread that computes, a program without a window, and a file that
+  is open for writing and not closed yet are not asked and go with the
+  machine: such a file is not written.
+- A world is saved at every shutdown, as it is. One that was broken at the
+  prompt is saved broken, and starts like that: `:save nil` is for the one
+  who knows, and what a machine does about a world that does not come to
+  its prompt is M15c's.
+- The world is saved where `clara.fat:*volume*` points, like any world
+  (M15b's group, above): with the variable set to a second disk, the
+  shutdown stops with the error of SAVE-IMAGE, and nothing is turned off.
+- tools/run.sh no longer starts QEMU with `-no-reboot`, under which a
+  machine that started itself again ended QEMU instead. A kernel that
+  resets the machine by a fault it cannot report, three faults in a row on
+  x86_64, now starts again and again where it used to end QEMU.
+- By hand, and in no test: `(clara.unsafe:power-off)` and
+  `(clara.unsafe:reset)` straight from a prompt, on the three machines;
+  the button pressed with nobody listening, which the kernel has to forget;
+  and a session that pressed it twice. What a machine says when the
+  substrate cannot turn it off is seen under SBCL only, where no machine
+  can: every machine that the tests boot has a way.
+- What was broken on purpose, to see that something notices: 66 mistakes
+  in lisp/disk.lisp, lisp/windows.lisp, lisp/editor.lisp, lisp/system.lisp,
+  kernel/acpi.c, the two power.c and the three functions in C, each run
+  through the host tests or through the two boots of tools/power.txt. Four
+  got through. Two became tests: a command taken out of the launcher's
+  list that is not its first, and a second request to shut down while the
+  first is saving the world. One draws nothing that differs, the line
+  across a list without applications, which lies on the list's own edge.
+  And one cannot be seen on these machines: the search for a device's
+  registers in the DSDT stops at the next device's name, and QEMU's
+  generic event device has its registers before any other is named.
 
 No milestone yet, to be picked up when they start to matter:
 

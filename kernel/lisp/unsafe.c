@@ -515,6 +515,37 @@ LISP_PRIMITIVE(lisp_p_pci_configuration)
     return NIL;
 }
 
+/* (power-off) turns the machine off and (reset) starts it again, there
+ * and then: nothing is saved, nobody is told, and what a disk was still to
+ * write is not waited for, so whoever calls these has seen to all that
+ * (lisp/system.lisp). Neither returns, unless the machine has no way of
+ * doing it that the kernel knows, or did not go by it: then NIL.
+ * (power-button) says whether the machine's power button has been pressed
+ * since it was last asked, which is how a host asks a machine to stop; NIL
+ * as well on a machine that has none. */
+LISP_PRIMITIVE(lisp_p_power_off)
+{
+    (void)argc;
+    (void)argv;
+    arch_power_off();
+    return NIL;
+}
+
+LISP_PRIMITIVE(lisp_p_reset)
+{
+    (void)argc;
+    (void)argv;
+    arch_restart();
+    return NIL;
+}
+
+LISP_PRIMITIVE(lisp_p_power_button)
+{
+    (void)argc;
+    (void)argv;
+    return arch_power_button() > 0 ? T : NIL;
+}
+
 /* (keyboard-break): Ctrl-C has been typed on a keyboard. The driver of a
  * keyboard is a thread in Lisp, and this is how it does what the serial
  * port's Ctrl-C does: it stops what the thread that reads from the console

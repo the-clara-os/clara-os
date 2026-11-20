@@ -17,11 +17,16 @@
 ;;;; The memory of a request is page frames (CLARA.UNSAFE:ALLOCATE-MEMORY):
 ;;;; the device reads and writes memory by its physical address, which is
 ;;;; the address of a page frame and not of an object in the heap.
+;;;;
+;;;; A write that the device has answered may still be in the memory of
+;;;; whatever the device is made of, a host's for one. FLUSH asks the device
+;;;; to put what it holds where it lasts, which is what a machine does
+;;;; before it is turned off (lisp/system.lisp).
 
 (defpackage "CLARA.DISK"
   (:use "COMMON-LISP")
   (:export "START" "DISKS" "DISK-P" "DISK-NAME" "DISK-SECTORS" "DISK-READ-ONLY"
-           "READ-SECTORS" "WRITE-SECTORS" "*PATIENCE*"))
+           "READ-SECTORS" "WRITE-SECTORS" "FLUSH" "*PATIENCE*"))
 (in-package "CLARA.DISK")
 
 (defstruct disk
@@ -29,6 +34,7 @@
   name        ; where it is on the PCI bus, which is all the name it has
   sectors     ; how many sectors it has
   read-only   ; it cannot be written
+  flushes     ; it holds writes back until it is told to put them where they last
   lock        ; for the one request that is under way
   request     ; a page frame for what a request says, and for the device's answer to it
   failed)     ; a request went unanswered: nothing more is asked of this disk
@@ -39,21 +45,21 @@
 (defun disks ()
   *disks*)
 
-;; One request (5.2.6): TYPE is 0 to read and 1 to write COUNT sectors from
-;; SECTOR on, into or out of the memory at ADDRESS. What a request says is
-;; its type, in 32 bits, 32 bits of nothing, and the sector, in 64. The
-;; device's answer is 0 when all went well, 1 when it could not read or
-;; write, and 2 when it does not know the request. A wait ends every tenth
-;; of a second to look at the queue, so an interrupt that got lost costs
-;; that much and no more.
-(defun request (disk type sector count address)
-  (unless (and (integerp sector) (integerp count) (<= 0 sector) (< 0 count)
-               (<= (+ sector count) (disk-sectors disk)))
-    (error "the disk ~A has the sectors 0 to ~D, and not ~S of them from ~S on"
-           (disk-name disk) (1- (disk-sectors disk)) count sector))
-  (when (and (= type 1) (disk-read-only disk))
-    (error "the disk ~A cannot be written" (disk-name disk)))
+;; One request (5.2.6): TYPE is 0 to read and 1 to write the sectors from
+;; SECTOR on that DATA has the memory of, a buffer as the queue takes them,
+;; and 4 to put what the device holds back where it lasts, which has no
+;; sectors and no memory to it. What a request says is its type, in 32
+;; bits, 32 bits of nothing, and the sector, in 64. The device's answer is
+;; what this gives: 0 when all went well, 1 when it could not do it, and 2
+;; when it does not know the request. A wait ends every tenth of a second
+;; to look at the queue, so an interrupt that got lost costs that much and
+;; no more. A disk that a variable has kept from an earlier start, in a
+;; world that was saved, is not asked: its queue and its page frame are
+;; somebody else's memory by now.
+(defun ask (disk type sector data)
   (clara:with-lock-held ((disk-lock disk))
+    (unless (member disk *disks*)
+      (error "the disk ~A is from an earlier start; (clara.disk:disks) has this start's" (disk-name disk)))
     (when (disk-failed disk)
       (error "the disk ~A left a request unanswered, and is asked nothing more" (disk-name disk)))
     (let ((frame (disk-request disk))
@@ -65,9 +71,7 @@
             (clara.unsafe:memory-64 (+ frame 8)) sector
             (clara.unsafe:memory-8 (+ frame 16)) 255) ; which no device answers
       (clara.virtio:queue-add queue
-                              (list (list frame 16 nil)
-                                    (list address (* 512 count) (= type 0))
-                                    (list (+ frame 16) 1 t))
+                              (append (list (list frame 16 nil)) data (list (list (+ frame 16) 1 t)))
                               disk)
       (clara.virtio:queue-notify queue)
       (loop
@@ -78,36 +82,60 @@
           (when (>= waited *patience*)
             (setf (disk-failed disk) t)
             (error "the disk ~A has not answered a request in ~D milliseconds" (disk-name disk) waited))))
-      (case (clara.unsafe:memory-8 (+ frame 16))
-        (0 count)
-        (1 (error "the disk ~A could not ~A its sectors ~D to ~D"
-                  (disk-name disk) (if (= type 0) "read" "write") sector (+ sector count -1)))
-        (t (error "the disk ~A does not know how to ~A: its answer is ~D"
-                  (disk-name disk) (if (= type 0) "read" "write") (clara.unsafe:memory-8 (+ frame 16))))))))
+      (clara.unsafe:memory-8 (+ frame 16)))))
+
+;; COUNT sectors from SECTOR on, read into the memory at ADDRESS or written
+;; from it.
+(defun request (disk type sector count address)
+  (unless (and (integerp sector) (integerp count) (<= 0 sector) (< 0 count)
+               (<= (+ sector count) (disk-sectors disk)))
+    (error "the disk ~A has the sectors 0 to ~D, and not ~S of them from ~S on"
+           (disk-name disk) (1- (disk-sectors disk)) count sector))
+  (when (and (= type 1) (disk-read-only disk))
+    (error "the disk ~A cannot be written" (disk-name disk)))
+  (let ((answer (ask disk type sector (list (list address (* 512 count) (= type 0))))))
+    (case answer
+      (0 count)
+      (1 (error "the disk ~A could not ~A its sectors ~D to ~D"
+                (disk-name disk) (if (= type 0) "read" "write") sector (+ sector count -1)))
+      (t (error "the disk ~A does not know how to ~A: its answer is ~D"
+                (disk-name disk) (if (= type 0) "read" "write") answer)))))
 
 ;; COUNT sectors from SECTOR on, read into the memory at ADDRESS, which is
 ;; page frames with room for them. COUNT is returned.
 (defun read-sectors (disk sector count address)
   (request disk 0 sector count address))
 
-;; The same sectors, written from that memory. Without the device having
-;; been asked for anything more, a write that is answered is on the disk.
+;; The same sectors, written from that memory. A write that is answered is
+;; the device's to keep, and FLUSH is what makes it last.
 (defun write-sectors (disk sector count address)
   (request disk 1 sector count address))
 
+;; What was written to the disk is where it lasts: T when the device was
+;; asked and has answered, and NIL for a disk that holds nothing back, or
+;; cannot be written at all.
+(defun flush (disk)
+  (when (and (disk-flushes disk) (not (disk-read-only disk)))
+    (let ((answer (ask disk 4 0 nil)))
+      (unless (= answer 0)
+        (error "the disk ~A could not put what it holds where it lasts: its answer is ~D" (disk-name disk) answer))
+      t)))
+
 ;; Open a virtio block device. Of what such a device can do, the driver
-;; asks for bit 5, by which the device says that it cannot be written. Its
+;; asks for bit 5, by which the device says that it cannot be written, and
+;; for bit 9, by which it says that it knows the request to flush. Its
 ;; own registers begin with how many sectors it has, in 64 bits (5.2.4);
 ;; a sector is 512 bytes there whatever the device is made of. Three
 ;; buffers make a request, so the queue need not be long.
 (defun open-disk (pci)
-  (let* ((device (clara.virtio:open-device pci 32))
+  (let* ((device (clara.virtio:open-device pci (+ 32 512)))
          (queue (clara.virtio:open-queue device 0 8))
          (disk (make-disk :device device :queue queue
                           :name (clara.pci:location pci)
                           :sectors (+ (clara.virtio:register-32 device 0)
                                       (ash (clara.virtio:register-32 device 4) 32))
                           :read-only (/= 0 (logand (clara.virtio:device-features device) 32))
+                          :flushes (/= 0 (logand (clara.virtio:device-features device) 512))
                           :lock (clara:make-lock "disk")
                           :request (clara.unsafe:allocate-memory 1))))
     (when (< (clara.virtio:queue-size queue) 3)

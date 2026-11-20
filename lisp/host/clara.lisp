@@ -35,6 +35,7 @@
            "INTERRUPT-EVENT" "FRAMEBUFFER" "SERIAL-DEVICE" "SERIAL-BYTE" "SERIAL-BREAK"
            "TAKE-SCREEN" "GIVE-SCREEN"
            "MAP-MEMORY" "PCI-CONFIGURATION" "MESSAGE-INTERRUPT" "KEYBOARD-BREAK" "MEMORY-STRING"
+           "POWER-OFF" "RESET" "POWER-BUTTON"
            "STRING-BYTES" "STRING-MEMORY" "HEAP-IMAGE"
            "MAKE-COMPILED-FUNCTION" "COMPILED-FUNCTION-CODE"
            "NATIVE-LAYOUT" "INSTALL-NATIVE-CODE" "NATIVE-CODE-BYTES" "NATIVE-FUNCTION"
@@ -46,7 +47,8 @@
            "SET-FRAMEBUFFER" "SET-SERIAL-DEVICE" "SET-SCREEN-CURSOR" "GIVEN-SCREEN"
            "TYPE-BYTES" "RAISE-INTERRUPT" "SERIAL-BREAK-P"
            "SET-PCI-CONFIGURATION" "SEND-MESSAGE" "MESSAGE-INTERRUPTS" "KEYBOARD-BREAKS"
-           "ALLOCATED-PAGES" "PROVIDED-FILES" "SET-HEAP-IMAGE" "PROVIDED-COMPILER"))
+           "ALLOCATED-PAGES" "PROVIDED-FILES" "SET-HEAP-IMAGE" "PROVIDED-COMPILER"
+           "POWER" "PRESS-POWER-BUTTON"))
 
 ;;; CLARA: threads
 
@@ -271,6 +273,8 @@
 (defvar *pci-configuration* nil) ; what PCI-CONFIGURATION gives, as a list, or NIL
 (defvar *messages* nil)      ; (device event address data): what MESSAGE-INTERRUPT has handed out, the last first
 (defvar *keyboard-breaks* 0) ; how often KEYBOARD-BREAK was called
+(defvar *power* nil)         ; what the machine was told of its power, the last first: :OFF and :AGAIN
+(defvar *button* nil)        ; its power button was pressed, and nobody has asked since
 (defvar *ports* nil)         ; the same for I/O ports
 (defvar *framebuffer* nil)   ; what FRAMEBUFFER gives, as a list, or NIL
 (defvar *serial-device* nil) ; (kind base)
@@ -290,7 +294,8 @@
   (setf clara::*files* nil)
   (setq *devices* nil *ports* nil *framebuffer* nil *serial-device* nil
         *screen-cursor* nil *given-screen* nil *typed* nil *interrupts* nil *serial-break* t
-        *mapped* nil *pci-configuration* nil *messages* nil *keyboard-breaks* 0)
+        *mapped* nil *pci-configuration* nil *messages* nil *keyboard-breaks* 0
+        *power* nil *button* nil)
   nil)
 
 ;; SIZE bytes of registers at ADDRESS: READ is called with an offset and
@@ -340,6 +345,15 @@
 
 (defun keyboard-breaks ()
   *keyboard-breaks*)
+
+;; What the machine was told of its power since it was made, the first
+;; first: this machine does neither, and goes on, as one does that cannot
+;; be turned off from inside.
+(defun power ()
+  (reverse *power*))
+
+(defun press-power-button ()
+  (setq *button* t))
 
 ;; How many page frames are handed out: a driver that gives back what it
 ;; takes leaves this as it was.
@@ -576,6 +590,18 @@
 (defun keyboard-break ()
   (incf clara.host::*keyboard-breaks*)
   nil)
+
+(defun power-off ()
+  (push :off clara.host::*power*)
+  nil)
+
+(defun reset ()
+  (push :again clara.host::*power*)
+  nil)
+
+(defun power-button ()
+  (prog1 clara.host::*button*
+    (setq clara.host::*button* nil)))
 
 ;; The text that some bytes of memory are: UTF-8, or it is an error.
 (defun memory-string (address bytes)

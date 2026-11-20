@@ -525,18 +525,25 @@
 ;; An editor in a window of its own, with the text of the file of a name in
 ;; it, or with no text yet. COLUMNS and ROWS are the size of the text's
 ;; part, 80 by 24 cells or what the screen has room for; X and Y are where
-;; the window goes. The window is the thread's that calls.
+;; the window goes. The window is the thread's that calls. Whoever shuts the
+;; machine down asks the window first, and a text that is not saved is what
+;; it has to say then.
 (defun open-editor (name &key columns rows x y)
   (let* ((screen (clara.draw:screen))
          (columns (or columns (max 20 (min 80 (floor (- (clara.draw:surface-width screen) 48) clara.font:+width+)))))
          (rows (or rows (max 3 (min 24 (floor (- (clara.draw:surface-height screen) 136) clara.font:+height+)))))
+         (holds (list nil))
          (window (clara.windows:open-window (or name "Editor") (* columns clara.font:+width+)
-                                            (* (1+ rows) clara.font:+height+) :x x :y y :events t))
+                                            (* (1+ rows) clara.font:+height+) :x x :y y :events t
+                                            :unfinished (lambda ()
+                                                          (and (car holds) (editor-changed (car holds))
+                                                               "text that is not saved"))))
          (editor (make-editor :window window :surface (clara.windows:window-surface window)
                               :columns columns :rows rows
                               :ink (clara.draw:color 232 227 244) :paper (clara.draw:color 30 27 46)
                               :shown (make-array (1+ rows) :initial-element nil)
                               :message "Ctrl-S saves, Ctrl-O opens a file, Ctrl-E evaluates, Ctrl-Q closes")))
+    (setf (car holds) editor)
     (when name
       (attempt editor (lambda () (read-in editor name)))
       ;; A file that could not be read is not what the window has.

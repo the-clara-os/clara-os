@@ -5,7 +5,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define CLARA_VERSION "0.0.24"
+#define CLARA_VERSION "0.0.25"
 
 #define PAGE_SHIFT 12
 #define PAGE_SIZE  (1ULL << PAGE_SHIFT)
@@ -191,6 +191,13 @@ int  arch_port_write(uint16_t port, unsigned size, uint32_t value);
  * its first I/O port or the address of its registers. */
 extern const char *const arch_serial_kind;
 extern const uint64_t arch_serial_base;
+
+/* arch/<arch>/power.c: turning the machine off, starting it again, and its
+ * power button, each by the way that ACPI names for this machine. */
+void arch_power_init(void);   /* find the three, and say in the boot report what there is */
+void arch_power_off(void);    /* returns when the machine has no way, or did not go by it: from a thread */
+void arch_restart(void);      /* likewise */
+int  arch_power_button(void); /* has it been pressed since this was last asked? -1 when the machine has none */
 
 /* arch/<arch>/exception.c: the processor's exceptions, in the kernel's hands,
  * and with them what a thread switch is made of (thread.c) */

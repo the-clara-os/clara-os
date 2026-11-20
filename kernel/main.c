@@ -34,6 +34,7 @@ void kmain(struct boot_info *bi)
     acpi_init(bi->acpi_rsdp);
     arch_interrupts_init();
     timer_selftest();
+    arch_power_init();
 
     /* With a tick to take turns on, this flow of control becomes one
      * thread among others. */

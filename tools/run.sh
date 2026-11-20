@@ -121,7 +121,7 @@ x86_64)
         -drive if=pflash,format=raw,readonly=on,file="$code" \
         -drive if=pflash,format=raw,file="$vars" \
         -drive if=none,id=esp,format=raw,file="$disk" -device virtio-blk-pci,drive=esp,bootindex=0 $input \
-        -serial "$serial" -no-reboot "$@"
+        -serial "$serial" "$@"
     ;;
 aarch64)
     firmware "$share/edk2-aarch64-code.fd" "$share/edk2-arm-vars.fd" \
@@ -137,7 +137,7 @@ aarch64)
         -drive if=pflash,format=raw,readonly=on,file="$code" \
         -drive if=pflash,format=raw,file="$vars" \
         -drive if=none,id=esp,format=raw,file="$disk" -device virtio-blk-pci,drive=esp,bootindex=0 $input \
-        -device ramfb -serial "$serial" -no-reboot "$@"
+        -device ramfb -serial "$serial" "$@"
     ;;
 *)
     echo "unknown arch: $arch" >&2

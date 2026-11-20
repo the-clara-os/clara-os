@@ -8,7 +8,9 @@
 ;;;; launcher: a bar whose button lists the applications there are, and
 ;;;; starts the one that is picked, in a thread of its own. An application
 ;;;; is defined in the world, or it is a file that is loaded when it is
-;;;; first picked, and can be unloaded again.
+;;;; first picked, and can be unloaded again. Under the applications the
+;;;; list has the commands: things that are done and open no window, such
+;;;; as shutting the machine down (lisp/system.lisp).
 ;;;;
 ;;;; Nothing here draws on the screen. What the screen is to show is put
 ;;;; together on a surface of the same size, out of sight: the desk, the
@@ -41,7 +43,7 @@
            "OPEN-WINDOW" "CLOSE-WINDOW" "SHOW" "WINDOW-P" "WINDOW-TITLE" "WINDOW-SURFACE" "WINDOW-POSITION"
            "MOVE-WINDOW" "RAISE-WINDOW" "RENAME-WINDOW" "NEXT-EVENT" "WINDOWS" "FOCUSED-WINDOW"
            "DEFINE-APPLICATION" "INSTALL-APPLICATION" "UNLOAD-APPLICATION" "REMOVE-APPLICATION"
-           "APPLICATIONS" "LAUNCH"
+           "APPLICATIONS" "LAUNCH" "DEFINE-COMMAND" "REMOVE-COMMAND" "COMMANDS" "UNFINISHED"
            "KEY-TYPED" "POINTER-MOVED"))
 (in-package "CLARA.WINDOWS")
 
@@ -54,6 +56,7 @@
   key      ; a function of a character's code, called for what is typed while the window has the focus, or NIL
   pointer  ; a function of a place on the inside and the buttons, called when a button goes down or up there, or NIL
   close    ; a function of no arguments, called when the close box is clicked; without one there is no box
+  unfinished ; a function of no arguments that says what its program has not finished, in words, or NIL: see UNFINISHED
   thread   ; the thread that opened it, whose it is to draw on and to close
   open     ; it is on the screen
   closing  ; its close box was clicked, and CLOSE called
@@ -78,6 +81,7 @@
 (defvar *made* nil)         ; every window that was opened and not closed, on the screen or not
 (defvar *dirty* nil)        ; rectangles of the screen that are to be put together again, none over another
 (defvar *applications* nil) ; the applications there are, in the order of the launcher's list
+(defvar *commands* nil)     ; and under them the commands, each (name . function), in that order
 (defvar *loading* (clara:make-lock "applications")) ; the file of one application is loaded at a time
 (defvar *launched* nil)     ; the threads that LAUNCH made
 (defvar *launching* nil)    ; in the thread of an application: the event that LAUNCH waits for, until its window is open
@@ -176,22 +180,28 @@
       (clara.draw:draw-text *back* (- (+ x width) 12) (- y 19) "x" text))
     (clara.draw:copy-rectangle (window-surface window) 0 0 width height *back* x y)))
 
-;; The launcher's list: the applications, one to a line, under the bar.
+;; The launcher's list: the applications, one to a line, under the bar,
+;; and under them the commands, with a line between the two.
+(defun menu-names ()
+  (append (mapcar #'application-name *applications*) (mapcar #'car *commands*)))
+
 (defun menu-width ()
   (let ((width +button+))
-    (dolist (application *applications* width)
-      (setq width (max width (+ 16 (clara.draw:text-width (application-name application))))))))
+    (dolist (name (menu-names) width)
+      (setq width (max width (+ 16 (clara.draw:text-width name)))))))
 
 (defun menu-damaged ()
-  (damaged 0 +bar+ (menu-width) (+ +bar+ (* +item+ (length *applications*)))))
+  (damaged 0 +bar+ (menu-width) (+ +bar+ (* +item+ (length (menu-names))))))
 
 (defun paint-menu ()
-  (let ((width (menu-width)) (height (* +item+ (length *applications*))) (y +bar+))
+  (let* ((names (menu-names)) (width (menu-width)) (height (* +item+ (length names))) (y +bar+))
     (clara.draw:fill-rectangle *back* 0 +bar+ width height *paper*)
     (clara.draw:draw-rectangle *back* 0 +bar+ width height *ink*)
-    (dolist (application *applications*)
-      (clara.draw:draw-text *back* 8 (+ y 2) (application-name application) *ink*)
-      (setq y (+ y +item+)))))
+    (dolist (name names)
+      (clara.draw:draw-text *back* 8 (+ y 2) name *ink*)
+      (setq y (+ y +item+)))
+    (when (and *applications* *commands*)
+      (clara.draw:fill-rectangle *back* 0 (+ +bar+ (* +item+ (length *applications*))) width 1 *ink*))))
 
 (defun paint-pointer ()
   (clara.draw:draw-bitmap *back* *pointer-x* *pointer-y* *arrow-edge* 12 *dark*)
@@ -287,15 +297,20 @@
 ;; which it has when CLOSE is given. They are called in the thread of the
 ;; keyboard or of the mouse, so they hand on what they are told and do not
 ;; draw. With EVENTS the window has the three for itself, and keeps what
-;; they are told until its program asks: NEXT-EVENT.
-(defun open-window (title width height &key x y key pointer close events)
+;; they are told until its program asks: NEXT-EVENT. UNFINISHED is a
+;; function that says, when it is asked, what the window's program still
+;; holds that would be lost if the window went now, in a few words, or NIL
+;; for nothing: a text that is not saved. It is asked before the machine is
+;; shut down, in whatever thread does that.
+(defun open-window (title width height &key x y key pointer close events unfinished)
   (unless (stringp title)
     (error "the title of a window is a string, and ~S is not one" title))
   (unless (and (integerp width) (>= width 24))
     (error "a window is 24 pixels wide or more, for its band to be got hold of, and ~S is not" width))
   (let* ((surface (clara.draw:allocate-surface width height))
          (window (make-window :title title :surface surface :width width :height height
-                              :key key :pointer pointer :close close :thread (clara:current-thread)))
+                              :key key :pointer pointer :close close :unfinished unfinished
+                              :thread (clara:current-thread)))
          (opened nil))
     (when events
       (setf (window-events-lock window) (clara:make-lock "events")
@@ -442,6 +457,16 @@
   (clara:with-lock-held (*lock*)
     (copy-list *windows*)))
 
+;; What the programs of the windows have not finished: for every window
+;; that says so, the window and what it says, the topmost first. A function
+;; that fails has nothing to say.
+(defun unfinished ()
+  (let ((found nil))
+    (dolist (window (windows) (reverse found))
+      (let ((says (and (window-unfinished window) (ignore-errors (funcall (window-unfinished window))))))
+        (when (stringp says)
+          (setq found (cons (cons window says) found)))))))
+
 (defun focused-window ()
   (car (windows)))
 
@@ -488,14 +513,19 @@
 ;; it when the lock is free is returned, as a function.
 (defun press (x y buttons)
   (cond (*menu*
-         (let ((application (and (< x (menu-width)) (>= y +bar+) (nth (floor (- y +bar+) +item+) *applications*))))
+         (let* ((line (and (< x (menu-width)) (>= y +bar+) (floor (- y +bar+) +item+)))
+                (application (and line (nth line *applications*)))
+                (command (and line (>= line (length *applications*))
+                              (nth (- line (length *applications*)) *commands*))))
            (menu-damaged)
            (setq *menu* nil)
-           (and application
-                (let ((name (application-name application)))
-                  (lambda () (launch name))))))
+           (cond (application
+                  (let ((name (application-name application)))
+                    (lambda () (launch name))))
+                 (command
+                  (lambda () (run-command command))))))
         ((< y +bar+)
-         (when (and (< x +button+) *applications*)
+         (when (and (< x +button+) (or *applications* *commands*))
            (setq *menu* t)
            (menu-damaged))
          nil)
@@ -701,6 +731,41 @@
       (shut-menu)
       (setq *applications* (remove application *applications*)))
     (application-name application)))
+
+;;; Commands
+;;;
+;;; A command is a name in the launcher's list, under the applications, and
+;;; a function of no arguments, which is called in a thread of its own when
+;;; the name is picked. It is for what is done and over: nothing waits for
+;;; it, and it opens no window that the launcher would know of.
+
+(defun run-command (command)
+  (clara:make-thread (cdr command) :name (car command)))
+
+;; The command of that name, in letters of either case, or NIL.
+(defun find-command (name)
+  (find-if (lambda (command) (string-equal name (car command))) *commands*))
+
+(defun define-command (name function)
+  (unless (stringp name)
+    (error "the name of a command is a string, and ~S is not one" name))
+  (clara:with-lock-held (*lock*)
+    (shut-menu)
+    (let ((defined (find-command name)))
+      (if defined
+          (rplacd defined function)
+          (setq *commands* (append *commands* (list (cons name function)))))))
+  name)
+
+(defun remove-command (name)
+  (clara:with-lock-held (*lock*)
+    (shut-menu)
+    (setq *commands* (remove (find-command name) *commands*)))
+  name)
+
+;; The names of the commands, in the order of the launcher's list.
+(defun commands ()
+  (mapcar #'car *commands*))
 
 ;;; Starting and stopping
 

@@ -76,9 +76,11 @@
 (load-source "lisp/listener.lisp")
 (load-source "lisp/windows.lisp")
 (load-source "lisp/terminal.lisp")
+(load-source "lisp/system.lisp")
 (load-source "lisp/editor.lisp")               ; the two that the kernel leaves on the volume for the launcher to load
 (load-source "lisp/files.lisp")
 (defvar *defined-applications* clara.windows::*applications*) ; what the files defined, for the tests to put back
+(defvar *defined-commands* clara.windows::*commands*)
 
 ;;; Names. boot.lisp is the part of Common Lisp that ClaraOS has in Lisp,
 ;;; and SBCL has all of it already, so it is read here as text. What it
@@ -1810,7 +1812,9 @@
 ;; A disk serves what is in its first queue. A request is three buffers or
 ;; more: 16 bytes for the device to read, the type in the first four and
 ;; the sector in the last eight; the memory of the sectors, for the device
-;; to write when it is a read; and a byte for its answer.
+;; to write when it is a read; and a byte for its answer. A request of the
+;; type 4 is to put what the disk holds where it lasts: no sectors and no
+;; memory, and only from a driver that asked whether the disk knows it.
 (defun serve-disk (vdev)
   (let ((vq (aref (vdev-queues vdev) 0)) (disk (vdev-disk vdev)))
     (loop
@@ -1826,11 +1830,15 @@
                (bytes (reduce #'+ (mapcar #'second data)))
                (at (* 512 sector))
                (went (vdev-answer vdev)))
-          (unless (and (>= (length buffers) 3) (= (second header) 16) (not (logbitp 1 (third header)))
+          (unless (and (= (second header) 16) (not (logbitp 1 (third header)))
                        (= (second answer) 1) (logbitp 1 (third answer))
-                       (plusp bytes) (zerop (mod bytes 512))
-                       (every (lambda (buffer) (eq (logbitp 1 (third buffer)) (= type 0))) data))
+                       (if (= type 4)
+                           (and (= (length buffers) 2) (= sector 0))
+                           (and (>= (length buffers) 3) (plusp bytes) (zerop (mod bytes 512))
+                                (every (lambda (buffer) (eq (logbitp 1 (third buffer)) (= type 0))) data))))
             (failed "the driver gave the disk a request that is not one: ~S" buffers))
+          (when (and (= type 4) (not (logbitp 9 (first (vdev-wanted vdev)))))
+            (failed "the driver asked a disk to flush that it had not asked whether it can"))
           (dolist (buffer data)
             (let ((first (floor (clara.host::memory-index (first buffer) (second buffer)) 4096)))
               (when (find 0 clara.host::*pages* :start first :end (+ first (ceiling (second buffer) 4096)))
@@ -1842,6 +1850,7 @@
           (cond ((/= went 0))
                 ((or (> (+ at bytes) (length disk)) (and (= type 1) (vdev-read-only vdev)))
                  (setq went 1))
+                ((= type 4))
                 ((> type 1)
                  (setq went 2))
                 (t
@@ -2446,7 +2455,7 @@
        (pages (clara.host:allocated-pages)))
   (check (format nil "disk: 00:03.0 has 100 sectors of 512 bytes, 0 MiB~%") said)
   (check '(0 1 3 11 15) (reverse (vdev-history vdev)))
-  (check '(0 1) (vdev-wanted vdev))                       ; of all that it offers, version 1 and no more
+  (check '(512 1) (vdev-wanted vdev))                     ; of all that it offers, version 1 and the flush
   (check '(8 1 0) (list (vq-size vq) (vq-enabled vq) (vq-message vq)))
   (check '("00:03.0" 100 nil 1) (list (clara.disk:disk-name disk) (clara.disk:disk-sectors disk)
                                       (clara.disk:disk-read-only disk) (length (clara.disk:disks))))
@@ -2464,6 +2473,9 @@
                 (equalp (subseq bytes (* 96 512) (* 97 512)) (subseq (pattern 100) (* 96 512) (* 97 512)))
                 (equalp (subseq bytes (* 99 512)) (subseq (pattern 100) (* 99 512)))))
   (check '(1 97 2) (car (vdev-requests vdev)))
+  ;; What was written is put where it lasts: a request without sectors.
+  (check '(t (4 0 0)) (list (clara.disk:flush disk) (car (vdev-requests vdev))))
+  (pop (vdev-requests vdev))
   ;; Sectors that the disk does not have are refused here, and the device is not asked.
   (check-condition error (clara.disk:read-sectors disk 99 2 memory))
   (check-condition error (clara.disk:read-sectors disk 100 1 memory))
@@ -2500,11 +2512,32 @@
        (disk (car (clara.disk:disks)))
        (memory (clara.unsafe:allocate-memory 1)))
   (check (format nil "disk: 00:03.0 has 4096 sectors of 512 bytes, 2 MiB, and cannot be written~%") said)
-  (check '(32 1) (vdev-wanted vdev))
+  (check '(544 1) (vdev-wanted vdev))
   (check t (clara.disk:disk-read-only disk))
   (check-condition error (clara.disk:write-sectors disk 0 1 memory))
-  (check nil (vdev-requests vdev))
+  (check '(nil nil) (list (clara.disk:flush disk) (vdev-requests vdev))) ; nothing was written that could be held back
   (check 1 (clara.disk:read-sectors disk 4095 1 memory)))
+
+;; A disk that does not say that it knows how to flush holds nothing back,
+;; and is not asked to. One that fails at it is an error. And a disk that a
+;; variable has kept from an earlier start is not asked anything: its queue
+;; and its page frame were that start's.
+(let* ((vdevs (new-disks (list 3 (pattern 16) :offers (list #x6c54 1)) (list 4 (pattern 16))))
+       (disks (progn (said-by #'clara.disk:start) (clara.disk:disks)))
+       (memory (clara.unsafe:allocate-memory 1)))
+  (check '((0 1) nil nil) (list (vdev-wanted (first vdevs)) (clara.disk:flush (first disks)) (vdev-requests (first vdevs))))
+  (setf (vdev-answer (second vdevs)) 1)
+  (check "the disk 00:04.0 could not put what it holds where it lasts: its answer is 1"
+         (handler-case (clara.disk:flush (second disks)) (error (c) (princ-to-string c))))
+  (setf (vdev-answer (second vdevs)) 0)
+  (check t (clara.disk:flush (second disks)))
+  (new-disks (list 3 (pattern 16)))
+  (said-by #'clara.disk:start)
+  (check "the disk 00:04.0 is from an earlier start; (clara.disk:disks) has this start's"
+         (handler-case (clara.disk:read-sectors (second disks) 0 1 memory) (error (c) (princ-to-string c))))
+  (check-condition error (clara.disk:write-sectors (first disks) 0 1 memory))
+  (check-condition error (clara.disk:flush (second disks)))
+  (check 1 (clara.disk:read-sectors (car (clara.disk:disks)) 0 1 (clara.unsafe:allocate-memory 1))))
 
 ;; A disk that fails at what it is asked, one that does not know the
 ;; request, and one that never answers.
@@ -3712,8 +3745,9 @@
 
 ;; A machine with a screen, what draws started on it, and the window manager
 ;; as a world has it that never ran one.
-(defun new-desk (&key (width 200) (height 140) applications (start t))
-  (clara.host:reset-machine)
+(defun new-desk (&key (width 200) (height 140) applications commands (start t) (machine t))
+  (when machine
+    (clara.host:reset-machine))
   (setq *desk-width* width
         *desk-height* height
         *pitch* (* 4 (+ width 2))
@@ -3725,6 +3759,7 @@
   (clara.input:send-keys-to nil)
   (clara.input:send-pointer-to nil)
   (setq clara.windows::*running* nil
+        clara.windows::*commands* commands
         clara.windows::*applications*
         (mapcar (lambda (application)
                   (if (consp application)
@@ -3759,12 +3794,16 @@
           ((and (>= at 112) (text-p name (- x at) (- y 2))) +ink+)
           (t +paper+))))
 
+;; The launcher's list: the applications and under them the commands, with
+;; a line across where the commands begin, when there are both.
 (defun menu-rule (x y)
-  (let* ((names (clara.windows:applications))
+  (let* ((applications (clara.windows:applications))
+         (names (append applications (clara.windows:commands)))
          (width (reduce #'max (mapcar (lambda (name) (+ 16 (* 8 (length name)))) names) :initial-value 112))
          (height (* 20 (length names))))
     (cond ((not (and clara.windows::*menu* (< -1 x width) (<= 20 y (+ 19 height)))) nil)
           ((or (= x 0) (= x (1- width)) (= y 20) (= y (+ 19 height))) +ink+)
+          ((and applications (clara.windows:commands) (= y (+ 20 (* 20 (length applications))))) +ink+)
           ((text-p (nth (floor (- y 20) 20) names) (- x 8) (- (mod (- y 20) 20) 2)) +ink+)
           (t +paper+))))
 
@@ -4055,6 +4094,77 @@
        (with-output-to-string (*standard-output*)
          (check nil (clara.windows:resume))))
 (check "" (with-output-to-string (*standard-output*) (check nil (clara.windows:resume)))) ; and one that was not
+
+;; Commands: under the applications in the launcher's list, with a line
+;; across where they begin. A click on one calls its function in a thread
+;; of its own, which has the command's name, and nothing waits for it.
+(defvar *commanded* nil)
+(new-desk :applications (list (cons "One" (lambda () 'done)) (cons "The second of them" (lambda () 'done))
+                              (cons "Quiet" (lambda () 'done))))
+(check '("Do it" ("Do it"))
+       (list (clara.windows:define-command "Do it" (lambda () (push (clara:thread-name (clara:current-thread)) *commanded*)))
+             (clara.windows:commands)))
+(check "Another" (clara.windows:define-command "Another" (lambda () (push 'another *commanded*))))
+(clara.windows:pointer-moved 5 5 1)
+(clara.windows:pointer-moved 5 5 0)
+(check '(t 0) (list clara.windows::*menu* (wrong-pixels)))
+(clara.windows:pointer-moved 20 85 1)          ; the fourth line: after three applications, the first command
+(clara.windows:pointer-moved 20 85 0)
+(check t (eventually (lambda () (equal *commanded* '("Do it")))))
+(check '(nil 0) (list clara.windows::*menu* (wrong-pixels)))
+(clara.windows:pointer-moved 5 5 1)
+(clara.windows:pointer-moved 5 5 0)
+(clara.windows:pointer-moved 20 119 1)         ; the last pixel of the last line
+(clara.windows:pointer-moved 20 119 0)
+(check t (eventually (lambda () (equal *commanded* '(another "Do it")))))
+(clara.windows:pointer-moved 5 5 1)
+(clara.windows:pointer-moved 5 5 0)
+(clara.windows:pointer-moved 20 120 1)         ; and under it: nothing
+(clara.windows:pointer-moved 20 120 0)
+(check '(nil (another "Do it") 0) (list clara.windows::*menu* *commanded* (wrong-pixels)))
+;; A name that is defined again, in letters of either case, keeps its place
+;; and has the new function. One that is removed is gone from the list.
+(check '("do it" ("Do it" "Another")) (list (clara.windows:define-command "do it" (lambda () (push 'again *commanded*)))
+                                            (clara.windows:commands)))
+(clara.windows:pointer-moved 5 5 1)
+(clara.windows:pointer-moved 5 5 0)
+(clara.windows:pointer-moved 20 85 1)
+(clara.windows:pointer-moved 20 85 0)
+(check t (eventually (lambda () (eq (car *commanded*) 'again))))
+(clara.windows:pointer-moved 5 5 1)            ; the list is open while a command goes: it shuts, and is right after
+(clara.windows:pointer-moved 5 5 0)
+(check '("ANOTHER" ("Do it") nil 0)
+       (list (clara.windows:remove-command "ANOTHER") (clara.windows:commands) clara.windows::*menu* (wrong-pixels)))
+(check '("none of that name" ("Do it")) (list (clara.windows:remove-command "none of that name") (clara.windows:commands)))
+(check-condition error (clara.windows:define-command 'name #'list))
+;; Commands and no application: the button opens the list all the same,
+;; and there is no line across it.
+(new-desk :commands (list (cons "Alone" (lambda () (push 'alone *commanded*)))))
+(clara.windows:pointer-moved 5 5 1)
+(clara.windows:pointer-moved 5 5 0)
+(check '(t 0) (list clara.windows::*menu* (wrong-pixels)))
+(clara.windows:pointer-moved 20 30 1)
+(clara.windows:pointer-moved 20 30 0)
+(check t (eventually (lambda () (eq (car *commanded*) 'alone))))
+(check '(nil 0) (list clara.windows::*menu* (wrong-pixels)))
+
+;; What the windows' programs have not finished: each window that was given
+;; a function for it is asked, and the ones that answer in words are
+;; listed, the topmost first. A function that fails has nothing to say.
+(let* ((says nil)
+       (quiet (clara.windows:open-window "quiet" 40 20))
+       (busy (clara.windows:open-window "busy" 40 20 :unfinished (lambda () says)))
+       (broken (clara.windows:open-window "broken" 40 20 :unfinished (lambda () (error "it cannot say"))))
+       (other (clara.windows:open-window "other" 40 20 :unfinished (lambda () "more of the same"))))
+  (check (list (cons other "more of the same")) (clara.windows:unfinished))
+  (setq says "a letter half written")
+  (check (list (cons other "more of the same") (cons busy "a letter half written")) (clara.windows:unfinished))
+  (clara.windows:raise-window busy)
+  (check (list busy other) (mapcar #'car (clara.windows:unfinished)))
+  (setq says 12)                               ; which is not words
+  (check (list other) (mapcar #'car (clara.windows:unfinished)))
+  (mapc #'clara.windows:close-window (list quiet busy broken other))
+  (check nil (clara.windows:unfinished)))
 
 ;; The console lends the screen and has it back: while the window manager
 ;; runs, what is written goes to the serial port alone.
@@ -5173,6 +5283,159 @@
   (clara:destroy-thread thread)               ; stopped, perhaps before it began
   (check-condition error (clara:join-thread thread))
   (check nil (clara:thread-alive-p thread)))
+;;; Shutting the machine down, and starting it again (lisp/system.lisp).
+;;; The machine of these tests does neither: it takes note of what it was
+;;; told and goes on, as a machine does that cannot be turned off from
+;;; inside. So what is looked at is the order of things up to there: what
+;;; the windows are asked, the world saved while the window manager still
+;;; runs, the window manager stopped, the disk asked to put what it holds
+;;; where it lasts, the substrate told, and what is said on the way.
+
+;; What FUNCTION writes, and what the threads write that it makes: a new
+;; thread writes where *STANDARD-OUTPUT* points outside every binding.
+(defun said-by-all (function)
+  (let ((output (sb-ext:symbol-global-value '*standard-output*)) (text (make-string-output-stream)))
+    (setf (sb-ext:symbol-global-value '*standard-output*) text)
+    (unwind-protect (let ((*standard-output* text)) (funcall function))
+      (setf (sb-ext:symbol-global-value '*standard-output*) output))
+    (get-output-stream-string text)))
+
+(defun condition-text (function)
+  (handler-case (progn (funcall function) nil)
+    (error (condition) (princ-to-string condition))))
+
+(defvar *cannot-off* "clara: this machine cannot be turned off from inside: it can be switched off now")
+(defvar *cannot-again* "clara: this machine cannot be started again from inside: that is for whoever runs it")
+
+(check '("Restart" "Shut Down") (mapcar #'car *defined-commands*))
+
+;; A machine with a disk and no window manager: the world goes to the disk,
+;; the disk is told to keep it, and the machine is told to go.
+(start-files (fat-bytes (make-fat-volume 16 '(("clara" (("kept.txt" "x")))))))
+(clara.host:set-heap-image (octets "the world, as bytes"))
+(let ((asked nil) (meanwhile nil))
+  ;; One at a time: whoever asks while the world is on its way to the disk is refused.
+  (setf (vdev-watch *disk*) (lambda ()
+                              (push (first (car (vdev-requests *disk*))) asked)
+                              (unless meanwhile
+                                (setq meanwhile (condition-text #'clara.system:start-again)))))
+  (check (format nil "clara: the world is saved~%clara: turning the machine off~%~A~%" *cannot-off*)
+         (said-by-all (lambda () (clara.system:shut-down))))
+  (check "the machine is being shut down already" meanwhile)
+  (check '(:off) (clara.host:power))
+  (check '(4 t) (list (car asked) (and (member 1 asked) t)))  ; written, and then put where it lasts
+  (check "the world, as bytes" (text-of-file "/clara/clara.image"))
+  (check nil clara.system::*leaving*)
+  ;; Without saving: the world that was saved last stays as it is, and nothing is written.
+  (clara.fat:remove-file "/clara/clara.image")
+  (setq asked nil)
+  (check (format nil "clara: starting the machine again~%~A~%" *cannot-again*)
+         (said-by-all (lambda () (clara.system:start-again :save nil))))
+  (check '((:off :again) (4) nil)
+         (list (clara.host:power) asked (find "clara.image" (clara.fat:names "/clara") :test #'string-equal)))
+  ;; One at a time.
+  (setq clara.system::*leaving* :again)
+  (check "the machine is being started again already" (condition-text #'clara.system:shut-down))
+  (setq clara.system::*leaving* nil))
+
+;; A world that cannot be saved: the machine stays as it was, and says why.
+(start-files (fat-bytes (make-fat-volume 16 '(("notes.txt" "x")))))
+(check (format nil "clara: the machine is not shut down: there is no directory for a file /clara/clara.image to be in~%")
+       (said-by-all (lambda () (clara.system:shut-down))))
+(check '(nil nil) (list (clara.host:power) clara.system::*leaving*))
+(start-files (fat-bytes (make-fat-volume 16 '(("clara" (("kept.txt" "x")))))) :read-only t)
+(check t (and (search "clara: the machine is not started again: the disk 00:03.0 cannot be written"
+                      (said-by-all (lambda () (clara.system:start-again))))
+              t))
+(check nil (clara.host:power))
+
+;; A machine without a disk has nowhere to save a world, and goes all the same.
+(new-disks)
+(said-by #'clara.disk:start)
+(said-by #'clara.fat:start)
+(check (format nil "clara: there is no disk to save the world on~%clara: turning the machine off~%~A~%" *cannot-off*)
+       (said-by-all (lambda () (clara.system:shut-down))))
+(check '(:off) (clara.host:power))
+
+;; With the window manager running. A window whose program has something
+;; unfinished stops the whole thing before anything is done: it comes to
+;; the top, and whoever asked is told which it is. With FORCE nobody is
+;; asked. The world is saved while the window manager runs, so that the
+;; machine starts in it; then it is stopped, and then the disk is told.
+(start-files (fat-bytes (make-fat-volume 16 '(("clara" (("kept.txt" "x")))))))
+(new-desk :machine nil :width 300 :height 220)
+(let* ((editor (clara.editor::open-editor nil :columns 20 :rows 3))
+       (second (clara.editor::open-editor nil :columns 20 :rows 3))
+       (plain (clara.windows:open-window "plain" 40 20))
+       (seen nil))
+  (check nil (clara.windows:unfinished))
+  (keys editor "a")
+  (check '("plain" "Editor" "Editor") (titles))
+  (check (format nil "the machine is not shut down: the window \"Editor\" has text that is not saved. ~
+                      Finish that, or ask with :FORCE T, which goes on without")
+         (condition-text #'clara.system:shut-down))
+  (check (list (clara.editor::editor-window editor) plain (clara.editor::editor-window second)) (clara.windows:windows))
+  (keys second "b")
+  (check (format nil "the machine is not started again: the window \"Editor\" has text that is not saved, ~
+                      and 1 more have something too. Finish that, or ask with :FORCE T, which goes on without")
+         (condition-text #'clara.system:start-again))
+  (check '(nil t nil 0) (list (clara.host:power) (clara.windows:running-p) clara.system::*leaving* (wrong-pixels)))
+  ;; The same from the launcher's list, where there is nobody to hand an error to: it is said.
+  (check t (and (search "clara: the machine is not shut down: the window \"Editor\" has text that is not saved"
+                        (said-by-all (lambda () (clara.system::asked :off))))
+                t))
+  (setf (vdev-watch *disk*)
+        (lambda () (push (cons (first (car (vdev-requests *disk*))) (clara.windows:running-p)) seen)))
+  (check (format nil "clara: the world is saved~%clara: starting the machine again~%~A~%" *cannot-again*)
+         (said-by-all (lambda () (clara.system:start-again :force t))))
+  (check '((4) t (:again) nil)
+         (list (car seen) (every #'cdr (remove 4 seen :key #'car)) (clara.host:power) (clara.windows:running-p)))
+  (check t (and (member '(1 . t) seen :test #'equal) t))
+  (mapc #'clara.windows:close-window
+        (list (clara.editor::editor-window editor) (clara.editor::editor-window second) plain)))
+
+;; The launcher's list has the two commands that this file defined, and a
+;; click on one is the same as asking at a prompt.
+(new-disks)
+(said-by #'clara.disk:start)
+(said-by #'clara.fat:start)
+(new-desk :machine nil :commands *defined-commands*)
+(clara.windows:pointer-moved 5 5 1)
+(clara.windows:pointer-moved 5 5 0)
+(check '(t 0) (list clara.windows::*menu* (wrong-pixels)))
+(check t (and (search (format nil "clara: turning the machine off~%~A~%" *cannot-off*)
+                      (said-by-all (lambda ()
+                                     (clara.windows:pointer-moved 20 50 1)       ; the second line: Shut Down
+                                     (clara.windows:pointer-moved 20 50 0)
+                                     (eventually (lambda () (clara.host:power)))
+                                     (eventually (lambda () (null clara.system::*leaving*))))))
+              t))
+(check '((:off) nil) (list (clara.host:power) (clara.windows:running-p)))
+
+;; The power button: START has a thread look at it, four times a second,
+;; and a press is a request to shut down. A world that was saved by a
+;; shutdown was in the middle of one, and is not when it starts.
+(new-disks)
+(said-by #'clara.disk:start)
+(said-by #'clara.fat:start)
+(setq clara.windows::*running* nil
+      clara.system::*leaving* :off)
+(check '(nil nil t) (list (clara.system:start) clara.system::*leaving* (clara:thread-alive-p clara.system::*watcher*)))
+(check '("power button" 2) (list (clara:thread-name clara.system::*watcher*) (length (clara:all-threads))))
+(check nil (clara.host:power))
+(check (format nil "clara: the power button was pressed~%clara: there is no disk to save the world on~%~
+                    clara: turning the machine off~%~A~%" *cannot-off*)
+       (said-by-all (lambda ()
+                      (clara.host:press-power-button)
+                      (eventually (lambda () (clara.host:power)))
+                      (eventually (lambda () (null clara.system::*leaving*))))))
+(check '(:off) (clara.host:power))
+(let ((first clara.system::*watcher*))       ; started again: one thread watches, and it is another
+  (clara.system:start)
+  (check '(nil t) (list (eq first clara.system::*watcher*) (eventually (lambda () (not (clara:thread-alive-p first)))))))
+(clara:destroy-thread clara.system::*watcher*)
+(check t (eventually (lambda () (= (length (clara:all-threads)) 1))))
+
 ;; A thread that is stopped before it has begun, and that nobody waits for,
 ;; is gone all the same: closing a window stops its thread in that way, and
 ;; on a machine that is slow enough the thread has not yet had its turn.

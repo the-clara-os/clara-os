@@ -1298,6 +1298,88 @@ architectures (kernel/vm.c).
   which the translation does not touch. The code of `fib` is 560 bytes on
   AArch64 and 660 on x86-64, where it was 732 and 828.
 
+## Shutting down (decided in M15e, 2026-11-20)
+
+- Shutting down is something the system does, and not something that is
+  done to it. Until this milestone a machine was stopped from outside,
+  which is the plug pulled: nothing was told, and the world as it had
+  become since it was last saved was gone. Now the machine is asked: at a
+  prompt, by the launcher's list, or by its power button, which is what a
+  host presses when it wants a machine to stop. The three come to one
+  procedure (lisp/system.lisp), and starting again is the same procedure
+  with another last step.
+- The procedure is Lisp, and the substrate's part is two functions and a
+  question: turn the machine off, start it again, has the button been
+  pressed. Each goes by what ACPI's table of fixed hardware says of the
+  machine. On AArch64 that is PSCI, a call to whatever runs above the
+  kernel, by the instruction that the table names. On x86_64 it is a few
+  I/O ports: the sleep state S5 written to the PM1 control register, the
+  reset register, and where there is none the keyboard controller's line
+  to the processor's reset pin.
+- The firmware has a runtime service for both, ResetSystem, the same on
+  both architectures, and the kernel does not call it. A runtime service
+  is the firmware's code, run by the kernel in the kernel's address space,
+  and the address space has one rule about code: the only memory that can
+  be run is the kernel's own image and what the Lisp world made for the
+  processor. Mapping what the firmware left behind so that it can be run,
+  and its data so that it can be written, on the word of a memory map from
+  before the handoff, gives that up for the sake of two calls. A call to a
+  higher level and a write to a port need nothing of the kind.
+- Two facts are in the DSDT and nowhere else: the type of the sleep state
+  that is "off", and where the registers of the generic event device are,
+  which is what has the power button on a machine without a PC's fixed
+  hardware. The DSDT is AML, a bytecode, and there is no interpreter for
+  it here (Devices, above). Both facts are written in it as a name with a
+  constant behind it, so the table is searched for those bytes
+  (kernel/acpi.c). A firmware that says them another way is not
+  understood; the boot report then says that the machine has no way of
+  being turned off, or no button, and it is stopped from outside as
+  before.
+- The power button is looked at and not waited for. On both machines it
+  would raise an interrupt, and on both the interrupt comes by a line,
+  whose number is in the DSDT's bytecode: the same reason for which no
+  device here interrupts by a line. A thread asks the substrate four times
+  a second, which costs a read of one register.
+- Before anything is done, the windows are asked. A window can be given a
+  function that says what its program holds that would be lost if the
+  window went, in a few words, and the editor's says so when its text is
+  not saved. While any window answers, the machine is not shut down: that
+  window comes to the top and whoever asked is told which it is. Asking
+  with `:force t` asks nobody. This is the whole of what an application is
+  told: it is not asked to close, and a program without a window is not
+  asked at all.
+- The world is saved, unless the shutdown is told not to: the next start
+  then goes on in the world that was left. It is saved while the window
+  manager still runs, so that the machine starts in it again; then the
+  window manager is stopped, which stops the applications; then every disk
+  is asked to put what it was given where it lasts, by the request that
+  virtio has for that, when the disk says that it holds anything back; and
+  then the substrate is told. A world that cannot be saved stops the
+  procedure before anything else is done, with the reason, so that
+  something can be done about it. A machine without a disk has nowhere to
+  save a world and goes all the same.
+- A thread of its own does all of that. The thread that asked may be an
+  application's, the listener's in a window, and stopping the window
+  manager stops it halfway. Whoever asked waits for that thread, and hears
+  from the procedure again only if the machine is still there: when a
+  world could not be saved, or when the substrate has no way of turning
+  this machine off, which is then said, with the world saved and the
+  machine left for the host to stop.
+- Ctrl-D at the first prompt is what it was: the session ends, the kernel
+  says that it has nothing more to do, and the machine stands still. It
+  saves nothing and turns nothing off. The boot tests end their sessions
+  that way and then look at the screen of a machine that is still there.
+- Shutting down is tested twice. Under SBCL the machine that the tests
+  make up takes note of what it is told and stays on, as a machine does
+  that cannot be turned off from inside, and the tests look at the order
+  of things up to there, through a disk that says at each request whether
+  the window manager still runs. And by booting: each kind of processor
+  starts once more from the disk that its first session left, is asked to
+  shut down while an editor holds a text that is not saved, is told to
+  start again and has to come up in the world that it saved on the way,
+  and has its power button pressed, after which it has to save once more
+  and be gone by itself, with its volume in order.
+
 ## Conventions
 
 - C: lower_snake_case for functions and files. Kernel-wide symbols carry

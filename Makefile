@@ -79,7 +79,14 @@ host-test:
 # (tools/session.txt), and the second boot, from a copy of that disk, has
 # to find the image, start from it, and answer for what the first one
 # defined (tools/resumed.txt). After every boot the host's own checker of
-# FAT volumes looks at the disk. Then the user manual: what it shows of
+# FAT volumes looks at the disk. Then each kind of processor once more, from
+# the disk that its first session left, for what is done to a machine and
+# not in it (tools/power.txt): it is asked to shut down while an editor has
+# a text that is not saved, and has to refuse; it is told to start again,
+# and has to come up in the world that it saved on the way; and its power
+# button is pressed, as a host does to stop a machine, after which it has
+# to save the world once more and be gone by itself, with its volume in
+# order. Then the user manual: what it shows of
 # the prompt (site/manual.html) is typed at a machine, which saves its
 # world, and at the same machine started again. That machine has a second
 # disk, with a volume that has nothing on it, given to it the way
@@ -105,6 +112,7 @@ host-test:
 # `make run-*`, stays out of all of them: a machine here has the disks that
 # its line gives it.
 test: export WORK :=
+POWER := SESSION=tools/power.txt MARKER='^clara: turning the machine off' EXPECT='^lisp: the heap is an image'
 RESUME := SESSION=tools/resumed.txt EXPECT='^lisp: the heap is an image;;^lisp: and with it [0-9]* KiB of code for the processor;;^lisp:   of the functions .* and 0 are walked;;^lisp:   the processor runs [1-9][0-9]* of the compiled ones itself, .* and the machine 3[^0-9]*$$'
 test: all host-test
 	tools/boottest.sh x86_64
@@ -114,6 +122,8 @@ test: all host-test
 	NAME=aarch64-gic2 NO_HVF=1 MKDISK="--fat 12 --table none" tools/boottest.sh aarch64 -machine gic-version=2
 	NAME=aarch64-gic2-resumed NO_HVF=1 DISK=$(BUILD)/boot-aarch64-gic2.img $(RESUME) \
 		tools/boottest.sh aarch64 -machine gic-version=2
+	NAME=x86_64-power DISK=$(BUILD)/boot-x86_64.img $(POWER) tools/boottest.sh x86_64
+	NAME=aarch64-power DISK=$(BUILD)/boot-aarch64.img $(POWER) tools/boottest.sh aarch64 -machine gic-version=3
 	python3 -I site/build.py --sessions $(BUILD)
 	rm -rf $(BUILD)/empty && mkdir -p $(BUILD)/empty && python3 -I tools/mkdisk.py $(BUILD)/empty $(BUILD)/work.img
 	NAME=manual WORK=$(BUILD)/work.img SESSION=$(BUILD)/manual-first.txt tools/boottest.sh aarch64 -machine gic-version=3

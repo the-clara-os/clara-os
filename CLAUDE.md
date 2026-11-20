@@ -33,7 +33,7 @@ Build with `make` (Homebrew's llvm and lld under /opt/homebrew/opt when they
 are there, otherwise clang and lld-link from the PATH; `LLVM=` and `LLD=`
 name other directories). `make test` runs the host tests of the Lisp
 files under SBCL (`make host-test`, ten seconds), then boots both
-architectures headless under QEMU, nine boots in about two minutes,
+architectures headless under QEMU, eleven boots in about three minutes,
 types a session at each kernel, and saves what each screen shows to
 build/screen-<name>.png; look at those images when a change touches the
 display. `make run-aarch64` and `make run-x86_64` open a QEMU window with
@@ -497,7 +497,7 @@ Rules:
 - What DISASSEMBLE writes is in a session and in the manual, and a line
   of a session that begins with two spaces is one that is typed: a line of
   a listing begins with its number.
-- `make test` boots nine times. Three machines, x86_64, AArch64 with GIC
+- `make test` boots eleven times. Three machines, x86_64, AArch64 with GIC
   version 3, and AArch64 emulated with GIC version 2, whose files in build/
   are named aarch64-gic2, each from a disk of another kind, and each twice:
   the first boot is typed tools/session.txt, which ends by saving the world,
@@ -531,13 +531,54 @@ Rules:
   between them. That boot runs the kernel that is on its disk, which is
   the one the first AArch64 session booted: to try a change there by
   hand, run `tools/boottest.sh aarch64` first and give the stress boot
-  `DISK=build/boot-aarch64.img`. Before that one, two boots for the user
+  `DISK=build/boot-aarch64.img`. Before that one, two boots for what is
+  done to a machine and not in it, x86_64-power and aarch64-power, each
+  from the disk that its machine's first session left (tools/power.txt,
+  below, under shutting down), and two boots for the user
   manual, named manual and manual-again: what the manual shows of the prompt
   is typed at them. The serial port of each is QEMU's standard input and
   output: the log is what the kernel printed, and a FIFO feeds it what the
   session types. QEMU's hvf has no version 2, and UTM uses version 3.
   tools/boottest.sh passes any further arguments on to QEMU, which is how to
   try another machine: `tools/boottest.sh aarch64 -smp 4 -cpu max`.
+- Shutting down (lisp/system.lisp, kernel/arch/<arch>/power.c,
+  kernel/acpi.c). `leave` is the one procedure behind every way of asking,
+  and `finish` its second half, in a thread of its own, since the thread
+  that asked may be an application's and stopped on the way: whatever is
+  added to a shutdown goes into `finish`, in the order that DESIGN.md
+  gives, and gets a line in the host tests, whose machine stays on
+  whatever it is told and whose disk says at every request whether the
+  window manager still runs (`vdev-watch`). What a new thread writes goes
+  where `*standard-output*` points outside every binding, so a test hears
+  it with `said-by-all`. The substrate's three functions are
+  `clara.unsafe:power-off`, `reset` and `power-button`; each architecture
+  finds its way in `arch_power_init`, from ACPI's FADT, and says in the
+  boot report's line `power:` what it found. Two facts are searched for in
+  the bytes of the DSDT (`acpi_sleep_type`, `acpi_device_memory`): a
+  change there is tried on all three machines, since each has a DSDT of
+  its own. A program that holds what would be lost gives its window an
+  `:unfinished` function, as lisp/editor.lisp does, and nothing else is
+  asked before a shutdown.
+- A session can go across a start: a line `^R` after the form that starts
+  the machine again, and what follows is typed at the kernel that comes up
+  then. What the kernel says between "clara: starting the machine again"
+  and its next invitation is no part of the transcript. A session that
+  ends with the machine turning itself off is given
+  `MARKER='^clara: turning the machine off'`: nothing is typed to end it,
+  it may end with a `^M` line, the machine has to be gone by itself ten
+  seconds later, and there is no screen to save. To press the power
+  button: `^M system_powerdown`. tools/run.sh no longer passes QEMU
+  `-no-reboot`, so a machine that starts itself again does.
+- A function in a file of the world cannot have a name of Common Lisp's,
+  also one that the kernel's own COMMON-LISP does not export: under SBCL
+  the name is the symbol of COMMON-LISP, which is locked. RESTART is one,
+  which is why it is `clara.system:start-again` and `clara.unsafe:reset`.
+- The launcher's list has applications and, under a line, commands
+  (`clara.windows:define-command`): a command is a function that is called
+  in a thread of its own and that nothing waits for, where LAUNCH waits
+  for an application's window. The tests' desk has the commands that a
+  test gives it and no others (`new-desk :commands`), like its
+  applications; `*defined-commands*` are the ones that the files defined.
 - Assembly lives in kernel/arch/<arch>/entry.S and nowhere else. On x86_64
   it follows the Microsoft calling convention, like the C around it:
   arguments in rcx and rdx, 32 bytes of home space above the return
@@ -576,7 +617,7 @@ Rules:
   in the order of `world` in lisp.c (the compiler, then native and the file
   of the machine's own processor, arm64.lisp or x86-64.lisp, whose name
   is the machine's in `*features*`, and then the console, draw, pci,
-  virtio, input, disk, fat, the listener, windows and terminal), and
+  virtio, input, disk, fat, the listener, windows, terminal and system), and
   lisp/host/tests.lisp loads the same files: a new one goes into both, and what its package exports goes into
   a list of names in the manual, or `make site` stops. A file that is an
   application is not in `world`, and the launcher loads it (below). What `lisp_main`

@@ -75,6 +75,12 @@ times as quick as the kernel's machine where the time goes into calls and
 arithmetic. The evaluator is still there to run the compiler until it has
 compiled itself, and the kernel's machine to do what the processor's code
 leaves to it, and every such start holds the three against each other.
+And the machine is shut down by asking it (lisp/system.lisp):
+`(clara.system:shut-down)` at a prompt, `Shut Down` in the launcher's
+list, or the power button that a host presses. It asks the windows whether
+something would be lost, saves the world, has the disks keep what they
+were given, and turns itself off; `(clara.system:start-again)` starts it
+again instead, in the world that it saved.
 The same Lisp files load
 under SBCL on the host, where they are tested against a machine that is
 made up for the purpose.
@@ -106,10 +112,13 @@ Then, on either:
                       # tools/resumed.txt; AArch64 does all that twice, once for each version of
                       # its interrupt controller, and boots once more with the Lisp collector
                       # running at every chance it has, from a disk whose saved world is damaged;
+                      # each kind of processor starts once more to be shut down, started again and
+                      # turned off by its power button (tools/power.txt);
                       # and what the user manual shows of the prompt is typed at one more machine,
                       # which has a second disk, as WORK= below gives one
     make run-aarch64  # QEMU window, serial on the terminal: type a form in either; Ctrl-C stops a form
-                      # that does not end, Ctrl-D ends the session, Ctrl-A X in the terminal leaves QEMU;
+                      # that does not end, (clara.system:shut-down) saves the world and turns the
+                      # machine off, which ends QEMU, and Ctrl-A X in the terminal leaves QEMU as it is;
                       # hvf-accelerated on Apple silicon. The disk, build/disk-aarch64.img, is kept from
                       # one run to the next, with a world that was saved on it, until the next build
     make run-x86_64   # same, emulated (TCG), so the firmware takes a few seconds
@@ -162,10 +171,11 @@ what to do at the prompt once it is there.
    `(mapcar #'1+ '(1 2 3))` say, is evaluated, and what it gives is printed
    on both. `(directory "/clara/*")` lists the files the system was
    loaded from. Ctrl-C stops a form that does not end, `(loop)` for one,
-   and the prompt comes back. Ctrl-D ends it, and the kernel halts with
-   `clara: nothing more to do`. `(clara.windows:start)` puts the window
+   and the prompt comes back. `(clara.windows:start)` puts the window
    manager on the display, with a prompt in a window; the tablet of step 5
-   is its pointer.
+   is its pointer. `(clara.system:shut-down)` saves the world and turns
+   the machine off, and so should UTM's Request power down, which presses
+   the machine's power button.
 7. `(clara:save-image)` saves the world on the disk. The next start says
    `lisp: the heap is an image` in its report, and whatever was defined is
    there. To start from the Lisp files again, import `build/claraos.img`
