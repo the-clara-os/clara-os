@@ -525,7 +525,10 @@ Rules:
   `watched()` before it. That boot then has the texts translated and run
   by the processor, with the same done at the safe points of its code.
   tools/stress.txt then types a few forms with the collector still at it,
-  one of them on the keyboard. Each of those forms is compiled under the
+  one of them on the keyboard. Its first form tells the listener to write
+  nothing down (`clara.listener:*record*`): a form that is written into
+  `/home/defined.lisp` with a collection at every safe point takes twenty
+  seconds where the machine is emulated, and a minute on CI. Each of those forms is compiled under the
   collector, by a compiler that the processor runs, and read by a console
   that it runs: that session is where the processor's code is tried with
   a collection at every one of its safe points in code that nobody wrote
@@ -622,6 +625,30 @@ Rules:
   types definitions sets the start to `:resumed t`, since a world that
   was made loads them in a thread, and SBCL then warns that a function is
   defined a second time.
+- A world made again (lisp/system.lisp). The shutdown (`finish`) has the
+  world that is leaving write `/clara/carried` when `/clara/next` says
+  that a system is to be tried (`carry`). `make-world` is what a start
+  does for a world that it made from the files: the window manager when
+  the account says that it ran, the text (`load-home`), the account
+  (`arrive`), and the save, in that order; `catch-up` is what it does for
+  a world that came as an image. A line about how a world came to be
+  what it is begins with `home:` or `world:` and goes through `tell`,
+  which keeps it for `(clara.system:report)`. The account's form is read
+  by the next system, like the manifest's: forms of keywords and strings,
+  one to a line, only ever added to. A world knows the text that it has
+  (`*known*`), and whatever loads or writes a file of `/home` says so
+  with `know`, or the next start in that world evaluates the forms
+  again. In the host tests a start that is `:resumed t` is a world that
+  goes on in the same SBCL: what the test before it left in `*known*` and
+  `*follows*` is what that world knows, and a test that means something
+  else sets them. `trial-disk` there gives a machine a system on trial,
+  with an account and a `/home`. A machine of the tests has a screen
+  only when `new-desk :machine nil` gave it one after its disks: the
+  screen of the machine before is memory that is the disk's by then, and
+  a window manager that draws there writes into the volume's table. A
+  line that a session waits for with `^W` comes once in the whole log, so
+  the world of tools/trial.txt that stands still says a different thing
+  the second time.
 - A session can wait for the kernel to say something before it goes on:
   `^W pattern`, for a kernel that will say nothing more by itself, a panic
   for one, which `PANICS=1` allows the boot once. `^M system_reset` after

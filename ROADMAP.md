@@ -460,13 +460,29 @@ Upgrades:
   start that had to pass a saved world over. A world is saved on the disk
   that the machine started from, wherever names are looked up at the
   moment. The image stays what makes a machine start quickly.
-- [ ] **M15c a world made again.** An upgrade ends in a world of the new
-  system. After one, the world is made from the new system's files, the
-  user's text is loaded into it and it is saved, without anybody asking,
-  and the report says what was done and what did not come across. That
-  holds also where the world that was saved could be gone on with, its
-  objects being laid out as before: the system's own Lisp in it is the
-  older system's.
+- [x] **M15c a world made again** (2026-11-20, version 0.0.28). An upgrade
+  ended in a world that had the definitions of the one before it, from
+  the text, and nothing else of it; that world was not saved, so every
+  later start made it again; and nothing said what was missing. Now the
+  world that is leaving writes an account of itself for the system that
+  is to take its place, as the machine is started again to try it: which
+  functions and variables there are in the packages that are the user's,
+  and of the variables the values that can be written as text. The system
+  that comes makes its world from its own files, starts the window
+  manager when it was running, loads the text of `/home`, gives the
+  variables the values that they had come to, saves the world without
+  anybody asking, and says what it found, by name: which variables have
+  their values, which held something that is no text and are as their
+  forms make them, and which names of the old world are not defined in
+  the new one. `(clara.system:report)` says it again. A world also knows
+  which text it has, so a start in a saved world loads what the two files
+  have that the world has not: what was defined after the world was
+  saved, on a machine that then stopped without saving, is there at the
+  next start, with an image or without one. A saved world that does not
+  come to its prompt is kept the first time and replaced the second, by
+  the world that was made in its place. The language has `do-symbols`. No
+  converter from one layout of the heap to another was needed: the old
+  system writes text, and the new one reads it.
 - [ ] **M15d upgrades over the network.** The newer system is fetched and
   not carried: the running system asks where ClaraOS is published which
   version is the newest, fetches it when it is newer than its own, sees
@@ -1506,15 +1522,11 @@ M15a, an upgrade in place, what it left:
   `failed` in it, until an upgrade is asked for again or another system
   takes the old one's place. The disk has room for it, and nothing shows
   it but a listing of `/clara`.
-- The world does not come across. What was defined at a prompt does,
-  as text, since M15b. After an upgrade the saved world is another
-  system's and stays on the disk, refused at every start, until a new one
-  is saved over it. The window manager is not running in the new world,
-  whatever it was before. M15c.
-- A start that follows one which did not come to its prompt passes the
-  saved world over and leaves it where it is: the start after that tries
-  it again. A world that never comes to its prompt is so passed over at
-  every other start, until M15c saves a new one in its place.
+- (Settled in M15b and M15c: what was defined comes across as text, the
+  values of variables as far as they are text, the new world is saved in
+  the place of the old system's, and the window manager is started in it
+  when it was running. A saved world that does not come to its prompt a
+  second time is replaced.)
 - Sums are held when a system is taken from another disk, and not when a
   kernel is started: a file of the system's directory that went bad on the
   disk afterwards is read as it is.
@@ -1549,6 +1561,11 @@ M15a, an upgrade in place, what it left:
   the right sum and the wrong length.
 M15b, work kept as text, what it left:
 
+- What takes a definition back is not written down, apart from the window
+  manager's REMOVE-APPLICATION and REMOVE-COMMAND with a name that is
+  written out (since 0.0.28): after DELETE-PACKAGE, or a SETF that takes
+  a function's place, the form that defined the thing is still in the
+  file, and a world that is made of the text has it again.
 - What is written down is decided by a form's first word (DESIGN.md), so
   a good deal of what changes a world is not: a form inside another, a
   PROGN or a LET; a SETQ, and a SETF of a function or of a property; what
@@ -1557,22 +1574,20 @@ M15b, work kept as text, what it left:
   back as its DEFPACKAGE made it; what Ctrl-E evaluated in the editor,
   which is in the editor's file; and the forms of a file that was loaded,
   of which the LOAD is written down and nothing else.
-- What is not a definition is not kept: a variable that was changed after
-  its DEFVAR comes back with the value that the form gives it, and a form
-  that got its value by doing something does it again, or fails: a DEFVAR
-  that opened a window is passed over in a world without a window
-  manager. That is M15c's, below.
+- What is not a definition is not written down: in a world that is made
+  of the text alone, a variable that was changed after its DEFVAR has the
+  value that the form gives it, and a form that got its value by doing
+  something does it again, or fails: a DEFVAR that opened a window is
+  passed over in a world without a window manager. Across an upgrade the
+  values come along and the window manager is started (M15c).
 - The file keeps a definition where its name was first defined. A later
   version of it that leans on something which was defined in between, a
   macro for one, is loaded before that, compiled as a call of a function,
   and fails when it is called. The order of a session is not always an
   order that loads, and nothing here sorts it: the user moves the form in
   the file.
-- A world that came back as an image is not loaded into. What was defined
-  after it was saved, on a machine that then stopped without a shutdown,
-  is in the file and not in the world until `(clara.system:load-home)` is
-  typed. Whether a start should see that for itself, a world remembering
-  what it has written down, is open.
+- (Settled in M15c: a world that came back as an image loads what the
+  two files have that it has not.)
 - A LOAD is written down as it was typed, and the name of a file does not
   say which volume it is on: a new world looks it up on the volume that
   the machine started from. A file that was loaded from a disk of the
@@ -1624,32 +1639,89 @@ M15b, work kept as text, what it left:
   is marked as not read to its end, where the name alone has the same
   effect.
 
-M15c, a world made again:
+M15c, a world made again, what it left:
 
-- An image outlives the kernel that saved it (DESIGN.md, Images), and what
-  it has in Lisp stays the older system's. Tried on 2026-11-18: a world
-  that 0.0.17 saved was started by the kernel of 0.0.18, with a function
-  of the user's in it and with what 0.0.18 has more of in C, and its
-  launcher had the one application of 0.0.17 and not the three of 0.0.18.
-  A world that is made again after every upgrade changes that decision,
-  and DESIGN.md with it. Whether an older world can still be gone on with
-  when somebody asks for it is open.
-- Until this milestone a world that is refused is lost, and the user's
-  definitions with it. The number in image.c went from 1 to 2 with M14a
-  and to 3 with M14b, which added instructions and changed what a macro
-  is: a world that 0.0.19 saved is refused by 0.0.20. A slice that raises
-  it says so in its pull request.
-- What only the heap has: the value that a variable came to, a list that
-  was built by hand. A converter from each layout to the next would keep
-  those, and is a piece of work for every change of layout, too many while
-  a layout lasts a milestone. The other way is for the old system to write
-  them out as text before the upgrade, which needs no converter, the old
-  system knowing its own objects and the new one reading text: lists,
-  numbers, strings, symbols and characters as the printer writes them, and
-  structures once the reader takes back the `#S(...)` that the printer
-  writes. A closure, a thread, a lock, a stream, a surface, and anything
-  that points round in a ring are not text, and would be named and left
-  behind. Neither way is in the milestone as it is written above.
+- What counts as the user's is COMMON-LISP-USER and the packages that
+  were made after the world was, apart from the ones called CLARA. So a
+  function that the user added to a package of the system's is in no
+  account, and a package of the user's that is called CLARA-something is
+  taken for the system's.
+- What comes across as a value: numbers, characters, strings, symbols and
+  lists of those, up to 20000 parts and 64000 characters of text. Not a
+  vector that is no string; not a structure, until the reader takes back
+  the `#S(...)` that the printer writes; not a list that leads back into
+  itself. Two variables that held one list hold two after the upgrade.
+  The variables of the system's own packages are not carried at all: a
+  setting like `clara.native:*translate*` or `clara.system:*patience*` is
+  as the new system makes it, unless `init.lisp` sets it.
+- The values are given back after the whole text is loaded. A form of the
+  text that works something out from a variable sees the value that the
+  variable's form gave it, and not the one that was carried.
+- The account is written by the shutdown that starts the trial. A machine
+  that is reset from outside after `(clara.system:upgrade :start-again
+  nil)` leaves none, and neither does a system from before 0.0.28: the
+  new system says that it has no account, and the world is the text's.
+- The new system takes the old one's place before it loads the text
+  (`commit`). A text that takes the new kernel down does not send the
+  machine back to the old system: the count of starts is what catches
+  it, and the third start has no text.
+- A start in a saved world compares forms as text. A form that was only
+  written differently counts as new and is evaluated again; a form that
+  was taken out of a file stays defined in the world; and of `init.lisp`
+  only what is new is evaluated, so that file is no script that runs at
+  every start.
+- A world that was made without the text, after two starts that went
+  wrong, follows no text until `(clara.system:load-home)` is typed in it,
+  and no later start says so again.
+- The note of a saved world that was passed over is the length of its
+  file and where it begins on the disk. Two worlds saved one after the
+  other could have both numbers in common; nothing reads the file to
+  tell them apart. And when the world that takes the place of one that
+  does not start fails in the same way once it is saved, the two go
+  round: every other start comes to its prompt.
+- A world is saved without being asked after an upgrade and when a saved
+  one failed twice, and at no other start. A machine whose world was
+  never saved has no image, and makes its world at every start, as it
+  did.
+- What is said is kept in the world, the last four hundred lines of it,
+  and `(clara.system:report)` writes all of them out at once.
+- UTM was not tried.
+- The stress boot writes nothing down: tools/stress.txt begins by telling
+  the listener not to. With a collection at every safe point, writing one
+  form into `/home/defined.lisp` took twenty seconds on the Mac's emulator
+  and about a minute on CI, where the boot went from 249 s to 423 s of its
+  600 with M15b. So the writing down is not tried under the collector's
+  slow test, and what it costs grows with the file: every form reads the
+  whole of it.
+- By hand, and in no test: tools/run.sh from the seat, with a copy of
+  Julio's work disk beside the machine's. A new disk, a function and a
+  variable defined, the variable changed, a file written to `/home`, the
+  window manager started, a shutdown; then another build, which the
+  machine took as it started, and the new world had the function, the
+  value, the file's form and the window manager; then the plug pulled
+  after one more definition, and the start after it loaded that one from
+  the text into the world that the upgrade had saved.
+- What was broken on purpose: 105 mistakes in lisp/system.lisp,
+  kernel/lisp/builtin.c and lisp/boot.lisp, each run through the host
+  tests, and through the boot that upgrades, the one that fails, the
+  manual's or a first boot where only a kernel can tell. Thirteen got
+  through. Ten became tests: packages of the system's own in the account,
+  two ways; an account written where names are looked up and not where
+  the machine started; a value that does not read back as it was; a name
+  that was a function there and is a variable here; a saved world told
+  from another by its length alone, and by its place alone; a form that
+  the world has in another package; and a world that is made keeping the
+  report, and the knowledge of the text, of the one before it. One was a
+  restriction that restricted nothing, a name that had to be written out
+  before a removal was held against the file, and is gone. Two change
+  nothing: a form that names a package is never among the forms that a
+  world is said to have, so it is evaluated whether it is looked for
+  there or not; and a world that does not note what it took out of the
+  file finds at its next start that the file has nothing new.
+- Once, the host tests ended with SBCL's "unhandled condition in
+  --disable-debugger mode, quitting" and no line of their own, right
+  after a test was edited, and passed when they were run again as they
+  were. What it was is not known.
 
 M15d, upgrades over the network:
 
@@ -1720,8 +1792,8 @@ M15e, shutting down, what it left:
   machine: such a file is not written.
 - A world is saved at every shutdown, as it is. One that was broken at the
   prompt is saved broken, and starts like that: `:save nil` is for the one
-  who knows, and what a machine does about a world that does not come to
-  its prompt is M15c's.
+  who knows. One that does not come to its prompt is passed over (M15a),
+  and replaced the second time (M15c).
 - (Settled in M15b: a world is saved on the volume that the machine was
   started from, wherever `clara.fat:*volume*` points, so a shutdown with
   the variable set to a second disk no longer stops at SAVE-IMAGE.)

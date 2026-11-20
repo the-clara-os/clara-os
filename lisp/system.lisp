@@ -42,7 +42,17 @@
 ;;;; a file defined.lisp, which the listeners write, each form that defines
 ;;;; something as it was typed, in the place of an earlier one of the same
 ;;;; name. A world that is made from the files loads the two, in that
-;;;; order.
+;;;; order, and a world that came back as an image loads what is new of
+;;;; them since it was saved.
+;;;;
+;;;; A world is made again when a newer system takes this one's place. The
+;;;; system that is leaving writes down what its world had that was the
+;;;; user's, the names of the functions and the variables, and of the
+;;;; variables the values that can be written as text (/clara/carried).
+;;;; The system that comes makes a world of its own files, loads the text
+;;;; of /home into it, gives the variables the values they had come to,
+;;;; saves the world without being asked, and says what did not come
+;;;; across (REPORT).
 ;;;;
 ;;;; This file loads under SBCL as well, where lisp/host/ stands in for the
 ;;;; machine, which there stays on whatever it is told.
@@ -50,7 +60,7 @@
 (defpackage "CLARA.SYSTEM"
   (:use "COMMON-LISP")
   (:export "START" "SHUT-DOWN" "START-AGAIN" "SYSTEM" "SYSTEM-FILE" "BOOT-VOLUME" "UPGRADE"
-           "HOME" "HOME-FILE" "LOAD-HOME" "*PATIENCE*"))
+           "HOME" "HOME-FILE" "LOAD-HOME" "*PATIENCE*" "REPORT"))
 (in-package "CLARA.SYSTEM")
 
 (defvar *lock* (clara:make-lock "system"))
@@ -61,6 +71,10 @@
 (defvar *home-lock* (clara:make-lock "home")) ; one listener at a time writes down what was defined
 (defvar *patience* 60000)   ; how many milliseconds the user's text may take to load into a new world
 (defvar *nothing* (list 'nothing)) ; what READ-FROM-STRING gives when no form is left
+(defvar *report* nil)       ; what was said of how this world was made, and of what came into it since: lines, the newest first
+(defvar *known* nil)        ; the text that this world has of the files of /home, as ((file . text) ...)
+(defvar *follows* nil)      ; this world was given the text of /home, and takes what is new of it at every start
+(defvar *system-packages* nil) ; the names of the packages that were there when this world was made
 
 ;; A line for whoever is watching, on the console: the serial port, and the
 ;; screen once the window manager has given it back.
@@ -68,12 +82,76 @@
   (fresh-line)
   (write-line (apply #'format nil control arguments)))
 
+;;; What is said of a world
+
+;; The first so many of a list.
+(defun first-of (list count)
+  (let ((kept nil))
+    (dotimes (i count)
+      (when list
+        (setq kept (cons (car list) kept)
+              list (cdr list))))
+    (reverse kept)))
+
+;; A line that is kept, so that it can be said again: the lines that say
+;; how this world was made and what came into it afterwards. The oldest go
+;; when there are too many.
+(defun keep (line)
+  (setq *report* (cons line *report*))
+  (when (> (length *report*) 400)
+    (setq *report* (first-of *report* 300))))
+
+;; A line of the report, said where the report goes and kept.
+(defun tell (control &rest arguments)
+  (let ((line (apply #'format nil control arguments)))
+    (keep line)
+    (format t "~A~%" line)))
+
+;; Names as lines, as many to a line as fit with what stands before them.
+(defun name-lines (names)
+  (let ((lines nil) (line ""))
+    (dolist (name names)
+      (cond ((string= line "")
+             (setq line name))
+            ((> (+ (length line) 2 (length name)) 88)
+             (setq lines (cons line lines)
+                   line name))
+            (t
+             (setq line (concatenate 'string line ", " name)))))
+    (unless (string= line "")
+      (setq lines (cons line lines)))
+    (reverse lines)))
+
+;; A line that counts names, ONE for one of them and MANY for more, and
+;; then the names. All of them are kept; a report says the first few lines
+;; and where the rest is to be had.
+(defun tell-names (one many names)
+  (tell "~A" (if (cdr names) (format nil many (length names)) one))
+  (let ((said 0))
+    (dolist (line (name-lines names))
+      (keep (concatenate 'string "world:   " line))
+      (when (< said 3)
+        (format t "world:   ~A~%" line))
+      (setq said (1+ said)))
+    (when (> said 3)
+      (format t "world:   and more: (clara.system:report) names them all~%"))))
+
+;; Everything that was said of how this world was made, and at every start
+;; since that loaded something into it, said again.
+(defun report ()
+  (dolist (line (reverse *report*))
+    (format t "~A~%" line))
+  (values))
+
 ;;; Shutting down, and starting again
 
 (defun done-to (how)
   (if (eq how :off) "shut down" "started again"))
 
-;; The second half: nothing asks any more. A world that cannot be saved is
+;; The second half: nothing asks any more. When a system is waiting to be
+;; tried at the next start, this world is on its way out, and what it has
+;; that is the user's is written down for that system first (CARRY). A
+;; world that cannot be saved is
 ;; a reason to stop here, with everything as it was, so that whoever asked
 ;; can do something about it; a machine without a disk has nowhere to save
 ;; one, and goes all the same. After the window manager has stopped there
@@ -83,6 +161,11 @@
   (unwind-protect
        (handler-case
            (progn
+             (let ((next (waiting)))
+               (when next
+                 (handler-case (carry next)
+                   (error (condition)
+                     (say "system: what this world has could not be written down for ~A: ~A" next condition)))))
              (when save
                (cond ((clara.fat:volumes)
                       (clara:save-image)
@@ -366,12 +449,15 @@
 ;; macro, of the user's as well, and not a function that happens to be
 ;; called so. And a LOAD, since what a file defined is not in any form
 ;; that was typed; but not a LOAD of one of the two files themselves,
-;; which would load itself from then on.
+;; which would load itself from then on. And the one function of the
+;; system's that puts something into a world for good under another name,
+;; CLARA.WINDOWS:INSTALL-APPLICATION.
 (defun defining-p (form)
   (and (consp form) (symbolp (car form))
        (if (eq (car form) 'load)
            (not (home-name-p (car (cdr form))))
            (or (starts-with "DEFINE-" (symbol-name (car form)))
+               (eq (car form) 'clara.windows:install-application)
                (and (starts-with "DEF" (symbol-name (car form)))
                     (or (member (car form) '(defun defmacro defvar defparameter defconstant))
                         (handler-case (nth-value 1 (macroexpand-1 form))
@@ -447,41 +533,104 @@
       (return end))
     (setq end (1- end))))
 
+;; What this world has of a file of /home: the text of the file as it was
+;; when the world last loaded it or wrote it, or NIL.
+(defun known (file)
+  (cdr (assoc file *known* :test #'string=)))
+
+(defun know (file text)
+  (let ((entry (assoc file *known* :test #'string=)))
+    (if entry
+        (rplacd entry text)
+        (setq *known* (cons (cons file text) *known*)))
+    text))
+
 ;; TEXT, a form that was read in the package of that name, goes into
 ;; defined.lisp: where an earlier form of the same name is, or at the end,
 ;; after a line that says which package it is read in when that is not
 ;; the package of what stands before it.
 (defun note (text package)
   (let* ((name (home-file "defined.lisp"))
-         (old (if (there-p (home) "defined.lisp") (clara.fat:file-text name) *first-lines*))
+         (there (there-p (home) "defined.lisp"))
+         (old (if there (clara.fat:file-text name) *first-lines*))
          (in (find-package package))
          (key (and in (key-of (let ((*package* in)) (read-from-string text)) in))))
     (multiple-value-bind (records last) (records old)
-      (let ((same (and key (find-if (lambda (record)
-                                      (and (string= (third record) package) (equal (fourth record) key)))
-                                    records))))
-        (write-text name
-                    (if same
-                        (concatenate 'string (subseq old 0 (form-start old (first same) (second same))) text
-                                     (subseq old (form-end old (first same) (second same))))
-                        (concatenate 'string old
-                                     (if (and last (string= last package))
-                                         ""
-                                         (format nil "~%(cl:in-package ~S)~%" package))
-                                     (format nil "~%~A~%" text))))))))
+      (let* ((same (and key (find-if (lambda (record)
+                                       (and (string= (third record) package) (equal (fourth record) key)))
+                                     records)))
+             (new (if same
+                      (concatenate 'string (subseq old 0 (form-start old (first same) (second same))) text
+                                   (subseq old (form-end old (first same) (second same))))
+                      (concatenate 'string old
+                                   (if (and last (string= last package))
+                                       ""
+                                       (format nil "~%(cl:in-package ~S)~%" package))
+                                   (format nil "~%~A~%" text)))))
+        (write-text name new)
+        ;; The world has this form, having evaluated it. It has the rest of
+        ;; the file when the file was what the world last saw of it; what
+        ;; somebody wrote into it since is still to be loaded.
+        (when (or (not there) (equal old (known "defined.lisp")))
+          (know "defined.lisp" new))))))
+
+;; A form that takes back what another form put into the world for good:
+;; the window manager's two, which take an application or a command out of
+;; the launcher's list. What such a form takes back, as what the forms
+;; that put it there define (KEY-OF), or NIL. The name is held against the
+;; file as it is written in the form: one that is worked out there finds
+;; nothing, unless it was worked out the same way where it was defined.
+(defun taken-back (form)
+  (and (consp form)
+       (cond ((eq (car form) 'clara.windows:remove-application)
+              (list (format nil "DEFINE-APPLICATION ~S" (car (cdr form)))
+                    (format nil "INSTALL-APPLICATION ~S" (car (cdr form)))))
+             ((eq (car form) 'clara.windows:remove-command)
+              (list (format nil "DEFINE-COMMAND ~S" (car (cdr form))))))))
+
+;; The forms of defined.lisp that define one of KEYS go out of it, in
+;; whichever package they were read, each with the line that it ends: a
+;; world that is made of the text is to be without them, like this one.
+;; What stood before such a form, a comment, stays.
+(defun forget (keys)
+  (when (there-p (home) "defined.lisp")
+    (let* ((name (home-file "defined.lisp")) (old (clara.fat:file-text name)) (new old))
+      ;; From the last one back, so that the places of the ones before stay what they were.
+      (dolist (record (reverse (records old)))
+        (when (member (fourth record) keys :test #'equal)
+          (let* ((start (form-start new (first record) (second record)))
+                 (end (form-end new (first record) (second record)))
+                 (after (if (and (< end (length new)) (char= (char new end) #\Newline)) (1+ end) end)))
+            ;; and of two empty lines that the form stood between, one
+            (when (and (>= start 2) (char= (char new (- start 1)) #\Newline) (char= (char new (- start 2)) #\Newline)
+                       (< after (length new)) (char= (char new after) #\Newline))
+              (setq after (1+ after)))
+            (setq new (concatenate 'string (subseq new 0 start) (subseq new after))))))
+      (unless (string= new old)
+        (write-text name new)
+        (when (equal old (known "defined.lisp"))
+          (know "defined.lisp" new))))))
 
 ;; From a listener: a form was typed and went well. One that defines
 ;; something is written down, on the volume that the machine was started
-;; from, one at a time. That it could not be is said, and is no error of
-;; the form's.
+;; from, and one that takes such a thing back takes it out of what was
+;; written down; one at a time. That it could not be done is said, and is
+;; no error of the form's.
 (defun record (form text package)
-  (when (and *boot-volume* (defining-p form))
-    (handler-case
-        (clara:with-lock-held (*home-lock*)
-          (on-volume (*boot-volume*)
-            (note (trimmed text) package)))
-      (error (condition)
-        (say "home: what was defined could not be written down in ~A: ~A" (home-file "defined.lisp") condition)))))
+  (when *boot-volume*
+    (let ((keys (taken-back form)))
+      (when (or keys (defining-p form))
+        (handler-case
+            (clara:with-lock-held (*home-lock*)
+              (on-volume (*boot-volume*)
+                (if keys
+                    (forget keys)
+                    (note (trimmed text) package))))
+          (error (condition)
+            (say (if keys
+                     "home: what was taken back could not be taken out of ~A: ~A"
+                     "home: what was defined could not be written down in ~A: ~A")
+                 (home-file "defined.lisp") condition)))))))
 
 ;; The beginning of a text, on one line, for a report, whose lines stay
 ;; under a hundred characters with what stands before it.
@@ -505,62 +654,110 @@
         (apply #'load arguments))
       (eval form)))
 
+;; The forms of a text that is one of the two files, each as the name of
+;; the package that it is read in and its text: what a world that has
+;; loaded the text has of it.
+(defun pieces (text)
+  (mapcar (lambda (record)
+            (cons (third record)
+                  (subseq text (form-start text (first record) (second record))
+                          (form-end text (first record) (second record)))))
+          (records text)))
+
 ;; The forms of a file, evaluated one after the other, as COMMON-LISP-USER
 ;; finds them. A form that fails is passed over, and so is everything after
 ;; a place that cannot be read: how many forms went well, and what did
-;; not, each as the beginning of its text and the reason. The file is the
-;; one on the volume that the machine was started from, wherever its forms
-;; have names looked up afterwards.
-(defun load-forms (name)
+;; not, each as the beginning of its text and the reason. When a form that
+;; says which package the next ones are read in fails, those are passed
+;; over too, up to the next such form: they would be read in a package
+;; that they were not written for. The file is the one on the volume that
+;; the machine was started from, wherever its forms have names looked up
+;; afterwards. With HAD, a text that the world has loaded before, only the
+;; forms that are not in it are evaluated and counted, and the ones that
+;; name a package. The third value is the text that was read.
+(defun load-forms (name &optional had)
   (let ((text (on-volume (*boot-volume*) (clara.fat:file-text name))) (start 0) (count 0) (failed nil)
+        (skip (and had (pieces had))) (missing nil)
         (*package* (find-package "COMMON-LISP-USER")))
     (loop
-      (multiple-value-bind (form position)
-          (handler-case (read-from-string text nil *nothing* :start start)
-            (error (condition)
-              (setq failed (cons (list (brief (subseq text start)) condition) failed))
-              (return)))
-        (when (eq form *nothing*)
-          (return))
-        (handler-case
-            (progn
-              (evaluate form)
-              (setq count (1+ count)))
-          (serious-condition (condition)
-            (setq failed (cons (list (brief (subseq text start position)) condition) failed))))
-        (setq start position)))
-    (values count (reverse failed))))
+      (let ((package (package-name *package*)))
+        (multiple-value-bind (form position)
+            (handler-case (read-from-string text nil *nothing* :start start)
+              (error (condition)
+                (setq failed (cons (list (brief (subseq text start)) condition) failed))
+                (return)))
+          (when (eq form *nothing*)
+            (return))
+          (let* ((piece (subseq text (form-start text start position) (form-end text start position)))
+                 (names-package (and (consp form) (eq (car form) 'in-package)))
+                 (old (and skip
+                           (find-if (lambda (one) (and (string= (car one) package) (string= (cdr one) piece))) skip))))
+            (cond (names-package
+                   (handler-case
+                       (progn
+                         (evaluate form)
+                         (setq missing nil)
+                         (unless had
+                           (setq count (1+ count))))
+                     (serious-condition (condition)
+                       (setq missing (format nil "~A" (car (cdr form))))
+                       (setq failed (cons (list (brief piece) condition) failed)))))
+                  (old nil)
+                  (missing
+                   (setq failed (cons (list (brief piece) (format nil "its package, ~A, is not there" missing)) failed)))
+                  (t
+                   (handler-case
+                       (progn
+                         (evaluate form)
+                         (setq count (1+ count)))
+                     (serious-condition (condition)
+                       (setq failed (cons (list (brief piece) condition) failed)))))))
+          (setq start position))))
+    (values count (reverse failed) text)))
 
 (defun forms (count)
   (if (= count 1) "1 form" (format nil "~D forms" count)))
 
 ;; A file of the user's is loaded into the world, in a thread of its own
 ;; that is given so long and no longer: a text that does not come to an
-;; end must not keep the machine from its prompt. What was done is said.
-(defun load-home-file (name)
-  (let* ((done (clara:make-event "loaded")) (count 0) (failed nil) (ended nil)
+;; end must not keep the machine from its prompt. What was done is said,
+;; and the world has that text from then on. With NEW, only the forms that
+;; the world does not have yet are loaded, and nothing is said when there
+;; are none.
+(defun load-home-file (file &optional new)
+  (let* ((name (home-file file)) (had (and new (or (known file) "")))
+         (done (clara:make-event "loaded")) (count 0) (failed nil) (text nil) (ended nil)
          (thread (clara:make-thread
                   (lambda ()
                     (unwind-protect
-                         (multiple-value-bind (went not) (load-forms name)
+                         (multiple-value-bind (went not read) (load-forms name had)
                            (setq count went
                                  failed not
+                                 text read
                                  ended t))
                       (clara:signal-event done)))
                   :name "home")))
     (unless (clara:wait-event done *patience*)
       (clara:destroy-thread thread))
     (ignore-errors (clara:join-thread thread))
+    (know file (or text (ignore-errors (on-volume (*boot-volume*) (clara.fat:file-text name))) ""))
     (cond ((not ended)
-           (format t "home: ~A was not loaded to its end: it took more than ~D seconds, or could not be read~%"
-                   name (floor *patience* 1000)))
-          (failed
-           (format t "home: ~A is loaded, ~A of it, and ~A passed over:~%" name (forms count)
-                   (if (cdr failed) (format nil "~D were" (length failed)) "1 was"))
-           (dolist (one failed)
-             (format t "home:   ~A~%home:     ~A~%" (first one) (brief (format nil "~A" (second one))))))
+           (tell "home: ~A was not loaded to its end: it took more than ~D seconds, or could not be read"
+                 name (floor *patience* 1000)))
+          ((and new (= count 0) (null failed)))
           (t
-           (format t "home: ~A is loaded, ~A~%" name (forms count))))
+           (let ((what (if new
+                           (format nil "has ~A that this world did not have, which ~A loaded now" (forms count)
+                                   (if (= count 1) "is" "are"))
+                           (format nil "is loaded, ~A" (forms count)))))
+             (cond (failed
+                    (tell "home: ~A ~A~A, and ~A passed over:" name what (if new "" " of it")
+                          (if (cdr failed) (format nil "~D were" (length failed)) "1 was"))
+                    (dolist (one failed)
+                      (tell "home:   ~A" (first one))
+                      (tell "home:     ~A" (brief (format nil "~A" (second one))))))
+                   (t
+                    (tell "home: ~A ~A" name what))))))
     ended))
 
 ;; The directory that is the user's, made when it is not there, and what a
@@ -572,12 +769,293 @@
       (unless (there-p "/" "home")
         (clara.fat:make-directory "/home")))))
 
-;; (That is also what a user asks for in a world that came back from its
-;; image and does not have what was defined after it was saved.)
+(defun home-has (file)
+  (and *boot-volume* (ignore-errors (on-volume (*boot-volume*) (there-p (home) file)))))
+
+;; The two files, loaded whole into this world, which follows the text
+;; from then on. That is what a start does for a world that it made, and
+;; what a user asks for in a world that was made without the text, after
+;; two starts that went wrong, when the text has been put right.
 (defun load-home ()
   (dolist (file '("init.lisp" "defined.lisp"))
-    (when (and *boot-volume* (on-volume (*boot-volume*) (there-p (home) file)))
-      (load-home-file (home-file file)))))
+    (when (home-has file)
+      (load-home-file file)))
+  (setq *follows* t)
+  nil)
+
+;; For a world that came back as an image: what the two files have that
+;; the world has not, which is what was defined after the world was saved
+;; on a machine that then stopped without saving it, and what somebody
+;; wrote into a file since. A world that was made without the text takes
+;; none of it by itself.
+(defun catch-up ()
+  (when *follows*
+    (dolist (file '("init.lisp" "defined.lisp"))
+      (when (home-has file)
+        (let ((text (ignore-errors (on-volume (*boot-volume*) (clara.fat:file-text (home-file file))))))
+          (when (and text (not (equal text (known file))))
+            (load-home-file file t)))))))
+
+;;; A world made again
+;;;
+;;; A world is its system's, and a newer system makes one of its own. What
+;;; was defined comes across as text. What the text does not have is known
+;;; to the world that is leaving and to nobody else, so that world leaves
+;;; an account of itself for the system that is to be tried, in
+;;; /clara/carried: forms, a line each, of keywords and strings, which a
+;;; reader that does not know one passes over.
+;;;
+;;;   (:carried "from" "to")           the system that wrote it, and the one it is for
+;;;   (:windows)                       the window manager was running
+;;;   (:name "PACKAGE" "NAME" :function)   a function or a macro of the user's
+;;;   (:name "PACKAGE" "NAME" :variable)   a variable of the user's
+;;;   (:value "PACKAGE" "NAME" "text")     and its value, as COMMON-LISP-USER reads it
+;;;
+;;; What is the user's is what is in COMMON-LISP-USER and in the packages
+;;; that were not there when the world was made. The system that comes
+;;; makes its world, loads the text into it, gives the variables their
+;;; values, and says which names it does not have.
+
+;; The packages whose symbols are the user's: COMMON-LISP-USER, and every
+;; package that was made since this world was, apart from the ones that
+;; are called CLARA, which the launcher makes when it loads an application
+;; of the system's.
+(defun user-packages ()
+  (let ((found nil))
+    (dolist (package (list-all-packages))
+      (let ((name (package-name package)))
+        (when (or (string= name "COMMON-LISP-USER")
+                  (not (or (starts-with "CLARA" name) (member name *system-packages* :test #'string=))))
+          (setq found (cons package found)))))
+    (sort found #'string-lessp :key #'package-name)))
+
+;; Is that made of nothing but what a text can say: numbers, characters,
+;; strings, symbols that are in a package, and lists of those? As far as
+;; 20000 parts go: a list that leads back into itself has no end.
+(defun plain-p (value)
+  (let ((left 20000) (pending (list value)))
+    (loop
+      (when (null pending)
+        (return t))
+      (let ((one (car pending)))
+        (setq pending (cdr pending)
+              left (1- left))
+        (cond ((< left 0)
+               (return nil))
+              ((consp one)
+               (setq pending (cons (car one) (cons (cdr one) pending))))
+              ((or (integerp one) (characterp one) (stringp one)))
+              ((and (symbolp one) (or (null one) (symbol-package one))))
+              (t
+               (return nil)))))))
+
+;; A value as a text that COMMON-LISP-USER reads back as the same value,
+;; or NIL when there is no such text of a reasonable length.
+(defun as-text (value)
+  (and (plain-p value)
+       (handler-case
+           (let* ((*package* (find-package "COMMON-LISP-USER"))
+                  (text (prin1-to-string value)))
+             (and (<= (length text) 64000)
+                  (equal value (read-from-string text))
+                  text))
+         (error () nil))))
+
+;; The system that /clara/next says is to be tried at the next start, or
+;; NIL.
+(defun waiting ()
+  (let ((text (and *boot-volume*
+                   (ignore-errors
+                     (on-volume (*boot-volume*)
+                       (and (there-p "/clara/" "next") (clara.fat:file-text "/clara/next")))))))
+    (and text (starts-with "try " text) (trimmed (subseq text 4)))))
+
+;; The account of this world, for the system TO, which is to take this
+;; one's place.
+(defun carry (to)
+  (let ((text (with-output-to-string (out)
+                (format out "(:carried ~S ~S)~%" (system) to)
+                (when (clara.windows:running-p)
+                  (format out "(:windows)~%"))
+                (dolist (package (user-packages))
+                  (let ((in (package-name package)) (own nil))
+                    (do-symbols (symbol package)
+                      (when (and (eq (symbol-package symbol) package) (or (fboundp symbol) (boundp symbol)))
+                        (setq own (cons symbol own))))
+                    (dolist (symbol (sort own #'string-lessp :key #'symbol-name))
+                      (when (fboundp symbol)
+                        (format out "(:name ~S ~S :function)~%" in (symbol-name symbol)))
+                      (when (boundp symbol)
+                        (format out "(:name ~S ~S :variable)~%" in (symbol-name symbol))
+                        (let ((value (as-text (symbol-value symbol))))
+                          (when value
+                            (format out "(:value ~S ~S ~S)~%" in (symbol-name symbol) value))))))))))
+    (on-volume (*boot-volume*)
+      (write-text "/clara/carried" text))))
+
+;; The account that the system before this one left for this one, as a
+;; list of its forms, or NIL: when there is none, when it was written for
+;; another system, or when it does not begin as one.
+(defun read-carried ()
+  (let ((text (ignore-errors
+                (on-volume (*boot-volume*)
+                  (and (there-p "/clara/" "carried") (clara.fat:file-text "/clara/carried")))))
+        (forms nil) (start 0)
+        (*package* (find-package "COMMON-LISP-USER")))
+    (when text
+      (loop
+        (multiple-value-bind (form position)
+            (handler-case (read-from-string text nil *nothing* :start start)
+              (error ()
+                (return)))
+          (when (eq form *nothing*)
+            (return))
+          (when (and (consp form) (keywordp (car form)))
+            (setq forms (cons form forms)))
+          (setq start position))))
+    (setq forms (reverse forms))
+    (and (eq (car (car forms)) :carried) (equal (third (car forms)) (system)) forms)))
+
+;; An account is for one start, the one of the system that it was written
+;; for, and of no use after it.
+(defun forget-carried ()
+  (ignore-errors
+    (on-volume (*boot-volume*)
+      (when (there-p "/clara/" "carried")
+        (clara.fat:remove-file "/clara/carried")))))
+
+;; A name of the account, as it is written at a prompt.
+(defun written (package name)
+  (if (string= package "COMMON-LISP-USER")
+      name
+      (concatenate 'string package "::" name)))
+
+;; This world was made in the place of the one that left the account, and
+;; has the text of /home in it. The variables get the values that they had
+;; come to, where those were written down and are not the ones that the
+;; text gave them; and what the old world had and this one has not is
+;; said: a function that nothing defines here, a variable without a value.
+(defun arrive (carried)
+  (let ((put nil) (made nil) (lost nil) (with-value nil))
+    (dolist (form carried)
+      (when (and (eq (car form) :value) (stringp (second form)) (stringp (third form)) (stringp (fourth form)))
+        (setq with-value (cons (written (second form) (third form)) with-value))
+        (let ((package (find-package (second form))))
+          (when package
+            (handler-case
+                (let ((symbol (intern (third form) package))
+                      (value (let ((*package* (find-package "COMMON-LISP-USER")))
+                               (read-from-string (fourth form)))))
+                  (unless (and (boundp symbol) (equal (symbol-value symbol) value))
+                    (set symbol value)
+                    (setq put (cons (written (second form) (third form)) put))))
+              (error () nil))))))
+    (dolist (form carried)
+      (when (and (eq (car form) :name) (stringp (second form)) (stringp (third form)))
+        (let* ((package (find-package (second form)))
+               (symbol (and package (find-symbol (third form) package)))
+               ;; the package's own symbol, as the one of the account was, and not one that it has of another
+               (here (and symbol
+                          (eq (symbol-package symbol) package)
+                          (if (eq (fourth form) :function) (fboundp symbol) (boundp symbol))))
+               (name (written (second form) (third form))))
+          (cond ((not here)
+                 (setq lost (cons (if (eq (fourth form) :function)
+                                      name
+                                      (concatenate 'string name " (a variable)"))
+                                  lost)))
+                ((and (eq (fourth form) :variable) (not (member name with-value :test #'string=)))
+                 (setq made (cons name made)))))))
+    (when put
+      (tell-names "world: 1 variable has the value that it had come to in the world before:"
+                  "world: ~D variables have the values that they had come to in the world before:"
+                  (reverse put)))
+    (when made
+      (tell-names "world: 1 variable held what is no text, and is as its form makes it here:"
+                  "world: ~D variables held what is no text, and are as their forms make them here:"
+                  (reverse made)))
+    (if lost
+        (tell-names "world: 1 name that the world before had is not defined in this one:"
+                    "world: ~D names that the world before had are not defined in this one:"
+                    (reverse lost))
+        (tell "world: every function and every variable that the world before had is defined in this one"))))
+
+;; The world as it is now becomes the world that the machine starts in.
+(defun save-world ()
+  (tell "world: it is saved as it is now, and the next start is in it; (clara.system:report) says this again")
+  (handler-case (clara:save-image)
+    (error (condition)
+      (tell "world: no, it could not be saved: ~A" condition))))
+
+;; What tells one saved world from another without reading it: how long
+;; its file is, and where on the disk it begins.
+(defun image-identity ()
+  (ignore-errors
+    (on-volume (*boot-volume*)
+      (let ((entry (find-if (lambda (entry) (string-equal (clara.fat:entry-name entry) "clara.image"))
+                            (clara.fat:entries "/clara/"))))
+        (and entry (format nil "~D ~D" (clara.fat:entry-size entry) (clara.fat::entry-cluster entry)))))))
+
+;; The world that was saved did not come to its prompt at the start before
+;; this one, so the handoff passed it over, and this world was made in its
+;; place. Once, that may have been anything, a machine that was switched
+;; off as it started: the saved world is kept, with a note of which one it
+;; was (/clara/passed), and the next start tries it again. When the same
+;; world is passed over a second time, it is the world, and this one is
+;; saved in its place.
+(defun passed-over ()
+  (let ((identity (image-identity))
+        (noted (ignore-errors
+                 (on-volume (*boot-volume*)
+                   (and (there-p "/clara/" "passed") (trimmed (clara.fat:file-text "/clara/passed")))))))
+    (cond ((null identity))
+          ((equal noted identity)
+           (tell "world: the world that was saved did not come to its prompt a second time: this one takes its place")
+           (save-world)
+           (forget-passed))
+          (t
+           (ignore-errors
+             (on-volume (*boot-volume*)
+               (write-text "/clara/passed" (format nil "~A~%" identity))))
+           (tell "world: the world that was saved did not come to its prompt at the start before this one.")
+           (tell "world:   It is kept, and the next start tries it once more; this world is of the files and of /home/")))))
+
+(defun forget-passed ()
+  (ignore-errors
+    (on-volume (*boot-volume*)
+      (when (there-p "/clara/" "passed")
+        (clara.fat:remove-file "/clara/passed")))))
+
+;; A world that this start made from the files gets what the user keeps as
+;; text. After an upgrade it is the world that takes the place of the old
+;; system's: the window manager is started when it was running there, so
+;; that the forms of the text which open windows have somewhere to open
+;; them; the account that the old world left is gone through; and the
+;; world is saved, without anybody asking, since the one on the disk is of
+;; no use to this system.
+(defun make-world ()
+  (let ((carried (and (state :trial) (read-carried))))
+    (when (state :trial)
+      (tell "world: made anew by ClaraOS ~A, of its files and of what ~A holds as text" (system) (home)))
+    (when (assoc :windows carried)
+      (unless (handler-case (clara.windows:start) (error () nil))
+        (tell "world: the window manager was running in the world before, and could not be started in this one")))
+    (load-home)
+    (when (state :trial)
+      (if carried
+          (arrive carried)
+          (tell "world: the system before this one left no account of its world: what that had beyond the text is not known"))
+      (forget-carried)
+      (save-world))
+    (when (state :passed-over)
+      (passed-over))))
+
+;; After two starts in a row that did not come to a prompt, the text may
+;; be the reason: the world is made of the system's files alone, and says
+;; what to do about it.
+(defun make-bare-world ()
+  (tell "home: the two starts before this one did not come to a prompt: what is in ~A is not loaded" (home))
+  (tell "home:   this world is the system's alone. Put the files right, and (clara.system:load-home) loads them"))
 
 ;;; An upgrade
 
@@ -735,21 +1213,28 @@
   (when *boot-volume*
     (when (state :failed)
       (note-failure (state :failed)))
-    (let ((source (and (not (state :trial)) (at-once-source))))
-      (cond ((state :trial)
-             (commit))
-            (source
-             (take (car source) (cdr source))
-             (format t "system: ~A is taken from another disk, and the machine starts again to try it~%"
-                     (car (cdr source)))
-             (leave :again nil t))))
+    (unless (state :trial)
+      (forget-carried))
     (make-home)
+    (when (state :trial)
+      (commit))
+    (when (state :resumed)
+      (catch-up))
+    (let ((source (and (not (state :trial)) (at-once-source))))
+      (when source
+        (take (car source) (cdr source))
+        (format t "system: ~A is taken from another disk, and the machine starts again to try it~%"
+                (car (cdr source)))
+        (leave :again nil t)
+        (return-from settle nil)))
     (unless (state :resumed)
       (if (>= (state :starts) 2)
-          (format t "home: the two starts before this one did not come to a prompt: what is in ~A is not loaded~%"
-                  (home))
-          (load-home)))
-    (came-to-prompt)))
+          (make-bare-world)
+          (make-world)))
+    (came-to-prompt)
+    ;; A saved world that has come this far was not why a start before it did not.
+    (when (state :resumed)
+      (forget-passed))))
 
 ;; For the substrate, at every boot, when the file system has started. A
 ;; world that was saved by a shutdown was in the middle of one, and is not
@@ -760,6 +1245,11 @@
   (setq *leaving* nil
         *state* (clara.unsafe:start-state)
         *boot-volume* (find-boot-volume))
+  (unless (state :resumed)
+    (setq *report* nil
+          *known* nil
+          *follows* nil
+          *system-packages* (mapcar #'package-name (list-all-packages))))
   (when *boot-volume*
     (setq clara.fat:*volume* *boot-volume*
           clara.fat:*image-volume* *boot-volume*))

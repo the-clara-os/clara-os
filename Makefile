@@ -167,7 +167,7 @@ host-test:
 # its line gives it.
 test: export WORK :=
 SECOND = -drive if=none,id=second,format=raw,readonly=on,file=$(BUILD)/$(1).img -device virtio-blk-pci,drive=second
-UPGRADED := EXPECT='^ClaraOS: starting the system that is to be tried;;^system: .*-other has come to its prompt;;^home: /home/init.lisp is loaded, 1 form of it, and 3 were passed over:;;^home:     the stack is full;;^home:     /home/init.lisp is loaded into a new world by itself;;^home: /home/defined.lisp is loaded, [0-9]* forms of it, and 1 was passed over:'
+UPGRADED := EXPECT='^ClaraOS: starting the system that is to be tried;;^system: .*-other has come to its prompt;;^world: made anew by ClaraOS .*-other;;^home: /home/init.lisp is loaded, 1 form of it, and 3 were passed over:;;^home:     the stack is full;;^home:     /home/init.lisp is loaded into a new world by itself;;^home: /home/defined.lisp is loaded, [0-9]* forms[^ ]*$$;;^world:   .*\*JOBS\*;;^world:   .*\*WINDOW\*;;^world:   .*NOT-WRITTEN-DOWN;;^world: it is saved as it is now;;^home: /home/defined.lisp has 1 form that this world did not have, which is loaded now'
 POWER :=SESSION=tools/power.txt MARKER='^clara: turning the machine off' EXPECT='^lisp: the heap is an image'
 RESUME := SESSION=tools/resumed.txt EXPECT='^lisp: the heap is an image;;^lisp: and with it [0-9]* KiB of code for the processor;;^lisp:   of the functions .* and 0 are walked;;^lisp:   the processor runs [1-9][0-9]* of the compiled ones itself, .* and the machine 3[^0-9]*$$'
 test: all host-test $(BUILD)/system-other/stamp $(BUILD)/system-broken/stamp
@@ -189,10 +189,10 @@ test: all host-test $(BUILD)/system-other/stamp $(BUILD)/system-broken/stamp
 	touch $(BUILD)/at-once/clara/at-once
 	python3 -I tools/mkdisk.py $(BUILD)/at-once $(BUILD)/at-once.img
 	NAME=aarch64-at-once SESSION=tools/at-once.txt TIMEOUT=300 \
-		EXPECT='^system: .*-other is taken from another disk;;^ClaraOS: starting the system that is to be tried;;^system: .*-other has come to its prompt' \
+		EXPECT='^system: .*-other is taken from another disk;;^ClaraOS: starting the system that is to be tried;;^system: .*-other has come to its prompt;;^world: every function and every variable that the world before had is defined in this one;;^world: it is saved as it is now' \
 		tools/boottest.sh aarch64 -machine gic-version=3 $(call SECOND,at-once)
 	NAME=aarch64-trial DISK=$(BUILD)/boot-aarch64.img SESSION=tools/trial.txt TIMEOUT=300 PANICS=1 \
-		EXPECT='^system: .*-broken was tried and did not come to its prompt;;^lisp: clara.image is passed over' \
+		EXPECT='^system: .*-broken was tried and did not come to its prompt;;^lisp: clara.image is passed over;;^world:   It is kept, and the next start tries it once more;;^world: the world that was saved did not come to its prompt a second time' \
 		tools/boottest.sh aarch64 -machine gic-version=3 $(call SECOND,broken)
 	python3 -I site/build.py --sessions $(BUILD)
 	rm -rf $(BUILD)/empty && mkdir -p $(BUILD)/empty && python3 -I tools/mkdisk.py $(BUILD)/empty $(BUILD)/work.img

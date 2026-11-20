@@ -16,15 +16,29 @@ clara: starting the machine again
 > (list (clara.fat:names "/clara/") (and (member "failed" (clara.fat:names "/clara/{{version}}-broken/") :test #'equal) t))
 (("{{system}}/" "{{version}}-broken/" "a file with a long name.text" "clara.image" "hello.lisp" "kept.lisp") T)
 > (progn (setf (symbol-function 'clara.system::came-to-prompt)
-               (lambda () (write-line "standing still on purpose") (loop (clara:wait-event (clara:make-event) 1000))))
+               (lambda ()
+                 (format t "standing still on purpose, ~A~%" (if (probe-file "/clara/passed") "a second time" "for the first time"))
+                 (loop (clara:wait-event (clara:make-event) 1000))))
          (clara:save-image))
 "/clara/clara.image"
 > (clara.system:start-again :save nil)
 clara: starting the machine again
-^W ^standing still on purpose
+^W ^standing still on purpose, for the first time
 ^M system_reset
 ^R
 > (list (getf (clara.unsafe:start-state) :starts) (getf (clara.unsafe:start-state) :passed-over) (getf (clara.unsafe:start-state) :resumed))
 (1 T NIL)
 > (list *before* (fact 4) (clara.fat:names "/clara/"))
-(THE-TRIAL 24 ("{{system}}/" "{{version}}-broken/" "a file with a long name.text" "clara.image" "hello.lisp" "kept.lisp"))
+(THE-TRIAL 24 ("{{system}}/" "{{version}}-broken/" "a file with a long name.text" "clara.image" "hello.lisp" "kept.lisp" "passed"))
+> (clara.system:start-again :save nil)
+clara: starting the machine again
+^W ^standing still on purpose, a second time
+^M system_reset
+^R
+> (list (getf (clara.unsafe:start-state) :starts) (getf (clara.unsafe:start-state) :passed-over) (probe-file "/clara/passed") *before*)
+(1 T NIL THE-TRIAL)
+> (clara.system:start-again :save nil)
+clara: starting the machine again
+^R
+> (list (getf (clara.unsafe:start-state) :starts) (getf (clara.unsafe:start-state) :resumed) *before* (fact 4))
+(0 T THE-TRIAL 24)

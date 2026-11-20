@@ -5740,9 +5740,16 @@
 (new-disks (list 3 *machine-disk*))
 (said-by #'clara.disk:start)
 (said-by #'clara.fat:start)
+;; The world that it has made is saved in the place of the old system's,
+;; which is of no use to it, and it says that the old world left no
+;; account of itself.
 (clara.host:set-start-state :system "0.0.1-new" :trial t :token "0000000000000001")
+(clara.host:set-heap-image (octets "the world that the new system made"))
 (check (format nil "system: this is ClaraOS 0.0.1-new, on trial: the system before it is still in place~%~
-                    system: 0.0.1-new has come to its prompt, and is the system of this machine from here on~%")
+                    system: 0.0.1-new has come to its prompt, and is the system of this machine from here on~%~
+                    world: made anew by ClaraOS 0.0.1-new, of its files and of what /home/ holds as text~%~
+                    world: the system before this one left no account of its world: what that had beyond the text is not known~%~
+                    world: it is saved as it is now, and the next start is in it; (clara.system:report) says this again~%")
        (said-by-all #'clara.system:start))
 (check '("the new kernel" "the new kernel of the other processor" nil nil nil "(the new system)" t)
        (list (on-disk *machine-disk* (format nil "/EFI/BOOT/~A" *this-kernel*))
@@ -5750,7 +5757,7 @@
              (on-disk *machine-disk* "/clara/next") (on-disk *machine-disk* "/clara/starts")
              (on-disk *machine-disk* "/clara/0.0.0-host/boot.lisp") (on-disk *machine-disk* "/clara/0.0.1-new/boot.lisp")
              (in-order-p *machine-disk*)))
-(check '("written before any of this" "the world that the old system saved")
+(check '("written before any of this" "the world that the new system made")
        (list (on-disk *machine-disk* "/notes.txt") (on-disk *machine-disk* "/clara/clara.image")))
 (check '("0.0.1-new") (clara.system::systems-here))
 
@@ -5795,6 +5802,9 @@
                 t)))
 (check (list '(:again) (format nil "try 0.0.1-new~%") t)
        (list (clara.host:power) (on-disk *machine-disk* "/clara/next") (in-order-p *machine-disk*)))
+(check (list "1 0000000000000002
+" 0) (list (on-disk *machine-disk* "/clara/starts")
+           (search "(:carried \"0.0.0-host\" \"0.0.1-new\")" (on-disk *machine-disk* "/clara/carried"))))
 ;; A disk that says so and has the system that runs is left alone.
 (two-disks (machine-tree) `(("clara" (,(system-tree "0.0.0-host" *old-files*) ("at-once" "")))))
 (clara.host:set-start-state)
@@ -5826,11 +5836,12 @@
 (defmacro deftest (name) `(quote ,name))
 (defun default-of (value) value)
 (defmacro defective (name) (error "~S cannot be expanded" name))
-(check '(t t t t t t t t t t nil nil nil nil nil nil nil nil nil nil)
+(check '(t t t t t t t t t t t nil nil nil nil nil nil nil nil nil nil nil)
        (mapcar (lambda (form) (and (clara.system::defining-p form) t))
                '((defun f ()) (defmacro m ()) (defvar *v* 1) (defparameter *p* 1) (define-condition c () ()) (defstruct s a)
                  (deftest of-the-users) (load "/x.lisp") (clara.windows:define-application "Mine" #'car) (define-whatever)
-                 (default-of 1) (defective one) (defer-nothing) (load "/home/defined.lisp") (load "/HOME/Init.lisp")
+                 (clara.windows:install-application "Mine" "/mine.lisp")
+                 (clara.windows:remove-application "Mine") (default-of 1) (defective one) (defer-nothing) (load "/home/defined.lisp") (load "/HOME/Init.lisp")
                  (setq *v* 2) (in-package "X") 5 ((lambda ())) (let () (defun f ())))))
 (check (list (concatenate 'string (make-string 84 :initial-element #\a) " ...") "one line ..." "short")
        (list (clara.system::brief (make-string 85 :initial-element #\a)) (clara.system::brief (format nil "  one line~%and another"))
@@ -5888,12 +5899,53 @@
               t))
 (setf (vdev-answer *disk*) 0)
 
+;; What the window manager's two functions take out of the launcher's list
+;; goes out of the file as well, whichever form put it there and in
+;; whichever package, so that a world which is made of the text is without
+;; it too. A name that is not in the file changes nothing, and neither
+;; does a name that is worked out.
+(one-disk (home-tree (list "defined.lisp" (format nil ";; mine~%(defun one () 1)~%~%;; an application~%~
+                                                       (clara.windows:define-application \"Mine\" #'one)~%~%~
+                                                       (clara.windows:define-command \"Tidy\" #'one)~%~%~
+                                                       (cl:in-package \"CLARA.TESTS\")~%~%~
+                                                       (clara.windows:install-application \"Mine\" \"/mine.lisp\")~%~%~
+                                                       (clara.windows:define-application \"Mine too\" #'car)~%"))))
+(clara.host:set-start-state :resumed t)
+(setq clara.system::*follows* nil)
+(said-by-all #'clara.system:start)
+(let ((before (on-disk *machine-disk* "/home/defined.lisp")))
+  (clara.system::record '(clara.windows:remove-application "Nobody's") "(clara.windows:remove-application \"Nobody's\")" "COMMON-LISP-USER")
+  (clara.system::record '(clara.windows:remove-application (car (list "Mine"))) "(clara.windows:remove-application (car (list \"Mine\")))"
+                        "COMMON-LISP-USER")
+  (clara.system::record '(clara.windows:unload-application "Mine") "(clara.windows:unload-application \"Mine\")" "COMMON-LISP-USER")
+  (check before (on-disk *machine-disk* "/home/defined.lisp")))
+(clara.system::record '(clara.windows:remove-application "Mine") "(clara.windows:remove-application \"Mine\")" "COMMON-LISP-USER")
+(check (format nil ";; mine~%(defun one () 1)~%~%;; an application~%~%~
+                    (clara.windows:define-command \"Tidy\" #'one)~%~%~
+                    (cl:in-package \"CLARA.TESTS\")~%~%~
+                    (clara.windows:define-application \"Mine too\" #'car)~%")
+       (on-disk *machine-disk* "/home/defined.lisp"))
+(clara.system::record '(clara.windows:remove-command "Tidy") "(clara.windows:remove-command \"Tidy\")" "CLARA.TESTS")
+(clara.system::record '(clara.windows:remove-application "Mine too") "(clara.windows:remove-application \"Mine too\")" "CLARA.TESTS")
+(check (list (format nil ";; mine~%(defun one () 1)~%~%;; an application~%~%(cl:in-package \"CLARA.TESTS\")~%~%") t)
+       (list (on-disk *machine-disk* "/home/defined.lisp") (in-order-p *machine-disk*)))
+;; What cannot be taken out is said, and is nobody's error.
+(clara.system::record '(defun three () 3) "(clara.windows:define-command \"Tidy\" #'car)" "COMMON-LISP-USER")
+(setf (vdev-answer *disk*) 1)
+(check t (and (search "home: what was taken back could not be taken out of /home/defined.lisp: "
+                      (said-by-all (lambda () (clara.system::record '(clara.windows:remove-command "Tidy")
+                                                                    "(clara.windows:remove-command \"Tidy\")" "COMMON-LISP-USER"))))
+              t))
+(setf (vdev-answer *disk*) 0)
+
 ;; A file that the user has written into: what stands before a form stays
 ;; before it, and a form in a package that is not there, or a place that
 ;; cannot be read, leaves everything from there on as it is, with the new
 ;; form after it and the name of its package before it. (The world of
-;; these is one that was saved, so that nothing of the files is loaded.)
+;; these is one that was saved without the text, so that nothing of the
+;; files is loaded.)
 (clara.host:set-start-state :resumed t)
+(setq clara.system::*follows* nil)
 (one-disk (home-tree (list "defined.lisp" (format nil ";; mine~%(defun one () 1) ; the first~%~%;; and the second~%(defun two () 2)~%"))))
 (said-by-all #'clara.system:start)
 (clara.system::record '(defun two () 22) "(defun two () 22)" "COMMON-LISP-USER")
@@ -5946,9 +5998,13 @@
 (setq *order* nil)
 (clara.host:set-start-state :starts 2)
 (check (format nil "system: this is ClaraOS 0.0.0-host~%~
-                    home: the two starts before this one did not come to a prompt: what is in /home/ is not loaded~%")
+                    home: the two starts before this one did not come to a prompt: what is in /home/ is not loaded~%~
+                    home:   this world is the system's alone. Put the files right, and (clara.system:load-home) loads them~%")
        (said-by-all #'clara.system:start))
-(check nil *order*)
+(check '(nil nil) (list *order* clara.system::*follows*))
+;; Asked for, the text is loaded into that world, which has it from then on.
+(check t (and (search "home: /home/init.lisp is loaded" (said-by-all #'clara.system:load-home)) t))
+(check '(t t) (list (and (member :init *order*) t) clara.system::*follows*))
 
 ;; A text that does not come to an end is given so long, and stopped: the
 ;; machine comes to its prompt all the same, and the file after it is
@@ -6036,6 +6092,383 @@
          (list (and (member earlier (clara.fat:volumes)) t) (condition-text #'clara:save-image)))
   (check '("a world, saved from anywhere" nil) (list (on-disk *machine-disk* "/clara/clara.image")
                                                      (on-disk *other-disk* "/clara/clara.image"))))
+
+;;; A world made again (lisp/system.lisp): what a world that is leaving
+;;; writes down of itself, what the system that comes makes of it, a world
+;;; that takes what is new of the text, and a saved world that does not
+;;; come to its prompt.
+
+;; What can be written as text and read back the same.
+(check '("5" "\"a \\\"b\\\"\"" "(1 \"two\" #\\3 FOUR (:FIVE . 6))" "NIL" nil nil nil nil nil)
+       (let ((ring (list 1 2 3)))
+         (setf (cdr (last ring)) ring)
+         (mapcar #'clara.system::as-text
+                 (list 5 "a \"b\"" '(1 "two" #\3 cl-user::four (:five . 6)) nil
+                       ring #'car (make-symbol "LOOSE") (list 1 (vector 2)) (make-list 20001 :initial-element 0)))))
+(check '(t nil nil) (list (and (clara.system::as-text (make-list 5000 :initial-element 'cl-user::item)) t)
+                          (clara.system::as-text (make-list 15000 :initial-element 'cl-user::item))
+                          (clara.system::as-text (make-list 100 :initial-element (make-string 1000 :initial-element #\x)))))
+;; Nothing is text on trust: what does not read back as it was is none. (Here a number, to a reader that counts in sixteens.)
+(check '("17" nil) (list (clara.system::as-text 17) (let ((*read-base* 16)) (clara.system::as-text 17))))
+;; Names in lines that fit, and a line that says there are more than were said.
+(check '(() ("one") ("one, two")) (mapcar #'clara.system::name-lines '(() ("one") ("one" "two"))))
+(let ((lines (clara.system::name-lines (loop for i below 40 collect (format nil "A-NAME-OF-SOME-LENGTH-~D" i)))))
+  (check '(t t 40) (list (every (lambda (line) (<= (length line) 88)) lines) (> (length lines) 3)
+                         (+ (length lines) (reduce #'+ (mapcar (lambda (line) (count #\, line)) lines))))))
+(setq clara.system::*report* nil)
+(check (format nil "world: 5 things:~%world:   a, b, c, d, e~%")
+       (said-by (lambda () (clara.system::tell-names "world: 1 thing:" "world: ~D things:" '("a" "b" "c" "d" "e")))))
+(check (format nil "world: 1 thing:~%world:   a~%")
+       (said-by (lambda () (clara.system::tell-names "world: 1 thing:" "world: ~D things:" '("a")))))
+(let ((said (said-by (lambda () (clara.system::tell-names "world: 1 name:" "world: ~D names:"
+                                                          (loop for i below 40 collect (format nil "A-NAME-OF-SOME-LENGTH-~D" i)))))))
+  (check '(5 t) (list (count #\Newline said)
+                      (and (search (format nil "world:   and more: (clara.system:report) names them all~%") said) t))))
+;; What was said is kept and said again, the oldest lines going when there are too many.
+(check t (let ((again (said-by #'clara.system:report)))
+           (and (search (format nil "world: 5 things:~%world:   a, b, c, d, e~%world: 1 thing:~%world:   a~%world: 40 names:~%") again)
+                (search "A-NAME-OF-SOME-LENGTH-39" again)
+                t)))
+(setq clara.system::*report* nil)
+(dotimes (i 450)
+  (clara.system::keep (format nil "line ~D" i)))
+(check '(349 "line 449" "line 101") (list (length clara.system::*report*) (first clara.system::*report*)
+                                           (car (last clara.system::*report*))))
+(setq clara.system::*report* nil)
+
+;; The account that a world leaves when a system waits to be tried: the
+;; system it is for, the window manager when that runs, and of every
+;; package that is the user's the functions and the variables, with the
+;; values that are text. It is written as the machine is started again,
+;; and not before.
+(two-disks (machine-tree) `(("clara" (,(system-tree "0.0.1-new" *new-files*)))))
+(clara.host:set-start-state)
+(said-by-all #'clara.system:start)
+(defpackage "PLAYGROUND" (:use "COMMON-LISP"))
+(defun playground::swing () 'high)
+(defmacro playground::twice (form) `(progn ,form ,form))
+(defvar playground::*count* 3)
+(defvar playground::*words* (list "one" #\2 'playground::three :four '(5 . cl-user::six)))
+(defvar playground::*lock* (clara:make-lock "held"))
+(defvar playground::*ring* (let ((ring (list 1 2))) (setf (cdr (last ring)) ring) ring))
+(defvar playground::swing 'a-variable-too)
+(defpackage "CLARA.LATER" (:use "COMMON-LISP"))       ; as the launcher makes one for an application of the system's
+(defun clara.later::of-the-system () 'not-the-users)
+(check '(t nil t) (list (and (member (find-package "PLAYGROUND") (clara.system::user-packages)) t)
+                        (member (find-package "CLARA.SYSTEM") (clara.system::user-packages))
+                        (and (member (find-package "COMMON-LISP-USER") (clara.system::user-packages)) t)))
+(check nil (clara.system::waiting))
+(clara.system::write-text "/clara/next" (format nil "tried 0.0.1-new~%"))
+(check nil (clara.system::waiting))
+(clara.fat:remove-file "/clara/next")
+(said-by-all (lambda () (clara.system:upgrade :start-again nil)))
+(check '("0.0.1-new" nil) (list (clara.system::waiting) (on-disk *machine-disk* "/clara/carried")))
+;; (It goes to the disk that the machine was started from, wherever names are looked up at the moment.)
+(setq clara.fat:*volume* (second (clara.fat:volumes)))
+(check t (and (search "clara: starting the machine again" (said-by-all (lambda () (clara.system:start-again :save nil)))) t))
+(setq clara.fat:*volume* (first (clara.fat:volumes)))
+(check nil (on-disk *other-disk* "/clara/carried"))
+(let ((account (on-disk *machine-disk* "/clara/carried")))
+  (check 0 (search (format nil "(:carried \"0.0.0-host\" \"0.0.1-new\")~%(:name ") account))
+  (check t (and (search (format nil "(:name \"PLAYGROUND\" \"*COUNT*\" :variable)~%(:value \"PLAYGROUND\" \"*COUNT*\" \"3\")~%~
+                                     (:name \"PLAYGROUND\" \"*LOCK*\" :variable)~%~
+                                     (:name \"PLAYGROUND\" \"*RING*\" :variable)~%~
+                                     (:name \"PLAYGROUND\" \"*WORDS*\" :variable)~%~
+                                     (:value \"PLAYGROUND\" \"*WORDS*\" \"(\\\"one\\\" #\\\\2 PLAYGROUND::THREE :FOUR (5 . SIX))\")~%~
+                                     (:name \"PLAYGROUND\" \"SWING\" :function)~%~
+                                     (:name \"PLAYGROUND\" \"SWING\" :variable)~%~
+                                     (:value \"PLAYGROUND\" \"SWING\" \"CLARA.TESTS::A-VARIABLE-TOO\")~%~
+                                     (:name \"PLAYGROUND\" \"TWICE\" :function)~%")
+                        account)
+                t))
+  ;; Nothing of the system's, nothing that a package only has of another, and no symbol that is neither.
+  (check '(nil nil nil nil nil nil t)
+         (list (search "CLARA.SYSTEM" account) (search "CLARA.LATER" account) (search "(:name \"COMMON-LISP\" " account)
+               (search "(:name \"KEYWORD\" " account)
+               (search "(:name \"PLAYGROUND\" \"CAR\"" account) (search "\"THREE\"" account)
+               (in-order-p *machine-disk*))))
+;; With the window manager running, that is said in it; and a world that
+;; cannot be written down goes all the same, and says so.
+(let ((clara.windows::*running* t))
+  (clara.system::carry "0.0.1-new"))
+(check 0 (search (format nil "(:carried \"0.0.0-host\" \"0.0.1-new\")~%(:windows)~%(:name ") (on-disk *machine-disk* "/clara/carried")))
+(clara.fat:remove-file "/clara/carried")
+(clara.fat:make-directory "/clara/carried")
+(check t (let ((said (said-by-all (lambda () (clara.system:start-again :save nil)))))
+           (and (search "system: what this world has could not be written down for 0.0.1-new: " said)
+                (search "clara: starting the machine again" said)
+                t)))
+(clara.fat:remove-directory "/clara/carried")
+;; A start that is not the trial of a system has no use for an account.
+(clara.system::carry "0.0.1-new")
+(clara.host:set-start-state)
+(said-by-all #'clara.system:start)
+(check nil (on-disk *machine-disk* "/clara/carried"))
+
+;; The system that comes: it makes its world, loads the text, gives the
+;; variables the values that they had come to, says what it does not have
+;; of the names that the old world had, and saves the world.
+(defun trial-disk (account &rest home)
+  (let ((tree (append (machine-tree '("next" "tried 0.0.1-new
+") '("starts" "1 0000000000000007
+"))
+                      (and home (list (list "home" home))))))
+    (setf (second (second tree))
+          (append (list (system-tree "0.0.1-new" *new-files*)) (and account (list (list "carried" account)))
+                  (second (second tree))))
+    (one-disk tree))
+  (said-by #'clara.draw:start)                        ; a machine without a screen, until a test gives it one
+  (clara.host:set-start-state :system "0.0.1-new" :trial t :token "0000000000000007")
+  (clara.host:set-heap-image (octets "the world that was made again")))
+
+(trial-disk (format nil "(:carried \"0.0.0-host\" \"0.0.1-new\")~%~
+                         (:later \"a line of a later system\" 5)~%42~%~
+                         (:name \"SANDPIT\" \"DIG\" :function)~%(:name \"SANDPIT\" \"DIG\" :variable)~%~
+                         (:name \"SANDPIT\" \"*TOOL*\" :function)~%(:name \"SANDPIT\" \"FILL\" :function)~%~
+                         (:name \"SANDPIT\" \"*DEPTH*\" :variable)~%(:value \"SANDPIT\" \"*DEPTH*\" \"7\")~%~
+                         (:name \"SANDPIT\" \"*SAME*\" :variable)~%(:value \"SANDPIT\" \"*SAME*\" \"(1 2)\")~%~
+                         (:name \"SANDPIT\" \"*TOOL*\" :variable)~%~
+                         (:name \"SANDPIT\" \"*GONE*\" :variable)~%~
+                         (:name \"SANDPIT\" \"*FOUND*\" :variable)~%(:value \"SANDPIT\" \"*FOUND*\" \"(\\\"a\\\" #\\\\b SHELL)\")~%~
+                         (:name \"SANDPIT\" \"*BROKEN*\" :variable)~%(:value \"SANDPIT\" \"*BROKEN*\" \"(1 2\")~%~
+                         (:name \"NOWHERE\" \"THING\" :variable)~%(:value \"NOWHERE\" \"THING\" \"1\")~%~
+                         (:name \"COMMON-LISP-USER\" \"NEVER-DEFINED-HERE\" :function)~%~
+                         (:value \"SANDPIT\" 5 \"1\")~%(:name 5)~%")
+            (list "defined.lisp" (format nil "(defpackage \"SANDPIT\" (:use \"COMMON-LISP\"))~%~
+                                              (cl:in-package \"SANDPIT\")~%~
+                                              (defun dig () 'deeper)~%(defvar *depth* 0)~%(defvar *same* (list 1 2))~%~
+                                              (defvar *tool* (list 'a 'spade))~%")))
+(when (find-package "SANDPIT")
+  (delete-package "SANDPIT"))
+(clara.system::keep "a line that was said of the world before this one")
+(let ((said (said-by-all #'clara.system:start)))
+  (check (format nil "system: this is ClaraOS 0.0.1-new, on trial: the system before it is still in place~%~
+                      system: 0.0.1-new has come to its prompt, and is the system of this machine from here on~%~
+                      world: made anew by ClaraOS 0.0.1-new, of its files and of what /home/ holds as text~%~
+                      home: /home/defined.lisp is loaded, 6 forms~%~
+                      world: 2 variables have the values that they had come to in the world before:~%~
+                      world:   SANDPIT::*DEPTH*, SANDPIT::*FOUND*~%~
+                      world: 1 variable held what is no text, and is as its form makes it here:~%~
+                      world:   SANDPIT::*TOOL*~%~
+                      world: 7 names that the world before had are not defined in this one:~%~
+                      world:   SANDPIT::DIG (a variable), SANDPIT::*TOOL*, SANDPIT::FILL, SANDPIT::*GONE* (a variable)~%~
+                      world:   SANDPIT::*BROKEN* (a variable), NOWHERE::THING (a variable), NEVER-DEFINED-HERE~%~
+                      world: it is saved as it is now, and the next start is in it; (clara.system:report) says this again~%")
+         said)
+  ;; All of it but the system's two lines is said again when it is asked for.
+  (check (subseq said (search "world: made anew" said)) (said-by #'clara.system:report)))
+(check '(7 ("a" #\b cl-user::shell) (1 2) (a spade) deeper)
+       (list (symbol-value (find-symbol "*DEPTH*" "SANDPIT")) (symbol-value (find-symbol "*FOUND*" "SANDPIT"))
+             (symbol-value (find-symbol "*SAME*" "SANDPIT"))
+             (mapcar (lambda (symbol) (intern (symbol-name symbol) "CLARA.TESTS")) (symbol-value (find-symbol "*TOOL*" "SANDPIT")))
+             (intern (symbol-name (funcall (find-symbol "DIG" "SANDPIT"))) "CLARA.TESTS")))
+(check '("the world that was made again" nil nil t t)
+       (list (on-disk *machine-disk* "/clara/clara.image") (on-disk *machine-disk* "/clara/carried")
+             (on-disk *machine-disk* "/clara/starts") (in-order-p *machine-disk*) clara.system::*follows*))
+;; An account that was written for another system is not this one's, and
+;; one that says nothing of the old world's names says that all are here.
+(trial-disk (format nil "(:carried \"0.0.0-host\" \"0.0.9-another\")~%(:name \"COMMON-LISP-USER\" \"NEVER-DEFINED-HERE\" :function)~%"))
+(check t (let ((said (said-by-all #'clara.system:start)))
+           (and (search "world: the system before this one left no account of its world" said)
+                (not (search "NEVER-DEFINED-HERE" said)))))
+(check nil (on-disk *machine-disk* "/clara/carried"))
+(trial-disk (format nil "(:carried \"0.0.0-host\" \"0.0.1-new\")~%(:name \"COMMON-LISP\" \"CAR\" :function)~%"))
+(check t (and (search (format nil "world: every function and every variable that the world before had is defined in this one~%")
+                      (said-by-all #'clara.system:start))
+              t))
+(dolist (none (list "this is no account (" (format nil "(:name \"COMMON-LISP-USER\" \"NEVER-DEFINED-HERE\" :function)~%") ""))
+  (trial-disk none)
+  (check t (and (search "world: the system before this one left no account of its world" (said-by-all #'clara.system:start)) t)))
+;; A world that cannot be saved, here one that the disk has no room for,
+;; says so, and the start comes to its prompt.
+(trial-disk nil)
+(clara.host:set-heap-image (make-array (+ (clara.fat:free-bytes) 200000) :element-type '(unsigned-byte 8) :initial-element 0))
+(check t (and (search (format nil "world: it is saved as it is now, and the next start is in it; (clara.system:report) says this again~%~
+                                   world: no, it could not be saved: ")
+                      (said-by-all #'clara.system:start))
+              t))
+(check '(nil t) (list (on-disk *machine-disk* "/clara/starts") (in-order-p *machine-disk*)))
+
+;; The window manager, when the account says that it was running, is
+;; started before the text is loaded, so that a form of the text which
+;; opens a window can. On a machine without a screen that is said. And an
+;; account that does not speak of it leaves it as it is.
+(dolist (screen '(nil t))
+  (trial-disk (format nil "(:carried \"0.0.0-host\" \"0.0.1-new\")~%(:windows)~%")
+              (list "init.lisp" "(push (clara.windows:running-p) clara.tests::*order*)"))
+  (when screen
+    (new-desk :machine nil :start nil))
+  (setq *order* nil)
+  (let ((said (said-by-all #'clara.system:start)))
+    (check (list (list screen) screen (not screen))
+           (list *order* (clara.windows:running-p)
+                 (and (search "world: the window manager was running in the world before, and could not be started in this one"
+                              said)
+                      t))))
+  (clara.windows:stop))
+(trial-disk (format nil "(:carried \"0.0.0-host\" \"0.0.1-new\")~%")
+            (list "init.lisp" "(push (clara.windows:running-p) clara.tests::*order*)"))
+(new-desk :machine nil :start nil)
+(setq *order* nil)
+(said-by-all #'clara.system:start)
+(check '((nil) nil) (list *order* (clara.windows:running-p)))
+
+;; A world that came back as an image takes what the two files have that
+;; it has not: what was defined after it was saved, and what somebody
+;; wrote into a file since. A form that it has is not evaluated again.
+(one-disk (home-tree (list "init.lisp" (format nil "(push :init clara.tests::*order*)~%"))
+                     (list "defined.lisp" (format nil "(push :one clara.tests::*order*)~%~%(cl:in-package \"CLARA.TESTS\")~%~
+                                                       (push :two clara.tests::*order*)~%"))))
+(clara.host:set-start-state)
+(setq *order* nil)
+(said-by-all #'clara.system:start)
+(check '((:init :one :two) t) (list (reverse *order*) clara.system::*follows*))
+(clara.host:set-start-state :resumed t)
+(setq *order* nil)
+(check (format nil "system: this is ClaraOS 0.0.0-host~%") (said-by-all #'clara.system:start))
+(check nil *order*)
+;; The files change on the disk, as they do when a machine goes on after
+;; its world was saved and is then stopped without saving.
+(clara.system::write-text "/home/defined.lisp"
+                          (format nil ";; a comment that is new~%(push :one clara.tests::*order*)~%(push :one-and-a-half clara.tests::*order*)~%~%~
+                                       (cl:in-package \"CLARA.TESTS\")~%(push :two clara.tests::*order*)~%~
+                                       (push (list :three (package-name *package*)) *order*)~%~
+                                       (error \"a new form that fails\")~%(cl:in-package \"COMMON-LISP-USER\")~%~
+                                       (push :two clara.tests::*order*)~%"))
+(clara.system::write-text "/home/init.lisp" (format nil "(push :init clara.tests::*order*)~%   ~%"))
+(check (format nil "system: this is ClaraOS 0.0.0-host~%~
+                    home: /home/defined.lisp has 3 forms that this world did not have, which are loaded now, and 1 was passed over:~%~
+                    home:   (error \"a new form that fails\")~%home:     a new form that fails~%")
+       (said-by-all #'clara.system:start))
+;; (The last of them is a form that the world has, word for word, in another package.)
+(check '(:one-and-a-half (:three "CLARA.TESTS") :two) (reverse *order*))
+;; Nothing is new the next time, and a world that was made without the text takes none of it.
+(setq *order* nil)
+(check (format nil "system: this is ClaraOS 0.0.0-host~%") (said-by-all #'clara.system:start))
+(clara.system::write-text "/home/defined.lisp" (format nil "(push :unasked clara.tests::*order*)~%"))
+(setq clara.system::*follows* nil)
+(check (format nil "system: this is ClaraOS 0.0.0-host~%") (said-by-all #'clara.system:start))
+(check nil *order*)
+(setq clara.system::*follows* t)
+(check (format nil "system: this is ClaraOS 0.0.0-host~%~
+                    home: /home/defined.lisp has 1 form that this world did not have, which is loaded now~%")
+       (said-by-all #'clara.system:start))
+(check '(:unasked) *order*)
+;; What a listener writes down the world has, and does not load again. A
+;; form that somebody wrote into the file in between it has not: that one
+;; is loaded at the next start, and the form that was typed with it.
+(setq *order* nil)
+(clara.system::record '(defvar *typed-here* (push :typed clara.tests::*order*)) "(defvar *typed-here* (push :typed clara.tests::*order*))"
+                      "COMMON-LISP-USER")
+(check (format nil "system: this is ClaraOS 0.0.0-host~%") (said-by-all #'clara.system:start))
+(clara.system::write-text "/home/defined.lisp"
+                          (concatenate 'string (on-disk *machine-disk* "/home/defined.lisp")
+                                       (format nil "(push :by-hand clara.tests::*order*)~%")))
+(clara.system::record '(defvar *typed-later* 1) "(defvar *typed-later* (push :typed-later clara.tests::*order*))" "COMMON-LISP-USER")
+(check t (and (search "home: /home/defined.lisp has 2 forms that this world did not have, which are loaded now"
+                      (said-by-all #'clara.system:start))
+              t))
+(check '(:by-hand :typed-later) (reverse *order*))
+;; A file that is there for the first time is the world's when a listener made it.
+(one-disk (machine-tree))
+(clara.host:set-start-state)
+(said-by-all #'clara.system:start)
+(setq *order* nil)
+(clara.system::record '(defvar *first-of-all* 1) "(defvar *first-of-all* (push :first-of-all clara.tests::*order*))" "COMMON-LISP-USER")
+(clara.host:set-start-state :resumed t)
+(check (format nil "system: this is ClaraOS 0.0.0-host~%") (said-by-all #'clara.system:start))
+(check nil *order*)
+
+;; A world that is made knows nothing of a text that another world had:
+;; a file that is written later with the very words of one that the world
+;; before had loaded is new to it.
+(one-disk (home-tree (list "init.lisp" "(push :of-the-world-before clara.tests::*order*)")))
+(clara.host:set-start-state)
+(said-by-all #'clara.system:start)
+(one-disk (machine-tree))
+(said-by-all #'clara.system:start)
+(clara.system::write-text "/home/init.lisp" "(push :of-the-world-before clara.tests::*order*)")
+(clara.host:set-start-state :resumed t)
+(setq *order* nil)
+(check t (and (search "home: /home/init.lisp has 1 form that this world did not have, which is loaded now"
+                      (said-by-all #'clara.system:start))
+              t))
+(check '(:of-the-world-before) *order*)
+
+;; A form that says which package the next ones are read in, and fails:
+;; those are passed over, up to the next such form, since they would be
+;; read in a package that they were not written for.
+(one-disk (home-tree (list "defined.lisp" (format nil "(cl:in-package \"NO-SUCH-PACKAGE-ANYWHERE\")~%~
+                                                       (push :in-the-wrong-package clara.tests::*order*)~%(defun lost () 1)~%~
+                                                       (cl:in-package \"CLARA.TESTS\")~%(push :in-the-right-one *order*)~%"))))
+(clara.host:set-start-state)
+(setq *order* nil)
+(let ((said (said-by-all #'clara.system:start)))
+  (check t (and (search "home: /home/defined.lisp is loaded, 2 forms of it, and 3 were passed over:" said)
+                (search (format nil "home:   (push :in-the-wrong-package clara.tests::*order*)~%~
+                                     home:     its package, NO-SUCH-PACKAGE-ANYWHERE, is not there~%")
+                        said)
+                (search (format nil "home:   (defun lost () 1)~%home:     its package, NO-SUCH-PACKAGE-ANYWHERE, is not there~%") said)
+                t)))
+(check '(:in-the-right-one) *order*)
+
+;; A saved world that did not come to its prompt is passed over by the
+;; handoff, and a world is made in its place. The first time the saved one
+;; is kept, with a note of which it was, and the next start tries it again;
+;; the second time, the world that was made takes its place.
+(one-disk (home-tree (list "init.lisp" "(push :made-anew clara.tests::*order*)")))
+(clara.host:set-start-state :starts 1 :passed-over t)
+(clara.host:set-heap-image (octets "a world made in the place of one that did not start"))
+(setq *order* nil)
+(check (format nil "system: this is ClaraOS 0.0.0-host~%home: /home/init.lisp is loaded, 1 form~%~
+                    world: the world that was saved did not come to its prompt at the start before this one.~%~
+                    world:   It is kept, and the next start tries it once more; this world is of the files and of /home/~%")
+       (said-by-all #'clara.system:start))
+(check '("the world that the old system saved" t t)
+       (list (on-disk *machine-disk* "/clara/clara.image") (and (on-disk *machine-disk* "/clara/passed") t) (in-order-p *machine-disk*)))
+(check (format nil "system: this is ClaraOS 0.0.0-host~%home: /home/init.lisp is loaded, 1 form~%~
+                    world: the world that was saved did not come to its prompt a second time: this one takes its place~%~
+                    world: it is saved as it is now, and the next start is in it; (clara.system:report) says this again~%")
+       (said-by-all #'clara.system:start))
+(check '("a world made in the place of one that did not start" nil t)
+       (list (on-disk *machine-disk* "/clara/clara.image") (on-disk *machine-disk* "/clara/passed") (in-order-p *machine-disk*)))
+;; What tells one saved world from another is how long its file is and
+;; where the file begins: a world that is saved over another of the same
+;; length begins elsewhere.
+(flet ((numbers ()
+         (let* ((identity (clara.system::image-identity)) (space (position #\Space identity)))
+           (list (parse-integer identity :end space) (parse-integer identity :start (1+ space))))))
+  (let ((first (numbers)))
+    (clara.host:set-heap-image (octets "a world of just the same length as the first one is"))
+    (clara:save-image)
+    (let ((second (numbers)))
+      (clara.host:set-heap-image (octets "and one that is a little longer than that, by a few words"))
+      (clara:save-image)
+      (check '(51 51 57 nil) (list (first first) (first second) (first (numbers)) (= (second first) (second second)))))))
+(clara.host:set-heap-image (octets "a world made in the place of one that did not start"))
+(clara:save-image)
+;; Another saved world than the one that was noted is passed over for the
+;; first time: one that is as long and begins elsewhere, and one that
+;; begins there and is not as long.
+(let* ((identity (clara.system::image-identity))
+       (space (position #\Space identity))
+       (size (parse-integer identity :end space)) (cluster (parse-integer identity :start (1+ space))))
+  (dolist (other (list (format nil "~D ~D" size (1+ cluster)) (format nil "~D ~D" (1+ size) cluster)))
+    (clara.system::write-text "/clara/passed" other)
+    (check t (and (search "world:   It is kept, and the next start tries it once more" (said-by-all #'clara.system:start)) t))
+    (check (list "a world made in the place of one that did not start" (format nil "~A~%" identity))
+           (list (on-disk *machine-disk* "/clara/clara.image") (on-disk *machine-disk* "/clara/passed")))))
+;; A saved world that comes to its prompt after all was not the reason, and the note goes.
+(clara.host:set-start-state :resumed t)
+(said-by-all #'clara.system:start)
+(check nil (on-disk *machine-disk* "/clara/passed"))
+;; With no saved world on the disk there is nothing to keep or to replace.
+(one-disk (let ((tree (machine-tree)))
+            (setf (second (second tree)) (remove "clara.image" (second (second tree)) :key #'car :test #'equal))
+            tree))
+(clara.host:set-start-state :starts 1 :passed-over t)
+(check (format nil "system: this is ClaraOS 0.0.0-host~%") (said-by-all #'clara.system:start))
+(check '(nil nil) (list (on-disk *machine-disk* "/clara/passed") (on-disk *machine-disk* "/clara/clara.image")))
 
 (clara.host:reset-machine)
 (clara.host:set-start-state)

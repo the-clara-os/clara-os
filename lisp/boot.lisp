@@ -16,7 +16,7 @@
 ;;; COMMON-LISP until it is exported, and only an external one is the
 ;;; symbol that the other packages mean by it.
 (export '(when unless and or cond case ecase otherwise return prog1 psetq
-          dolist dotimes do do* loop
+          dolist dotimes do do* loop do-symbols
           multiple-value-list multiple-value-setq nth-value
           setf defsetf incf decf push pop
           defstruct in-package defpackage make-package
@@ -151,6 +151,13 @@
                   (setq ,rest (cdr ,rest))
                   (go ,next)))))
        ,@(if result `((let ((,variable nil)) ,result))))))
+
+;; DO-SYMBOLS: the body with the variable bound in turn to every symbol
+;; that can be had by its name in a package, its own and the external ones
+;; of the packages that it uses; in the current package when none is named.
+(defmacro do-symbols ((variable &optional (package '*package*) result) &body body)
+  `(dolist (,variable (%package-symbols ,package) ,result)
+     ,@body))
 
 (defmacro dotimes ((variable count &optional result) &body body)
   (let ((limit (gensym)) (next (gensym)))

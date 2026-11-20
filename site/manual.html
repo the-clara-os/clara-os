@@ -166,7 +166,7 @@ draw: a screen of 800 by 600 pixels
 system: this is ClaraOS {{version}}-41d0c97b
 clara: reading the serial port and the keyboard: a form is evaluated, Ctrl-C stops it, Ctrl-D ends
 &gt; </code></pre>
-    <p>The lines that begin with <code>pci:</code>, <code>input:</code>, <code>disk:</code>, <code>files:</code> and <code>draw:</code> say what the machine has: its devices, the keyboards and pointers among them, its disks, the volume that names of files are looked up on, and the screen that <a href="#drawing">pictures</a> are shown on. The line <code>system:</code> says which build of ClaraOS this is, its version and eight digits that are different for every build, and more lines follow it when <a href="#upgrade">a newer system</a> was taken. Lines that begin with <code>home:</code> say what was loaded of <a href="#home">your own text</a> into a world that was made anew. A line that begins with <code>panic:</code> or <code>exception:</code> means the kernel has stopped. <a href="#trouble">When something goes wrong</a> has more about those.</p>
+    <p>The lines that begin with <code>pci:</code>, <code>input:</code>, <code>disk:</code>, <code>files:</code> and <code>draw:</code> say what the machine has: its devices, the keyboards and pointers among them, its disks, the volume that names of files are looked up on, and the screen that <a href="#drawing">pictures</a> are shown on. The line <code>system:</code> says which build of ClaraOS this is, its version and eight digits that are different for every build, and more lines follow it when <a href="#upgrade">a newer system</a> was taken. Lines that begin with <code>home:</code> say what was loaded of <a href="#home">your own text</a>, and lines that begin with <code>world:</code> what a world that was made again has of <a href="#across">the one before it</a>. A line that begins with <code>panic:</code> or <code>exception:</code> means the kernel has stopped. <a href="#trouble">When something goes wrong</a> has more about those.</p>
 
     <h3 id="stop">Stopping it</h3>
     <p>The machine is shut down by asking it to:</p>
@@ -300,8 +300,13 @@ POINT
 &gt; (list 'ball 'bat (symbol-package 'bat) 'cl-user::fact)
 (BALL BAT #&lt;PACKAGE "PLAY"&gt; COMMON-LISP-USER::FACT)
 &gt; (in-package "COMMON-LISP-USER")
-#&lt;PACKAGE "COMMON-LISP-USER"&gt;</pre>
-    <p>Names are read in the package that <code>*package*</code> holds, which is <code>COMMON-LISP-USER</code> when the system starts. What the system adds to Common Lisp is in the package <code>CLARA</code>, and is written with that name before it: <code>clara:make-thread</code>, <code>clara:save-image</code>.</p>
+#&lt;PACKAGE "COMMON-LISP-USER"&gt;
+&gt; (let ((own nil))
+    (do-symbols (s "PLAY")
+      (when (eq (symbol-package s) (find-package "PLAY")) (push s own)))
+    (sort own #'string-lessp :key #'symbol-name))
+(PLAY:BALL PLAY::BAT)</pre>
+    <p>Names are read in the package that <code>*package*</code> holds, which is <code>COMMON-LISP-USER</code> when the system starts. What the system adds to Common Lisp is in the package <code>CLARA</code>, and is written with that name before it: <code>clara:make-thread</code>, <code>clara:save-image</code>. <code>do-symbols</code> goes through every symbol that a package has by name: its own, as here, and the ones it has of the packages that it uses.</p>
 
     <h3 id="conditions">Errors that a program handles</h3>
 <pre class="session">&gt; (handler-case (/ 10 0) (division-by-zero () 'no-quotient))
@@ -588,6 +593,7 @@ NIL
       <li>The <a href="#windows">window manager</a> is running again when it was running, with one Listener window. The windows that were open do not come back.</li>
       <li>The devices are found again, as at every start. A world can be saved on one machine and started on another that has other devices, or another screen, as long as it is the same kind of processor.</li>
       <li>Files are on the disk either way, and have nothing to do with the image.</li>
+      <li>What you defined after the world was saved, on a machine that was then stopped without a shutdown, is not in the image. It is in <a href="#home">the text</a>, and the start loads it from there.</li>
     </ul>
     <p>Saving again writes a new image in place of the old one. A world of this size takes a fraction of a second to save. <a href="#stop">Shutting the machine down</a> saves it as well, unless it is told not to.</p>
 
@@ -612,7 +618,14 @@ T</pre>
 
     <h3 id="prompt-not-reached">A world that does not come to its prompt</h3>
     <p>One thing a world cannot be saved from is itself. A world in which something essential was redefined, and which was then saved, starts like that every time. When such a world does not get as far as its prompt, stop the machine and start it again. Every start is counted on the disk before anything else is done, and the count is taken away when the prompt is reached; a start that finds the count of the one before it still there passes the saved world over and makes a new one from the Lisp files. The report says so:</p>
-<pre><code>lisp: clara.image is passed over: the start before this one did not come to its prompt</code></pre>
+<pre><code>lisp: clara.image is passed over: the start before this one did not come to its prompt
+<span class="note">...</span>
+world: the world that was saved did not come to its prompt at the start before this one.
+world:   It is kept, and the next start tries it once more; this world is of the files and of /home/</code></pre>
+    <p>The world that is made in its place has <a href="#home">what you defined</a>, from the text. The saved one is kept that first time, since one start that went wrong may have been anything, a machine that was switched off as it started. When the same saved world does not come to its prompt a second time, the world that was made takes its place on the disk:</p>
+<pre><code>world: the world that was saved did not come to its prompt a second time: this one takes its place
+world: it is saved as it is now, and the next start is in it; (clara.system:report) says this again</code></pre>
+    <p>And when the start after a world was passed over does not come to its prompt either, the text may be the reason, and the third start has neither: <a href="#init">A file of your own</a>.</p>
     <p>A world that is broken and comes to its prompt all the same is yours to delete: <a href="#unsave">Going back to the files</a>.</p>
   </section>
 
@@ -623,7 +636,7 @@ T</pre>
       <tr><td><code>/home/defined.lisp</code></td><td>is written by the system: every form that defines something, as you typed it at a prompt.</td></tr>
       <tr><td><code>/home/init.lisp</code></td><td>is yours to write: whatever a new world should begin with.</td></tr>
     </table>
-    <p>Whenever a world is made anew, from the Lisp files and not from an image, the two are loaded into it, <code>init.lisp</code> first: after <a href="#upgrade">an upgrade</a>, after the image was <a href="#unsave">deleted</a>, and when an image was <a href="#prompt-not-reached">passed over</a>. A world that comes back from its image is as it was saved, and nothing is loaded into it. So what was defined after the world was last saved, on a machine that then stopped without saving, is in the file and not in that world: <code>(clara.system:load-home)</code> loads the two files into the world that it is typed in, the way a start does.</p>
+    <p>Whenever a world is made anew, from the Lisp files and not from an image, the two are loaded into it, <code>init.lisp</code> first: after <a href="#upgrade">an upgrade</a>, after the image was <a href="#unsave">deleted</a>, and when an image was <a href="#prompt-not-reached">passed over</a>. A world that comes back from its image takes what is new of them: the forms that it does not have yet, which is what was defined after it was saved, on a machine that then stopped without saving, and what you wrote into a file since. A form that the world has is not evaluated a second time.</p>
 
     <h3 id="defined">What is written down</h3>
 <pre class="session">&gt; (defun area (width height) (* width height))
@@ -646,11 +659,11 @@ AREA
   ;; of a rectangle
   (* width height))</code></pre>
     <ul>
-      <li>A form is written down when it was typed at a prompt, in any listener, on the serial port or in a window; when it stands by itself, and not inside a <code>progn</code> or a <code>let</code>; when it went well; and when its first word says that it defines something. That is a word of the language's own, <code>defun</code>, <code>defmacro</code>, <code>defvar</code>, <code>defparameter</code>, <code>defstruct</code>, <code>defpackage</code>, <code>define-condition</code>; a macro of yours whose name begins with <code>def</code>; and anything whose name begins with <code>define-</code>, as <code>clara.windows:define-application</code>. Any other call of a function is not written down, whatever the function is called. A <code>load</code> is, since what a file defined is in none of the forms that were typed, unless it is one of the two files of <code>/home</code> that is loaded.</li>
+      <li>A form is written down when it was typed at a prompt, in any listener, on the serial port or in a window; when it stands by itself, and not inside a <code>progn</code> or a <code>let</code>; when it went well; and when its first word says that it defines something. That is a word of the language's own, <code>defun</code>, <code>defmacro</code>, <code>defvar</code>, <code>defparameter</code>, <code>defstruct</code>, <code>defpackage</code>, <code>define-condition</code>; a macro of yours whose name begins with <code>def</code>; and anything whose name begins with <code>define-</code>, as <code>clara.windows:define-application</code>, and with it <code>clara.windows:install-application</code>. Any other call of a function is not written down, whatever the function is called. A <code>load</code> is, since what a file defined is in none of the forms that were typed, unless it is one of the two files of <code>/home</code> that is loaded.</li>
       <li>A form that defines a name again takes the place of the form that defined it before, so the file has every definition once, in the order in which each was first made.</li>
       <li>Forms that were read in another package than the ones before them have a line <code>(cl:in-package "NAME")</code> before them.</li>
-      <li>What is not a definition is not kept. A variable that was changed after its <code>defvar</code> comes back with the value that the <code>defvar</code> gives it; what a <code>defvar</code> did to get its value, it does again; and what <kbd>Ctrl-E</kbd> evaluated in the <a href="#editor">editor</a> is in the editor's file, and not here.</li>
-      <li>The file is text, and yours: read it, and take out of it what you no longer want, in the editor. What the system cannot read of it any more it leaves as it is, and goes on after it.</li>
+      <li>What is not a definition is not written down. A variable that was changed after its <code>defvar</code> is in the file with the value that the <code>defvar</code> gives it, and a world that is made of the text alone has that one; an upgrade <a href="#across">carries the value that it had come to</a> as well. What a <code>defvar</code> did to get its value, it does again. And what <kbd>Ctrl-E</kbd> evaluated in the <a href="#editor">editor</a> is in the editor's file, and not here.</li>
+      <li>Nothing else that takes a definition back is written down: after <code>(delete-package "PLAY")</code> the forms that made the package, and what was defined in it, are still in the file. The file is text, and yours: read it, and take out of it what you no longer want, in the editor. What the system cannot read of it any more it leaves as it is, and goes on after it.</li>
     </ul>
 
     <h3 id="init">A file of your own</h3>
@@ -669,7 +682,7 @@ home:     there is no window manager to open a window with: (clara.windows:start
       <li>Each form is evaluated by itself. One that fails is passed over, with its beginning and the reason in the report, and the rest goes on: a form that a newer system no longer understands does not keep a world from being made.</li>
       <li>A file gets a minute. One that has not come to its end by then is stopped where it is, and the machine goes on to its prompt. <code>clara.system:*patience*</code> is that time, in milliseconds.</li>
       <li>A <code>load</code> of <code>/home/init.lisp</code> or <code>/home/defined.lisp</code> that stands in one of the two is passed over like a form that fails: the file would load itself without end. A file of yours anywhere else is loaded from <code>init.lisp</code> like from a prompt, with its name looked up on the disk that the machine started from.</li>
-      <li>After two starts in a row that did not come to a prompt, nothing of <code>/home</code> is loaded, in case that is the reason: the world is then the system's alone, the report says so, and the files are there to be put right.</li>
+      <li>After two starts in a row that did not come to a prompt, nothing of <code>/home</code> is loaded, in case that is the reason: the world is then the system's alone, the report says so, and the files are there to be put right. <code>(clara.system:load-home)</code> loads the two files into the world that it is typed in, the way a start does, and that world takes what is new of them from then on.</li>
     </ul>
   </section>
 
@@ -708,9 +721,21 @@ system: {{version}}-41d0c97b has come to its prompt, and is the system of this m
     <ul>
       <li>Every file that you wrote, wherever it is on the disk. The upgrade writes into <code>/clara</code> and <code>/EFI</code> and nowhere else.</li>
       <li>What you defined at a prompt, as text: the newer system loads <a href="#home"><code>/home/init.lisp</code> and <code>/home/defined.lisp</code></a> into the world that it makes.</li>
-      <li>Not the world that was saved. A world belongs to the system that saved it, and the newer system makes one of its own files. So what only the old world had is gone: the value that a variable came to after it was defined, and whatever was built by hand and never defined.</li>
-      <li>Not the windows, nor whether the window manager was running: the newer system starts at the console.</li>
+      <li>What your variables had come to, as far as that is text: numbers, characters, strings, symbols, and lists of those. The old system writes those values down as it leaves, and the new one gives them to the variables once the text has defined them.</li>
+      <li>The window manager: it is started when it was running, with one Listener window, and a form of your text that opens a window opens it.</li>
+      <li>Not the world itself. A world belongs to the system that saved it, so the newer system makes one of its own files, and saves it without being asked: the next start is in it. What is no text is not in it: a function that no form of the text defines, a thread, a lock, a list that leads back into itself. A variable that held such a thing has what its form makes anew.</li>
     </ul>
+    <p>The newer system says which is which as it starts, by name:</p>
+<pre><code>world: made anew by ClaraOS {{version}}-41d0c97b, of its files and of what /home/ holds as text
+home: /home/defined.lisp is loaded, 35 forms
+world: 3 variables have the values that they had come to in the world before:
+world:   *ASKED*, *JOBS*, *THREADS*
+world: 8 variables held what is no text, and are as their forms make them here:
+world:   *ADD*, *BELL*, *CANVAS*, *HELD*, *SEEN*, *SVREF*, *WAITER*, *WINDOW*
+world: 3 names that the world before had are not defined in this one:
+world:   *SPINNER* (a variable), HI, NOT-WRITTEN-DOWN
+world: it is saved as it is now, and the next start is in it; (clara.system:report) says this again</code></pre>
+    <p>The last of the three lists is what did not come across: names that the old world had, in <code>COMMON-LISP-USER</code> and in the packages that you made, and that nothing in the text defines. They were defined inside another form, by a file that was loaded from inside one, or in the editor. <code>(clara.system:report)</code> says all of it again, at any later time, with every name, where the report of a start says the first few lines of a long list.</p>
     <p>The disk needs room for two systems while the newer one is tried, some four mebibytes beside what is there. When it has less, the upgrade says so and does nothing.</p>
   </section>
 
@@ -1074,6 +1099,7 @@ NIL
     <ul>
       <li><code>clara.windows:unload-application</code> stops the application wherever it runs, which closes its windows, and deletes the packages that its file made: what the file defined is gone from the world, and the memory it took comes back. The application stays in the list, and the next launch loads the file as it is by then. That is how to try a change to an application: save the file, unload, launch.</li>
       <li><code>clara.windows:remove-application</code> does the same and takes the name out of the list. It is also what takes out an application that was defined at a prompt, like <code>Hello</code>.</li>
+      <li>What is typed at a prompt to define an application or to install one is <a href="#defined">written down</a> with everything else that you define, so the launcher of a world that is made again, after <a href="#upgrade">an upgrade</a> for one, has it in its list. <code>clara.windows:remove-application</code> and <code>clara.windows:remove-command</code>, typed at a prompt with the name written out, take the form that put it there out of <code>/home/defined.lisp</code> again.</li>
       <li>An application that fails, in its file or later, ends with its windows closed. The reason is said on the console, as for any thread: <code>error in #&lt;THREAD "Greeting"&gt;:</code> and what went wrong.</li>
       <li>The editor and the browser are unloaded and launched again the same way, and the system's <code>editor.lisp</code> can be changed in the editor: <code>(clara.system:system-file "editor.lisp")</code> is its name. A file that is installed by a name without a directory, as those two are, is one of the system's own.</li>
       <li>What an application is installed as is part of the world, and is saved with it. Whether its file has been loaded is too: a world that is saved after the editor was used starts with the editor in it.</li>
@@ -1131,7 +1157,7 @@ error: nothing is mapped at #x0</pre>
       <tr><td>Boxes on the screen where characters should be.</td><td>The screen's font has the characters of ASCII. The characters themselves are right, and show on the serial port.</td></tr>
       <tr><td>A picture that was shown has text over it, or is no longer where it was put.</td><td>The console writes on the same screen, and moves everything on it up with every new line: <a href="#showing">Showing what has changed</a>. Show the picture again.</td></tr>
       <tr><td><code>error: this surface is of a machine that was switched off</code></td><td>The surface was made before the world was saved, and its pixels were not saved with it. Make a new one and draw on that: <a href="#surfaces">Memory</a>.</td></tr>
-      <tr><td>After a <code>make</code>, a variable has the value it was defined with, and not the one it had come to.</td><td>The build is another system, the machine took it as it started, and a newer system makes a world of its own, into which what you defined is loaded as text: <a href="#across">What comes across</a>.</td></tr>
+      <tr><td>After a <code>make</code>, something that was defined is not, or a variable holds another window or another lock than before.</td><td>The build is another system, the machine took it as it started, and a newer system makes a world of its own, from the text: <a href="#across">What comes across</a>. <code>(clara.system:report)</code> names what is missing.</td></tr>
       <tr><td><code>home: ... was passed over</code>, in the report</td><td>A form of <code>/home/init.lisp</code> or <code>/home/defined.lisp</code> failed when it was loaded into a new world, and the line after it says why. The rest was loaded. <a href="#init">A file of your own</a>.</td></tr>
       <tr><td><code>system: ... was tried and did not come to its prompt</code></td><td>A newer system was taken, did not get as far as its prompt, and the machine was started again: this is the system from before, as it was. <a href="#trial">What happens at the next start</a>.</td></tr>
       <tr><td><code>lisp: clara.image is passed over</code></td><td>The start before this one did not come to its prompt, so the world that was saved was not started a second time: <a href="#prompt-not-reached">A world that does not come to its prompt</a>.</td></tr>
@@ -1171,7 +1197,7 @@ error: nothing is mapped at #x0</pre>
     <p class="names"><code>char</code> <code>schar</code> <code>char-code</code> <code>code-char</code> <code>char=</code> <code>char&lt;</code> <code>char-upcase</code> <code>char-downcase</code> <code>char-code-limit</code> <code>characterp</code> <code>string</code> <code>string=</code> <code>string-equal</code> <code>string-lessp</code> <code>string-upcase</code> <code>string-downcase</code> <code>stringp</code> <code>concatenate</code> <code>subseq</code> <code>vector</code> <code>make-array</code> <code>aref</code> <code>svref</code> <code>vectorp</code></p>
 
     <h3>Symbols and packages</h3>
-    <p class="names"><code>t</code> <code>nil</code> <code>symbol-name</code> <code>symbol-package</code> <code>symbol-value</code> <code>symbol-plist</code> <code>get</code> <code>set</code> <code>boundp</code> <code>symbolp</code> <code>keywordp</code> <code>make-symbol</code> <code>gensym</code> <code>*gensym-counter*</code> <code>intern</code> <code>find-symbol</code> <code>export</code> <code>find-package</code> <code>package-name</code> <code>packagep</code> <code>make-package</code> <code>delete-package</code> <code>list-all-packages</code> <code>in-package</code> <code>*package*</code></p>
+    <p class="names"><code>t</code> <code>nil</code> <code>symbol-name</code> <code>symbol-package</code> <code>symbol-value</code> <code>symbol-plist</code> <code>get</code> <code>set</code> <code>boundp</code> <code>symbolp</code> <code>keywordp</code> <code>make-symbol</code> <code>gensym</code> <code>*gensym-counter*</code> <code>intern</code> <code>find-symbol</code> <code>export</code> <code>find-package</code> <code>package-name</code> <code>packagep</code> <code>make-package</code> <code>delete-package</code> <code>list-all-packages</code> <code>do-symbols</code> <code>in-package</code> <code>*package*</code></p>
 
     <h3>Conditions</h3>
     <p class="names"><code>error</code> <code>warn</code> <code>signal</code> <code>handler-case</code> <code>ignore-errors</code> <code>make-condition</code> <code>condition</code> <code>serious-condition</code> <code>warning</code> <code>storage-condition</code> <code>simple-condition</code> <code>simple-error</code> <code>simple-warning</code> <code>simple-condition-format-control</code> <code>simple-condition-format-arguments</code> <code>type-error</code> <code>type-error-datum</code> <code>type-error-expected-type</code> <code>program-error</code> <code>control-error</code> <code>cell-error</code> <code>cell-error-name</code> <code>unbound-variable</code> <code>undefined-function</code> <code>arithmetic-error</code> <code>division-by-zero</code> <code>stream-error</code> <code>end-of-file</code> <code>parse-error</code> <code>reader-error</code></p>
@@ -1201,8 +1227,8 @@ error: nothing is mapped at #x0</pre>
     <p class="names" data-package="CLARA.TERMINAL"><code>clara.terminal:open-terminal</code> <code>clara.terminal:terminal-p</code> <code>clara.terminal:terminal-stream</code> <code>clara.terminal:terminal-window</code> <code>clara.terminal:clear</code> <code>clara.terminal:listener</code></p>
 
     <h3>The package CLARA.SYSTEM</h3>
-    <p>The machine as a whole: <a href="#stop">shutting it down and starting it again</a>, and <a href="#upgrade">taking a newer system</a>. <code>system</code> is the name of the system that runs, <code>system-file</code> the name of one of its files, and <code>boot-volume</code> the volume that the machine was started from. <code>home</code> is the directory where <a href="#home">your work is kept as text</a>, <code>home-file</code> the name of a file in it, and <code>load-home</code> loads its two files into the world. <code>start</code> is called by the kernel as the machine comes up: it sees to a system that is on trial, and has a thread watch the power button from then on.</p>
-    <p class="names" data-package="CLARA.SYSTEM"><code>clara.system:shut-down</code> <code>clara.system:start-again</code> <code>clara.system:upgrade</code> <code>clara.system:system</code> <code>clara.system:system-file</code> <code>clara.system:boot-volume</code> <code>clara.system:home</code> <code>clara.system:home-file</code> <code>clara.system:load-home</code> <code>clara.system:*patience*</code> <code>clara.system:start</code></p>
+    <p>The machine as a whole: <a href="#stop">shutting it down and starting it again</a>, and <a href="#upgrade">taking a newer system</a>. <code>system</code> is the name of the system that runs, <code>system-file</code> the name of one of its files, and <code>boot-volume</code> the volume that the machine was started from. <code>home</code> is the directory where <a href="#home">your work is kept as text</a>, <code>home-file</code> the name of a file in it, and <code>load-home</code> loads its two files into the world. <code>report</code> says again <a href="#across">how the world was made</a> and what came into it since. <code>start</code> is called by the kernel as the machine comes up: it sees to a system that is on trial, and has a thread watch the power button from then on.</p>
+    <p class="names" data-package="CLARA.SYSTEM"><code>clara.system:shut-down</code> <code>clara.system:start-again</code> <code>clara.system:upgrade</code> <code>clara.system:system</code> <code>clara.system:system-file</code> <code>clara.system:boot-volume</code> <code>clara.system:home</code> <code>clara.system:home-file</code> <code>clara.system:load-home</code> <code>clara.system:*patience*</code> <code>clara.system:report</code> <code>clara.system:start</code></p>
 
     <h3>The package CLARA.COMPILER</h3>
     <p><a href="#compiler">The compiler</a> is a file of Lisp as well. What it is used by are Common Lisp's own names, <code>eval</code>, <code>load</code>, <code>compile</code> and <code>disassemble</code>; the one name of its own is the function that <code>eval</code> calls.</p>

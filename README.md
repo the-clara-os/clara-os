@@ -89,7 +89,11 @@ starts as when the new one does not; the files that were written stay
 where they are. What was defined at a prompt comes across too: each form
 that defines something is written down as it is typed, in
 `/home/defined.lisp`, and a world that is made from the files loads that
-file after `/home/init.lisp`, which is the user's to write.
+file after `/home/init.lisp`, which is the user's to write. The system
+that is leaving also writes down what its variables had come to, as far
+as that is text, and the one that comes gives those values back, saves
+the world that it made, and says by name what did not come across;
+`(clara.system:report)` says it again.
 The same Lisp files load
 under SBCL on the host, where they are tested against a machine that is
 made up for the purpose.

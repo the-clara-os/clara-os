@@ -718,6 +718,17 @@ static const struct {
     { "(delete-package \"COMMON-LISP\")",
       "error: the package COMMON-LISP is one that the system cannot do without, and is not deleted" },
     { "(delete-package \"CLARA.NEVER\")", "error: there is no package named CLARA.NEVER" },
+    /* every symbol that a package has by name, its own and the ones it has of the packages it uses */
+    { "(let* ((lent (make-package \"CLARA.LENT\")) (p (make-package \"CLARA.WALKED\" :use (list lent))) (names nil) (n 0))"
+      "  (export (intern \"OFFERED\" lent) lent) (intern \"HIDDEN\" lent) (intern \"OWN\" p) (export (intern \"SHOWN\" p) p)"
+      "  (do-symbols (s p) (push (symbol-name s) names))"
+      "  (do-symbols (s \"CLARA.WALKED\") (setq n (+ n 1)))"
+      "  (list (sort names #'string-lessp) n (do-symbols (s lent 'done))"
+      "        (let ((*package* lent) (m 0)) (do-symbols (s) (setq m (+ m 1))) m)"
+      "        (do-symbols (s p) (when (eq (symbol-package s) lent) (return (symbol-name s))))"
+      "        (delete-package p) (delete-package lent)))",
+      "((\"OFFERED\" \"OWN\" \"SHOWN\") 3 DONE 2 \"OFFERED\" T T)" },
+    { "(do-symbols (s \"CLARA.NEVER\"))", "error: there is no package named CLARA.NEVER" },
     { "(list char-code-limit (char-code (code-char (1- char-code-limit))))", "(1114112 1114111)" },
     { "(list (let ((*package* (find-package \"KEYWORD\"))) (package-name *package*)) (package-name *package*))",
       "(\"KEYWORD\" \"CLARA.SELF-TEST\")" },

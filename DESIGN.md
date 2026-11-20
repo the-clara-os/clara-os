@@ -1373,9 +1373,10 @@ architectures (kernel/vm.c).
   system takes it as it starts and starts again by itself. A system that
   was tried that way and failed is not taken a second time unasked.
 - What does not come across is the world. The newer system does not start
-  the older one's image (Images, above). What was defined at a prompt
-  comes across as text (Work kept as text, below); what only the heap
-  had, a value that a variable came to, does not.
+  the older one's image (Images, above), and makes a world of its own.
+  What was defined at a prompt comes across as text (Work kept as text,
+  below), and what the variables had come to, as far as that is text (A
+  world made again, below).
 - Upgrades are tested by doing them. The build makes two more systems of
   the same sources under other names, one of which has a boot.lisp that
   is no Lisp. A machine of each kind of processor takes the good one and
@@ -1415,6 +1416,13 @@ architectures (kernel/vm.c).
   defined is in none of the forms that were typed. A function whose name
   happens to begin with the three letters, DEFAULT-SIZE, is called and
   not written down.
+- What takes a definition back is not written down, with one exception:
+  the window manager's two functions that take an application or a
+  command out of the launcher's list take the form that put it there out
+  of the file. Without that, an application that was tried and removed
+  was there again in the next world, which nobody would have expected of
+  a function called remove. DELETE-PACKAGE and whatever else undoes a
+  definition are left to the user and the editor: the file is theirs.
 - A form is kept as it was typed, comments and all, and not as the
   printer would write it: the text is for a person to read. A form that
   defines a name again takes the place of the earlier one, so the file
@@ -1426,8 +1434,9 @@ architectures (kernel/vm.c).
   `defined.lisp`, a form at a time. A form that fails is said, with the
   reason, and passed over, and the rest goes on: the forms were written
   under another system, and one that this system does not understand must
-  not keep a world from being made. A world that came as an image is not
-  loaded into: it is as it was saved.
+  not keep a world from being made. When the form that fails is the one
+  that says which package the next ones are read in, those are passed
+  over with it: read in another package they would define other names.
 - Nothing in the text may keep a machine from its prompt. Each file is
   loaded by a thread that is given a minute (`*patience*`) and is stopped
   after it. A LOAD of one of the two files from one of them is refused,
@@ -1440,9 +1449,69 @@ architectures (kernel/vm.c).
   a machine looks for an image there and nowhere else. Until this, a
   world saved while `clara.fat:*volume*` named another disk was an error,
   or a file that no start found.
-- What is not text is not kept: the value that a variable came to after
-  it was defined, an object that was built by hand, whatever a form did
-  that was no definition. M15c is about saying so.
+- What is not text is not kept by this: the value that a variable came to
+  after it was defined, an object that was built by hand, whatever a form
+  did that was no definition. The next section is about those.
+
+## A world made again (decided in M15c, 2026-11-20)
+
+- A world is two things on the disk, the image and the text, and the two
+  are kept in step. A world knows which text it has: each of the two
+  files as it last loaded or wrote it. A start in a saved world holds the
+  files against that and loads the forms that the world does not have:
+  what was defined after the world was saved, on a machine that then
+  stopped without saving, and what somebody wrote into a file since. So a
+  machine that has its plug pulled loses no definition, with an image or
+  without one. A form that the world has is not evaluated a second time.
+- After an upgrade the world is made again, and saved without anybody
+  asking. The newer system makes a world of its own files, loads the text
+  into it, and saves it, since the world on the disk is the old system's
+  and of no use to it. The next start is then as quick as before the
+  upgrade.
+- What the text does not have is known to the world that is leaving and to
+  nobody else. So that world leaves an account of itself for the system
+  that is to be tried, as its last act before the machine starts again
+  (`carry`, from the shutdown): which functions and variables there are in
+  the packages that are the user's, and of the variables the values that
+  can be written as text and read back the same, numbers, characters,
+  strings, symbols and lists of those. The system that comes gives the
+  variables those values, after the text has defined them, and says what
+  it found: which variables have the values that they had come to, which
+  held something that is no text, a function, a lock, a window, and are
+  as their forms make them, and which names of the old world are not
+  defined in the new one at all. That is the whole of "what did not come
+  across", by name, and it is kept in the world and said again when it is
+  asked for (`clara.system:report`).
+- The account is a text of the same kind as the manifest: forms of
+  keywords and strings, one to a line, of which a reader passes over the
+  ones it does not know. It is written by one system and read by the
+  next, so its form is only ever added to. It is for one start, the trial
+  of the system that it names, and is deleted by any other.
+- What is the user's is what is in COMMON-LISP-USER and in the packages
+  that were made after the world was, apart from the ones called CLARA,
+  which the launcher makes when it loads an application of the system's.
+  A value is carried when it reads back as an equal value, which is tried
+  before it is written; nothing is said to be text on trust.
+- No converter from one layout of the heap to the next was written, and
+  none is needed: the old system knows its own objects and writes text,
+  and the new one reads text. What cannot be text is named and left
+  behind.
+- The window manager is started in the new world when it was running in
+  the old one, before the text is loaded, so that a form of the text which
+  opens a window finds a screen to open it on.
+- A saved world that does not come to its prompt is replaced, the second
+  time. The first time the handoff passes it over, a world is made of the
+  files and the text in its place, the saved one is kept and the next
+  start tries it again: one start that did not come to a prompt may have
+  been anything, a machine that was switched off as it started. A note of
+  which world it was stays on the disk. When the same world is passed over
+  again, it is the world that is at fault, and the one that was made
+  takes its place. A saved world that comes to its prompt takes the note
+  away.
+- After two starts in a row that did not come to a prompt, the world is
+  the system's alone and follows no text: nothing of `/home` is loaded
+  into it by itself, then or at a later start, until the user has put the
+  files right and asks (`clara.system:load-home`).
 
 ## Shutting down (decided in M15e, 2026-11-20)
 

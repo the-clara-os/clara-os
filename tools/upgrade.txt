@@ -47,7 +47,9 @@ clara: starting the machine again
 > (list (fact 5) (doubled 21) (unless-zero 4 'not-zero) (point-y (make-point :x 3)) (package-name (find-package "PLAY")))
 (120 42 NOT-ZERO 0 "PLAY")
 > (list *from-init* *jobs* (fboundp 'not-written-down) (handler-case (error 'low-fuel :left 3) (low-fuel (c) (fuel-left c))))
-((LOADED BEFORE NIL) 0 NIL 3)
+((LOADED BEFORE NIL) CHANGED-AND-NOT-DEFINED-AGAIN NIL 3)
+> (list (clara.windows:running-p) (clara.windows:window-title *window*) (> (length clara.system::*report*) 10))
+(T "A picture" T)
 > (list *from-a-file* (written-down "(load (concatenate 'string \"/clara/\" \"kept.lisp\"))") (written-down "(default-of 4)") (written-down "(defun default-of (value) value)"))
 ("written by ClaraOS" 1 0 1)
 > (list (with-open-file (in "/letters/first.txt") (read-line in)) (with-open-file (in "/clara/kept.lisp") (read-line in)))
@@ -56,8 +58,7 @@ clara: starting the machine again
 (("{{version}}-other/" "a file with a long name.text" "clara.image" "hello.lisp" "kept.lisp") ("BOOTAA64.EFI" "BOOTX64.EFI") ("first.txt"))
 > (defun since-the-upgrade () 'defined-in-the-new-system)
 SINCE-THE-UPGRADE
-> (clara.system:start-again)
-clara: the world is saved
+> (clara.system:start-again :save nil)
 clara: starting the machine again
 ^R
 > (list (clara.system:system) (getf (clara.unsafe:start-state) :resumed) (getf (clara.unsafe:start-state) :trial) (since-the-upgrade))

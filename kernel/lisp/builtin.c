@@ -940,6 +940,33 @@ PRIMITIVE(p_list_all_packages)
     return list;
 }
 
+/* The symbols of a table (symbol.c) in front of a list. */
+static lisp with_symbols(lisp table, lisp list)
+{
+    const struct lisp_vector *v = lisp_as_vector(table);
+    uint64_t slots = lisp_length(v->header) - 1;
+
+    for (uint64_t i = 1; i <= slots; i++)
+        if (v->items[i])
+            list = lisp_cons(v->items[i], list);
+    return list;
+}
+
+/* Every symbol that can be had by its name in a package: the package's
+ * own, and the external ones of the packages that it uses. In a list of
+ * the caller's own, which is what DO-SYMBOLS goes through. */
+PRIMITIVE(p_package_symbols)
+{
+    lisp package = package_of(argv[0]), list = NIL;
+
+    if (!package)
+        return NIL;
+    for (lisp uses = lisp_as_package(package)->uses; uses != NIL; uses = lisp_as_cons(uses)->cdr)
+        list = with_symbols(lisp_as_package(lisp_as_cons(uses)->car)->external, list);
+    list = with_symbols(lisp_as_package(package)->external, list);
+    return with_symbols(lisp_as_package(package)->internal, list);
+}
+
 PRIMITIVE(p_export) /* a symbol or a list of them, and the package */
 {
     lisp package = argc > 1 ? package_of(argv[1]) : lisp_current_package(), symbols = argv[0];
@@ -1610,6 +1637,7 @@ const struct lisp_primitive lisp_primitives[] = {
     { "PACKAGE-NAME", p_package_name, 1, 1 },
     { "DELETE-PACKAGE", p_delete_package, 1, 1 },
     { "LIST-ALL-PACKAGES", p_list_all_packages, 0, 0 },
+    { "%PACKAGE-SYMBOLS", p_package_symbols, 1, 1 },
     { "%MAKE-PACKAGE", p_make_package, 3, 3 },
     { "INTERN", p_intern, 1, 2 },
     { "FIND-SYMBOL", p_find_symbol, 1, 2 },
