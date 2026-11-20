@@ -99,13 +99,33 @@
          (go next)))
     `(let ,(reverse bindings) (setq ,@settings) nil)))
 
+;; The keys of a clause of CASE are compared with EQL. For a symbol and for
+;; an integer that is EQ, which compiled code does without a call, and those
+;; are the keys that nearly every CASE has: a clause with such keys is
+;; written as so many EQs, and any other as it reads.
+(defun %plain-keys (keys)
+  (if (null keys)
+      t
+      (if (if (symbolp (car keys)) t (integerp (car keys)))
+          (%plain-keys (cdr keys))
+          nil)))
+
+(defun %case-test (value keys)
+  (if (null (cdr keys))
+      `(eq ,value ',(car keys))
+      `(if (eq ,value ',(car keys)) t ,(%case-test value (cdr keys)))))
+
 (defmacro case (key &rest clauses)
   (let ((value (gensym)))
     `(let ((,value ,key))
        (cond ,@(mapcar (lambda (clause)
                          (let ((keys (car clause)))
                            (cons (cond ((or (eq keys t) (eq keys 'otherwise)) t)
-                                       ((listp keys) `(member ,value ',keys))
+                                       ((null keys) nil)
+                                       ((listp keys) (if (%plain-keys keys)
+                                                         (%case-test value keys)
+                                                         `(member ,value ',keys)))
+                                       ((%plain-keys (list keys)) `(eq ,value ',keys))
                                        (t `(eql ,value ',keys)))
                                  (or (cdr clause) '(nil)))))
                        clauses)))))

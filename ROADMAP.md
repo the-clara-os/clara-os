@@ -504,17 +504,44 @@ Code for the processor:
   translated, five million additions 70 and 20, and a million items
   pushed, reversed and mapped over 100 either way, since the world's own
   functions are not translated yet.
-- [ ] **M16b a world for the processor.** Translating is the rule and no
-  longer asked for: whatever is compiled is translated, the compiler and
-  the translator themselves, lisp/boot.lisp and the files of the world,
-  so that a machine which starts from the files, or from a world that was
-  saved, runs on the processor through and through, as it has run on the
-  machine since M14b. That is checked like the last time, by going
-  through the heap. Before it, what the code is now too long and too slow
-  by: a value that is pushed and taken off again at once, a comparison
-  that makes T or NIL only for the jump after it, the way to the machine
-  written out behind every instruction that can fail, and the making of a
-  cons, a cell and a closure by way of the machine.
+- [x] **M16b a world for the processor** (2026-11-19, version 0.0.24).
+  Translating is the rule and no longer asked for: whatever is compiled is
+  translated before it is run, what is typed, what is loaded and the
+  system itself, so that a machine which starts from the files, or from a
+  world that was saved, runs on its processor through and through, as it
+  has run on the kernel's machine since M14b. lisp/native.lisp and the
+  processor's file are loaded right after the compiler has compiled
+  itself, and then everything that is there is translated, the language,
+  the compiler and the translator, by going through the heap for every
+  function (`clara.native:translate-all`); the files of the world after
+  that are translated a form at a time as they are compiled. It is checked
+  like the last time: when the world is loaded, a compiled function that
+  the processor does not run is a panic. The kernel's machine stays, for
+  the instructions that the processor's code leaves to it, for what is
+  compiled while `clara.native:*translate*` is NIL, and as the witness
+  that the texts of the self-test are run on, twice, before the translator
+  is loaded. Functions of the two kinds call each other, and
+  `clara.native:translate` now reaches the functions that were made of a
+  code before it was translated. Before all that, the code became shorter
+  and quicker by what the last milestone had left. A value that would be
+  pushed and taken off again stays where it is, a local variable, a
+  constant or a register, until an instruction takes it as its argument. A
+  comparison whose value is only wanted by the jump after it is one
+  comparison and one jump of the processor's. The way to the machine is
+  written once for a function, and an instruction that can fail calls it
+  in three instructions where it had ten of its own. And a cons, a cell
+  and a closure are made by a function in C that the code calls as it
+  stands. Where the processor runs the code itself, `(fib 35)` takes 750
+  ms on the machine and 70 translated, fifty million additions 610 and
+  70, and a million items pushed, reversed and mapped over 60 and 50; the
+  code of `fib` is 560 bytes on AArch64 where it was 732. Translating what
+  is there takes 100 ms and the rest of the world 90 where compiling it
+  took 60, and where x86-64 is emulated 2.1 s and 2.3 s where it was 0.7;
+  the code of the world is 700 KiB, and a saved world 3.2 MiB where it was
+  2.2. A world that 0.0.23 saved is refused once, since the code leans on
+  three more functions of the kernel's, and the machine starts from the
+  files. CASE compares symbols and integers with EQ, an instruction, where
+  it called EQL and MEMBER, which the translator spent its time in.
 
 Later, in no order: virtio-net and TCP/IP; outline fonts; sound; CLOS; a
 USB keyboard and mouse, which is what UTM gives a machine that is not told
@@ -1326,7 +1353,59 @@ Infrastructure, for sessions with budget left over:
   when it is full, which every caller above puts right; and the
   processor's stack eight bytes off what the calling convention says on
   x86-64, which nothing in a kernel built without those instructions
-  minds. From the disk of the user's own (0.0.22): tools/run.sh by hand
+  minds. From M16b: four small programs timed on the machine and on the
+  processor, under hvf, with loads ten times as long as the clock's tick
+  wants (the figures are in the entry of the milestone); the translator's
+  two halves timed by themselves, on a function of 870 instructions and
+  on one of 70, before and after CASE and before and after the assembler
+  kept what it wrote, which is how it was known where the time went; the
+  code of `fib` for AArch64 read back by LLVM's disassembler; 38 more
+  rows of the two files' instructions held against LLVM's assembler; the
+  stress boot timed line by line under hvf and emulated, for this
+  version and for the one before it, built from the same sources in a
+  copy. And 116 mistakes planted, in four copies of the tree at once,
+  twice over. What is pending, 50 ways: pushed in the wrong order, not
+  pushed where two ways through the code meet, before a call, a jump, a
+  record or a closure; arguments in each other's registers; a variable
+  fetched after it was set; a constant, a variable or a closed-over value
+  off by one; a small integer written without its tag; a value dropped or
+  kept one too many. A comparison written with its jump, 20 ways: the
+  jump turned round, here or behind the function; the jump written twice;
+  the name not asked whether it still means the function in C. The count
+  of values, the sums, the way to the machine and what the assembler
+  keeps, 30 ways. The world translated, and CASE, 15 ways. Twenty got
+  through at first, and nine of them were holes in the texts, which three
+  new texts close. No text read a variable, set it and read it again
+  within one form, so a variable that was fetched after it was set went
+  unseen. None compared with a number below zero that was written into
+  the function. And no text gave another function to a name whose
+  comparison is written with its jump: that way comes back with a value
+  only then, since a comparison of what are no numbers is an error, and a
+  jump that was turned round there, or left out, or a name that was not
+  asked, changed nothing. The new text gives `<`, `null`, `eq` and `cons`
+  other functions and calls a function that was compiled before, with
+  numbers and with lists. (A fourth text asks how many values there are
+  after a function that has an instruction of its own, wherever its value
+  goes next; it closed nothing that was planted.) One more was a check that
+  came too late: a start that translated only the translator was put
+  right by the first `translate` of the self-test, which reaches every
+  function, and passed; the count is taken right after TRANSLATE-ALL now.
+  One was no mistake: the count of values was still written when the
+  instruction that takes the value is one that something jumps to, which
+  nobody reads either, and it is not written there any more. The other
+  nine change nothing that can be seen: three pushes of what is
+  pending where nothing ever is, before DISPATCH, SUPPLIED and under a
+  NIP; the count of values not written before a DUP, after which the
+  compiler always says how many there are; a function translated a second
+  time and the second code thrown away; functions that nobody holds
+  translated too; what the assembler wrote the first time not kept, which
+  is only slower; and a function more in the world, which was the check
+  of the harness itself. And the mistake that was not planted: every
+  instruction taken for one that something jumps to, because
+  `make-array` fills with 0 and 0 is true, left the code as long as it
+  had been and every answer right, and was seen in the listing of `fib`.
+  The host tests hold that code to a length now. From the disk of the
+  user's own (0.0.22): tools/run.sh by hand
   with a file that is not there, with a `~` that the shell had left as it
   was written, and with `WORK=` empty; x86_64 and AArch64 emulated with
   GIC version 2 with such a disk, and AArch64 with a volume of 64 MiB that
@@ -1551,97 +1630,97 @@ M15e, shutting down:
 - The order. An upgrade ends by starting the machine again, so that half
   comes before M15a, or with it.
 
-M16b, a world for the processor:
+No milestone yet, to be picked up when they start to matter:
 
-- What the code is too long and too slow by, all of it because an
-  instruction is translated by itself. A value is pushed and taken off
-  again by the next instruction: `LOCAL 0`, `CONST 2`, `<` is two stores
-  and two loads that nothing needed. A comparison makes T or NIL, puts it
-  on the stack, and the jump after it takes it off and compares it with
-  NIL. Every instruction that can fail has its own way to the machine
-  written out behind the function, ten instructions each, where one for
-  the whole function would do. And `cons`, `*`, a cell, a closure, a
-  binding and the values of a form go to the machine every time, which
-  for those costs about what the machine's own instruction costs: a
-  function that makes lists is no quicker translated. `(fib 32)` is seven
+- Code for the processor, what it is still long and slow by. An
+  instruction is translated with a look at the one after it and at what
+  has not been pushed yet, and no further: a value lives in a register
+  from the instruction that makes it to the next one, and every argument
+  of a call is written to the stack. An instruction that stands for a
+  function in C looks every time whether its name still means that
+  function, three instructions of the processor's, where once between two
+  calls would do. `*`, a binding, the values of a form and every record
+  go to the machine, by the function's one way there. `(fib 35)` is ten
   times as quick as on the machine; a compiler that kept values in
-  registers would be twenty times.
-- The world is the machine's. What a translated function calls of
-  lisp/boot.lisp, `mapcar`, `reverse`, `format`, is not translated, so a
-  million items pushed, reversed and mapped over take 100 ms as before.
-  To translate the world, lisp/native.lisp and the processor's file have
-  to be loaded right after the compiler, and translate themselves as the
-  compiler compiles itself, by being loaded twice or by going through
-  what is there; what a start from the files costs then, how long the
-  image is with the code in it and how long saving it takes are to be
-  measured before it is made the rule. The 733 functions of the
-  self-test's texts take 210 ms to compile, translate and run where the
-  processor runs the code itself, and 3.8 s where x86-64 is emulated.
-- Nothing is translated unless asked for, and `clara.native:*translate*`
-  is NIL in every world, a saved one included. When it becomes the rule,
-  the manual's chapter, the sessions and what `translated-p` is good for
-  change with it, and a way to say "not this one" may be wanted.
-- Translating does not reach back. A function object has the word that
-  code for the processor enters it by, and one that was made before its
-  code was translated keeps running on the machine: `translate` puts the
-  one right that it is given, and the closures that were made of the same
-  code before stay as they were.
-- A function whose code would be longer than a megabyte is not translated
-  on AArch64, where a jump that depends on a condition reaches no
-  further, and nothing says so: `translate` signals an error for it, and
-  with `*translate*` it is left to the machine in silence. No function of
-  the system is near that.
-- `disassemble` lists the machine's instructions and says that a function
-  is translated. The processor's own are listed by
+  registers across instructions would be twice that again. What makes
+  lists gains little: a million conses cost what the allocator and the
+  collector take for them, which is C either way.
+- Code for the processor, what translating costs. Translating a function
+  takes five times as long as compiling it, 0.06 ms against 0.01 for a
+  small one where the processor runs the code itself: the translator makes
+  a list for every instruction of the processor's, and the two files that
+  write them go through each list with `cadr` and `caddr`, with `get` for
+  every register and with `ash` and `logand`, which are calls. Writing
+  bytes into a vector as they are made, and the processor's instructions
+  as numbers, would take most of that away. A typed form is translated
+  before it is run, so the prompt pays it for every line, a tenth of a
+  millisecond; with a collection at every safe point it is seconds, which
+  is why tools/stress.txt types all but one of its forms with
+  `*translate*` NIL.
+- Code for the processor, what is not said. A function whose code would
+  be longer than a megabyte is not translated on AArch64, where a jump
+  that depends on a condition reaches no further: `translate` signals an
+  error for it, and with `*translate*` it is left to the machine in
+  silence; were it a function of the world's files, the start from the
+  files would panic at its check, and none is near that. `disassemble`
+  lists the machine's instructions and says that a function is
+  translated; the processor's own are listed by
   `tools/processor-code.sh`, under SBCL and with LLVM, and by nothing on
   ClaraOS. `(room)` says nothing of the memory that code takes; the boot
   report does. A fault in such code is reported with its address and the
   words "code that the Lisp world made for the processor", and not with
-  the function that it is in.
-- The region of the code is searched from its beginning for a free piece
-  whenever one is free, which is a walk over every piece: fine for the
-  hundreds that there are now, and to be looked at when a world has
-  thousands. Its page frames go back to the kernel when the last piece is
-  freed and when an image is made, and not in between.
-- Code is made of the instructions that a function has when it is
-  translated. Whoever changes those afterwards, which
-  `clara.unsafe:compiled-function-code` lets him do, has changed what the
-  machine would run and not what the processor does.
-- The machine has an instruction that no part of the compiler writes,
-  JUMP-IF-TRUE. Its case in vm.c and its translation are tried by
-  nothing: turned around on purpose, neither was noticed.
-- On x86-64 the processor's stack is kept a multiple of 16 bytes at every
-  call into C, as the calling convention has it. Nothing here would
+  the function that it is in. `(let ((clara.native:*translate* nil))
+  (defun ...))` at the prompt translates the function all the same, since
+  the form is compiled before the LET binds anything; the manual says so,
+  and a way to say "not this one" in the function itself is not there.
+- Code for the processor, its memory. The region of the code is searched
+  from its beginning for a free piece whenever one is free, which is a
+  walk over every piece, a thousand in a new world and one more for every
+  form that is typed: 2000 functions compiled and translated one after the
+  other took 120 ms, the search among it, and it is to be looked at when a
+  world has ten times as many. Its page frames go back to the kernel when
+  the last piece is freed and when an image is made, and not in between.
+  A function keeps the compiler's instructions beside the processor's,
+  for the listing and for the machine; a world that never ran on the
+  machine could do without half of them, the ones that the processor's
+  code never leaves to it. Code is made of the instructions that a
+  function has when it is translated: whoever changes those afterwards,
+  which `clara.unsafe:compiled-function-code` lets him do, has changed
+  what the machine would run and not what the processor does.
+- Code for the processor, what nothing tries. The machine has an
+  instruction that no part of the compiler writes, JUMP-IF-TRUE: its case
+  in vm.c and its translation are tried by nothing. On x86-64 the
+  processor's stack is kept a multiple of 16 bytes at every call into C,
+  in a function and in the piece that leaves an instruction to the
+  machine, as the calling convention has it, and nothing here would
   notice if it were not: the kernel is built without the instructions
-  that care. Taken out on purpose, it was not noticed.
-- The bytes that the two files write for each instruction are held against
-  what LLVM's assembler wrote for the same, once, by hand, with a script
-  that is gone: for each row of the host tests' table the instruction as
-  text for both processors, assembled by `llvm-mc` with a label a thousand
-  bytes on, and the bytes compared. All 86 rows were the same. A new
-  instruction is one more line of `llvm-mc -show-encoding` (CLAUDE.md).
-- Not tried: UTM. Under QEMU's hvf the code runs on the Mac's own
-  processor, which is what UTM uses; the emulated machines of `make test`
-  run it too.
-- What it costs CI, where both machines are emulated. A boot from the
-  files takes 4.5 s more on AArch64 and 7.4 s more on x86-64, for the
-  texts compiled, translated and run once more. A run took 7m56s, where
-  the one before the milestone took 5m25s, and its stress boot 237 s of
-  its 600, where it had taken 127. That was taken for the collections at
-  the safe points of translated code, two hundred to a text and 1641 in
-  all, and they were made fifty: the next run's stress boot took 234 s,
-  so that was not it. Timed line
-  by line on the Mac, emulated, where that boot takes 88 s and took 61
-  before: the evaluator's round with a collection at every safe point has
-  8000 collections more, for the texts that this milestone added, and
-  takes 8 s longer; the two rounds of translated code are 7 s; and the
-  session at the end, which is half of the boot, goes through a world that
-  is a seventh larger at every one of its collections. The text that was
-  4900 of the 8000 is no longer given to the evaluator. The number stays
-  at fifty, which lost nothing. When the world itself is translated, the
-  session at the end of that boot is where to look first.
-
-No milestone yet, to be picked up when they start to matter:
+  that care. Two threads that translate the same function at the same
+  moment: the second looks again before it hands its code over, and that
+  was read and not run. The bytes that the two files write for each
+  instruction are held against what LLVM's assembler wrote for the same,
+  by hand, 124 rows of the host tests' table now: a new instruction is
+  one more line of `llvm-mc` (CLAUDE.md). And UTM: under QEMU's hvf the
+  code runs on the Mac's own processor, which is what UTM uses.
+- What a translated world costs CI, where both machines are emulated.
+  Emulated on the Mac, x86-64 starts from the files in 33 s where it took
+  30: translating what is there 2.1 s, the rest of the world 2.3 s where
+  compiling it took 0.7, and the texts on the processor 1.5 s where they
+  took 3.1 while the world they call was the machine's. The boot that
+  collects at every safe point takes 19 s under hvf where it took 14, and
+  emulated on the Mac 132 s where it took 102, timed line by line. Two
+  things there were found by timing and not by thought. The collections
+  at the safe points of the processor's code, fifty to a text, were all
+  used up by the compiler, which is such code now, before the text had
+  run a step: they begin when a function is made of what the compiler
+  made (`lisp_native_watched`, vm.c), and that round runs before the rest
+  of the world is loaded, 9400 collections where there were 900, because
+  the functions of lisp/boot.lisp that a text calls are counted now. And
+  the session at the end took 23 s under hvf where it had taken 8: every
+  form that is typed there was translated with a collection at every
+  call of the translator's. It types one translation now, of a function
+  that the machine ran until then, 17 s of the 132, and compiles the rest
+  for the machine. What CI's own runner makes of it is in the run of the
+  pull request: read `ok after` there.
 
 - The compiler. A form that is not what it should be fails when the code
   comes to it, with the evaluator's words, and nothing says so when the

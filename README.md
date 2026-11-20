@@ -64,17 +64,18 @@ opens a file from a prompt. And there is a compiler, written in Lisp
 prompt or loaded from a file is compiled before it runs, and so are the
 console, the file system, the window manager, the applications and the
 compiler itself, which it compiles when a machine starts from the files.
-What it makes is run by a small machine in the kernel, instruction by
-instruction, several times as quick as the evaluator walks the same forms
-and with the same meaning, and `(disassemble 'name)` shows the
-instructions. The evaluator is still there to run the compiler until it
-has compiled itself, and every such start holds the two against each
-other. A function can be translated once more, into the instructions of
-the processor itself, AArch64's or x86-64's (lisp/native.lisp, and
-lisp/arm64.lisp or lisp/x86-64.lisp): `(clara.native:translate 'name)`,
-after which the processor runs it with nothing in between, several times
-as quick again where the time went into calls and arithmetic. The world
-itself is not translated yet. The same Lisp files load
+What it makes are instructions for a small machine in the kernel, which
+`(disassemble 'name)` shows, and those are translated once more, into the
+instructions of the processor itself, AArch64's or x86-64's
+(lisp/native.lisp, and lisp/arm64.lisp or lisp/x86-64.lisp), so that the
+processor runs a function with nothing in between: what is typed, and the
+world from the language's own functions to the window manager, which
+translates itself when a machine starts from the files. That is some ten
+times as quick as the kernel's machine where the time goes into calls and
+arithmetic. The evaluator is still there to run the compiler until it has
+compiled itself, and the kernel's machine to do what the processor's code
+leaves to it, and every such start holds the three against each other.
+The same Lisp files load
 under SBCL on the host, where they are tested against a machine that is
 made up for the purpose.
 [ROADMAP.md](ROADMAP.md) has what comes next, [DESIGN.md](DESIGN.md) the

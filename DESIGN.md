@@ -1200,7 +1200,8 @@ architectures (kernel/vm.c).
 - In M16a nothing is translated unless somebody asks:
   `clara.native:translate` for a function, `clara.native:*translate*`
   for whatever is compiled from then on. The world itself is still the
-  machine's, which is M16b.
+  machine's, which is M16b. (It came the day after: A world for the
+  processor, below.)
 - What it gained, where the processor runs the code itself: `(fib 32)`
   takes 210 ms on the machine and 30 translated, five million additions
   in a loop 70 and 20, `(tak 22 16 8)` 30 and 10. A million items pushed,
@@ -1212,6 +1213,90 @@ architectures (kernel/vm.c).
   every instruction is translated by itself: a value is pushed and taken
   off again at once, and every instruction that can fail has its own way
   to the machine written out.
+
+## A world for the processor (decided in M16b, 2026-11-19)
+
+- Translating is the rule. Whatever the compiler makes is translated
+  before it is run (`clara.native:*translate*` is true in every world), so
+  a machine that starts from the files, or from a world that was saved,
+  runs on its processor from the language's own functions to the window
+  manager, as it ran on the kernel's machine before. The machine stays. It
+  does the instructions that the processor's code leaves to it, it runs
+  what is compiled while the variable is NIL and a function that is too
+  long for a processor's jumps, and it is the second witness of the
+  self-test, after the evaluator: the texts are run on it twice at every
+  start from the files, before the translator is loaded.
+- The translator translates itself by going through what is there, and
+  not by being loaded twice like the compiler. lisp/native.lisp and the
+  processor's file are loaded right after the compiler has compiled itself
+  and lisp/boot.lisp, as code for the machine like those; then every
+  function in the heap is translated (`clara.native:translate-all`), the
+  translator's own first, so that the processor runs it while it does the
+  rest, and every function object is given the place where the processor
+  enters it. A second load would have translated the three files a form at
+  a time and left behind whatever holds on to a function of the first
+  load; going through the heap finds those as well, and it is also what
+  `translate` needed to reach the closures that were made before their
+  code was translated, which M16a had left open. A function that the
+  machine is in the middle of a call of, the translator at that moment,
+  finishes the call there: the machine looked at the function when the
+  call began, and does not look again. Everything after that is compiled
+  and translated a form at a time, by code that the processor runs.
+- "Through and through" is checked as it was in M14b, by going through the
+  heap once the world is loaded: a compiled function that the processor
+  does not run is a panic there, like a function that the evaluator would
+  walk.
+- The translation is still one instruction of the machine's after the
+  other, and looks no further than one instruction ahead and at what it
+  has not yet written. A value that the machine would push is not pushed
+  until somebody needs it on the stack. A local variable, a constant and a
+  closed-over value stay where they are, and what an instruction made
+  stays in a register, and the instruction that takes them as its
+  arguments fetches them from there. Everything is on the stack wherever
+  two ways through the code meet, at every call and wherever the collector
+  can look, so that neither the collector nor the machine had to learn
+  anything: an instruction that goes to the machine after all puts its
+  arguments on the stack first, as the machine would have found them. A
+  small integer that is written into a function is written into the code.
+  A comparison whose value is wanted by the jump after it and by nothing
+  else is one comparison and one jump of the processor's, and no T or NIL
+  is made. The way to the machine is written once for a function and
+  called from the instructions that need it, three instructions each
+  where there were ten. A cons, a cell and a closure are made by a
+  function in C that the code calls as it stands, with nothing of the
+  stack handed over. And an instruction that stands for a function in C
+  no longer says that it made one value when the next instruction takes
+  the value for itself, since nobody reads it then.
+- CASE compares its keys with EQ where that is what EQL comes to, for
+  symbols and integers, which is nearly every CASE in the system and every
+  one in the translator. EQ is an instruction, and with the jump after it
+  a comparison of the processor's; EQL and MEMBER are calls. It was
+  measured before it was changed: the translator spends its time going
+  through CASE forms of thirty clauses, once for every instruction that it
+  writes.
+- What it costs to start from the files. Where the processor runs the code
+  itself, the language, the compiler and the translator are translated in
+  100 ms, 450 functions, and the rest of the world is compiled and
+  translated in 90 ms, where compiling it took 60; the texts of the
+  self-test take 110 ms where they took 200. Where x86-64 is emulated,
+  those are 2.1 s, 2.3 s where it was 0.7, and 1.5 s where it was 3.1.
+  Translating a small function takes about five times as long as compiling
+  it, 0.06 ms against 0.01, because the translator makes a list for every
+  instruction of the processor's and goes through it twice. A machine
+  that starts from an image pays none of it.
+- What it costs in memory. The code for the processor of the whole world
+  is 700 KiB on AArch64 and 830 KiB on x86-64, beside a heap of a mebibyte
+  in use, and an image is that much longer: 3.2 MiB where it was 2.2. A
+  function keeps the compiler's instructions too, which the listing shows
+  and the machine needs for the instructions that are left to it.
+- What it gained, where the processor runs the code itself: `(fib 35)`
+  takes 750 ms on the machine and 70 translated, fifty million additions
+  in a loop 610 and 70, `(tak 22 16 8)` ten times over 240 and 20. A
+  million items pushed, reversed and mapped over take 60 ms on the machine
+  and 50 translated: `mapcar` and `reverse` are the processor's now, and
+  what is left is the making of a million conses and their collection,
+  which the translation does not touch. The code of `fib` is 560 bytes on
+  AArch64 and 660 on x86-64, where it was 732 and 828.
 
 ## Conventions
 

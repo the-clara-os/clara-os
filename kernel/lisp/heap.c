@@ -357,6 +357,23 @@ void lisp_heap_functions(struct lisp_functions *count)
     }
 }
 
+/* Every function in the heap that the compiler made is handed to EACH,
+ * which makes no object meanwhile: for whoever goes through the functions
+ * that there are (native.c). */
+void lisp_heap_compiled(void (*each)(struct lisp_function *f, void *with), void *with)
+{
+    for (uint64_t at = VM_HEAP_BASE; at < g_next;) {
+        lisp *object = (lisp *)(uintptr_t)at;
+        uint64_t words = lisp_object_words(*object);
+
+        if (!words || words > (g_next - at) / sizeof(lisp))
+            panic("lisp: the heap is damaged: at %llx the header is %llx", at, *object);
+        if ((*object & 0xff) == LISP_FUNCTION && lisp_length(*object) == LISP_COMPILED)
+            each((struct lisp_function *)object, with);
+        at += words * sizeof(lisp);
+    }
+}
+
 void lisp_heap_state(struct lisp_heap *state)
 {
     uint64_t count[LISP_TYPES];

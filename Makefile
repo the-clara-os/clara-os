@@ -99,11 +99,13 @@ host-test:
 # them typed on the keyboard. Where AArch64 is emulated, on CI, that boot
 # takes minutes, so it is given ten. A world that was saved is compiled
 # through and through, and the second boot of each machine has to say so:
-# none of its functions is left for the evaluator to walk. A disk of the
-# user's own, which WORK= names for `make run-*`, stays out of all of them:
-# a machine here has the disks that its line gives it.
+# none of its functions is left for the evaluator to walk, and the machine
+# runs the three that the first session compiled for it, and no other: the
+# rest is the processor's. A disk of the user's own, which WORK= names for
+# `make run-*`, stays out of all of them: a machine here has the disks that
+# its line gives it.
 test: export WORK :=
-RESUME := SESSION=tools/resumed.txt EXPECT='^lisp: the heap is an image;;^lisp: and with it [0-9]* KiB of code for the processor;;^lisp:   of the functions .* and 0 are walked;;^lisp:   the processor runs [1-9][0-9]* of the compiled ones itself'
+RESUME := SESSION=tools/resumed.txt EXPECT='^lisp: the heap is an image;;^lisp: and with it [0-9]* KiB of code for the processor;;^lisp:   of the functions .* and 0 are walked;;^lisp:   the processor runs [1-9][0-9]* of the compiled ones itself, .* and the machine 3[^0-9]*$$'
 test: all host-test
 	tools/boottest.sh x86_64
 	NAME=x86_64-resumed DISK=$(BUILD)/boot-x86_64.img $(RESUME) tools/boottest.sh x86_64

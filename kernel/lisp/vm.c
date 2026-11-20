@@ -219,7 +219,8 @@ void lisp_vm_init(void)
 static const char *const failures[] = { "ERROR", "PROGRAM-ERROR", "CONTROL-ERROR" };
 
 static unsigned g_watched; /* the self-test wants a collection at so many more safe points of compiled code, */
-static unsigned g_watched_native; /* and at so many more of code for the processor */
+static unsigned g_watched_native; /* and at so many more of code for the processor, */
+static unsigned g_watch_made; /* which is so many again whenever a function has been made of what the compiler made */
 static uint64_t g_entered; /* how often C has sent the processor into code of its own, */
 static uint64_t g_stepped; /* how often such code has left an instruction to the machine, */
 static uint64_t g_slow;    /* and how often a call to C: what it is quick for not doing */
@@ -243,14 +244,16 @@ void lisp_compiled_watched(unsigned points)
         lisp_attention = 1; /* code for the processor comes to its safe points by looking at that word */
 }
 
-/* The same for the safe points that code for the processor comes to, which
- * are counted apart: what compiles and translates a text is the machine's
- * code, and would have used the collections up before the text ran. */
+/* The same for the safe points that code for the processor comes to. What
+ * compiles and translates a text is such code as well, and would have used
+ * the collections up before the text ran: so they begin when a function is
+ * made of what the compiler made (lisp_p_make_compiled_function), which is
+ * the last thing that happens to a form before it is run, and begin again
+ * with every function that is made that way from then on. */
 void lisp_native_watched(unsigned points)
 {
-    g_watched_native = points;
-    if (points)
-        lisp_attention = 1;
+    g_watch_made = points;
+    g_watched_native = 0;
 }
 
 int lisp_compiled_watching(void)
@@ -1039,6 +1042,31 @@ uint64_t lisp_native_stack_full(void)
     return 0;
 }
 
+/* What code for the processor calls where the machine has CELL and CLOSURE
+ * (and lisp_cons for CONS): the object is made, and that is all. Nothing
+ * here looks at the value stack or comes to a safe point, so the code
+ * calls these as it stands, with what it has in its registers. */
+lisp lisp_native_cell(lisp value)
+{
+    lisp cell = lisp_make_vector(1);
+
+    lisp_as_vector(cell)->items[0] = value;
+    return cell;
+}
+
+/* A function of CODE that closes over the COUNT values under TOP, which
+ * the code takes off the stack itself afterwards. */
+lisp lisp_native_closure(lisp code, uint64_t count, const lisp *top)
+{
+    lisp closed = LISP_NIL;
+
+    if (count) {
+        closed = lisp_make_vector(count);
+        memcpy(lisp_as_vector(closed)->items, top - count, count * sizeof(lisp));
+    }
+    return make_function(LISP_COMPILED, lisp_as_vector(code)->items[LISP_CODE_NAME], code, closed);
+}
+
 /* Code for the processor was called by other such code, with ARGC
  * arguments on top of the value stack and itself, F, under them, and it
  * cannot take them as they lie: the count is wrong, or its lambda list has
@@ -1206,6 +1234,10 @@ LISP_PRIMITIVE(lisp_p_make_compiled_function)
         wrong = "it closes over values, and here are none";
     if (wrong)
         return lisp_fail("the machine cannot run that code: ~Z", wrong);
+    if (g_watch_made) {
+        g_watched_native = g_watch_made; /* the self-test: what is made here is about to be run */
+        lisp_attention = 1;
+    }
     return make_function(LISP_COMPILED, lisp_as_vector(argv[0])->items[LISP_CODE_NAME], argv[0], LISP_NIL);
 }
 

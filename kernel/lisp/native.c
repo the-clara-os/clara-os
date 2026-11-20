@@ -73,6 +73,9 @@ void lisp_native_init(void)
     lisp_machine.arguments = lisp_native_arguments;
     lisp_machine.finish = lisp_native_finish;
     lisp_machine.stack_full = lisp_native_stack_full;
+    lisp_machine.cons = lisp_cons;
+    lisp_machine.cell = lisp_native_cell;
+    lisp_machine.closure = lisp_native_closure;
 }
 
 /* Bytes go into the region, through the addresses that its page frames
@@ -341,6 +344,9 @@ LISP_PRIMITIVE(lisp_p_native_layout)
         { "ARGUMENTS", offsetof(struct lisp_machine, arguments) },
         { "FINISH", offsetof(struct lisp_machine, finish) },
         { "STACK-FULL", offsetof(struct lisp_machine, stack_full) },
+        { "CONS", offsetof(struct lisp_machine, cons) },
+        { "CELL", offsetof(struct lisp_machine, cell) },
+        { "CLOSURE", offsetof(struct lisp_machine, closure) },
         { "LEAVE", NATIVE_LEAVE },
         { "FAST", NATIVE_FAST },
         { "CAR", (int64_t)offsetof(struct lisp_cons, car) - (int64_t)LISP_TAG_CONS },
@@ -443,4 +449,68 @@ LISP_PRIMITIVE(lisp_p_native_function)
     if (argc > 1 && argv[1] != LISP_NIL && lisp_function_kind(argv[0]) == LISP_COMPILED)
         f->entry = (lisp)lisp_native_entry(f->code);
     return f->entry ? lisp_roots.t : LISP_NIL;
+}
+
+/* What a walk of the heap's compiled functions is after, and what it has
+ * found. */
+struct walk {
+    lisp *codes;    /* where to put what the compiler made of each function that the machine runs, or NULL */
+    uint64_t count; /* how many functions that was, or how many are the processor's now */
+};
+
+static void untranslated(struct lisp_function *f, void *with)
+{
+    struct walk *walk = with;
+
+    if (lisp_is(lisp_as_vector(f->code)->items[LISP_CODE_NATIVE], LISP_NATIVE))
+        return;
+    if (walk->codes)
+        walk->codes[walk->count] = f->code;
+    walk->count++;
+}
+
+/* (clara.unsafe:untranslated-code): what the compiler made of every
+ * function that there is and that has no code for the processor, in a
+ * vector, for lisp/native.lisp to translate. There is a collection first:
+ * what nobody can call any more is not worth translating. A function that
+ * was made twice of the same code, a closure, is there twice. */
+LISP_PRIMITIVE(lisp_p_untranslated_code)
+{
+    struct walk walk = { NULL, 0 };
+    lisp codes;
+
+    (void)argc;
+    (void)argv;
+    lisp_collect();
+    lisp_heap_compiled(untranslated, &walk);
+    codes = lisp_make_vector(walk.count);
+    walk.codes = lisp_as_vector(codes)->items;
+    walk.count = 0;
+    lisp_heap_compiled(untranslated, &walk);
+    return codes;
+}
+
+static void entered(struct lisp_function *f, void *with)
+{
+    struct walk *walk = with;
+
+    if (!f->entry) {
+        f->entry = (lisp)lisp_native_entry(f->code);
+        walk->count += f->entry != 0;
+    }
+}
+
+/* (clara.unsafe:native-functions): every function whose code has code for
+ * the processor is entered there from now on, also one that was made
+ * before its code was translated. How many functions that changed. One
+ * that the machine is in the middle of a call of finishes the call there:
+ * the machine looked at the function when the call began. */
+LISP_PRIMITIVE(lisp_p_native_functions)
+{
+    struct walk walk = { NULL, 0 };
+
+    (void)argc;
+    (void)argv;
+    lisp_heap_compiled(entered, &walk);
+    return lisp_fixnum((int64_t)walk.count);
 }

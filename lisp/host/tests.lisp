@@ -198,7 +198,7 @@
     (dolist (item items)
       (cond ((eq (car item) :label) (push (cadr item) placed))
             ((member (car item) '(:jump :jump-if :jump-tag :jump-not-tag :jump-odd :jump-bit-clear :add-over
-                                  :sub-over :word))
+                                  :sub-over :word :call-local))
              (push (car (last item)) named))))
     (cond ((/= (length placed) (length (remove-duplicates placed :test #'eq))) "a label is put in two places")
           ((notevery (lambda (label) (member label placed :test #'eq)) named) "a jump goes to a label that is nowhere"))))
@@ -692,6 +692,40 @@
                  (subseq listing 0 (position #\Newline listing))))))
 (check-condition error (clara.native:translate #'car))
 
+;; What the translation gains by not pushing what is taken off again, by a
+;; comparison and its jump as one, and by one way to the machine for a
+;; function, is not to be lost without anybody noticing: the answers would
+;; be the same. The code of FIB was 732 bytes for AArch64 and 828 for x86-64
+;; before those, and is 560 and 660 with them.
+(check '(t t)
+       (let ((code (clara.compiler::generate
+                    (clara.compiler::convert-function
+                     'fib '(n) '((if (< n 2) n (+ (fib (- n 1)) (fib (- n 2))))) (clara.compiler::make-env)))))
+         (mapcar (lambda (machine limit)
+                   (let ((clara.native::*machine* machine))
+                     (<= (* 4 (length (clara.native::assemble (clara.native::lower code)
+                                                              (get machine 'clara.native::writer)
+                                                              (get machine 'clara.native::unit))))
+                         limit)))
+                 '(:arm64 :x86-64) '(600 700))))
+
+;; Everything that there is and that the machine still runs, translated
+;; at once (TRANSLATE-ALL), which is how a kernel's world comes to run on
+;; its processor. The kernel goes through its heap for that; here the
+;; functions that were ever made are in a table, and for this one check the
+;; table holds two, of which one is translated already.
+(check '(1 0 t t 0)
+       (let* ((clara.host::*codes* (make-hash-table :test 'eq))
+              (slow (let ((clara.native:*translate* nil))
+                      (clara.compiler::compile-lambda '(lambda (x) (lambda () (car x))) 'slow)))
+              (quick (let ((clara.native:*translate* t))
+                       (clara.compiler::compile-lambda '(lambda (x) (cdr x)) 'quick))))
+         (list (length (clara.unsafe:untranslated-code))
+               (clara.native:translate-all)
+               (clara.native:translated-p slow)
+               (clara.native:translated-p quick)
+               (length (clara.unsafe:untranslated-code)))))
+
 ;; Where the words lie that such code reads is the kernel's to say
 ;; (NATIVE-LAYOUT, kernel/lisp/native.c). The stand-in here has to say
 ;; something for every name that the kernel has, and nothing else, and the
@@ -811,6 +845,44 @@
            ((:call-lisp 248) "707E40F900023FD6" "41FF97F8000000")
            ((:save) "FD7BBEA9F55B01A9" "5641564883EC28")
            ((:restore-return) "F55B41A9FD7BC2A8C0035FD6" "4883C428415E5EC3")
+           ((:call-local l) "FA000094" "E8E3030000")
+           ((:call-local l) :back "06FFFF97" "E813FCFFFF")
+           ((:enter-local) "FD7BBFA9" "4883EC28")
+           ((:leave-local) "FD7BC1A8" "4883C428")
+           ((:return-local) "C0035FD6" "C3")
+           ((:forget-local) "" "4883C408")
+           ((:move :c :vsp) "E20314AA" "4989D8")
+           ((:move :b :c) "E10302AA" "4C89C2")
+           ((:move :a :b) "E00301AA" "4889D1")
+           ((:move :b :a) "E10300AA" "4889CA")
+           ((:move :a :f) "E0030AAA" "4C89D9")
+           ((:move :a :nil) "E00317AA" "4889F9")
+           ((:const :c 49) "220680D2" "41B831000000")
+           ((:const :a 4) "800080D2" "B904000000")
+           ((:const :b 2) "410080D2" "BA02000000")
+           ((:word :c 42 l) "42059DD26200A0F20200C0F20200E0F2" "49B82AE8030000000000")
+           ((:pop :b) "818E5FF8" "4883EB08488B13")
+           ((:store :a :b 3) "203000F8" "48894A03")
+           ((:store :a :e 21) "205101F8" "49894A15")
+           ((:store :nil :locals 16) "B70A00F9" "48897E10")
+           ((:store :a :locals 8) "A00600F9" "48894E08")
+           ((:load :a :a 3) "003040F8" "488B4903")
+           ((:load :a :a 19) "003041F8" "488B4913")
+           ((:load :b :locals 8) "A10640F9" "488B5608")
+           ((:load :a :consts 8) "C00640F9" "498B4E08")
+           ((:load :a :locals -8) "A0825FF8" "488B4EF8")
+           ((:sub-reg :a :b) "000001CB" "4829D1")
+           ((:add-reg :a :b) "0000018B" "4801D1")
+           ((:add :vsp -24) "946200D1" "4883C3E8")
+           ((:jump-if :ne :a :nil l) "1F0017EB211F0054" "4839F90F85DF030000")
+           ((:jump-if :eq :a :nil l) :back "1F0017EBA0E0FF54" "4839F90F840FFCFFFF")
+           ((:jump-if :ge :a 4 l) "1F1000F12A1F0054" "4883F9040F8DDE030000")
+           ((:jump-if :ne :a 4094 l) "1FF83FF1211F0054" "4881F9FE0F00000F85DB030000")
+           ((:jump-if :eq :nil :nil l) "FF0217EB201F0054" "4839FF0F84DF030000")
+           ((:jump-if :eq :a 15 l) "1F3C00F1201F0054" "4883F90F0F84DE030000")
+           ((:jump-tag :a 1 l) :back "100840921F0600F180E0FF54" "89C883E00783F8010F840AFCFFFF")
+           ((:call-c 304) "709A40F900023FD6" "41FF97300100004889C1")
+           ((:call-c 320) "70A240F900023FD6" "41FF97400100004889C1")
                ))
   (let* ((back (eq (second row) :back))
          (item (subst (list 1000) 'l (first row)))

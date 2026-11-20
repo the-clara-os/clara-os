@@ -1,15 +1,19 @@
-> (defvar *made* (compile nil '(lambda (n) (let ((made nil)) (dotimes (i n) (push (let ((k i)) (lambda () (list k))) made)) (mapcar #'funcall made)))))
+> (defvar *made* (let ((clara.native:*translate* nil)) (compile nil '(lambda (n) (let ((made nil)) (dotimes (i n) (push (let ((k i)) (lambda () (list k))) made)) (mapcar #'funcall made))))))
 *MADE*
-> (defvar *quick* (let ((clara.native:*translate* t)) (compile nil '(lambda (n) (let ((kept nil)) (dotimes (i n) (push (list i (* i i)) kept)) (length kept))))))
+> (defvar *quick* (compile nil '(lambda (n) (let ((kept nil)) (dotimes (i n) (push (list i (* i i)) kept)) (length kept)))))
 *QUICK*
+> (setq clara.native:*translate* nil)
+NIL
 > (cl::%collect-every 1)
 0
-> (list (clara.native:translated-p *quick*) (funcall *quick* 30))
-(T 30)
+> (list (clara.native:translated-p *made*) (clara.native:translated-p *quick*) (funcall *quick* 30))
+(NIL T 30)
 > (car 5)
 error: CAR wants a list, and 5 is not one
 > (length (funcall *made* 30))
 30
+> (progn (clara.native:translate *made*) (list (clara.native:translated-p *made*) (length (funcall *made* 30))))
+(T 30)
 > (destructuring-bind (first (second) &rest others) (list 1 (list 2) 3) (list first second others))
 (1 2 (3))
 > (defun gather (n) (let ((kept nil)) (dotimes (i n) (push (list i (* i i)) kept)) (reverse kept)))
@@ -23,3 +27,5 @@ TWICE
 42
 > (cl::%collect-every 0)
 1
+> (setq clara.native:*translate* t)
+T
