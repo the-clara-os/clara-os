@@ -532,6 +532,24 @@ Upgrades:
   editor's text, start again into the world that was saved on the way, and
   go by themselves when the power button is pressed. Starting again is how
   an upgrade ends, so M15a has that half of it to stand on.
+- [x] **M15f HTTPS** (2026-11-20, version 0.0.30). What M15d fetched came
+  over a road that anybody on it can read and change, which is no way to
+  publish a system. An address that begins with `https://` is now fetched
+  over a connection that is kept closed: TLS 1.3 (lisp/tls.lisp). The
+  other side shows a certificate, and the machine holds it against the
+  name that was asked for, against the day, and against the certificates
+  that signed it, up to one that the system trusts: the authorities that
+  sign for the web, Mozilla's list, a file of the system
+  (lisp/roots.pem), to which `(clara.tls:trust ...)` adds. `(clara.net:fetch-text
+  "https://claraos.org/")` fetches the website. A release is fetched by
+  HTTPS and from no other kind of address; its signature stays under
+  that. The arithmetic is in C, each piece held against the examples of
+  its standard at every boot: SHA-256 and SHA-384, HMAC, AES-128 in
+  Galois/Counter Mode, X25519, numbers of thousands of bits to a power,
+  and signatures on the curves P-256 and P-384. Two things that such a
+  connection needs came with it: the time of day, from the firmware's
+  clock (`get-universal-time`), and numbers that nobody can guess, from
+  virtio's device for them (lisp/random.lisp, `clara.random:below`).
 
 Code for the processor:
 
@@ -617,8 +635,8 @@ Code for the processor:
   files. CASE compares symbols and integers with EQ, an instruction, where
   it called EQL and MEMBER, which the translator spent its time in.
 
-Later, in no order: the rest of a network, a machine that listens, IPv6,
-TLS; outline fonts; sound; CLOS; a USB keyboard and mouse, which is what
+Later, in no order: the rest of a network, a machine that listens, IPv6;
+outline fonts; sound; CLOS; a USB keyboard and mouse, which is what
 UTM gives a machine that is not told otherwise.
 
 The website, <https://claraos.org>, is built from this file by
@@ -1745,33 +1763,26 @@ M15d, upgrades over the network, what it left:
   and Julio has said his word on each (2026-11-20). Where ClaraOS is
   published: not at a place that answers plain HTTP, which is what this
   slice had asked for, with "Enforce HTTPS" switched off for the website
-  ("we don't do that here"). So it will be a place that answers HTTPS,
-  and ClaraOS has to speak TLS before it can fetch from there: the next
-  point. The key: he is fine with one. `python3 tools/release.py key
-  <file>` makes it, on his computer, and prints the public half, which
-  goes into lisp/system.lisp; the secret half stays with him, and with
-  whatever publishes for him as a secret. The key says whose releases a
-  machine takes over the network and nothing else: a system from a disk
-  is held against its manifest and against no key, and somebody who
-  publishes a ClaraOS of their own gives the variable the public half of
-  their own key. And publishing: nothing builds a release when a version
-  is merged. `python3 tools/release.py make build/esp/clara/<system>
-  <directory> <key file>` lays one out, and a workflow that does it is
-  not written, since it needs the place and the key.
-- No TLS, and that is what a published release waits for. The entry had
-  left two ways open, HTTPS in ClaraOS or a file that is trusted and a
-  road that is not, and this slice took the second (DESIGN.md): what it
-  built fetches by plain HTTP. Julio's word since is that nothing is
-  published that way, so what is here is for a web server on the same
-  computer or the same network, which is how the tests use it. An
-  address that begins with https:// is refused with those words, and so
-  is a web server that sends a request on to one, which GitHub's does
-  for everything. What TLS takes: an exchange of keys, ciphers,
-  certificates and their chain to a root that is trusted, the time of
-  day to hold them against, which the system does not know, numbers that
-  nobody can guess, which it cannot make, and arithmetic on integers of
-  thousands of bits. It has no milestone yet. The signature stays when
-  it comes: what arrives is still held against the key.
+  ("we don't do that here"). So it is to be a place that answers HTTPS,
+  which M15f lets a machine fetch from: the website does, as it is, and
+  `https://claraos.org/releases/` would be the directory `releases` of
+  what the site's workflow publishes. That is still his to say. The key:
+  he is fine with one. `python3 tools/release.py key <file>` makes it, on
+  his computer, and prints the public half, which goes into
+  lisp/system.lisp; the secret half stays with him, and with whatever
+  publishes for him as a secret. The key says whose releases a machine
+  takes over the network and nothing else: a system from a disk is held
+  against its manifest and against no key, and somebody who publishes a
+  ClaraOS of their own gives the variable the public half of their own
+  key. And publishing: nothing builds a release when a version is merged.
+  `python3 tools/release.py make build/esp/clara/<system> <directory>
+  <key file>` lays one out, and a workflow that does it is not written,
+  since it needs the place and the key.
+- No TLS was this slice's, and is M15f's. The entry had left two ways
+  open, HTTPS in ClaraOS or a file that is trusted and a road that is
+  not, and this slice took the second: what it built fetches by plain
+  HTTP. That stays, for a web server on one's own computer; a release is
+  no longer fetched that way.
 - The network is the client's half of each protocol, and of that the part
   that fetching needs. One card, the first. IPv4, and no IPv6. No pieces
   of packets, in either direction. No ICMP: the machine does not answer a
@@ -1916,6 +1927,135 @@ M15e, shutting down, what it left:
   And one cannot be seen on these machines: the search for a device's
   registers in the DSDT stops at the next device's name, and QEMU's
   generic event device has its registers before any other is named.
+
+M15f, HTTPS, what it left:
+
+- UTM was not tried, as with the five before it. A machine there needs
+  the device that makes numbers, which the manual says how to add when
+  the report says that there is none; whether UTM gives a machine one by
+  itself was not looked at.
+- One of each, and no more: TLS 1.3; X25519 for the exchange of keys;
+  AES-128 in Galois/Counter Mode with SHA-256. A server that speaks only
+  an older TLS is refused in those words. One that wants another exchange
+  of keys asks to begin again, which is refused too, and not answered
+  with another: the curve P-256 is the one that every server has to have,
+  and its arithmetic is there, for signatures, but with a number that is
+  a secret it would have to take the same time whatever the number is,
+  which it does not. The cipher of ChaCha20 and Poly1305 is not there
+  either, nor AES-256.
+- AES is written with its table of 256 bytes, so how long it takes
+  depends a little on the key (DESIGN.md says why that is let be). The
+  cipher that does not have that is the one in the point before.
+- A certificate that was taken back by whoever signed it is still taken:
+  nothing asks (no OCSP, no lists). Certificates are known that are
+  signed with RSA's older padding or on the two curves, over SHA-256,
+  SHA-384 or SHA-512, and that have keys of RSA's, from 2048 bits to
+  4096, or on the two curves. Anything else is "signed in a way that is
+  not known here": RSA's newer padding in a certificate, Ed25519, the
+  curve of 521 bits, which one certificate of the list has its key on,
+  and SHA-1, which three of the list's certificates are signed with, each
+  by itself, where nothing checks it. What a
+  certificate says that has to be understood is understood for four
+  things (whether it may sign, what its key is for, its names, what it
+  may be shown for); a certificate with anything else of that kind is not
+  taken, limits on the names that a signer may sign for among them.
+- The list of whom the system trusts is Mozilla's of 2026-11-05, 118
+  certificates, the file that curl publishes (SHA-256 427c0642...7285).
+  It is renewed by hand: `curl -o lisp/roots.pem
+  https://curl.se/ca/cacert.pem`, and a look at what changed. A system
+  has the list that it was built with until it is upgraded. Nothing
+  takes a certificate out of the list short of editing the file, and
+  what `clara.tls:trust` added is forgotten by a world that is made
+  again: a line in `/home/init.lisp` is where it belongs.
+- The clock is asked once, as the machine starts, and counted on from
+  there with the kernel's ticks. Nothing sets it, nothing asks the
+  network what time it is, and it has no zone: it is Greenwich's when the
+  firmware's is, which QEMU's is. A file that the system writes is still
+  dated 1980.
+- The numbers that nobody can guess come from virtio's device and from
+  nowhere else: not from the processor's own instruction for them, where
+  it has one, and not from a pool that is kept. The numbers that TCP and
+  DNS tell their exchanges apart by are still the ones of M15d, made by a
+  rule from the time and a count.
+- Every file is a connection of its own, greeted from the beginning:
+  some thirty greetings for a system. Nothing comes back to a connection
+  of before (the tickets for that are passed over), and nothing asks for
+  two files over one. Where the machine is virtualized, a greeting and
+  300,000 bytes after it take less than two hundredths of a second.
+- A machine that is asked who it is says that it has no certificate, and
+  what the server makes of that is the server's.
+- A file whose length is not said has to be ended with the word that the
+  connection is over. Python's web server does not say it unless it is
+  told to, which tools/serve.py does; a web server that drops such a
+  connection is refused, where a browser would take the file.
+- The Internet was tried by hand, and no test goes there:
+  https://claraos.org/ and a picture from it, the same from an address
+  that begins with http://, which the website sends on, a file of the
+  repository from github.com, which sends on to
+  raw.githubusercontent.com, and that address itself. Those are
+  certificates of two authorities, with keys of both kinds. The machine
+  says "ClaraOS" and its version to every web server that it asks
+  (User-Agent), which is why nothing else was asked.
+- Found on the way, in M15d's code: the memory of a connection is moved
+  to where there is more room by the thread that takes what arrives,
+  while the thread that fetches reads it, or has just handed it to its
+  caller. A connection has a lock for its memory now, and takes nothing
+  more once the file is somebody's (`frozen`). Nothing had shown it. With
+  TLS it shows: a long file over a closed connection fails under SBCL,
+  whose threads really run at once, when the lock is taken out again.
+- Found on the way, in M15a's tests: tools/trial.txt listed `/clara` with
+  the system's own directory before the one named "broken", which is how
+  the two sort for a system whose eight digits begin with 0 to b, and
+  not for one whose digits begin with c to f. One build in four failed
+  that boot. No commit on the way had been one of them; 0.0.30's first
+  build was. One verdict of M15a's planted mistakes had rested on it
+  (`:starts` always 0, in a copy of the tree whose digits began with c):
+  planted again, with the session put right, it is noticed for what it
+  is.
+- The disk of the kind FAT12 that one machine of `make test` starts from
+  was twelve megabytes, with clusters of four kilobytes, and the world is
+  saved on it twice over for a moment. With this slice the world and the
+  system no longer fitted: it is twenty-four megabytes now, with clusters
+  of eight, which is as far as that kind goes with such clusters.
+- Mistakes planted on purpose: 238, of which 66 in the arithmetic in C,
+  held against the self-tests that a boot runs, 16 in what Lisp calls of
+  it, in the clock and in what is started, held against a boot with its
+  session, and 156 in the Lisp, held against the host tests. 29 got
+  through at first. 22 of them became examples and tests: a
+  multiplication that needs its topmost piece, which next to no numbers
+  do and numbers just below a power of two do; a modulus with a zero
+  before it; a signature whose second number is the order too much, and
+  a key whose x is above the order, both made up for the purpose and
+  both taken by OpenSSL where they are signatures; the session's sum
+  with a key, whose key and bytes were of one length; a piece of a
+  certificate that says it is longer than what it is in, a length
+  without end, a date that is not Greenwich's and one of the last
+  century, an authority that says outright that it is none; signatures
+  of RSA's with one thing wrong in the block that they are made of, the
+  word for the sum, a zero before the signature, dirt among the zeroes
+  and the bit above the block; a greeting that goes on for longer than
+  is kept, a word of an older TLS that is none, a half of the exchange
+  of keys that makes nothing, a question about who the machine is that
+  is asked wrongly, the beginning of a message in the record of the
+  first one, the older way of signing with RSA where only the newer is
+  allowed; a request that is longer than one piece of a connection; and
+  an answer that ends in words while the connection under it stays
+  open. Seven change nothing that can be seen: a whole block of SHA-256
+  that waits is summed with what comes next, or at the end; a key that
+  is no point of its curve gives sums that no signature fits, and no
+  numbers can be made that tell; a sum above the order comes to the same
+  in the multiplication; a signature with a zero in it, and one that
+  comes to no point at all, are each refused by the check for the other;
+  a number below another that is taken from an uneven stretch of
+  numbers is wrong by one part in millions of millions; and a piece that
+  arrives after the file was handed on arrives in an instant that no
+  test can make.
+- One more fault was mine and lasted an hour: what is said over a
+  connection gave up with words of its own when the connection was no
+  longer open, which it is not when the answer has already come and was
+  too long. The host tests failed for it one time in two with six of
+  them running at once, and never alone. They are run eight at once
+  after a change to lisp/net.lisp now, three times.
 
 No milestone yet, to be picked up when they start to matter:
 

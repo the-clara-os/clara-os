@@ -1173,9 +1173,16 @@
          parts))
 
 ;; Where ClaraOS is published, when nobody says: what the system knows of.
+;; It is an address that begins with https://, and no other: a release is
+;; held against its signature whatever road it came by, but which release
+;; is the newest is said by a file that nobody signed, and what a machine
+;; fetches is nobody's to read on the way.
 (defun releases (from)
-  (or from *releases*
-      (error "this system knows of no place where ClaraOS is published: CLARA.SYSTEM:*RELEASES* names none")))
+  (let ((base (or from *releases*
+                  (error "this system knows of no place where ClaraOS is published: CLARA.SYSTEM:*RELEASES* names none"))))
+    (unless (clara.net::secure-address-p base)
+      (error "~A does not begin with https://: a release is fetched over a connection that is kept closed, and over no other" base))
+    base))
 
 ;; The name of the newest system that is published at an address, which is
 ;; what the file "latest" there says. That file is not signed: whoever

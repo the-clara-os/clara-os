@@ -1641,6 +1641,10 @@ static const struct {
       "\"this machine has no I/O ports\"" },
     /* which of the two this is, for #+ and #- */
     { "*features*", "(:CLARA :X86-64)", "(:CLARA :ARM64)" },
+    /* the time of day, where the firmware has a clock: later than the beginning of 2026, and not going backwards */
+    { "(handler-case (let ((now (get-universal-time))) (list (> now 3976214400) (<= now (get-universal-time))))"
+      " (error (c) (format nil \"~A\" c)))",
+      "(T T)", "\"this machine does not know what time it is: its firmware did not say\"" },
     /* what the firmware said about the machine */
     { "(list (keywordp (clara.unsafe:serial-device)) (integerp (nth-value 1 (clara.unsafe:serial-device)))"
       " (let ((screen (multiple-value-list (clara.unsafe:framebuffer)))) (or (null (car screen)) (length screen))))",
@@ -2106,8 +2110,8 @@ static void new_world(void)
 {
     static const char *const world[] = { "compiler.lisp", "native.lisp",   "font.lisp",    "console.lisp",
                                          "draw.lisp",     "pci.lisp",      "virtio.lisp",  "input.lisp",
-                                         "disk.lisp",     "fat.lisp",      "net.lisp",      "listener.lisp", "windows.lisp",
-                                         "terminal.lisp", "system.lisp" };
+                                         "disk.lisp",     "fat.lisp",      "random.lisp",   "net.lisp",      "listener.lisp",
+                                         "windows.lisp",  "terminal.lisp", "system.lisp",   "tls.lisp" };
     uint64_t before[LISP_TYPES], after[LISP_TYPES], ticks, collections;
     char processor[16] = { 0 };
     struct lisp_functions functions;
@@ -2270,8 +2274,12 @@ static void lisp_main(void)
      * there are the files that came with the kernel. */
     if (!lisp_evaluate(own_form("(progn (clara.pci:start) (clara.input:start) (clara.disk:start) (clara.fat:start))")))
         panic("lisp: the drivers did not start");
-    /* The network card, when the machine has one: it is found and opened,
-     * and asks nothing of the network until something wants it. */
+    /* The device that makes numbers which nobody can guess, and the network
+     * card, when the machine has them: each is found and opened, and the
+     * card asks nothing of the network until something wants it. */
+    if (!lisp_evaluate(own_form("(let ((random (find-package \"CLARA.RANDOM\")))"
+                                "  (if random (funcall (intern \"START\" random))))")))
+        panic("lisp: what makes numbers that nobody can guess did not start");
     if (!lisp_evaluate(own_form("(let ((net (find-package \"CLARA.NET\")))"
                                 "  (if net (funcall (intern \"START\" net))))")))
         panic("lisp: the network did not start");
@@ -2294,6 +2302,12 @@ static void lisp_main(void)
     if (!lisp_evaluate(own_form("(let ((system (find-package \"CLARA.SYSTEM\")))"
                                 "  (if system (funcall (intern \"START\" system))))")))
         panic("lisp: what shuts the machine down did not start");
+    /* What keeps a connection closed forgets whom an earlier start had read
+     * that it trusts: that was read into memory which is this start's to
+     * hand out again. */
+    if (!lisp_evaluate(own_form("(let ((tls (find-package \"CLARA.TLS\")))"
+                                "  (if tls (funcall (intern \"START\" tls))))")))
+        panic("lisp: what keeps a connection closed did not start");
     listen = own_form("clara.listener:run");
     while (!lisp_call(listen, told, &condition)) {
         condition = lisp_values.value[0];

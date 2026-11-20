@@ -42,9 +42,11 @@ FIRST = 2048  # the sector that a partition begins at, a mebibyte into the disk
 # cluster of it has, how many are kept back before its table, and how many
 # entries the directory of its root has where that is no file. What makes
 # a volume the kind it is is how many clusters it has: fewer than 4085,
-# fewer than 65525, or more.
+# fewer than 65525, or more. So the kind that may have fewest has the
+# largest: a volume has to hold a system and, twice over for a moment,
+# the world that is saved on it.
 KINDS = {
-    12: dict(sectors=24576, cluster=8, reserved=1, root=224),
+    12: dict(sectors=49152, cluster=16, reserved=1, root=224),
     16: dict(sectors=49152, cluster=4, reserved=1, root=512),
     32: dict(sectors=70000, cluster=1, reserved=32, root=0),
 }

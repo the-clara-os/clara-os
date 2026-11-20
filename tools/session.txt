@@ -211,6 +211,27 @@ error: interrupted from the keyboard
 > (list (clara.net:station) (clara.net:address))
 net: this machine is 10.0.2.15 on its network, 10.0.2.2 is the way out, 10.0.2.3 knows names
 ("52:54:00:12:34:56" "10.0.2.15")
+> (list (< -1 (clara.random:below 6) 6) (< (abs (- (get-universal-time) {{now}})) 900) (length clara.net:*secure*))
+(T T 12)
+> (let ((page (clara.unsafe:allocate-memory 1)))
+    (flet ((at (place count) (let ((number 0)) (dotimes (i count number) (setq number (+ (* 256 number) (clara.unsafe:memory-8 (+ page place i))))))))
+      (setf (clara.unsafe:memory-8 page) 97 (clara.unsafe:memory-8 (+ page 1)) 98 (clara.unsafe:memory-8 (+ page 2)) 99
+            (clara.unsafe:memory-8 (+ page 256)) 9 (clara.unsafe:memory-8 (+ page 320)) 4
+            (clara.unsafe:memory-8 (+ page 328)) 1 (clara.unsafe:memory-8 (+ page 329)) 241)
+      (prog1 (list (clara.unsafe:digest 256 page 3 (+ page 64)) (at 64 4)
+                   (clara.unsafe:hmac 256 page 2 page 3 (+ page 64)) (at 64 4)
+                   (clara.unsafe:aes-128-gcm-seal (+ page 128) (+ page 144) page 0 page 3 (+ page 160) (+ page 176)) (at 160 3) (at 176 4)
+                   (clara.unsafe:aes-128-gcm-open (+ page 128) (+ page 144) page 0 (+ page 160) 3 (+ page 192) (+ page 176)) (at 192 3)
+                   (clara.unsafe:aes-128-gcm-open (+ page 128) (+ page 144) page 1 (+ page 160) 3 (+ page 192) (+ page 176))
+                   (clara.unsafe:x25519 (+ page 224) (+ page 256) (+ page 288)) (at 288 4)
+                   (clara.unsafe:x25519 (+ page 224) (+ page 128) (+ page 288))
+                   (clara.unsafe:power-mod (+ page 320) 1 13 (+ page 328) 2 (+ page 336)) (at 336 2)
+                   (clara.unsafe:ecdsa 256 page page 32 page 3 page 3))
+        (clara.unsafe:free-memory page 1))))
+(32 3128432319 32 3882553867 T 6482617 1613968785 T 6382179 NIL T 803569059 NIL T 445 NIL)
+> (length (clara.tls:roots))
+tls: this system trusts {{roots}} certificates to say who a machine is
+{{roots}}
 > (with-open-file (in (clara.system:system-file "self-test.lisp")) (list (read-line in) (read-line in)))
 (";;;; self-test.lisp: a file with a mistake in it, for the evaluator's" ";;;; self-test to load")
 > (list (load (clara.system:system-file "listener.lisp")) (load "/clara/listener.lisp") (load "listener.lisp"))

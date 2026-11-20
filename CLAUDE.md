@@ -544,8 +544,8 @@ Rules:
   below, under shutting down), three for upgrades, x86_64-upgrade,
   aarch64-at-once and aarch64-trial (tools/upgrade.txt, tools/at-once.txt,
   tools/trial.txt), each with the disk of another system beside its own,
-  one that fetches a signed release of another system from a web server
-  on this computer and upgrades to it (aarch64-network,
+  one that fetches a signed release of another system by HTTPS from a web
+  server on this computer and upgrades to it (aarch64-network,
   tools/network.txt), and two boots for the user
   manual, named manual and manual-again: what the manual shows of the prompt
   is typed at them. The serial port of each is QEMU's standard input and
@@ -686,10 +686,25 @@ Rules:
   start tools/serve.py, a web server and a name server on one free port
   of this computer, which a machine under QEMU reaches at 10.0.2.2.
   `{{port}}` in the session is that port, and `{{key}}` what `KEY=`
-  says. tools/run.sh gives every machine a virtio network card on QEMU's
-  own network (`NET=` for none), so every boot of `make test` has one,
-  and the first session asks for the machine's address on all three
-  machines.
+  says. With `CERTS=directory` the same web server is there once more,
+  on another port, `{{secure}}`, where it keeps its connections closed
+  with the certificates of that directory, which tools/certs.py makes;
+  the machine is told to trust their root from a disk, which is how a
+  user would do it (`WORK=`, a disk made of the root alone). The web
+  server there is OpenSSL's, by way of Python: the one piece of the tests
+  of TLS that nobody here wrote. `{{roots}}` is how many certificates
+  lisp/roots.pem has, which the system says when it first reads them, and
+  `{{now}}` what time it is on this computer as the boot begins, counted
+  as the machine counts it: a session holds the machine's clock against
+  that, to a quarter of an hour.
+  tools/run.sh gives every machine a virtio network card on QEMU's
+  own network (`NET=` for none) and the device that makes numbers which
+  nobody can guess (`RNG=` for none), so every boot of `make test` has
+  both, and the first session asks for the machine's address, a number
+  and the time on all three machines. No test goes further than this
+  computer. When something is tried by hand against the Internet, it is
+  the project's own website and repository and nothing else: the machine
+  names ClaraOS to every web server that it asks.
 - A release (tools/release.py, lisp/system.lisp). `take` copies a system
   by way of a function that reads a file of it by name, from a volume or
   from a web server (`from-volume`, `take-release`): what a system is
@@ -700,6 +715,76 @@ Rules:
   `clara.host:ed25519-sign` signs what a test then offers
   (`release`, `machine-and-releases`). No key is in the repository:
   `make test` makes one for the run, in build/.
+- A connection that is kept closed (lisp/tls.lisp; DESIGN.md has what was
+  decided). The arithmetic is C, a file to each kind (kernel/sha256.c,
+  hmac.c, aes.c, the X25519 of ed25519.c, bignum.c, ecdsa.c), each with a
+  self-test in kmain that holds it against the examples of its standard,
+  and each a function of CLARA.UNSAFE on bytes of memory (unsafe.c). The
+  stand-ins in lisp/host/clara.lisp are the same arithmetic in SBCL's big
+  numbers, written from the standards and not from the C; the host tests
+  hold them against the same examples. After a change to the C, build
+  those files for the host with a `panic` of your own and a `main` that
+  reads numbers, and hold what they give against Python's big numbers on
+  a few thousand cases made at random: that was done once, in /tmp, and
+  found nothing, which is what it is for. A table of numbers there is not
+  typed: it is worked out, by a script, and pasted.
+- lisp/net.lisp knows of TLS that there are six functions for it
+  (`clara.net:*secure*`), which lisp/tls.lisp hands over as it is loaded,
+  after lisp/system.lisp, whose volume it reads the system's list from.
+  Whoever reads the memory of a connection holds the connection's lock:
+  the thread that takes what arrives moves that memory to where there is
+  more room. And nothing is sent with that lock held, since sending may
+  have to ask the network something that only that thread can take the
+  answer to. So an error in lisp/tls.lisp is `refuse`, with the number
+  that the other side is to be told, and the telling is done by whoever
+  opened the connection, once the error has come that far and the lock is
+  let go. Everything of a connection that is a secret is in one page
+  frame, at the places that the constants name, and that page is wiped
+  before it goes back. One record is taken at a time, and no more than
+  the greeting needs: the keys change after some messages, and a record
+  that was opened with the keys of before is a record that does not open.
+- The tests of TLS (lisp/host/tests.lisp). The made-up network's web
+  server keeps connections closed at the ports that `:secure` names, 443
+  when nothing is said, with its own half of TLS 1.3, written there from
+  the RFC on the arithmetic of host/clara.lisp. `certificate` makes a
+  certificate with whatever a test wants in it or wrong with it,
+  `kept-closed` gives what a fetch gives and what the machine told the
+  other side, and `shown` the same for a server that shows the
+  certificates it is given. What the other side can get wrong is an
+  `:accident`, a keyword that `tls-greet` or `tls-answer` knows: a new
+  way of being wrong gets a keyword there, and a row in one of the two
+  tables with the words that the machine says and the number that it
+  tells the other side. The machine trusts what `:trusted` says and
+  reads no list from a disk (`trust-only`); one test reads lisp/roots.pem
+  itself and has every certificate in it that signed itself in a way
+  which is known here check its own signature. The device that makes
+  numbers is `add-numbers`, which makes them by a rule so that a test
+  that fails fails again.
+- After a change to lisp/net.lisp or lisp/tls.lisp, run the host tests
+  eight at once, three times over (`sbcl --script lisp/host/tests.lisp`,
+  eight of them started together, and the last line of each). Under SBCL
+  the threads of the machine and of the made-up network really run at
+  once, and a fault that needs one of them to lose its turn at one
+  particular call shows when the computer is busy and not otherwise: one
+  such failed one run in two that way, and no run alone.
+- lisp/roots.pem is the list that curl publishes of Mozilla's, as it is,
+  so that its sum is the published one: `curl -o lisp/roots.pem
+  https://curl.se/ca/cacert.pem`, and never the file that Homebrew keeps
+  under /opt/homebrew/etc, to which macOS adds the certificates of the
+  computer's own keychain. The handoff does not read it into memory
+  (kernel/boot.c, `of_the_system`); the system reads it from its volume
+  when something is first fetched by HTTPS.
+- The time of day is what the firmware's clock said in the handoff
+  (kernel/boot.c, `read_clock`) and the ticks since (kernel/timer.c):
+  `get-universal-time`, whose answer is in `either` of the self-test,
+  since a firmware need not have a clock.
+- A session never says in which order the names of two systems come. A
+  system is named by eight digits of its sources, which sort before
+  "broken" and "other" for some builds and after them for others:
+  tools/trial.txt listed `/clara` whole, and failed for every build whose
+  digits began with c, d, e or f, one in four, which nobody saw until
+  0.0.30 was one of them. Take the system's own name out of such a list,
+  and ask for it by itself.
 - A session can wait for the kernel to say something before it goes on:
   `^W pattern`, for a kernel that will say nothing more by itself, a panic
   for one, which `PANICS=1` allows the boot once. `^M system_reset` after
@@ -793,7 +878,8 @@ Rules:
   in the order of `world` in lisp.c (the compiler, then native and the file
   of the machine's own processor, arm64.lisp or x86-64.lisp, whose name
   is the machine's in `*features*`, and then the console, draw, pci,
-  virtio, input, disk, fat, the listener, windows, terminal and system), and
+  virtio, input, disk, fat, random, net, the listener, windows, terminal,
+  system and tls), and
   lisp/host/tests.lisp loads the same files: a new one goes into both, and what its package exports goes into
   a list of names in the manual, or `make site` stops. A file that is an
   application is not in `world`, and the launcher loads it (below). What `lisp_main`

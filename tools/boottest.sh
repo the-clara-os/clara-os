@@ -37,6 +37,10 @@
 #                 which the machine reaches at 10.0.2.2, and {{key}} is what
 #                 KEY= says, the public half of the key that a release there
 #                 is signed with)
+#        CERTS=directory (and the same directory by HTTPS, on another port,
+#                 which is {{secure}} in the session: the certificates that
+#                 the server shows are the ones in that directory, which
+#                 tools/certs.py makes)
 #        plus what tools/run.sh reads
 set -eu
 arch=${1:?usage: tools/boottest.sh <arch> [qemu args]}
@@ -65,10 +69,10 @@ rm -f "$shot" "$sock" "$keys" "$orders" "$heard" "$typing".* "$scratch"
 
 # A machine that is to fetch something gets somewhere to fetch it from,
 # which lasts as long as this script does.
-port=0
+port=0 secure=0
 if [ -n "${SERVE:-}" ]; then
     rm -f "build/serve-$name.port"
-    python3 -I tools/serve.py "$SERVE" "build/serve-$name.port" > "build/serve-$name.log" 2>&1 &
+    python3 -I tools/serve.py "$SERVE" "build/serve-$name.port" ${CERTS:+"$CERTS"} > "build/serve-$name.log" 2>&1 &
     server=$!
     trap 'kill "$server" 2> /dev/null || true' EXIT
     n=0
@@ -76,7 +80,7 @@ if [ -n "${SERVE:-}" ]; then
         sleep 0.1
         n=$((n + 1))
     done
-    port=$(cat "build/serve-$name.port" 2> /dev/null || echo 0)
+    read -r port secure < "build/serve-$name.port" 2> /dev/null || port=0
     if [ "$port" = 0 ]; then
         echo "boottest $name: FAILED, tools/serve.py did not start"
         cat "build/serve-$name.log"
@@ -86,12 +90,16 @@ fi
 
 # A session can name the system that was built and its version, which are
 # different for every build: they are written into a copy of it. And the
-# port that it fetches from, and the key that what it fetches is signed
-# with.
+# ports that it fetches from, the key that what it fetches is signed
+# with, how many certificates the system's list has ({{roots}}), and what
+# time it is on this computer as the machine is started, in seconds since
+# 1900 began, which is how the machine counts it too ({{now}}).
 if [ -n "$session" ]; then
     system=$(ls "${ESP:-build/esp}/clara" 2> /dev/null | head -1)
     version=$(sed -n 's/^#define CLARA_VERSION "\(.*\)"/\1/p' kernel/kernel.h)
-    sed -e "s/{{system}}/$system/g" -e "s/{{version}}/$version/g" -e "s/{{port}}/$port/g" -e "s/{{key}}/${KEY:-}/g" \
+    sed -e "s/{{system}}/$system/g" -e "s/{{version}}/$version/g" -e "s/{{port}}/$port/g" -e "s/{{secure}}/$secure/g" \
+        -e "s/{{key}}/${KEY:-}/g" -e "s/{{roots}}/$(grep -c 'BEGIN CERTIFICATE' lisp/roots.pem)/g" \
+        -e "s/{{now}}/$(($(date +%s) + 2208988800))/g" \
         "$session" > "build/typed-$name.txt"
     session=build/typed-$name.txt
 fi

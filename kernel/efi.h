@@ -128,6 +128,23 @@ typedef struct {
     void    *VendorTable;
 } EFI_CONFIGURATION_TABLE;
 
+/* The time of day, as the firmware's clock has it (8.3): sixteen bytes. */
+typedef struct {
+    uint16_t Year;
+    uint8_t  Month, Day, Hour, Minute, Second, Pad1;
+    uint32_t Nanosecond;
+    int16_t  TimeZone; /* how many minutes this is behind Greenwich's time, or 0x7ff when the firmware does not know */
+    uint8_t  Daylight, Pad2;
+} EFI_TIME;
+
+#define EFI_UNSPECIFIED_TIMEZONE 0x07ff
+
+/* The services that stay after the boot services are gone; only the first is called, and before then. */
+typedef struct {
+    EFI_TABLE_HEADER Hdr;
+    EFI_STATUS (*GetTime)(EFI_TIME *time, void *capabilities);
+} EFI_RUNTIME_SERVICES;
+
 typedef struct {
     EFI_TABLE_HEADER                 Hdr;
     CHAR16                          *FirmwareVendor;
@@ -138,7 +155,7 @@ typedef struct {
     EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *ConOut;
     EFI_HANDLE                       StandardErrorHandle;
     EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *StdErr;
-    void                            *RuntimeServices;
+    EFI_RUNTIME_SERVICES            *RuntimeServices;
     EFI_BOOT_SERVICES               *BootServices;
     UINTN                            NumberOfTableEntries;
     EFI_CONFIGURATION_TABLE         *ConfigurationTable;

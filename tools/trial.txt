@@ -13,8 +13,8 @@ clara: starting the machine again
 ^R
 > (list *before* (equal (clara.system:system) "{{system}}") (getf (clara.unsafe:start-state) :resumed) (getf (clara.unsafe:start-state) :failed))
 (THE-TRIAL T T "{{version}}-broken")
-> (list (clara.fat:names "/clara/") (and (member "failed" (clara.fat:names "/clara/{{version}}-broken/") :test #'equal) t))
-(("{{system}}/" "{{version}}-broken/" "a file with a long name.text" "clara.image" "hello.lisp" "kept.lisp") T)
+> (list (remove "{{system}}/" (clara.fat:names "/clara/") :test #'equal) (and (member "{{system}}/" (clara.fat:names "/clara/") :test #'equal) (member "failed" (clara.fat:names "/clara/{{version}}-broken/") :test #'equal) t))
+(("{{version}}-broken/" "a file with a long name.text" "clara.image" "hello.lisp" "kept.lisp") T)
 > (progn (setf (symbol-function 'clara.system::came-to-prompt)
                (lambda ()
                  (format t "standing still on purpose, ~A~%" (if (probe-file "/clara/passed") "a second time" "for the first time"))
@@ -28,8 +28,8 @@ clara: starting the machine again
 ^R
 > (list (getf (clara.unsafe:start-state) :starts) (getf (clara.unsafe:start-state) :passed-over) (getf (clara.unsafe:start-state) :resumed))
 (1 T NIL)
-> (list *before* (fact 4) (clara.fat:names "/clara/"))
-(THE-TRIAL 24 ("{{system}}/" "{{version}}-broken/" "a file with a long name.text" "clara.image" "hello.lisp" "kept.lisp" "passed"))
+> (list *before* (fact 4) (remove "{{system}}/" (clara.fat:names "/clara/") :test #'equal))
+(THE-TRIAL 24 ("{{version}}-broken/" "a file with a long name.text" "clara.image" "hello.lisp" "kept.lisp" "passed"))
 > (clara.system:start-again :save nil)
 clara: starting the machine again
 ^W ^standing still on purpose, a second time

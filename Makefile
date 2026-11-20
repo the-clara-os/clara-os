@@ -40,7 +40,7 @@ BOOT_FILES  := $(BUILD)/boot-files.stamp
 # (lisp/system.lisp).
 VERSION     := $(shell sed -n 's/^\#define CLARA_VERSION "\(.*\)"/\1/p' kernel/kernel.h)
 SYSTEM_SRCS := $(sort kernel/system.c $(COMMON_SRCS) $(HEADERS) kernel/lisp/self-test.lisp \
-                 $(wildcard kernel/arch/*/*.c kernel/arch/*/*.S lisp/*.lisp))
+                 $(wildcard kernel/arch/*/*.c kernel/arch/*/*.S lisp/*.lisp) lisp/roots.pem)
 SYSTEM      := $(VERSION)-$(shell python3 -I tools/system.py id $(SYSTEM_SRCS))
 BOOTDIR     := $(BUILD)/esp/clara/$(SYSTEM)
 
@@ -77,10 +77,10 @@ $(eval $(call ARCH_RULES,aarch64,aarch64-unknown-windows,,BOOTAA64.EFI,arm64))
 # so do the two kernels, a second time: a system is its directory, which is
 # what another machine takes when it is given this disk to upgrade from.
 # The manifest is written last, and is what says that a system is whole.
-$(BOOT_FILES): lisp $(wildcard lisp/*.lisp) kernel/lisp/self-test.lisp $(ESP)/BOOTX64.EFI $(ESP)/BOOTAA64.EFI tools/system.py
+$(BOOT_FILES): lisp $(wildcard lisp/*.lisp) lisp/roots.pem kernel/lisp/self-test.lisp $(ESP)/BOOTX64.EFI $(ESP)/BOOTAA64.EFI tools/system.py
 	rm -rf $(BUILD)/esp/clara
 	mkdir -p $(BOOTDIR)
-	cp lisp/*.lisp kernel/lisp/self-test.lisp $(ESP)/BOOTX64.EFI $(ESP)/BOOTAA64.EFI $(BOOTDIR)/
+	cp lisp/*.lisp lisp/roots.pem kernel/lisp/self-test.lisp $(ESP)/BOOTX64.EFI $(ESP)/BOOTAA64.EFI $(BOOTDIR)/
 	python3 -I tools/system.py manifest $(BOOTDIR) $(SYSTEM)
 	touch $@
 all: $(BOOT_FILES)
@@ -145,10 +145,15 @@ host-test:
 # time, has to replace. One more machine has no second disk and fetches:
 # the other system is laid out as a release, signed with a key that is
 # made for the run (tools/release.py), and handed out by a web server on
-# this computer, which also knows names (tools/serve.py, SERVE=); the
-# machine asks for its address, looks a name up, fetches files, has to
-# refuse the release while it has no key or another one, and then takes
-# it and comes up as the other system (tools/network.txt). Then the user
+# this computer, which also knows names (tools/serve.py, SERVE=), by HTTP
+# and, with certificates that are made for the run as well
+# (tools/certs.py, CERTS=), by HTTPS. The machine asks for its address,
+# looks a name up, fetches files both ways, is given the root of those
+# certificates on a disk and told to trust it, has to refuse a server
+# whose certificate is too old, is for another name or was signed by
+# nobody it knows, and the release while it has no key or another one,
+# and then takes it, by HTTPS, and comes up as the other system
+# (tools/network.txt). Then the user
 # manual: what it shows of
 # the prompt (site/manual.html) is typed at a machine, which saves its
 # world, and at the same machine started again. That machine has a second
@@ -203,11 +208,14 @@ test: all host-test $(BUILD)/system-other/stamp $(BUILD)/system-broken/stamp
 	NAME=aarch64-trial DISK=$(BUILD)/boot-aarch64.img SESSION=tools/trial.txt TIMEOUT=300 PANICS=1 \
 		EXPECT='^system: .*-broken was tried and did not come to its prompt;;^lisp: clara.image is passed over;;^world:   It is kept, and the next start tries it once more;;^world: the world that was saved did not come to its prompt a second time' \
 		tools/boottest.sh aarch64 -machine gic-version=3 $(call SECOND,broken)
-	rm -rf $(BUILD)/releases $(BUILD)/release-key
+	rm -rf $(BUILD)/releases $(BUILD)/release-key $(BUILD)/certs $(BUILD)/trusted
 	python3 -I tools/release.py key $(BUILD)/release-key > $(BUILD)/release-key.public
 	python3 -I tools/release.py make $(BUILD)/system-other/esp/clara/$(VERSION)-other $(BUILD)/releases $(BUILD)/release-key
-	NAME=aarch64-network SERVE=$(BUILD)/releases KEY=$$(cat $(BUILD)/release-key.public) SESSION=tools/network.txt TIMEOUT=300 \
-		EXPECT='^ClaraOS: starting the system that is to be tried;;^system: .*-other has come to its prompt;;^world: 1 variable has the value that it had come to;;^world: it is saved as it is now' \
+	python3 -I tools/certs.py $(BUILD)/certs releases.test rsa.test:rsa large.test:large old.test:old
+	mkdir -p $(BUILD)/trusted && cp $(BUILD)/certs/root.pem $(BUILD)/trusted/ && python3 -I tools/mkdisk.py $(BUILD)/trusted $(BUILD)/trusted.img
+	NAME=aarch64-network SERVE=$(BUILD)/releases CERTS=$(BUILD)/certs WORK=$(BUILD)/trusted.img KEY=$$(cat $(BUILD)/release-key.public) \
+		SESSION=tools/network.txt TIMEOUT=300 \
+		EXPECT='^random: .* makes numbers that nobody can guess;;^ClaraOS: starting the system that is to be tried;;^system: .*-other has come to its prompt;;^world: 1 variable has the value that it had come to;;^world: it is saved as it is now' \
 		tools/boottest.sh aarch64 -machine gic-version=3
 	python3 -I site/build.py --sessions $(BUILD)
 	rm -rf $(BUILD)/empty && mkdir -p $(BUILD)/empty && python3 -I tools/mkdisk.py $(BUILD)/empty $(BUILD)/work.img

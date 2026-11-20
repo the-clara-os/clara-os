@@ -15,11 +15,14 @@
 ;;;;   TCP         bytes in order, and all of them or an error (RFC 9293)
 ;;;;   HTTP        a file, by its name on another machine (RFC 9112)
 ;;;;
-;;;; There is no encryption here: what is fetched comes as the other side
-;;;; sends it, and anybody on the way can read it and change it. Whoever
-;;;; fetches something that matters has to hold it against something that
-;;;; did not come by the same road, as lisp/system.lisp does with a release
-;;;; and its signature.
+;;;; Nothing in this file is kept from anybody: what is fetched from an
+;;;; address that begins with http:// comes as the other side sends it, and
+;;;; whoever is on the way can read it and change it. An address that
+;;;; begins with https:// is fetched over a connection that TLS keeps
+;;;; closed, which is lisp/tls.lisp: that file is loaded after this one and
+;;;; tells this one what it can do (*SECURE*), and FETCH then asks it to
+;;;; open the connection, to say the request, and to make of what arrives
+;;;; what the other side said.
 ;;;;
 ;;;; A frame is put together and taken apart in page frames, which is where
 ;;;; the card reads and writes: numbers go onto the wire with their highest
@@ -37,7 +40,7 @@
 (defpackage "CLARA.NET"
   (:use "COMMON-LISP")
   (:export "START" "UP" "ADDRESS" "STATION" "RESOLVE" "FETCH" "FETCH-TEXT"
-           "*PATIENCE*" "*AGAIN*" "*NAME-SERVER*" "*NAME-PORT*"))
+           "*PATIENCE*" "*AGAIN*" "*NAME-SERVER*" "*NAME-PORT*" "*SECURE*"))
 (in-package "CLARA.NET")
 
 (defstruct card
@@ -65,6 +68,13 @@
 (defvar *again* 1000)        ; and after how many of them a question that has no answer yet is asked again
 (defvar *name-server* nil)   ; who is asked for names instead of the one that the network named: an address, as text
 (defvar *name-port* 53)      ; and at which port
+;; What keeps a connection closed, as lisp/tls.lisp says it: functions, each by its name. :OPEN, of a
+;; connection and the name of the machine at its other end, greets that machine and gives what is kept
+;; of the connection from then on, which the others take: :SAY, with a text, says it; :TAKE opens what
+;; has arrived since; :HELD is how many bytes of what the other side said lie at the beginning of the
+;; connection's memory; :ENDED is whether the other side has said that it is done; :CLOSE says that this
+;; side is. NIL until that file is loaded.
+(defvar *secure* nil)
 
 ;;; Numbers in memory, the highest byte first
 
@@ -598,8 +608,12 @@
   memory room  ; what has arrived: page frames, and how many bytes they hold
   (held 0)     ; how many of those are filled, from the first byte on without a gap
   later        ; ((from . to) ...): what has arrived beyond a gap, as places in that memory
-  limit        ; how many bytes may arrive
-  ended)       ; the other side has sent all that it will
+  limit        ; how many bytes may arrive,
+  allowed      ; and how many of them the file may be that is fetched, which is what an error names
+  ended        ; the other side has sent all that it will
+  lock         ; for the memory: the thread that takes what arrives may move it to where there is more room
+  frozen       ; nothing more is taken: the memory is somebody else's from here on, or nobody's
+  secure)      ; what lisp/tls.lisp keeps of a connection that it keeps closed, or NIL
 
 (defun wrap (number)
   (logand number #xffffffff))
@@ -670,31 +684,36 @@
 ;; whole, and so does every piece that had come early and now joins on;
 ;; what comes early is kept for then, as long as there are few such pieces
 ;; and it is within what may arrive. T when it was the piece that was
-;; expected.
+;; expected. All of it with the connection's lock: whoever reads the memory
+;; holds that lock too, since making room moves the memory. A connection
+;; that is frozen takes nothing more.
 (defun take-piece (connection ahead data bytes)
-  (let* ((from (+ (connection-held connection) ahead))
-         (fits (min bytes (- (connection-limit connection) from))))
-    (cond ((and (= ahead 0) (< fits bytes))
-           (setf (connection-state connection) :overrun)
-           nil)
-          ((or (<= fits 0) (< fits bytes) (and (> ahead 0) (>= (length (connection-later connection)) 64)))
-           nil)
-          (t
-           (make-room connection (+ from bytes))
-           (clara.unsafe:copy-memory (+ (connection-memory connection) from) data bytes)
-           (if (> ahead 0)
-               (setf (connection-later connection) (cons (cons from (+ from bytes)) (connection-later connection)))
-               (let ((held (+ from bytes)))
-                 (loop
-                   (let ((piece (find-if (lambda (piece) (<= (car piece) held)) (connection-later connection))))
-                     (unless piece
-                       (return))
-                     (setq held (max held (cdr piece)))
-                     (setf (connection-later connection) (remove piece (connection-later connection)))))
-                 (setf (connection-expected connection)
-                       (wrap (+ (connection-expected connection) (- held (connection-held connection))))
-                       (connection-held connection) held)))
-           (= ahead 0)))))
+  (clara:with-lock-held ((connection-lock connection))
+    (let* ((from (+ (connection-held connection) ahead))
+           (fits (min bytes (- (connection-limit connection) from))))
+      (cond ((connection-frozen connection)
+             nil)
+            ((and (= ahead 0) (< fits bytes))
+             (setf (connection-state connection) :overrun)
+             nil)
+            ((or (<= fits 0) (< fits bytes) (and (> ahead 0) (>= (length (connection-later connection)) 64)))
+             nil)
+            (t
+             (make-room connection (+ from bytes))
+             (clara.unsafe:copy-memory (+ (connection-memory connection) from) data bytes)
+             (if (> ahead 0)
+                 (setf (connection-later connection) (cons (cons from (+ from bytes)) (connection-later connection)))
+                 (let ((held (+ from bytes)))
+                   (loop
+                     (let ((piece (find-if (lambda (piece) (<= (car piece) held)) (connection-later connection))))
+                       (unless piece
+                         (return))
+                       (setq held (max held (cdr piece)))
+                       (setf (connection-later connection) (remove piece (connection-later connection)))))
+                   (setf (connection-expected connection)
+                         (wrap (+ (connection-expected connection) (- held (connection-held connection))))
+                         (connection-held connection) held)))
+             (= ahead 0))))))
 
 ;; A segment has arrived for a connection.
 (defun heard-segment (connection number arrived flags data bytes)
@@ -754,14 +773,16 @@
                  (segment-out card from from-port to-port 0
                               (wrap (+ number carried (if (/= 0 (logand flags 3)) 1 0))) 20 0))))))))
 
-;; A connection to a port of another machine, which may send LIMIT bytes
-;; over it. The beginning is said, and said again every second, until the
-;; other side has answered it.
-(defun connect (card to to-port limit)
+;; A connection to a port of another machine, which may send a file of
+;; LIMIT bytes over it, and MORE bytes around that. The beginning is said,
+;; and said again every second, until the other side has answered it.
+(defun connect (card to to-port limit &optional (more 65536))
   (let* ((first (fresh card))
          (connection (make-connection :card card :to to :to-port to-port :port (next-port card)
                                       :state :asked :first first :next (wrap (1+ first)) :heard first
-                                      :memory (clara.unsafe:allocate-memory 16) :room 65536 :limit limit))
+                                      :memory (clara.unsafe:allocate-memory 16) :room 65536
+                                      :limit (+ limit more) :allowed limit
+                                      :lock (clara:make-lock "connection")))
          (open nil))
     (setf (card-connections card) (cons connection (card-connections card)))
     (unwind-protect
@@ -776,43 +797,71 @@
       (unless open
         (disconnect connection)))))
 
-;; What a connection has to say, in one segment, said again every second
-;; until the other side has it.
+;; BYTES bytes of memory go over a connection, in segments of 1400 at most,
+;; each said again every second until the other side has it. On a
+;; connection that is no longer open nothing more is said, and nothing is
+;; said about that here: whoever waits for the answer finds out why, and
+;; has the better words for it.
+(defun say-bytes (connection memory bytes)
+  (let ((card (connection-card connection)) (done 0))
+    (loop
+      (when (>= done bytes)
+        (return bytes))
+      (let ((piece (min 1400 (- bytes done))) (number (connection-next connection)) (from (+ memory done)))
+        (setf (connection-next connection) (wrap (+ number piece)))
+        (ask-until card
+                   (lambda () (or (not (eq (connection-state connection) :open))
+                                  (= (connection-heard connection) (connection-next connection))))
+                   (lambda () (segment-out card (connection-to connection) (connection-to-port connection)
+                                           (connection-port connection) number (connection-expected connection)
+                                           24 (window connection) from piece))
+                   (lambda () (format nil "~A does not say that it has what it was sent"
+                                      (address-text (connection-to connection)))))
+        (unless (eq (connection-state connection) :open)
+          (return bytes))
+        (setq done (+ done piece))))))
+
+;; What a connection has to say, as a text.
 (defun say (connection text)
-  (let* ((card (connection-card connection)) (bytes (clara.unsafe:string-bytes text))
-         (page (clara.unsafe:allocate-memory 1)) (number (connection-next connection)))
-    (when (> bytes 1400)
-      (error "~D bytes are more than is said in one piece" bytes))
+  (let ((bytes (clara.unsafe:string-bytes text)) (page (clara.unsafe:allocate-memory 1)))
+    (when (> bytes 4096)
+      (error "~D bytes are more than is said at once" bytes))
     (unwind-protect
          (progn
            (clara.unsafe:string-memory text page)
-           (setf (connection-next connection) (wrap (+ number bytes)))
-           (ask-until card
-                      (lambda () (or (not (eq (connection-state connection) :open))
-                                     (= (connection-heard connection) (connection-next connection))))
-                      (lambda () (segment-out card (connection-to connection) (connection-to-port connection)
-                                              (connection-port connection) number (connection-expected connection)
-                                              24 (window connection) page bytes))
-                      (lambda () (format nil "~A does not say that it has what it was sent"
-                                         (address-text (connection-to connection))))))
-      (clara.unsafe:free-memory page 1))
-    bytes))
+           (say-bytes connection page bytes))
+      (clara.unsafe:free-memory page 1))))
+
+;; How many bytes of what the other side says lie at the beginning of a
+;; connection's memory: all that has arrived, or, on a connection that is
+;; kept closed, what has been opened of it.
+(defun said (connection)
+  (if (connection-secure connection)
+      (funcall (getf *secure* :held) (connection-secure connection))
+      (connection-held connection)))
 
 ;; Wait until TEST is true of what has arrived, or the other side has sent
 ;; all that it will: T in the first case. An error when the connection is
-;; no more, and when nothing has arrived for as long as *PATIENCE* is.
+;; no more, and when nothing has arrived for as long as *PATIENCE* is. On
+;; a connection that is kept closed, what has arrived is opened before
+;; TEST looks; whether the other side is done is looked at before that, so
+;; that nothing arrives between the two looks and is taken for missing.
 (defun wait-for (connection test)
-  (let ((card (connection-card connection)) (held (connection-held connection)) (since (now)))
+  (let ((card (connection-card connection)) (held (connection-held connection)) (since (now))
+        (secure (connection-secure connection)))
     (loop
-      (when (funcall test)
-        (return t))
-      (case (connection-state connection)
-        (:open)
-        (:overrun (error "~A sends more than the ~D bytes that were to be taken from it"
-                         (address-text (connection-to connection)) (- (connection-limit connection) 65536)))
-        (t (error "~A has given the connection up" (address-text (connection-to connection)))))
-      (when (connection-ended connection)
-        (return nil))
+      (let ((ended (connection-ended connection)))
+        (when secure
+          (funcall (getf *secure* :take) secure))
+        (when (funcall test)
+          (return t))
+        (case (connection-state connection)
+          (:open)
+          (:overrun (error "~A sends more than the ~D bytes that were to be taken from it"
+                           (address-text (connection-to connection)) (connection-allowed connection)))
+          (t (error "~A has given the connection up" (address-text (connection-to connection)))))
+        (when (or ended (and secure (funcall (getf *secure* :ended) secure)))
+          (return nil)))
       (cond ((/= held (connection-held connection))
              (setq held (connection-held connection)
                    since (now)))
@@ -823,7 +872,8 @@
 ;; A connection is over. The other side is told that nothing more comes,
 ;; when it is still there to be told; whatever it says after that finds no
 ;; connection, and is answered so. The memory of what arrived goes back,
-;; unless KEEP says that somebody has it.
+;; unless KEEP says that somebody has it; either way nothing more is put
+;; into it, which the thread that takes what arrives may be about to do.
 (defun disconnect (connection &optional keep)
   (let ((card (connection-card connection)))
     (when (eq (connection-state connection) :open)
@@ -832,47 +882,55 @@
                      (connection-next connection) (connection-expected connection) 17 0)))
     (setf (connection-state connection) :closed
           (card-connections card) (remove connection (card-connections card)))
-    (unless keep
-      (clara.unsafe:free-memory (connection-memory connection) (floor (connection-room connection) 4096)))
+    (clara:with-lock-held ((connection-lock connection))
+      (setf (connection-frozen connection) t)
+      (unless keep
+        (clara.unsafe:free-memory (connection-memory connection) (floor (connection-room connection) 4096))))
     nil))
 
 ;;; HTTP: a file from another machine
 
-;; "http://host:port/path", taken apart: the host, the port, which is 80
-;; when none is written, and the path, which is / when there is none.
+;; Does an address begin with https://, which says that it is fetched over
+;; a connection that is kept closed?
+(defun secure-address-p (text)
+  (and (stringp text) (> (length text) 8) (string-equal (subseq text 0 8) "https://")))
+
+;; "http://host:port/path", taken apart: the host, the port, the path,
+;; which is / when there is none, and whether it began with https://. The
+;; port is 80 when none is written, and 443 for https://.
 (defun parse-address (text)
-  (unless (and (> (length text) 7) (string-equal (subseq text 0 7) "http://"))
-    (error (if (and (> (length text) 8) (string-equal (subseq text 0 8) "https://"))
-               "~A is to be had by HTTPS, which this system does not speak: it fetches by plain HTTP"
-               "~A is no address that begins with http://")
-           text))
-  (let ((slash (length text)) (colon nil))
-    (dotimes (i (- (length text) 7))
-      (let ((character (char text (+ 7 i))))
+  (let* ((secure (secure-address-p text))
+         (begin (cond (secure 8)
+                      ((and (> (length text) 7) (string-equal (subseq text 0 7) "http://")) 7)
+                      (t (error "~A is no address that begins with http:// or https://" text))))
+         (slash (length text)) (colon nil))
+    (dotimes (i (- (length text) begin))
+      (let ((character (char text (+ begin i))))
         (cond ((and (char= character #\/) (= slash (length text)))
-               (setq slash (+ 7 i)))
+               (setq slash (+ begin i)))
               ((and (char= character #\:) (= slash (length text)) (null colon))
-               (setq colon (+ 7 i))))))
-    (let ((host (subseq text 7 (or colon slash)))
-          (port (if colon (number-of (subseq text (1+ colon) slash)) 80))
+               (setq colon (+ begin i))))))
+    (let ((host (subseq text begin (or colon slash)))
+          (port (if colon (number-of (subseq text (1+ colon) slash)) (if secure 443 80)))
           (path (if (= slash (length text)) "/" (subseq text slash))))
       (unless (and (> (length host) 0) port (< 0 port 65536))
         (error "~A names no machine, or no port of one" text))
-      (values host port path))))
+      (values host port path secure))))
 
 (defvar *line-end* (format nil "~A~A" (code-char 13) (code-char 10)))
 
 ;; Where the head of an answer ends, when all of it has arrived: after the
 ;; first empty line. NIL until then.
 (defun head-end (connection from)
-  (let ((memory (connection-memory connection)) (held (connection-held connection)))
-    (loop
-      (when (> (+ from 4) held)
-        (return nil))
-      (when (and (= (one (+ memory from)) 13) (= (one (+ memory from 1)) 10)
-                 (= (one (+ memory from 2)) 13) (= (one (+ memory from 3)) 10))
-        (return (+ from 4)))
-      (setq from (1+ from)))))
+  (clara:with-lock-held ((connection-lock connection))
+    (let ((memory (connection-memory connection)) (held (said connection)))
+      (loop
+        (when (> (+ from 4) held)
+          (return nil))
+        (when (and (= (one (+ memory from)) 13) (= (one (+ memory from 1)) 10)
+                   (= (one (+ memory from 2)) 13) (= (one (+ memory from 3)) 10))
+          (return (+ from 4)))
+        (setq from (1+ from))))))
 
 ;; The lines of a text that ends its lines the way HTTP does.
 (defun head-lines (text)
@@ -940,38 +998,49 @@
         (setq to (+ to size)
               from (+ from size 2))))))
 
-;; The file that an address names, fetched by HTTP: the memory that it is
-;; in, which is page frames, how many bytes it is, and how many page frames
-;; that memory is, which are the caller's to give back
-;; (CLARA.UNSAFE:FREE-MEMORY). A file of more than LIMIT bytes is not
-;; taken. Where the other side says that the file is to be had at another
-;; address, that one is asked, three times at most.
+;; The file that an address names, fetched by HTTP, or by HTTPS when the
+;; address begins that way: the memory that it is in, which is page frames,
+;; how many bytes it is, and how many page frames that memory is, which
+;; are the caller's to give back (CLARA.UNSAFE:FREE-MEMORY). A file of more
+;; than LIMIT bytes is not taken. Where the other side says that the file
+;; is to be had at another address, that one is asked, three times at
+;; most; but never from an address that is kept closed at one that is not.
 (defun fetch (address &key (limit 16777216))
   (let ((moves 0))
     (loop
-      (multiple-value-bind (host port path) (parse-address address)
+      (multiple-value-bind (host port path secure) (parse-address address)
+        (when (and secure (null *secure*))
+          (error "~A is to be had by HTTPS, and nothing in this system speaks it" address))
         (let* ((card (up))
-               (connection (connect card (address-of host) port (+ limit 65536)))
+               ;; A connection that is kept closed carries more than the file: a greeting of some
+               ;; thousand bytes, and twenty-two bytes around every piece that the other side closes.
+               (connection (connect card (address-of host) port limit (if secure (+ 131072 (floor limit 8)) 65536)))
+               (named (concatenate 'string host (if (= port (if secure 443 80)) "" (format nil ":~D" port))))
                (kept nil) (moved nil))
           (unwind-protect
                (progn
-                 (say connection
-                      (concatenate 'string "GET " path " HTTP/1.1" *line-end*
-                                   "Host: " host (if (= port 80) "" (format nil ":~D" port)) *line-end*
-                                   "User-Agent: ClaraOS/" (lisp-implementation-version) *line-end*
-                                   "Accept: */*" *line-end*
-                                   "Connection: close" *line-end* *line-end*))
+                 (when secure
+                   (setf (connection-secure connection) (funcall (getf *secure* :open) connection host)))
+                 (let ((request (concatenate 'string "GET " path " HTTP/1.1" *line-end*
+                                             "Host: " named *line-end*
+                                             "User-Agent: ClaraOS/" (lisp-implementation-version) *line-end*
+                                             "Accept: */*" *line-end*
+                                             "Connection: close" *line-end* *line-end*)))
+                   (if secure
+                       (funcall (getf *secure* :say) (connection-secure connection) request)
+                       (say connection request)))
                  (let ((from 0) (end nil))
                    (wait-for connection
                              (lambda ()
                                (setq end (head-end connection from)
-                                     from (max 0 (- (connection-held connection) 3)))
-                               (when (and (null end) (> (connection-held connection) 16384))
+                                     from (max 0 (- (said connection) 3)))
+                               (when (and (null end) (> (said connection) 16384))
                                  (error "~A answers with a head that does not end" host))
                                end))
                    (unless end
                      (error "~A ended the connection before it had answered" host))
-                   (let* ((lines (head-lines (clara.unsafe:memory-string (connection-memory connection) end)))
+                   (let* ((lines (head-lines (clara:with-lock-held ((connection-lock connection))
+                                               (clara.unsafe:memory-string (connection-memory connection) end))))
                           (words (pieces (or (car lines) "") #\Space))
                           (status (and (cdr words) (number-of (second words))))
                           (length nil) (place nil) (chunked nil))
@@ -991,28 +1060,41 @@
                      (cond ((= status 200)
                             (when (and length (> length limit))
                               (error "~A is ~D bytes, and more than ~D are not taken" address length limit))
-                            (wait-for connection (lambda () (and length (>= (- (connection-held connection) end) length))))
-                            (let ((bytes (- (connection-held connection) end)))
-                              (when (and length (< bytes length))
-                                (error "~A ended the connection after ~D bytes of the ~D of ~A" host bytes length path))
-                              (when (> bytes limit)
-                                (error "~A is more than ~D bytes, which are not taken" address limit))
-                              (clara.unsafe:copy-memory (connection-memory connection)
-                                                        (+ (connection-memory connection) end) (or length bytes))
-                              (when chunked
-                                (setq length (or (join-chunks (connection-memory connection) bytes)
-                                                 (error "~A sends ~A in chunks that do not come to an end" host path))))
-                              (setq kept t)
-                              (return (values (connection-memory connection) (or length bytes)
-                                              (floor (connection-room connection) 4096)))))
+                            (wait-for connection (lambda () (and length (>= (- (said connection) end) length))))
+                            ;; A file that is over when the connection is has to have been ended by the other
+                            ;; side, and not by somebody on the way: only a connection that is kept closed can
+                            ;; tell the two apart, and it has to.
+                            (when (and secure (null length) (not chunked)
+                                       (not (funcall (getf *secure* :ended) (connection-secure connection))))
+                              (error "~A ended the connection without saying that ~A was whole: what came of it may be cut short"
+                                     host path))
+                            (clara:with-lock-held ((connection-lock connection))
+                              ;; from here on the memory is the caller's, and nothing more is put into it
+                              (setf (connection-frozen connection) t)
+                              (let ((memory (connection-memory connection)) (bytes (- (said connection) end)))
+                                (when (and length (< bytes length))
+                                  (error "~A ended the connection after ~D bytes of the ~D of ~A" host bytes length path))
+                                (when (> bytes limit)
+                                  (error "~A is more than ~D bytes, which are not taken" address limit))
+                                (clara.unsafe:copy-memory memory (+ memory end) (or length bytes))
+                                (when chunked
+                                  (setq length (or (join-chunks memory bytes)
+                                                   (error "~A sends ~A in chunks that do not come to an end" host path))))
+                                (setq kept t)
+                                (return (values memory (or length bytes) (floor (connection-room connection) 4096))))))
                            ((and (member status '(301 302 303 307 308)) place (> (length place) 0))
                             (when (>= moves 3)
                               (error "~A is said to be somewhere else more often than is followed" address))
-                            (setq moved (if (and (> (length place) 0) (char= (char place 0) #\/))
-                                            (format nil "http://~A~A~A" host (if (= port 80) "" (format nil ":~D" port)) place)
-                                            place)))
+                            (setq moved (if (char= (char place 0) #\/)
+                                            (concatenate 'string (if secure "https://" "http://") named place)
+                                            place))
+                            (when (and secure (not (secure-address-p moved)))
+                              (error "~A says that ~A is to be had at ~A, where nothing is kept closed: it is not fetched from there"
+                                     host path moved)))
                            (t
                             (error "~A answers ~D to the request for ~A" host status path))))))
+            (when (connection-secure connection)
+              (funcall (getf *secure* :close) (connection-secure connection)))
             (disconnect connection kept))
           (setq address moved
                 moves (1+ moves)))))))

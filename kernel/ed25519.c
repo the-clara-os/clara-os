@@ -364,6 +364,70 @@ int ed25519_verify(const uint8_t key[32], const void *message, uint64_t bytes, c
     return memcmp(signature, t, 32) == 0;
 }
 
+/* X25519: what two sides agree on who have each a secret number and tell
+ * each other, in the open, what their number makes of the point 9 (RFC
+ * 7748, Elliptic Curves for Security, 5). Each then has the other's point
+ * times its own number, which is the same for both and which nobody who
+ * only listened can work out. TLS begins with it (lisp/tls.lisp). It is
+ * the same curve as above seen another way, and the same numbers, so it
+ * is here.
+ *
+ * OUT becomes the point POINT times the number SCALAR, thirty-two bytes
+ * each. The number is a secret here, where nothing above is: every turn
+ * of the loop does the same work, and which of the two points it does it
+ * to is chosen without a branch (TweetNaCl's crypto_scalarmult). 0 when
+ * what comes out is all zeroes, which it is for a few points that an
+ * honest side never sends, and which TLS has to refuse (RFC 8446, 7.4.2). */
+static const field A24 = {0xdb41, 1}; /* 121665, which is (486662 - 2) / 4 */
+
+int x25519(uint8_t out[32], const uint8_t scalar[32], const uint8_t point[32])
+{
+    uint8_t z[32], any = 0;
+    field x, a, b, c, d, e, f;
+
+    memcpy(z, scalar, 32);
+    z[31] = (z[31] & 127) | 64;
+    z[0] &= 248;
+    unpack(x, point);
+    set(a, one);
+    set(b, x);
+    set(c, zero);
+    set(d, one);
+    for (int i = 254; i >= 0; i--) {
+        int bit = (z[i >> 3] >> (i & 7)) & 1;
+
+        swap(a, b, bit);
+        swap(c, d, bit);
+        sum(e, a, c);
+        difference(a, a, c);
+        sum(c, b, d);
+        difference(b, b, d);
+        square(d, e);
+        square(f, a);
+        product(a, c, a);
+        product(c, b, e);
+        sum(e, a, c);
+        difference(a, a, c);
+        square(b, a);
+        difference(c, d, f);
+        product(a, c, A24);
+        sum(a, a, d);
+        product(c, c, a);
+        product(a, d, f);
+        product(d, b, x);
+        square(b, e);
+        swap(a, b, bit);
+        swap(c, d, bit);
+    }
+    inverse(c, c);
+    product(a, a, c);
+    pack(out, a);
+    memset(z, 0, sizeof z);
+    for (unsigned i = 0; i < 32; i++)
+        any |= out[i];
+    return any != 0;
+}
+
 static void bytes_of(uint8_t *bytes, const char *digits, unsigned count)
 {
     for (unsigned i = 0; i < 2 * count; i++) {
@@ -435,4 +499,43 @@ void ed25519_selftest(void)
                 panic("ed25519 self-test: a signature whose number is not below the order of the base point is taken for good");
         }
     }
+}
+
+/* The examples of the RFC: a number and a point with what they make (5.2),
+ * and the two sides of an agreement, each of which makes the same of the
+ * other's point (6.1). And a point that makes all zeroes of any number. */
+void x25519_selftest(void)
+{
+    static const char *const known[][3] = {
+        { "a546e36bf0527c9d3b16154b82465edd62144c0ac1fc5a18506a2244ba449ac4",
+          "e6db6867583030db3594c1a424b15f7c726624ec26b3353b10a903a6d0ab1c4c",
+          "c3da55379de9c6908e94ea4df28d084f32eccf03491c71f754b4075577a28552" },
+        { "77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a",
+          "0900000000000000000000000000000000000000000000000000000000000000",
+          "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a" },
+        { "5dab087e624a8a4b79e17f8b83800ee66f3bb1292618b6fd1c2f8b27ff88e0eb",
+          "0900000000000000000000000000000000000000000000000000000000000000",
+          "de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f" },
+        { "77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a",
+          "de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f",
+          "4a5d9d5ba4ce2de1728e3bf480350f25e07e21c947d19e3376f09b3c1e161742" },
+        { "5dab087e624a8a4b79e17f8b83800ee66f3bb1292618b6fd1c2f8b27ff88e0eb",
+          "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a",
+          "4a5d9d5ba4ce2de1728e3bf480350f25e07e21c947d19e3376f09b3c1e161742" },
+    };
+    uint8_t scalar[32], point[32], wanted[32], out[32];
+
+    for (unsigned i = 0; i < sizeof known / sizeof known[0]; i++) {
+        bytes_of(scalar, known[i][0], 32);
+        bytes_of(point, known[i][1], 32);
+        bytes_of(wanted, known[i][2], 32);
+        if (!x25519(out, scalar, point) || memcmp(out, wanted, 32))
+            panic("x25519 self-test: the RFC's example %u does not come out as the RFC has it", i + 1);
+    }
+    memset(point, 0, sizeof point);
+    if (x25519(out, scalar, point))
+        panic("x25519 self-test: the point that makes zeroes of every number is not said to");
+    point[0] = 1;
+    if (x25519(out, scalar, point))
+        panic("x25519 self-test: the point 1, which makes zeroes of every number, is not said to");
 }

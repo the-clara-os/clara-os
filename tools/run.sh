@@ -24,6 +24,9 @@
 #        is a virtio card on a network that QEMU makes up, on which the machine
 #        is 10.0.2.15, this computer is 10.0.2.2, and whatever this computer
 #        reaches is reached through it. NET= gives a machine with no card)
+#        RNG="-device virtio-rng-pci" (the device that makes numbers which nobody
+#        can guess, of the host's own making: the default. Nothing is fetched
+#        by HTTPS without one. RNG= gives a machine with none)
 #        WORK=~/clara-work.img (a second disk, the user's own: a raw image with a
 #        FAT volume, for files that are to be apart from the machine's disk, and
 #        to outlive it. A .dmg that macOS made is such an image too, when it is
@@ -42,6 +45,7 @@ serial=${SERIAL:-mon:stdio}
 mem=${MEM:-512M}
 input=${INPUT--device virtio-keyboard-pci -device virtio-mouse-pci -device virtio-tablet-pci}
 net=${NET--netdev user,id=net -device virtio-net-pci,netdev=net}
+random=${RNG--device virtio-rng-pci}
 # Left to itself QEMU gives some machines a card of its own choosing, so no
 # card has to be said.
 [ -n "$net" ] || net="-nic none"
@@ -195,7 +199,7 @@ x86_64)
         -drive if=pflash,format=raw,readonly=on,file="$code" \
         -drive if=pflash,format=raw,file="$vars" \
         -drive if=none,id=esp,format=raw,file="$disk" -device virtio-blk-pci,drive=esp,bootindex=0 $input $net \
-        -serial "$serial" "$@"
+        -serial "$serial" "$@" $random
     ;;
 aarch64)
     firmware "$share/edk2-aarch64-code.fd" "$share/edk2-arm-vars.fd" \
@@ -211,7 +215,7 @@ aarch64)
         -drive if=pflash,format=raw,readonly=on,file="$code" \
         -drive if=pflash,format=raw,file="$vars" \
         -drive if=none,id=esp,format=raw,file="$disk" -device virtio-blk-pci,drive=esp,bootindex=0 $input $net \
-        -device ramfb -serial "$serial" "$@"
+        -device ramfb -serial "$serial" "$@" $random
     ;;
 *)
     echo "unknown arch: $arch" >&2

@@ -1538,6 +1538,20 @@ PRIMITIVE(p_get_internal_real_time)
     return lisp_fixnum((int64_t)timer_ticks());
 }
 
+/* (get-universal-time): how many seconds have gone by since 1900 began in
+ * Greenwich, which is how Common Lisp counts the time of day: what the
+ * firmware's clock said when the machine was started, and the ticks
+ * since. An error on a machine whose firmware said nothing. */
+PRIMITIVE(p_get_universal_time)
+{
+    uint64_t now = timer_clock();
+
+    (void)argv;
+    if (!now)
+        return lisp_fail("this machine does not know what time it is: its firmware did not say");
+    return lisp_fixnum((int64_t)(now + 2208988800ULL));
+}
+
 /* What this Lisp is, and which: the system's name and the kernel's version. */
 PRIMITIVE(p_lisp_implementation_type)
 {
@@ -1693,6 +1707,7 @@ const struct lisp_primitive lisp_primitives[] = {
     { "CLARA:WAIT-EVENT", lisp_p_wait_event, 1, 2 },
     { "CLARA:VARIABLE-KIND", lisp_p_variable_kind, 1, 1 },
     { "GET-INTERNAL-REAL-TIME", p_get_internal_real_time, 0, 0 },
+    { "GET-UNIVERSAL-TIME", p_get_universal_time, 0, 0 },
     { "LISP-IMPLEMENTATION-TYPE", p_lisp_implementation_type, 0, 0 },
     { "LISP-IMPLEMENTATION-VERSION", p_lisp_implementation_version, 0, 0 },
     /* what only a driver should touch (unsafe.c) */
@@ -1725,6 +1740,13 @@ const struct lisp_primitive lisp_primitives[] = {
     { "CLARA.UNSAFE:SHA-512", lisp_p_sha_512, 2, 2 },
     { "CLARA.UNSAFE:ED25519", lisp_p_ed25519, 4, 4 },
     { "CLARA.UNSAFE:INTERNET-SUM", lisp_p_internet_sum, 2, 2 },
+    { "CLARA.UNSAFE:DIGEST", lisp_p_digest, 4, 4 },
+    { "CLARA.UNSAFE:HMAC", lisp_p_hmac, 6, 6 },
+    { "CLARA.UNSAFE:AES-128-GCM-SEAL", lisp_p_aes_128_gcm_seal, 8, 8 },
+    { "CLARA.UNSAFE:AES-128-GCM-OPEN", lisp_p_aes_128_gcm_open, 8, 8 },
+    { "CLARA.UNSAFE:X25519", lisp_p_x25519, 3, 3 },
+    { "CLARA.UNSAFE:POWER-MOD", lisp_p_power_mod, 6, 6 },
+    { "CLARA.UNSAFE:ECDSA", lisp_p_ecdsa, 8, 8 },
     { "CLARA.UNSAFE:START-STATE", lisp_p_start_state, 0, 0 },
     { "CLARA.UNSAFE:POWER-OFF", lisp_p_power_off, 0, 0 },
     { "CLARA.UNSAFE:RESET", lisp_p_reset, 0, 0 },

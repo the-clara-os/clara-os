@@ -1,33 +1,50 @@
 #!/usr/bin/env python3
 """The other machine of a boot test that fetches something: a web server
 for a directory, and somebody who knows names, both on this computer and
-on one port, which is whatever port is free.
+on one port, which is whatever port is free; and, when it is given
+certificates, the same web server once more on another port, where it
+keeps its connections closed (TLS).
 
-usage: serve.py <directory> <file to write the port's number to>
+usage: serve.py <directory> <file to write the ports' numbers to> [<directory of certificates>]
 
 A machine under QEMU reaches this computer at 10.0.2.2, so what is served
-here is http://10.0.2.2:<port>/ to it (tools/boottest.sh, SERVE=).
+here is http://10.0.2.2:<port>/ to it, and https://<name>:<other port>/ for
+every name that the certificates are for (tools/boottest.sh, SERVE= and
+CERTS=). The file gets the two ports' numbers on one line, the second
+being 0 without certificates.
 
 The web server hands out the files of the directory, and a few things
 that are no files, for what a fetch has to cope with:
 
     /moved/<path>    is somewhere else: at /<path>
-    /secure/<path>   is somewhere else: at an address that begins with https://
+    /secure/<path>   is somewhere else: at https://releases.test:<other port>/<path>
+    /open/<path>     is somewhere else: at http://releases.test:<port>/<path>, where nothing is kept closed
     /round           is somewhere else: at /round
-    /unsized/<path>  the file, without saying how long it is, and the connection closed after it
+    /unsized/<path>  the file, without saying how long it is, and the connection ended after it
+    /cut/<path>      the same, and the connection only dropped: on a closed one, without the word that it is over
     /short/<path>    the file, said to be longer than what is sent
 
-The name server answers on the same port, by UDP: every name that ends in
-".test" is this computer, 10.0.2.2, and any other name is said not to
+The certificates are the ones that tools/certs.py makes: for each name a
+file <name>.pem with what the server shows and <name>.key with its key.
+Which of them a connection gets is said by the name that the other side
+asks for as it greets (RFC 6066, 3); one that asks for no name, or for a
+name that there is no certificate for, gets the one for releases.test,
+or the first that there is.
+
+The name server answers on the first port, by UDP: every name that ends
+in ".test" is this computer, 10.0.2.2, and any other name is said not to
 exist. That is all of DNS that it knows.
 """
 import http.server
 import os
 import socket
 import socketserver
+import ssl
 import struct
 import sys
 import threading
+
+PORTS = [0, 0]  # the port where nothing is kept closed, and the one where everything is
 
 
 class Handler(http.server.SimpleHTTPRequestHandler):
@@ -49,10 +66,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if self.path.startswith("/moved/"):
             self.moved(self.path[len("/moved"):])
         elif self.path.startswith("/secure/"):
-            self.moved("https://claraos.org" + self.path[len("/secure"):])
+            self.moved("https://releases.test:%d%s" % (PORTS[1], self.path[len("/secure"):]))
+        elif self.path.startswith("/open/"):
+            self.moved("http://releases.test:%d%s" % (PORTS[0], self.path[len("/open"):]))
         elif self.path == "/round":
             self.moved("/round")
-        elif self.path.startswith("/unsized/") or self.path.startswith("/short/"):
+        elif self.path.startswith("/unsized/") or self.path.startswith("/short/") or self.path.startswith("/cut/"):
             kind, rest = self.path[1:].split("/", 1)
             try:
                 data = open(os.path.join(self.directory, rest), "rb").read()
@@ -65,6 +84,14 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.send_header("Connection", "close")
             self.end_headers()
             self.wfile.write(data)
+            if kind == "unsized" and isinstance(self.connection, ssl.SSLSocket):
+                # A file that is over when the connection is has to be ended with the word that says so,
+                # or the other side cannot tell its end from a connection that somebody cut.
+                self.wfile.flush()
+                try:
+                    self.connection.unwrap()
+                except OSError:
+                    pass
         else:
             super().do_GET()
 
@@ -72,6 +99,35 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 class Web(socketserver.ThreadingMixIn, http.server.HTTPServer):
     daemon_threads = True
     allow_reuse_address = True
+
+    def handle_error(self, request, client_address):
+        # a greeting that the other side gave up, which a test does on purpose, is no news
+        sys.stderr.write("a connection ended with an error: %s\n" % (sys.exc_info()[1],))
+        sys.stderr.flush()
+
+
+def closed(certificates):
+    """What keeps the connections of the second server closed: one context for each name that has a
+    certificate, and the first of them picks the one that a connection asks for by name."""
+    contexts = {}
+    for entry in sorted(os.listdir(certificates)):
+        name, kind = os.path.splitext(entry)
+        if kind == ".pem" and os.path.exists(os.path.join(certificates, name + ".key")):
+            context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            context.load_cert_chain(os.path.join(certificates, entry), os.path.join(certificates, name + ".key"))
+            contexts[name] = context
+    if not contexts:
+        sys.exit("serve.py: %s has no certificate with its key: tools/certs.py makes them" % certificates)
+    first = contexts.get("releases.test") or contexts[sorted(contexts)[0]]
+
+    def pick(connection, name, context):
+        sys.stderr.write("greeted as %s\n" % name)
+        sys.stderr.flush()
+        if name in contexts:
+            connection.context = contexts[name]
+
+    first.sni_callback = pick
+    return first
 
 
 def names(port):
@@ -103,15 +159,20 @@ def names(port):
 
 
 def main(argv):
-    if len(argv) != 3:
+    if len(argv) not in (3, 4):
         sys.exit(__doc__)
     directory = os.path.abspath(argv[1])
     handler = lambda *args, **more: Handler(*args, directory=directory, **more)
     web = Web(("127.0.0.1", 0), handler)
-    port = web.server_address[1]
-    threading.Thread(target=names, args=(port,), daemon=True).start()
+    PORTS[0] = web.server_address[1]
+    threading.Thread(target=names, args=(PORTS[0],), daemon=True).start()
+    if len(argv) == 4:
+        secure = Web(("127.0.0.1", 0), handler)
+        PORTS[1] = secure.server_address[1]
+        secure.socket = closed(argv[3]).wrap_socket(secure.socket, server_side=True)
+        threading.Thread(target=secure.serve_forever, daemon=True).start()
     with open(argv[2] + ".new", "w") as out:
-        out.write("%d\n" % port)
+        out.write("%d %d\n" % (PORTS[0], PORTS[1]))
     os.replace(argv[2] + ".new", argv[2])
     web.serve_forever()
 

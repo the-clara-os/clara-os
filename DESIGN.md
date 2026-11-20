@@ -1548,11 +1548,11 @@ architectures (kernel/vm.c).
   thousands of bits. What an upgrade needs is less than what TLS gives:
   not that nobody reads a system which is published for everybody, but
   that what arrives is what was published. So a release is signed, and
-  the road is not trusted at all. That is as far as it goes: Julio's word
-  on it (2026-11-20) is that ClaraOS is not published over plain HTTP. So
-  what this fetches is a release from a web server on the same computer
-  or the same network, and a release from where ClaraOS is published
-  waits for TLS, with the signature under it as before.
+  the road is not trusted at all. That is as far as M15d went, and it was
+  not far enough: Julio's word on it (2026-11-20) was that ClaraOS is not
+  published over plain HTTP ("we don't do that here"). M15f is the
+  answer: TLS, under the signature, which stays. A release is fetched by
+  HTTPS and from no other kind of address (below).
 - A release is a system as a disk holds it, a directory with its files
   and its manifest, on a web server, and beside the manifest a signature
   of it (tools/release.py): Ed25519, whose check is five hundred lines of
@@ -1587,6 +1587,89 @@ architectures (kernel/vm.c).
   name server on the host (tools/serve.py), from which a machine fetches a
   signed release of another system and has to come up as it. The check
   of signatures is held against the examples of RFC 8032 at every boot.
+
+## A connection that is kept closed (decided in M15f, 2026-11-20)
+
+- HTTPS is there because plain HTTP is not how a system is published, or
+  how anything else is fetched that matters: what a machine asks for is
+  nobody's to read on the way, and which release is the newest is said by
+  a file that nobody signed. TLS closes both (lisp/tls.lisp). The
+  signature of a release stays under it: the connection says that this is
+  the web server that was asked, and the signature that the release is
+  its publisher's, whoever serves it.
+- TLS 1.3, and nothing older (RFC 8446). A version that was made after
+  twenty years of mending the ones before is the one to write once: one
+  round of greeting, no ciphers that are known to be weak to refuse, and
+  every server that matters speaks it. Of what it allows, one of each:
+  X25519 for the exchange of keys, AES-128 in Galois/Counter Mode for the
+  records, SHA-256 under the keys. The cipher is the one that every TLS
+  1.3 has to have, so no server is left out for it; the exchange is one
+  that a server should have and nearly every one has, and a server that
+  has not is told so.
+- The arithmetic is the substrate's and everything else is Lisp, as with
+  SHA-512 and Ed25519: sums, HMAC, AES in its mode, X25519, a number to a
+  power, and the signatures of the two curves P-256 and P-384 are C
+  (kernel/sha256.c, hmac.c, aes.c, ed25519.c, bignum.c, ecdsa.c), each
+  held against the examples of its standard at every boot, and each a
+  function of CLARA.UNSAFE on bytes of memory. What the bytes mean is
+  Lisp: the pieces of a certificate, the greeting, the records, and the
+  two ways in which RSA pads a signature. It is written here and not
+  taken from a library, like everything else in the system. What stands
+  in for the review that a library has had: the examples of the
+  standards; the same arithmetic a second time, in SBCL's big numbers,
+  which the host tests hold against the same examples; a third time in
+  Python, against which the C was run on two thousand numbers made at
+  random, once; a web server of OpenSSL's at the other end in the boot
+  test; and the certificates of Mozilla's list, which are a hundred
+  signatures that nobody here made.
+- Nothing in the checking of a signature is a secret, so none of it takes
+  care to take the same time whatever the numbers are. What is a secret
+  is this side's number in the exchange of keys, and the keys: X25519 does
+  the same work for every number, and the multiplication of the mode's
+  tag has no branch. AES is written with its table, so its time depends a
+  little on the key, which somebody who shared the processor's cache
+  could measure: nobody does, since the machine runs one world.
+- Who the other side is: a certificate for the name that was asked for,
+  good today, signed by somebody whose certificate is good today and who
+  may sign, and so on up to a certificate that the system trusts (RFC
+  5280, as far as the web uses it). The ones that it trusts are Mozilla's
+  list, as curl publishes it, a file of the system (lisp/roots.pem): the
+  same authorities that a browser believes, and no list of this system's
+  own making, which nobody would keep up. The list is the system's, so an
+  upgrade is what renews it. The user can add to it (`clara.tls:trust`),
+  for a server of their own. What a certificate says that has to be
+  understood and is not understood here makes it one that is not taken.
+  Whether a certificate was taken back since it was signed is not asked.
+- A certificate is good from one day to another, so the system has to
+  know the day. It asks the firmware's clock once, in the handoff, and
+  counts on from there with its own ticks: there is no driver for a clock
+  (`get-universal-time`). A machine whose clock is wrong takes no
+  certificate, and the error says what the clock says.
+- The keys of a connection are made of numbers that nobody can guess, and
+  a machine that computes has none of its own. They come from virtio's
+  device for that, which hands on the host's (lisp/random.lisp), and are
+  used as they come: nothing is kept of them and nothing is made of them
+  by a rule, since a world that is saved and comes back twice would make
+  the same numbers twice. A machine without the device fetches nothing by
+  HTTPS, and says why.
+- What arrives is opened where it lies, in the memory of the connection,
+  and what the other side said is moved to the beginning of that memory
+  as it is opened: always behind the place that the next record is read
+  from, since a record is longer than what it carries. So HTTP finds its
+  answer where it always did, and the file that is fetched is in the same
+  page frames at the end. lisp/net.lisp knows of TLS only that there are
+  six functions for it, which lisp/tls.lisp hands over when it is loaded
+  (`clara.net:*secure*`).
+- A file whose length nobody said is over when the connection is. On a
+  connection that is kept closed the other side has to say that it is
+  done, in a record like any other; an end without that word is an end
+  that somebody on the way may have made, and the file is not taken. That
+  is what TLS says, and stricter than most programs are.
+- A machine goes from an address that is not kept closed to one that is,
+  when a web server sends it there, and never the other way.
+- A release is fetched by HTTPS only (`clara.system:upgrade :from`). What
+  M15d built for plain HTTP stays for `clara.net:fetch`, for a web server
+  on one's own computer: it is no way to publish, and it is not shut off.
 
 ## Shutting down (decided in M15e, 2026-11-20)
 

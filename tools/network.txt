@@ -16,29 +16,52 @@ COMPLAINT
 " "releases.test answers 404 to the request for /nothing")
 > (subseq (complaint (lambda () (clara.net:fetch-text "http://releases.test:{{port}}/short/latest"))) 0 45)
 "releases.test ended the connection after 13 b"
-> (complaint (lambda () (clara.net:fetch-text "http://releases.test:{{port}}/secure/latest")))
-"https://claraos.org/latest is to be had by HTTPS, which this system does not speak: it fetches by plain HTTP"
 > (complaint (lambda () (clara.net:fetch-text "http://releases.test:{{port}}/round")))
 "http://releases.test:{{port}}/round is said to be somewhere else more often than is followed"
 > (complaint (lambda () (clara.net:fetch-text "http://10.0.2.2:1/latest")))
 "10.0.2.2 takes no connection at its port 1"
+> (list (< -1 (clara.random:below 6) 6) (> (get-universal-time) 4000000000))
+(T T)
+> (complaint (lambda () (clara.net:fetch-text "https://releases.test:{{secure}}/latest")))
+tls: this system trusts {{roots}} certificates to say who a machine is
+"the certificate of releases.test is signed by somebody whom this system does not know, and who was not shown"
+> (length (let ((clara.fat:*volume* (second (clara.fat:volumes)))) (clara.tls:trust "/root.pem")))
+1
+> (list (clara.net:fetch-text "https://releases.test:{{secure}}/latest") (clara.net:fetch-text "http://releases.test:{{port}}/secure/latest"))
+("{{version}}-other
+" "{{version}}-other
+")
+> (list (clara.net:fetch-text "https://rsa.test:{{secure}}/moved/latest") (clara.net:fetch-text "https://large.test:{{secure}}/unsized/latest"))
+("{{version}}-other
+" "{{version}}-other
+")
+> (subseq (complaint (lambda () (clara.net:fetch-text "https://old.test:{{secure}}/latest"))) 0 43)
+"the certificate of old.test was good until "
+> (complaint (lambda () (clara.net:fetch-text "https://other.test:{{secure}}/latest")))
+"the certificate that other.test shows is not for that name: it is for releases.test"
+> (complaint (lambda () (clara.net:fetch-text "https://10.0.2.2:{{secure}}/latest")))
+"the certificate that 10.0.2.2 shows is not for that name: it is for releases.test"
+> (complaint (lambda () (clara.net:fetch-text "https://releases.test:{{secure}}/open/latest")))
+"releases.test says that /open/latest is to be had at http://releases.test:{{port}}/latest, where nothing is kept closed: it is not fetched from there"
+> (complaint (lambda () (clara.net:fetch-text "https://releases.test:{{secure}}/cut/latest")))
+"releases.test ended the connection without saying that /cut/latest was whole: what came of it may be cut short"
 > (let ((name (clara.system:system-file "boot.lisp")))
-    (multiple-value-bind (memory bytes pages) (clara.net:fetch "http://releases.test:{{port}}/{{version}}-other/compiler.lisp")
+    (multiple-value-bind (memory bytes pages) (clara.net:fetch "https://releases.test:{{secure}}/{{version}}-other/compiler.lisp")
       (prog1 (multiple-value-bind (mine size frames) (clara.fat:read-file (clara.system:system-file "compiler.lisp"))
                (prog1 (list (> bytes 50000) (= bytes size) (equal (clara.unsafe:sha-512 memory bytes) (clara.unsafe:sha-512 mine size)) (stringp name))
                  (clara.unsafe:free-memory mine frames)))
         (clara.unsafe:free-memory memory pages))))
 (T T T T)
-> (clara.system:newest "http://releases.test:{{port}}/")
-"{{version}}-other"
-> (clara.system:upgrade :from "http://releases.test:{{port}}/")
-error: the newest ClaraOS at http://releases.test:{{port}}/ is {{version}}-other, which is no newer than this one, {{system}}: :ANY T takes it all the same
-> (clara.system:upgrade :from "http://releases.test:{{port}}/" :any t)
+> (list (clara.system:newest "https://releases.test:{{secure}}/") (complaint (lambda () (clara.system:newest "http://releases.test:{{port}}/"))))
+("{{version}}-other" "http://releases.test:{{port}}/ does not begin with https://: a release is fetched over a connection that is kept closed, and over no other")
+> (clara.system:upgrade :from "https://releases.test:{{secure}}/")
+error: the newest ClaraOS at https://releases.test:{{secure}}/ is {{version}}-other, which is no newer than this one, {{system}}: :ANY T takes it all the same
+> (clara.system:upgrade :from "https://releases.test:{{secure}}/" :any t)
 error: this system has no key to hold a release against: CLARA.SYSTEM:*RELEASE-KEY* is NIL
 > (length (setq clara.system:*release-key* "0000000000000000000000000000000000000000000000000000000000000000"))
 64
-> (clara.system:upgrade :from "http://releases.test:{{port}}/" :any t)
-error: the manifest of {{version}}-other at http://releases.test:{{port}}/ is not signed with the key that this system has: nothing of it is taken
+> (clara.system:upgrade :from "https://releases.test:{{secure}}/" :any t)
+error: the manifest of {{version}}-other at https://releases.test:{{secure}}/ is not signed with the key that this system has: nothing of it is taken
 > (list (clara.fat:names "/clara/") (length (setq clara.system:*release-key* "{{key}}")))
 (("{{system}}/") 64)
 > (clara.system:upgrade)
@@ -47,10 +70,10 @@ error: no other disk of this machine holds a ClaraOS other than this one, {{syst
 *CARRIED*
 > (setq *carried* (list 'across "the network"))
 (ACROSS "the network")
-> (setq clara.system:*releases* "http://releases.test:{{port}}/")
-"http://releases.test:{{port}}/"
+> (setq clara.system:*releases* "https://releases.test:{{secure}}/")
+"https://releases.test:{{secure}}/"
 > (clara.system:upgrade :any t)
-system: {{version}}-other is published at http://releases.test:{{port}}/, and signed with the key that this system has: its files are fetched
+system: {{version}}-other is published at https://releases.test:{{secure}}/, and signed with the key that this system has: its files are fetched
 system: {{version}}-other is on the disk, and is tried at the next start
 clara: the world is saved
 clara: starting the machine again

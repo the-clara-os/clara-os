@@ -96,12 +96,14 @@ the world that it made, and says by name what did not come across;
 `(clara.system:report)` says it again. And a newer ClaraOS can be fetched:
 there is a network (lisp/net.lisp), a driver for virtio's network card
 with ARP, IPv4, UDP, DHCP, DNS, TCP and HTTP over it, as far as fetching a
-file takes, `(clara.net:fetch-text "http://10.0.2.2:8000/hello.txt")`; and
-`(clara.system:upgrade :from "http://.../")` takes the newest release that
+file takes, and HTTPS (lisp/tls.lisp): TLS 1.3, with certificates held
+against the authorities that sign for the web,
+`(clara.net:fetch-text "https://claraos.org/")`. And
+`(clara.system:upgrade :from "https://.../")` takes the newest release that
 is published at an address, when its manifest is signed with the key that
 the system has (Ed25519, checked in the kernel) and every file is what the
-manifest says. There is no TLS: what arrives is believed for its
-signature, and not for the road it came by.
+manifest says. What a connection is kept closed with is in the kernel too,
+each piece held against the examples of its standard at every boot.
 The same Lisp files load
 under SBCL on the host, where they are tested against a machine that is
 made up for the purpose.

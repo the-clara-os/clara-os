@@ -427,9 +427,34 @@ static void count_start(void)
     write_small(L"starts", text);
 }
 
+/* What time it is, by the firmware's clock, which is the only clock that
+ * is asked: a certificate is good from one day to another, and whoever is
+ * shown one has to know the day (lisp/tls.lisp). A firmware that has no
+ * clock, or one that says a time that is none, leaves the kernel without. */
+static void read_clock(void)
+{
+    EFI_TIME time;
+
+    if (!g_st->RuntimeServices || EFI_ERROR(g_st->RuntimeServices->GetTime(&time, NULL)))
+        return;
+    if (time.Year < 1970 || time.Year > 9999 || time.Month < 1 || time.Month > 12 || time.Day < 1 || time.Day > 31 ||
+        time.Hour > 23 || time.Minute > 59 || time.Second > 59)
+        return;
+    g_boot.clock.known = 1;
+    g_boot.clock.year = time.Year;
+    g_boot.clock.month = time.Month;
+    g_boot.clock.day = time.Day;
+    g_boot.clock.hour = time.Hour;
+    g_boot.clock.minute = time.Minute;
+    g_boot.clock.second = time.Second;
+    g_boot.clock.behind = time.TimeZone == EFI_UNSPECIFIED_TIMEZONE || time.TimeZone < -1440 || time.TimeZone > 1440 ? 0 : time.TimeZone;
+}
+
 static int of_the_system(const CHAR16 *name)
 {
-    return !ends_with(name, ".EFI") && !named(name, "manifest"); /* the kernels are in memory already */
+    /* The kernels are in memory already. The list of whom the system trusts is read from the volume
+     * by whoever wants it, when it is wanted (lisp/tls.lisp), and by no machine that fetches nothing. */
+    return !ends_with(name, ".EFI") && !ends_with(name, ".pem") && !named(name, "manifest");
 }
 
 static int of_the_volume(const CHAR16 *name)
@@ -505,6 +530,7 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
     efi_puts(L"ClaraOS: taking the machine from the firmware\r\n");
     find_config_tables();
     find_framebuffer();
+    read_clock();
     open_boot_volume(image);
     if (g_dir) {
         try_next(image);

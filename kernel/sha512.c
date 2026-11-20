@@ -38,6 +38,15 @@ static const uint64_t initial[8] = {
     0x510e527fade682d1ULL, 0x9b05688c2b3e6c1fULL, 0x1f83d9abfb41bd6bULL, 0x5be0cd19137e2179ULL,
 };
 
+/* SHA-384 is the same sum from another beginning, of which the first
+ * forty-eight bytes are kept: the square roots of the ninth to the
+ * sixteenth prime (5.3.4). Certificates are signed over it as often as
+ * over SHA-256. */
+static const uint64_t initial_384[8] = {
+    0xcbbb9d5dc1059ed8ULL, 0x629a292a367cd507ULL, 0x9159015a3070dd17ULL, 0x152fecd8f70e5939ULL,
+    0x67332667ffc00b31ULL, 0x8eb44a8768581511ULL, 0xdb0c2e0d64f98fa7ULL, 0x47b5481dbefa4fa4ULL,
+};
+
 static uint64_t rotate(uint64_t x, unsigned n)
 {
     return x >> n | x << (64 - n);
@@ -69,6 +78,15 @@ static void block(uint64_t h[8], const uint8_t *p)
 void sha512_begin(struct sha512_state *state)
 {
     memcpy(state->h, initial, sizeof state->h);
+    state->bytes = 0;
+    state->held = 0;
+}
+
+/* The beginning of SHA-384: what is added and how it ends are SHA-512's,
+ * and whoever ends it keeps the first forty-eight bytes. */
+void sha384_begin(struct sha512_state *state)
+{
+    memcpy(state->h, initial_384, sizeof state->h);
     state->bytes = 0;
     state->held = 0;
 }
@@ -151,6 +169,17 @@ void sha512_selftest(void)
         sha512(known[i].text, strlen(known[i].text), sum);
         if (memcmp(sum, known[i].first, 8))
             panic("sha-512 self-test: the sum of \"%s\" is not what the standard has", known[i].text);
+    }
+    /* SHA-384 of "abc": its first eight bytes and its last, the forty-eighth among them. */
+    {
+        static const uint8_t first[8] = { 0xcb, 0x00, 0x75, 0x3f, 0x45, 0xa3, 0x5e, 0x8b }, last[8] = { 0x58, 0xba, 0xec, 0xa1, 0x34, 0xc8, 0x25, 0xa7 };
+        struct sha512_state state;
+
+        sha384_begin(&state);
+        sha512_add(&state, "abc", 3);
+        sha512_end(&state, sum);
+        if (memcmp(sum, first, 8) || memcmp(sum + 40, last, 8))
+            panic("sha-512 self-test: the SHA-384 of \"abc\" is not what the standard has");
     }
     memset(many, 'a', sizeof many);
     for (unsigned i = 0; i < 2; i++) {
