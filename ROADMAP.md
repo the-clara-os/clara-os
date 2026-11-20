@@ -2050,6 +2050,14 @@ M15f, HTTPS, what it left:
   numbers is wrong by one part in millions of millions; and a piece that
   arrives after the file was handed on arrives in an instant that no
   test can make.
+- What it cost CI, on the first green run: 12m16s for the job, of its 25
+  minutes; the boot that fetches 38 s, where M15d's had taken 47; the
+  first boots of the three machines 43, 38 and 37 s; and the stress boot
+  231 s of its 600, where M15d's had taken 382. That run's machine was
+  plainly a faster one than the ones before it, so the two are not to be
+  held against each other, and what the new files cost a boot there is
+  not known from it. On the Mac the emulated first boot went from 31 s
+  to 36.
 - One more fault was mine and lasted an hour: what is said over a
   connection gave up with words of its own when the connection was no
   longer open, which it is not when the answer has already come and was
