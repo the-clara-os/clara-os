@@ -77,6 +77,7 @@ td:first-child { white-space: nowrap; }
     <li><a href="#compiler">The compiler</a></li>
     <li><a href="#files">Files</a></li>
     <li><a href="#image">Saving the world</a></li>
+    <li><a href="#upgrade">A newer ClaraOS</a></li>
     <li><a href="#threads">Threads</a></li>
     <li><a href="#drawing">Drawing</a></li>
     <li><a href="#windows">Windows</a></li>
@@ -116,7 +117,10 @@ make run-x86_64    <span class="note"># emulated: the firmware takes a few secon
       <tr><td><code>MEM=1G make run-aarch64</code></td><td>a machine with that much memory, where it has 512 MiB otherwise</td></tr>
       <tr><td><code>WORK=~/clara-work.img make run-aarch64</code></td><td>a machine with a second disk, <a href="#work">one of your own</a></td></tr>
     </table>
-    <p>The machine starts from a disk image, <code>build/disk-aarch64.img</code> or <code>build/disk-x86_64.img</code>, which is made of the files in <code>build/esp</code> the first time and kept from one run to the next. Files that you write are on it the next time, and so is a <a href="#image">world that you saved</a>. After the next <code>make</code> that changed something, the disk is made again and both are gone. What is to stay longer than that goes on <a href="#work">a disk of your own</a>.</p>
+    <p>The machine starts from a disk image, <code>build/disk-aarch64.img</code> or <code>build/disk-x86_64.img</code>, which is made of the files in <code>build/esp</code> the first time and kept from then on. Files that you write are on it the next time, and so is a <a href="#image">world that you saved</a>. A newer build does not make the disk again: <code>make run-aarch64</code> hands the machine the build as a second disk, the system that is running takes it and starts the machine again, and the newer system comes up with your files where they were. <a href="#upgrade">A newer ClaraOS</a> says what happens there.</p>
+    <table>
+      <tr><td><code>FRESH=1 make run-aarch64</code></td><td>a new disk for the machine, as if it had never run. The one that was there is kept as <code>build/disk-aarch64-before.img</code>.</td></tr>
+    </table>
 
     <h3 id="utm">In UTM</h3>
     <ol>
@@ -127,14 +131,14 @@ make run-x86_64    <span class="note"># emulated: the firmware takes a few secon
       <li>For typing in the screen's own window, add a keyboard that ClaraOS has a driver for. UTM gives a machine USB devices, which it does not have one for. Under QEMU, Arguments, add two: <code>-device virtio-keyboard-pci</code> and <code>-device virtio-tablet-pci</code>. The second is the pointer, which the <a href="#windows">window manager</a> is worked with.</li>
       <li>Start.</li>
     </ol>
-    <p>UTM copies the disk into the virtual machine. To put a newer ClaraOS there, or to go back to a system that nothing was saved on, import <code>build/claraos.img</code> again in place of the drive. The files that were written on the old drive go with it, and so does a world that was saved there.</p>
+    <p>UTM copies the disk into the virtual machine, and that copy is the machine's from then on. To put a newer ClaraOS on it, give the machine the newer <code>build/claraos.img</code> as a second drive and tell the system to take it: <a href="#upgrade">A newer ClaraOS</a>. To go back to a system that nothing was written on, import <code>build/claraos.img</code> again in place of the drive; the files that were written on the old drive go with it, and so does a world that was saved there.</p>
 
     <h3 id="needs">What it needs of a machine</h3>
     <table class="wrap">
       <tr><td>A processor</td><td>x86_64 or AArch64. One is used, however many the machine has.</td></tr>
       <tr><td>Firmware</td><td>UEFI. The kernel is the program that the firmware starts: there is no boot loader between them.</td></tr>
       <tr><td>Memory</td><td>128 MiB is enough to start and to work. It is given 512 MiB unless you say otherwise.</td></tr>
-      <tr><td>A disk</td><td>A virtio disk with a FAT volume, of 12, 16 or 32 bits, behind either kind of table of partitions or without one. The volume it starts from is the one whose files it sees, until it is told to look on <a href="#work">another disk's</a>.</td></tr>
+      <tr><td>A disk</td><td>A virtio disk with a FAT volume, of 12, 16 or 32 bits, behind either kind of table of partitions or without one, that the firmware can write to. The volume it starts from is the one whose files it sees, until it is told to look on <a href="#work">another disk's</a>.</td></tr>
       <tr><td>A place to type</td><td>A serial port, a virtio keyboard, or both.</td></tr>
       <tr><td>A screen</td><td>The one the firmware sets up, if there is one. Without it everything is on the serial port.</td></tr>
       <tr><td>A pointer</td><td>A virtio mouse or tablet, for the <a href="#windows">window manager</a>. Nothing else has a use for one.</td></tr>
@@ -158,9 +162,10 @@ input: 00:03.0 is a keyboard, QEMU Virtio Keyboard
 disk: 00:02.0 has 72081 sectors of 512 bytes, 35 MiB
 files: a FAT32 volume of 33 MiB on the disk 00:02.0, from its sector 2048 on
 draw: a screen of 800 by 600 pixels
+system: this is ClaraOS {{version}}-41d0c97b
 clara: reading the serial port and the keyboard: a form is evaluated, Ctrl-C stops it, Ctrl-D ends
 &gt; </code></pre>
-    <p>The lines that begin with <code>pci:</code>, <code>input:</code>, <code>disk:</code>, <code>files:</code> and <code>draw:</code> say what the machine has: its devices, the keyboards and pointers among them, its disks, the volume that names of files are looked up on, and the screen that <a href="#drawing">pictures</a> are shown on. A line that begins with <code>panic:</code> or <code>exception:</code> means the kernel has stopped. <a href="#trouble">When something goes wrong</a> has more about those.</p>
+    <p>The lines that begin with <code>pci:</code>, <code>input:</code>, <code>disk:</code>, <code>files:</code> and <code>draw:</code> say what the machine has: its devices, the keyboards and pointers among them, its disks, the volume that names of files are looked up on, and the screen that <a href="#drawing">pictures</a> are shown on. The line <code>system:</code> says which build of ClaraOS this is, its version and eight digits that are different for every build, and more lines follow it when <a href="#upgrade">a newer system</a> was taken. A line that begins with <code>panic:</code> or <code>exception:</code> means the kernel has stopped. <a href="#trouble">When something goes wrong</a> has more about those.</p>
 
     <h3 id="stop">Stopping it</h3>
     <p>The machine is shut down by asking it to:</p>
@@ -398,7 +403,7 @@ SQUARE
 (T 144)
 &gt; (clara.native:translate-all)
 0</pre>
-    <p>The variable counts at the moment a form is compiled. Set it at the prompt, as above, or bind it around a <code>compile</code> or a <code>load</code>: <code>(let ((clara.native:*translate* nil)) (load "/clara/mine.lisp"))</code>. A <code>let</code> around a <code>defun</code> that is typed changes nothing, because the whole form is compiled, and translated, before the <code>let</code> has bound anything.</p>
+    <p>The variable counts at the moment a form is compiled. Set it at the prompt, as above, or bind it around a <code>compile</code> or a <code>load</code>: <code>(let ((clara.native:*translate* nil)) (load "/mine.lisp"))</code>. A <code>let</code> around a <code>defun</code> that is typed changes nothing, because the whole form is compiled, and translated, before the <code>let</code> has bound anything.</p>
     <p>How much quicker the processor is depends on what a function does. On one machine, with <code>fib</code> compiled for the kernel's machine first:</p>
 <pre><code>&gt; (time (fib 35))
 750 milliseconds
@@ -428,23 +433,31 @@ FIB
 
   <section id="files">
     <h2>{{spleen:Files}}</h2>
-    <p>The system reads and writes the files of the disk it started from. The name of a file is a string: the directories that lead to it and then its own name, with a slash before each, as in <code>"/clara/boot.lisp"</code>. Letters match in either case. There is no current directory: every name starts at the top of the volume.</p>
+    <p>The system reads and writes the files of the disk it started from. The name of a file is a string: the directories that lead to it and then its own name, with a slash before each, as in <code>"/EFI/BOOT/BOOTX64.EFI"</code>. Letters match in either case. There is no current directory: every name starts at the top of the volume.</p>
 
     <h3 id="listing">What is there</h3>
 <pre class="session">&gt; (directory "/*")
 ("/clara/" "/EFI/")
-&gt; (directory "/clara/*.lisp")
-("/clara/arm64.lisp" "/clara/boot.lisp" "/clara/compiler.lisp" "/clara/console.lisp" "/clara/disk.lisp" "/clara/draw.lisp" "/clara/editor.lisp" "/clara/fat.lisp" "/clara/files.lisp" "/clara/font.lisp" "/clara/input.lisp" "/clara/listener.lisp" "/clara/native.lisp" "/clara/pci.lisp" "/clara/self-test.lisp" "/clara/system.lisp" "/clara/terminal.lisp" "/clara/virtio.lisp" "/clara/windows.lisp" "/clara/x86-64.lisp")
-&gt; (probe-file "/CLARA/Boot.Lisp")
-"/CLARA/boot.lisp"
-&gt; (probe-file "/clara/nothing.lisp")
+&gt; (directory "/EFI/BOOT/*")
+("/EFI/BOOT/BOOTAA64.EFI" "/EFI/BOOT/BOOTX64.EFI")
+&gt; (probe-file "/efi/boot/bootaa64.efi")
+"/efi/boot/BOOTAA64.EFI"
+&gt; (probe-file "/nothing.lisp")
 NIL</pre>
-    <p><code>directory</code> takes a pattern, in which <code>*</code> stands for any characters in the last part of the name, and gives the names that fit, a directory's with a slash at its end. <code>probe-file</code> gives the name of a file as the disk spells it, or <code>NIL</code> when there is none. The files in <code>/clara</code> are the system's own Lisp: the language's part that is written in Lisp, the compiler, the console, the drivers, the file system, the window manager and what <a href="#stop">shuts the machine down</a>, and two that are not loaded until they are wanted, the <a href="#applications">applications</a> <code>editor.lisp</code> and <code>files.lisp</code>. <code>native.lisp</code> is what <a href="#processor">translates for the processor</a>, with a file for each kind of processor, <code>arm64.lisp</code> and <code>x86-64.lisp</code>, of which a machine loads its own. <code>/EFI</code> holds the kernels.</p>
+    <p><code>directory</code> takes a pattern, in which <code>*</code> stands for any characters in the last part of the name, and gives the names that fit, a directory's with a slash at its end. <code>probe-file</code> gives the name of a file as the disk spells it, or <code>NIL</code> when there is none.</p>
+    <p>A new disk has two directories. <code>/EFI/BOOT</code> holds the two kernels, where the firmware looks for the one to start. <code>/clara</code> is the system's own: it holds a directory for the system that runs, named after it, and in time the <a href="#image">world that was saved</a>. A system's name is its version and eight digits that are different for every build, so the names of its files are asked for and not spelt out:</p>
+<pre><code>&gt; (clara.system:system)
+"{{version}}-8f3a1c2e"
+&gt; (clara.system:system-file "boot.lisp")
+"/clara/{{version}}-8f3a1c2e/boot.lisp"</code></pre>
+<pre class="session">&gt; (clara.fat:names (clara.system:system-file ""))
+("arm64.lisp" "boot.lisp" "BOOTAA64.EFI" "BOOTX64.EFI" "compiler.lisp" "console.lisp" "disk.lisp" "draw.lisp" "editor.lisp" "fat.lisp" "files.lisp" "font.lisp" "input.lisp" "listener.lisp" "manifest" "native.lisp" "pci.lisp" "self-test.lisp" "system.lisp" "terminal.lisp" "virtio.lisp" "windows.lisp" "x86-64.lisp")</pre>
+    <p>Those are the system's Lisp files: the language's part that is written in Lisp, the compiler, the console, the drivers, the file system, the window manager and what sees to <a href="#stop">the machine as a whole</a>, and two that are not loaded until they are wanted, the <a href="#applications">applications</a> <code>editor.lisp</code> and <code>files.lisp</code>. <code>native.lisp</code> is what <a href="#processor">translates for the processor</a>, with a file for each kind of processor, <code>arm64.lisp</code> and <code>x86-64.lisp</code>, of which a machine loads its own. Beside them are a second copy of the kernels and <code>manifest</code>, the list of what the system is made of, which is what <a href="#upgrade">another machine reads</a> when it takes this system from this disk. Everything outside <code>/clara</code> and <code>/EFI</code> is yours, and no system writes there.</p>
 
     <h3 id="reading">Reading and loading</h3>
-<pre class="session">&gt; (with-open-file (in "/clara/listener.lisp") (list (read-line in) (read-line in)))
+<pre class="session">&gt; (with-open-file (in (clara.system:system-file "listener.lisp")) (list (read-line in) (read-line in)))
 (";;;; listener.lisp: read, evaluate, print" ";;;;")
-&gt; (load "/clara/listener.lisp")
+&gt; (load (clara.system:system-file "listener.lisp"))
 T</pre>
     <p><code>with-open-file</code> opens a file for the forms inside it and closes it afterwards. <code>read-line</code> gives the next line, and at the end of the file it is an error, or the value you name: <code>(read-line in nil 'done)</code>. <code>load</code> evaluates the forms of a file one after the other, as if they had been typed. When a form in it fails, the error says the file and the line.</p>
 
@@ -482,13 +495,13 @@ NIL</pre>
     <ul>
       <li>A file is text, in UTF-8. It is read whole when it is opened and written whole when it is closed, so it has to fit in memory, which a text does.</li>
       <li>A name can be 255 characters long and have spaces in it. It cannot have any of <code>" * : &lt; &gt; ? \ |</code> in it, or end in a dot or a space.</li>
-      <li>Directories cannot be made, and a file cannot be renamed or moved. A new file goes into a directory that is there.</li>
+      <li>A file goes into a directory that is there. <code>(clara.fat:make-directory "/letters")</code> makes one, and <code>(clara.fat:remove-directory "/letters")</code> takes one away that has nothing in it. A file cannot be renamed or moved.</li>
       <li>There is no clock in the system, so every file it writes is dated the first of January 1980.</li>
       <li>The disk is a FAT volume, which other systems read. On macOS, <code>build/claraos.img</code> opens with a double click, and the files that ClaraOS wrote are in it.</li>
     </ul>
 
     <h3 id="work">A disk of your own</h3>
-    <p>The disk that the machine starts from is the system's. It is made again for every newer ClaraOS, and whatever was written on the old one is gone with it, your files and the <a href="#image">world that you saved</a>. What is to stay goes on a second disk, which is yours: nothing here makes it again, and nothing is written to it that you did not write. Make one once, a FAT volume with nothing on it, somewhere outside <code>build</code>:</p>
+    <p>The disk that the machine starts from is the system's, and your files are on it beside the system. A machine can have a second disk that is yours alone: nothing here ever makes it again, nothing is written to it that you did not write, and it can be given to another machine, or to a new disk of the system's. Make one once, a FAT volume with nothing on it, somewhere outside <code>build</code>:</p>
 <pre><code>mkdir -p build/empty &amp;&amp; python3 tools/mkdisk.py build/empty ~/clara-work.img</code></pre>
     <p>Then name it when you start the machine:</p>
 <pre><code>WORK=~/clara-work.img make run-aarch64</code></pre>
@@ -533,15 +546,15 @@ error: there is no directory for a file /clara/clara.image to be in
 &gt; (progn (setq clara.fat:*volume* (first (clara.fat:volumes))) (directory "/*"))
 ("/clara/" "/EFI/" "/hello.lisp")</pre>
     <p>As the error in the middle shows, the world is saved where names are looked up, and the machine only starts from an image that is on the system's disk: set the variable back to the first volume before you <a href="#image">save the world</a>. The applications start either way, since <code>load</code> finds the system's own files in what the machine read of them as it started.</p>
-    <p>The next time the machine starts, your disk is as you left it, whatever became of the system's in the meantime. On a newer system nothing that you defined is defined, and one line brings it back:</p>
+    <p>The next time the machine starts, your disk is as you left it, whatever became of the system's in the meantime. In a world that was made anew, by <a href="#upgrade">a newer system</a> for one, nothing that you defined is defined, and one line brings it back:</p>
 <pre class="session again">&gt; (let ((clara.fat:*volume* (second (clara.fat:volumes)))) (load "/mine.lisp"))
 T
 &gt; (mine)
 "kept on a disk of my own"</pre>
-    <p>A file of yours that loads all the others makes that the only line to type after an update. What to know about such a disk:</p>
+    <p>A file of yours that loads all the others makes that the only line to type in a new world. What to know about such a disk:</p>
     <ul>
       <li>The volumes are found anew at every start, so ask <code>(clara.fat:volumes)</code> for yours each time, as <code>work</code> does. A volume that a variable has kept since before the machine was started again, in a world that was saved, is refused.</li>
-      <li>Directories cannot be made on it either. Make them on the host: on macOS the disk opens with a double click, like the system's. That is also the way to <a href="#outside">carry files in and out</a>, and the whole disk is one file, which is easy to keep a copy of.</li>
+      <li>The host opens the disk as well: on macOS with a double click, like the system's. That is the way to <a href="#outside">carry files in and out</a>, and the whole disk is one file, which is easy to keep a copy of.</li>
       <li>The host and the machine must not have it at the same time, since each would write without knowing of the other. On macOS, <code>make run-aarch64</code> ejects a disk that is still open in the Finder before it starts the machine, and says so in the terminal; when something on the Mac is still using the disk, it says that and starts nothing. The other way round nothing stops you, so stop the machine before you open the disk on the host.</li>
       <li>Any FAT volume will do, as large as you like, made with whatever the host has for that. A disk image that macOS made is one, a <code>.dmg</code> as well, as long as it is a plain read/write image and not a compressed or a sparse one: <code>WORK=~/clara-work.dmg make run-aarch64</code>. The one above has 33 MiB, which is room for a great many texts.</li>
     </ul>
@@ -580,7 +593,7 @@ NIL
     <h3 id="unsave">Going back to the files</h3>
 <pre class="session again">&gt; (delete-file "/clara/clara.image")
 T</pre>
-    <p>Without the image, the next start loads the Lisp files again, and the world is as new. A disk that nothing was saved on does the same: under QEMU, delete <code>build/disk-aarch64.img</code> and it is made anew; in UTM, import <code>build/claraos.img</code> again.</p>
+    <p>Without the image, the next start loads the Lisp files again, and the world is as new. A disk that nothing was saved on does the same, and has none of your files either: under QEMU, <code>FRESH=1 make run-aarch64</code>; in UTM, import <code>build/claraos.img</code> again.</p>
 
     <h3 id="refused">An image that is not taken</h3>
     <p>When the system cannot use an image, it says why in its report and starts from the Lisp files, as if there had been none. The image stays on the disk until it is deleted or saved over.</p>
@@ -590,12 +603,56 @@ T</pre>
       <tr><td>it is not what was saved, by its checksum</td><td>The file was damaged, or changed, since it was written.</td></tr>
       <tr><td>it is 775020 bytes long, and not as long as it says it is</td><td>The file is not whole: the machine stopped while it was being written, or it was cut short on the way.</td></tr>
       <tr><td>it does not begin the way an image does</td><td>Some other file has the image's name.</td></tr>
-      <tr><td>ClaraOS 0.0.14 saved it, with objects that are not laid out as they are here</td><td>The image is from a version whose memory was arranged otherwise. Images of other versions are taken as long as that has not changed.</td></tr>
-      <tr><td>it has the function FOO in C, and this kernel has none of that name</td><td>The image was saved by a newer system than the one that is starting.</td></tr>
+      <tr><td>the system 0.0.25-8f3a1c2e saved it, and this is {{version}}-41d0c97b</td><td>A world is started by the system that saved it, and by no other: <a href="#upgrade">a newer system</a> makes a world of its own.</td></tr>
+      <tr><td>ClaraOS 0.0.14 saved it, with objects that are not laid out as they are here</td><td>The image is from a version whose memory was arranged otherwise.</td></tr>
       <tr><td>the machine has no memory for its heap</td><td>The world was saved on a machine with more memory.</td></tr>
     </table>
-    <p>A newer ClaraOS starts an older image, and what it has more of is there. What the older world defined in Lisp stays as it was saved, the system's own files included. To have those as the newer system has them, delete the image, start again, and save a new one.</p>
-    <p>One thing an image cannot be saved from is itself. A world in which something essential was redefined and then saved starts like that every time, and if it cannot get to its prompt it cannot delete its own image. The way out is a disk without the image: the two at the end of <a href="#unsave">Going back to the files</a>.</p>
+    <p>A world holds the system's own Lisp as it was when the world was made, so a world belongs to the system that saved it. A newer system does not start in an older system's world: it says so, in the first line of the table, and makes a world of its own files.</p>
+
+    <h3 id="prompt-not-reached">A world that does not come to its prompt</h3>
+    <p>One thing a world cannot be saved from is itself. A world in which something essential was redefined, and which was then saved, starts like that every time. When such a world does not get as far as its prompt, stop the machine and start it again. Every start is counted on the disk before anything else is done, and the count is taken away when the prompt is reached; a start that finds the count of the one before it still there passes the saved world over and makes a new one from the Lisp files. The report says so:</p>
+<pre><code>lisp: clara.image is passed over: the start before this one did not come to its prompt</code></pre>
+    <p>A world that is broken and comes to its prompt all the same is yours to delete: <a href="#unsave">Going back to the files</a>.</p>
+  </section>
+
+  <section id="upgrade">
+    <h2>{{spleen:A newer ClaraOS}}</h2>
+    <p>A system is one build of ClaraOS: its two kernels and its Lisp files. On a disk it is a directory, <code>/clara</code> and then its name, with a list in it of what it is made of. A newer ClaraOS is another such directory, and the system that is running puts it on its own disk, beside itself: that is an upgrade. The files that you wrote stay where they are, and nothing else on the disk is touched.</p>
+
+    <h3 id="upgrade-qemu">Under QEMU</h3>
+    <p>There is nothing to do. When the build is another system than the one on the machine's disk, <code>make run-aarch64</code> says so and gives the machine the build as a second disk, marked as one to take at once:</p>
+<pre><code>tools/run.sh: build/disk-aarch64.img holds ClaraOS 0.0.25-8f3a1c2e, and the build is {{version}}-41d0c97b: the machine is given the build
+    as a second disk, takes it, and starts again by itself to try it.</code></pre>
+    <p>The machine starts as the system that it was, takes the newer one, starts again, and comes to its prompt as the newer one, a few seconds later than usual. Its report tells the story as it goes, in the lines that begin with <code>system:</code>.</p>
+
+    <h3 id="upgrade-utm">In UTM, or on any machine</h3>
+    <ol>
+      <li><code>make image</code> makes the newer <code>build/claraos.img</code>.</li>
+      <li>Stop the machine. Give it that image as a second drive, with the interface VirtIO, <strong>after</strong> the drive that it starts from.</li>
+      <li>Start it, and say:
+<pre><code>&gt; (clara.system:upgrade)
+system: {{version}}-41d0c97b is on the disk, and is tried at the next start
+clara: the world is saved
+clara: starting the machine again</code></pre></li>
+      <li>When the newer system has come to its prompt, the second drive has done its work, and can be taken out again the next time the machine is stopped.</li>
+    </ol>
+    <p><code>(clara.system:upgrade :start-again nil)</code> takes the system and leaves the machine running; the newer system is tried whenever the machine is next started. <code>:from</code> names the volume to take it from, one of <code>(clara.fat:volumes)</code>, where the first disk that holds another system is taken otherwise. It need not be a newer one: any ClaraOS that is not the one that runs is taken, an older one as well.</p>
+
+    <h3 id="trial">What happens at the next start</h3>
+    <p>The newer system is tried before it takes the old one's place. The firmware still starts the old kernel, which sees that a system is waiting, and starts that system's kernel in place of itself, once. The report of that start begins like any other and ends like this:</p>
+<pre><code>system: this is ClaraOS {{version}}-41d0c97b, on trial: the system before it is still in place
+system: {{version}}-41d0c97b has come to its prompt, and is the system of this machine from here on</code></pre>
+    <p>With the second line the newer system has put its kernels where the firmware looks for them and taken the old system's directory away. Until then the old system is whole, and is what the machine starts as: when the newer one stops on the way, with a report that begins with <code>panic:</code>, or stands still, stop the machine and start it again. It comes up as it was before the upgrade, in the world that was saved then, and says:</p>
+<pre><code>system: {{version}}-41d0c97b was tried and did not come to its prompt: this is still 0.0.25-8f3a1c2e</code></pre>
+    <p>A system that failed like that is not taken a second time by itself, however often <code>make run-aarch64</code> offers it; <code>(clara.system:upgrade)</code> tries it again when you ask. An upgrade that is cut short while the files are still being copied changes nothing: the machine starts as the old system, and the upgrade can be asked for again.</p>
+
+    <h3 id="across">What comes across</h3>
+    <ul>
+      <li>Every file that you wrote, wherever it is on the disk. The upgrade writes into <code>/clara</code> and <code>/EFI</code> and nowhere else.</li>
+      <li>Not the world that was saved. A world belongs to the system that saved it: the newer system makes a world of its own files, and what was defined at the prompt of the old one is not defined in it. Keep what matters in a file and load it: <a href="#files">Files</a>.</li>
+      <li>Not the windows, nor whether the window manager was running: the newer system starts at the console.</li>
+    </ul>
+    <p>The disk needs room for two systems while the newer one is tried, some four mebibytes beside what is there. When it has less, the upgrade says so and does nothing.</p>
   </section>
 
   <section id="threads">
@@ -857,7 +914,7 @@ T</pre>
 
   <section id="applications">
     <h2>{{spleen:Applications}}</h2>
-    <p>Two applications come with the system besides the Listener: an editor for text, and a browser for the files of the disk. Each is a file of Lisp on the boot volume, <code>/clara/editor.lisp</code> and <code>/clara/files.lisp</code>, which the system does not load as it starts. The file is loaded the first time its application is picked from <code>Applications</code>, or launched from a prompt, and the application can be unloaded again while everything else goes on.</p>
+    <p>Two applications come with the system besides the Listener: an editor for text, and a browser for the files of the disk. Each is a file of Lisp among <a href="#listing">the system's own</a>, <code>editor.lisp</code> and <code>files.lisp</code>, which the system does not load as it starts. The file is loaded the first time its application is picked from <code>Applications</code>, or launched from a prompt, and the application can be unloaded again while everything else goes on.</p>
 
     <h3 id="editor">The editor</h3>
     <p><code>Editor</code> in the list opens a window with no text in it yet. From a prompt, the editor is launched with the name of a file, and the window has the file's name for its title:</p>
@@ -914,7 +971,7 @@ NIL
       <tr><td><kbd>Ctrl-R</kbd></td><td>reads the directory again: the window does not notice by itself what was written since.</td></tr>
       <tr><td><kbd>Ctrl-Q</kbd>, the <code>x</code> in the title</td><td>close the window.</td></tr>
     </table>
-    <p>Every file opens in the editor, also one that is no text, which the editor says it cannot read. Directories are not made or deleted here, as they are not <a href="#writing">anywhere in the system</a> yet, and the window shows names and no sizes or dates.</p>
+    <p>Every file opens in the editor, also one that is no text, which the editor says it cannot read. Directories are not made or deleted here, which <a href="#writing">two functions</a> do at a prompt, and the window shows names and no sizes or dates.</p>
 
     <h3 id="installed">Applications in files</h3>
     <p>The launcher knows the editor and the browser by a name and the name of a file. <code>clara.windows:install-application</code> says so for any file, and the file itself says <code>clara.windows:define-application</code> for the function, under the same name, as its last form. Here is such a file, written from the prompt, a line of it to the string, so that this page can be tried as it stands; the editor is the place to write one.</p>
@@ -934,10 +991,10 @@ NIL
       "        (return)))))"
       "(clara.windows:define-application \"Greeting\" #'greet)"))
 *GREETING*
-&gt; (with-open-file (out "/clara/greeting.lisp" :direction :output)
+&gt; (with-open-file (out "/greeting.lisp" :direction :output)
     (dolist (line *greeting*) (write-line line out)))
 NIL
-&gt; (clara.windows:install-application "Greeting" "/clara/greeting.lisp")
+&gt; (clara.windows:install-application "Greeting" "/greeting.lisp")
 "Greeting"
 &gt; (list (clara.windows:applications) (find-package "GREETING"))
 (("Listener" "Editor" "Files" "Hello" "Greeting") NIL)
@@ -959,7 +1016,7 @@ NIL
       <li><code>clara.windows:unload-application</code> stops the application wherever it runs, which closes its windows, and deletes the packages that its file made: what the file defined is gone from the world, and the memory it took comes back. The application stays in the list, and the next launch loads the file as it is by then. That is how to try a change to an application: save the file, unload, launch.</li>
       <li><code>clara.windows:remove-application</code> does the same and takes the name out of the list. It is also what takes out an application that was defined at a prompt, like <code>Hello</code>.</li>
       <li>An application that fails, in its file or later, ends with its windows closed. The reason is said on the console, as for any thread: <code>error in #&lt;THREAD "Greeting"&gt;:</code> and what went wrong.</li>
-      <li>The editor and the browser are unloaded and launched again the same way, and <code>/clara/editor.lisp</code> can be changed in the editor.</li>
+      <li>The editor and the browser are unloaded and launched again the same way, and the system's <code>editor.lisp</code> can be changed in the editor: <code>(clara.system:system-file "editor.lisp")</code> is its name. A file that is installed by a name without a directory, as those two are, is one of the system's own.</li>
       <li>What an application is installed as is part of the world, and is saved with it. Whether its file has been loaded is too: a world that is saved after the editor was used starts with the editor in it.</li>
     </ul>
   </section>
@@ -1015,14 +1072,17 @@ error: nothing is mapped at #x0</pre>
       <tr><td>Boxes on the screen where characters should be.</td><td>The screen's font has the characters of ASCII. The characters themselves are right, and show on the serial port.</td></tr>
       <tr><td>A picture that was shown has text over it, or is no longer where it was put.</td><td>The console writes on the same screen, and moves everything on it up with every new line: <a href="#showing">Showing what has changed</a>. Show the picture again.</td></tr>
       <tr><td><code>error: this surface is of a machine that was switched off</code></td><td>The surface was made before the world was saved, and its pixels were not saved with it. Make a new one and draw on that: <a href="#surfaces">Memory</a>.</td></tr>
-      <tr><td>A file that was written is gone after <code>make</code>.</td><td>Under QEMU the disk is made again whenever a build changed something. Keep what matters on <a href="#work">a disk of your own</a>, which no build touches.</td></tr>
+      <tr><td>After a <code>make</code>, what was defined at the prompt is gone, and the files are there.</td><td>The build is another system, the machine took it as it started, and a newer system makes a world of its own: <a href="#across">What comes across</a>.</td></tr>
+      <tr><td><code>system: ... was tried and did not come to its prompt</code></td><td>A newer system was taken, did not get as far as its prompt, and the machine was started again: this is the system from before, as it was. <a href="#trial">What happens at the next start</a>.</td></tr>
+      <tr><td><code>lisp: clara.image is passed over</code></td><td>The start before this one did not come to its prompt, so the world that was saved was not started a second time: <a href="#prompt-not-reached">A world that does not come to its prompt</a>.</td></tr>
+      <tr><td><code>tools/run.sh: a machine is running from build/disk-aarch64.img already</code></td><td>There is one machine to a disk. Shut the other one down first.</td></tr>
       <tr><td><code>error: the volume in CLARA.FAT:*VOLUME* is from an earlier start</code></td><td>A variable kept a volume while the machine was started again, in a world that was saved. Take the volume from <code>(clara.fat:volumes)</code> anew: <a href="#work">A disk of your own</a>.</td></tr>
       <tr><td>QEMU does not start, and says that it failed to get a lock.</td><td>Something else has one of the machine's disks. A machine that is still running from it, for one: there is one machine to a disk. Or the host: <code>make run-aarch64</code> ejects a disk that is open in the Finder by itself, and QEMU started in any other way needs it ejected first.</td></tr>
       <tr><td>A window is gone that nobody closed, or an application's window never comes.</td><td>The application failed, and its thread ended. The serial port has the reason, in a line that begins with <code>error in #&lt;THREAD</code>. When the reason is in the application's file, mend the file and launch it again: <a href="#installed">Applications in files</a>.</td></tr>
       <tr><td><code>error: the machine is not shut down: the window ... has text that is not saved</code></td><td>A program holds something that would go with the machine, and the window that says so has come to the top. Save it or close the window and ask again, or ask with <code>:force t</code>: <a href="#stop">Stopping it</a>.</td></tr>
       <tr><td><code>clara: this machine cannot be turned off from inside</code></td><td>The firmware names no way of turning this machine off that the system knows, and the report said so as it started, in its line <code>power:</code>. The world is saved by then: stop the machine from outside.</td></tr>
       <tr><td>The arrow keys do nothing at a prompt.</td><td>A line at a prompt is edited with <kbd>Backspace</kbd> alone. The arrows are for the <a href="#editor">editor</a> and the <a href="#browser">browser</a>.</td></tr>
-      <tr><td><code>lisp: clara.image is not resumed</code> in the report.</td><td>A saved world could not be used, and the reason follows on the same line: <a href="#refused">An image that is not taken</a>.</td></tr>
+      <tr><td><code>lisp: clara.image is not resumed</code> in the report.</td><td>A saved world was not started, and the reason follows on the same line: <a href="#refused">An image that is not taken</a>. After an upgrade that is how it should be.</td></tr>
       <tr><td>A report that begins with <code>exception:</code> or <code>panic:</code>, and a machine that stands still.</td><td>The kernel, or a driver, has failed, and has stopped the machine where it was. The report says what happened in words, where, and what was in every register. Start the machine again. What was saved or written to a file before is there. Then please <a href="https://github.com/the-clara-os/clara-os/issues">say what you did</a>, with the report: that is a bug in ClaraOS.</td></tr>
     </table>
   </section>
@@ -1077,12 +1137,12 @@ error: nothing is mapped at #x0</pre>
 
     <h3>The packages CLARA.WINDOWS and CLARA.TERMINAL</h3>
     <p><a href="#windows">Windows</a> says what each of these is for. <code>clara.windows:resume</code> is what the system calls as it starts, for a world that was saved with the window manager running.</p>
-    <p class="names" data-package="CLARA.WINDOWS"><code>clara.windows:start</code> <code>clara.windows:stop</code> <code>clara.windows:running-p</code> <code>clara.windows:resume</code> <code>clara.windows:open-window</code> <code>clara.windows:close-window</code> <code>clara.windows:show</code> <code>clara.windows:window-p</code> <code>clara.windows:window-title</code> <code>clara.windows:window-surface</code> <code>clara.windows:window-position</code> <code>clara.windows:move-window</code> <code>clara.windows:raise-window</code> <code>clara.windows:rename-window</code> <code>clara.windows:next-event</code> <code>clara.windows:windows</code> <code>clara.windows:focused-window</code> <code>clara.windows:define-application</code> <code>clara.windows:install-application</code> <code>clara.windows:unload-application</code> <code>clara.windows:remove-application</code> <code>clara.windows:applications</code> <code>clara.windows:launch</code> <code>clara.windows:define-command</code> <code>clara.windows:remove-command</code> <code>clara.windows:commands</code> <code>clara.windows:unfinished</code> <code>clara.windows:key-typed</code> <code>clara.windows:pointer-moved</code></p>
+    <p class="names" data-package="CLARA.WINDOWS"><code>clara.windows:start</code> <code>clara.windows:stop</code> <code>clara.windows:running-p</code> <code>clara.windows:resume</code> <code>clara.windows:open-window</code> <code>clara.windows:close-window</code> <code>clara.windows:show</code> <code>clara.windows:window-p</code> <code>clara.windows:window-title</code> <code>clara.windows:window-surface</code> <code>clara.windows:window-position</code> <code>clara.windows:move-window</code> <code>clara.windows:raise-window</code> <code>clara.windows:rename-window</code> <code>clara.windows:next-event</code> <code>clara.windows:windows</code> <code>clara.windows:focused-window</code> <code>clara.windows:define-application</code> <code>clara.windows:install-application</code> <code>clara.windows:unload-application</code> <code>clara.windows:remove-application</code> <code>clara.windows:applications</code> <code>clara.windows:launch</code> <code>clara.windows:*application-directory*</code> <code>clara.windows:define-command</code> <code>clara.windows:remove-command</code> <code>clara.windows:commands</code> <code>clara.windows:unfinished</code> <code>clara.windows:key-typed</code> <code>clara.windows:pointer-moved</code></p>
     <p class="names" data-package="CLARA.TERMINAL"><code>clara.terminal:open-terminal</code> <code>clara.terminal:terminal-p</code> <code>clara.terminal:terminal-stream</code> <code>clara.terminal:terminal-window</code> <code>clara.terminal:clear</code> <code>clara.terminal:listener</code></p>
 
     <h3>The package CLARA.SYSTEM</h3>
-    <p>The machine as a whole: <a href="#stop">shutting it down and starting it again</a>. <code>start</code> is called by the kernel as the machine comes up, and has a thread watch the power button from then on.</p>
-    <p class="names" data-package="CLARA.SYSTEM"><code>clara.system:shut-down</code> <code>clara.system:start-again</code> <code>clara.system:start</code></p>
+    <p>The machine as a whole: <a href="#stop">shutting it down and starting it again</a>, and <a href="#upgrade">taking a newer system</a>. <code>system</code> is the name of the system that runs, <code>system-file</code> the name of one of its files, and <code>boot-volume</code> the volume that the machine was started from. <code>start</code> is called by the kernel as the machine comes up: it sees to a system that is on trial, and has a thread watch the power button from then on.</p>
+    <p class="names" data-package="CLARA.SYSTEM"><code>clara.system:shut-down</code> <code>clara.system:start-again</code> <code>clara.system:upgrade</code> <code>clara.system:system</code> <code>clara.system:system-file</code> <code>clara.system:boot-volume</code> <code>clara.system:start</code></p>
 
     <h3>The package CLARA.COMPILER</h3>
     <p><a href="#compiler">The compiler</a> is a file of Lisp as well. What it is used by are Common Lisp's own names, <code>eval</code>, <code>load</code>, <code>compile</code> and <code>disassemble</code>; the one name of its own is the function that <code>eval</code> calls.</p>
@@ -1098,19 +1158,19 @@ error: nothing is mapped at #x0</pre>
     <p class="names" data-package="CLARA.FILES"><code>clara.files:browse</code></p>
 
     <h3>The console, the drivers and the file system</h3>
-    <p>Each of these is a file of Lisp in <code>/clara</code> with a package of its own, and these are the names that it lets the others use. Most are for the system itself: <a href="#machine">Looking at the machine</a> has the ones that tell something at the prompt. A function named <code>start</code> is what the system calls as it starts, and is not for calling again.</p>
+    <p>Each of these is a file of Lisp among <a href="#listing">the system's</a> with a package of its own, and these are the names that it lets the others use. Most are for the system itself: <a href="#machine">Looking at the machine</a> has the ones that tell something at the prompt. A function named <code>start</code> is what the system calls as it starts, and is not for calling again.</p>
     <p class="names" data-package="CLARA.CONSOLE"><code>clara.console:start</code> <code>clara.console:stop</code> <code>clara.console:write-text</code> <code>clara.console:read-text-line</code> <code>clara.console:use-serial</code> <code>clara.console:use-screen</code> <code>clara.console:make-console-stream</code> <code>clara.console:key-typed</code> <code>clara.console:read-edited-line</code> <code>clara.console:lend-screen</code> <code>clara.console:return-screen</code></p>
     <p class="names" data-package="CLARA.FONT"><code>clara.font:+width+</code> <code>clara.font:+height+</code> <code>clara.font:+first+</code> <code>clara.font:+last+</code> <code>clara.font:*glyphs*</code></p>
     <p class="names" data-package="CLARA.PCI"><code>clara.pci:start</code> <code>clara.pci:devices</code> <code>clara.pci:device-p</code> <code>clara.pci:device-bus</code> <code>clara.pci:device-slot</code> <code>clara.pci:device-part</code> <code>clara.pci:device-vendor</code> <code>clara.pci:device-id</code> <code>clara.pci:device-kind</code> <code>clara.pci:device-revision</code> <code>clara.pci:location</code> <code>clara.pci:description</code> <code>clara.pci:hex</code> <code>clara.pci:config-8</code> <code>clara.pci:config-16</code> <code>clara.pci:config-32</code> <code>clara.pci:capabilities</code> <code>clara.pci:base-address</code> <code>clara.pci:map-registers</code> <code>clara.pci:enable</code> <code>clara.pci:message-interrupt</code></p>
     <p class="names" data-package="CLARA.VIRTIO"><code>clara.virtio:device-type</code> <code>clara.virtio:open-device</code> <code>clara.virtio:start-device</code> <code>clara.virtio:device-p</code> <code>clara.virtio:device-pci</code> <code>clara.virtio:device-event</code> <code>clara.virtio:device-features</code> <code>clara.virtio:register-8</code> <code>clara.virtio:register-16</code> <code>clara.virtio:register-32</code> <code>clara.virtio:open-queue</code> <code>clara.virtio:queue-p</code> <code>clara.virtio:queue-size</code> <code>clara.virtio:queue-add</code> <code>clara.virtio:queue-notify</code> <code>clara.virtio:queue-take</code></p>
     <p class="names" data-package="CLARA.INPUT"><code>clara.input:start</code> <code>clara.input:devices</code> <code>clara.input:pointer</code> <code>clara.input:pointer-changed</code> <code>clara.input:set-pointer-limits</code> <code>clara.input:key-character</code> <code>clara.input:send-keys-to</code> <code>clara.input:send-pointer-to</code> <code>clara.input:*repeat-delay*</code> <code>clara.input:*repeat-interval*</code> <code>clara.input:+up+</code> <code>clara.input:+down+</code> <code>clara.input:+left+</code> <code>clara.input:+right+</code> <code>clara.input:+home+</code> <code>clara.input:+end+</code> <code>clara.input:+page-up+</code> <code>clara.input:+page-down+</code> <code>clara.input:+insert+</code> <code>clara.input:+f1+</code> <code>clara.input:+alt+</code></p>
     <p class="names" data-package="CLARA.DISK"><code>clara.disk:start</code> <code>clara.disk:disks</code> <code>clara.disk:disk-p</code> <code>clara.disk:disk-name</code> <code>clara.disk:disk-sectors</code> <code>clara.disk:disk-read-only</code> <code>clara.disk:read-sectors</code> <code>clara.disk:write-sectors</code> <code>clara.disk:flush</code> <code>clara.disk:*patience*</code></p>
-    <p class="names" data-package="CLARA.FAT"><code>clara.fat:start</code> <code>clara.fat:volumes</code> <code>clara.fat:*volume*</code> <code>clara.fat:volume-p</code> <code>clara.fat:volume-disk</code> <code>clara.fat:volume-kind</code> <code>clara.fat:volume-first</code> <code>clara.fat:entries</code> <code>clara.fat:entry-p</code> <code>clara.fat:entry-name</code> <code>clara.fat:entry-short</code> <code>clara.fat:entry-directory-p</code> <code>clara.fat:entry-size</code> <code>clara.fat:names</code> <code>clara.fat:file-text</code> <code>clara.fat:read-file</code> <code>clara.fat:write-file</code> <code>clara.fat:remove-file</code></p>
+    <p class="names" data-package="CLARA.FAT"><code>clara.fat:start</code> <code>clara.fat:volumes</code> <code>clara.fat:*volume*</code> <code>clara.fat:volume-p</code> <code>clara.fat:volume-disk</code> <code>clara.fat:volume-kind</code> <code>clara.fat:volume-first</code> <code>clara.fat:entries</code> <code>clara.fat:entry-p</code> <code>clara.fat:entry-name</code> <code>clara.fat:entry-short</code> <code>clara.fat:entry-directory-p</code> <code>clara.fat:entry-size</code> <code>clara.fat:names</code> <code>clara.fat:file-text</code> <code>clara.fat:read-file</code> <code>clara.fat:write-file</code> <code>clara.fat:remove-file</code> <code>clara.fat:make-directory</code> <code>clara.fat:remove-directory</code> <code>clara.fat:free-bytes</code></p>
     <p class="names" data-package="CLARA.LISTENER"><code>clara.listener:run</code> <code>clara.listener:answer</code> <code>clara.listener:read-and-answer</code> <code>clara.listener:answer-lines</code></p>
 
     <h3>The package CLARA.UNSAFE</h3>
-    <p>For drivers. What can be read with one of the first seven can be written with <code>setf</code>. The eight after <code>give-screen</code> are the compiler's and the translator's. The first two are a function made of code, and the code of a function: code is looked at before it is made a function, and refused when it points where it should not; that it uses its stack as it says is taken on trust, which is why the two are here. The other six are for <a href="#processor">the processor's own instructions</a>: where the kernel keeps what they read, the instructions of a function handed to the kernel, how many bytes of them a function has, whether the processor runs a function, what the compiler made of every function that the processor does not run yet, and every function that has such instructions entered by them from then on. Those instructions are run as they are given, and nothing looks at them first. <code>power-off</code> and <code>reset</code> turn the machine off and start it again there and then, with nothing saved and nobody asked, which is what <a href="#stop">shutting down</a> sees to before it calls them; <code>power-button</code> says whether the machine's power button has been pressed since it was last asked.</p>
-    <p class="names" data-package="CLARA.UNSAFE"><code>clara.unsafe:memory-8</code> <code>clara.unsafe:memory-16</code> <code>clara.unsafe:memory-32</code> <code>clara.unsafe:memory-64</code> <code>clara.unsafe:port-8</code> <code>clara.unsafe:port-16</code> <code>clara.unsafe:port-32</code> <code>clara.unsafe:fill-memory-32</code> <code>clara.unsafe:copy-memory</code> <code>clara.unsafe:expand-bits-32</code> <code>clara.unsafe:fill-rectangle-32</code> <code>clara.unsafe:copy-rectangle-32</code> <code>clara.unsafe:allocate-memory</code> <code>clara.unsafe:free-memory</code> <code>clara.unsafe:map-memory</code> <code>clara.unsafe:memory-string</code> <code>clara.unsafe:string-bytes</code> <code>clara.unsafe:string-memory</code> <code>clara.unsafe:heap-image</code> <code>clara.unsafe:interrupt-event</code> <code>clara.unsafe:message-interrupt</code> <code>clara.unsafe:pci-configuration</code> <code>clara.unsafe:framebuffer</code> <code>clara.unsafe:serial-device</code> <code>clara.unsafe:serial-byte</code> <code>clara.unsafe:serial-break</code> <code>clara.unsafe:keyboard-break</code> <code>clara.unsafe:power-off</code> <code>clara.unsafe:reset</code> <code>clara.unsafe:power-button</code> <code>clara.unsafe:take-screen</code> <code>clara.unsafe:give-screen</code> <code>clara.unsafe:make-compiled-function</code> <code>clara.unsafe:compiled-function-code</code> <code>clara.unsafe:native-layout</code> <code>clara.unsafe:install-native-code</code> <code>clara.unsafe:native-code-bytes</code> <code>clara.unsafe:native-function</code> <code>clara.unsafe:untranslated-code</code> <code>clara.unsafe:native-functions</code></p>
+    <p>For drivers. What can be read with one of the first seven can be written with <code>setf</code>. The eight after <code>give-screen</code> are the compiler's and the translator's. The first two are a function made of code, and the code of a function: code is looked at before it is made a function, and refused when it points where it should not; that it uses its stack as it says is taken on trust, which is why the two are here. The other six are for <a href="#processor">the processor's own instructions</a>: where the kernel keeps what they read, the instructions of a function handed to the kernel, how many bytes of them a function has, whether the processor runs a function, what the compiler made of every function that the processor does not run yet, and every function that has such instructions entered by them from then on. Those instructions are run as they are given, and nothing looks at them first. <code>power-off</code> and <code>reset</code> turn the machine off and start it again there and then, with nothing saved and nobody asked, which is what <a href="#stop">shutting down</a> sees to before it calls them; <code>power-button</code> says whether the machine's power button has been pressed since it was last asked. <code>sha-512</code> is the sum of some bytes of memory, by which a system's files are known to be what its list says, and <code>start-state</code> is what the kernel knows of this start and of the ones before it.</p>
+    <p class="names" data-package="CLARA.UNSAFE"><code>clara.unsafe:memory-8</code> <code>clara.unsafe:memory-16</code> <code>clara.unsafe:memory-32</code> <code>clara.unsafe:memory-64</code> <code>clara.unsafe:port-8</code> <code>clara.unsafe:port-16</code> <code>clara.unsafe:port-32</code> <code>clara.unsafe:fill-memory-32</code> <code>clara.unsafe:copy-memory</code> <code>clara.unsafe:expand-bits-32</code> <code>clara.unsafe:fill-rectangle-32</code> <code>clara.unsafe:copy-rectangle-32</code> <code>clara.unsafe:allocate-memory</code> <code>clara.unsafe:free-memory</code> <code>clara.unsafe:map-memory</code> <code>clara.unsafe:memory-string</code> <code>clara.unsafe:string-bytes</code> <code>clara.unsafe:string-memory</code> <code>clara.unsafe:heap-image</code> <code>clara.unsafe:interrupt-event</code> <code>clara.unsafe:message-interrupt</code> <code>clara.unsafe:pci-configuration</code> <code>clara.unsafe:framebuffer</code> <code>clara.unsafe:serial-device</code> <code>clara.unsafe:serial-byte</code> <code>clara.unsafe:serial-break</code> <code>clara.unsafe:keyboard-break</code> <code>clara.unsafe:power-off</code> <code>clara.unsafe:reset</code> <code>clara.unsafe:power-button</code> <code>clara.unsafe:sha-512</code> <code>clara.unsafe:start-state</code> <code>clara.unsafe:take-screen</code> <code>clara.unsafe:give-screen</code> <code>clara.unsafe:make-compiled-function</code> <code>clara.unsafe:compiled-function-code</code> <code>clara.unsafe:native-layout</code> <code>clara.unsafe:install-native-code</code> <code>clara.unsafe:native-code-bytes</code> <code>clara.unsafe:native-function</code> <code>clara.unsafe:untranslated-code</code> <code>clara.unsafe:native-functions</code></p>
   </section>
 </main>
 

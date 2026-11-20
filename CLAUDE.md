@@ -33,7 +33,7 @@ Build with `make` (Homebrew's llvm and lld under /opt/homebrew/opt when they
 are there, otherwise clang and lld-link from the PATH; `LLVM=` and `LLD=`
 name other directories). `make test` runs the host tests of the Lisp
 files under SBCL (`make host-test`, ten seconds), then boots both
-architectures headless under QEMU, eleven boots in about three minutes,
+architectures headless under QEMU, fourteen boots in about four minutes,
 types a session at each kernel, and saves what each screen shows to
 build/screen-<name>.png; look at those images when a change touches the
 display. `make run-aarch64` and `make run-x86_64` open a QEMU window with
@@ -134,14 +134,15 @@ Rules:
   the firmware's `Shell>` means the firmware did not find that disk. The
   disk is a file that tools/mkdisk.py makes of build/esp, a FAT volume of
   any of the three kinds behind either table of partitions or none
-  (`--fat`, `--table`): build/disk-<arch>.img for `make run-*`, made again
-  when build/esp has something newer and kept until then with whatever
-  the kernel wrote to it, a saved world among it; and for a boot of the
-  tests build/boot-<name>.img, new every time. Run by hand without
-  `DISK=`, tools/run.sh makes that first file again when the build is
-  newer, also under a machine that is running from it, which Julio often
-  has: give it `DISK=` and a file of the session's own, or use
-  tools/boottest.sh, which always does.
+  (`--fat`, `--table`): build/disk-<arch>.img for `make run-*`, made once
+  and kept from then on, with whatever the kernel wrote to it; and for a
+  boot of the tests build/boot-<name>.img, new every time. Run by hand
+  without `DISK=`, tools/run.sh works on the first of those: it gives the
+  machine a newer build as a second disk, which the system on the disk
+  takes as it starts (upgrades, below), so the disk that Julio runs from
+  is another system afterwards. Give it `DISK=` and a file of the
+  session's own, or use tools/boottest.sh, which always does. In another
+  worktree build/ is another directory, and nothing of his is touched.
 - `WORK=file` gives a machine a second disk, the user's own (the manual,
   "A disk of your own"): tools/run.sh puts it in front of the other
   arguments, which is behind the boot disk and the keyboard and pointers
@@ -215,7 +216,10 @@ Rules:
   image or not. A change to what an object is in memory, to the tags, to
   `enum lisp_type`, to a struct of lisp.h or to `lisp_roots`, raises
   `FORMAT` in image.c in the same change, or an older image is taken for
-  a heap that it is not. So does a change to what code for the processor
+  a heap that it is not. (An image is started by the system that saved it
+  and by no other since 0.0.26, and every build is another system, so the
+  number matters for an image that is carried to another build by hand
+  and for nothing else; it is raised all the same.) So does a change to what code for the processor
   leans on, since a world holds its code: the order of the words of
   `struct lisp_machine`, what the functions that it names take and give,
   the numbers of machine.h, and how such code begins and what it keeps
@@ -497,7 +501,7 @@ Rules:
 - What DISASSEMBLE writes is in a session and in the manual, and a line
   of a session that begins with two spaces is one that is typed: a line of
   a listing begins with its number.
-- `make test` boots eleven times. Three machines, x86_64, AArch64 with GIC
+- `make test` boots fourteen times. Three machines, x86_64, AArch64 with GIC
   version 3, and AArch64 emulated with GIC version 2, whose files in build/
   are named aarch64-gic2, each from a disk of another kind, and each twice:
   the first boot is typed tools/session.txt, which ends by saving the world,
@@ -534,13 +538,82 @@ Rules:
   `DISK=build/boot-aarch64.img`. Before that one, two boots for what is
   done to a machine and not in it, x86_64-power and aarch64-power, each
   from the disk that its machine's first session left (tools/power.txt,
-  below, under shutting down), and two boots for the user
+  below, under shutting down), three for upgrades, x86_64-upgrade,
+  aarch64-at-once and aarch64-trial (tools/upgrade.txt, tools/at-once.txt,
+  tools/trial.txt), each with the disk of another system beside its own,
+  and two boots for the user
   manual, named manual and manual-again: what the manual shows of the prompt
   is typed at them. The serial port of each is QEMU's standard input and
   output: the log is what the kernel printed, and a FIFO feeds it what the
   session types. QEMU's hvf has no version 2, and UTM uses version 3.
   tools/boottest.sh passes any further arguments on to QEMU, which is how to
   try another machine: `tools/boottest.sh aarch64 -smp 4 -cpu max`.
+- A system and its directory (the Makefile, tools/system.py,
+  kernel/system.c, kernel/boot.c). A build has a name, `$(SYSTEM)` in the
+  Makefile: the version and eight digits worked out from `SYSTEM_SRCS`,
+  which are all the sources of the two kernels and of lisp/. A new kind of
+  source that goes into a kernel or onto the boot volume goes into that
+  list. The name is in both kernels (`clara_system`) and is the name of
+  the directory on the boot volume that holds the system's files, its
+  kernels a second time and its `manifest`; the kernel reads its own
+  directory and no other. So a path of a system's file has digits in it
+  that change with every edit: Lisp asks `(clara.system:system-file
+  "boot.lisp")`, a session writes `{{system}}` and `{{version}}`, which
+  tools/boottest.sh fills in, and the manual shows such a name only in a
+  `<pre>` that nothing types. `/clara/<name>` in LOAD still finds a file
+  of the system's among what was read at boot, and an application that is
+  installed by a bare name is a file of the system's directory
+  (`clara.windows:*application-directory*`). `make build/system-other/stamp`
+  makes a second system of the same sources under the name
+  `<version>-other`, as build/system-other/esp, for two links; a name that
+  begins with `broken` gets a boot.lisp that is no Lisp. The Makefile must
+  never have `.SECONDARY:`: with it make does not relink a kernel when
+  the system's name has changed, and the kernel then looks for a
+  directory that the build did not make.
+- What the handoff does with files (kernel/boot.c), all of it through the
+  firmware's file system and before a line of Lisp runs, so that it holds
+  when the Lisp does not start. `\clara\starts` counts the starts that did
+  not come to a prompt: the handoff writes the count plus one, with a
+  number of this start's own behind it, and `clara.system::came-to-prompt`
+  deletes the file. After one such start the image is not read
+  (`image_passed_over`). `\clara\next` is a system to try: "try <name>",
+  which the old kernel's handoff turns into "tried <name>" before it has
+  the firmware load and start the new system's kernel in place of itself
+  (`start_system`), and into "failed <name>" when it finds "tried" at a
+  later start. What Lisp knows of all that is `(clara.unsafe:start-state)`.
+  A change there is tried on both architectures, whose firmware is not the
+  same program: the `-upgrade`, `-at-once` and `-trial` boots of
+  `make test`.
+- Upgrades (lisp/system.lisp). `take` copies a system's directory from
+  another volume, each file held against the manifest (`take-file`,
+  `clara.unsafe:sha-512`), the manifest last, and then writes
+  `/clara/next`: that order is what lets a machine stop anywhere, and the
+  host tests look at the volume after each refusal. `settle` is what a
+  start does about the system, from `start`: a system on trial takes the
+  old one's place (`commit`), a failed trial is said and marked, a disk
+  that says `/clara/at-once` is taken from at once, and then the start has
+  come to its prompt. It uses `clara.fat` and never OPEN or
+  WITH-OPEN-FILE, which under SBCL are the host's. The manifest's form is
+  read by every older system that upgrades to a newer one, so it is only
+  ever added to: a reader passes over a line it does not know. In the host
+  tests `system-tree` makes a system's directory with a right manifest or
+  a wrong one, `two-disks` a machine with its own disk and another, and
+  `clara.host:set-start-state` what the kernel says of the start.
+- A session can wait for the kernel to say something before it goes on:
+  `^W pattern`, for a kernel that will say nothing more by itself, a panic
+  for one, which `PANICS=1` allows the boot once. `^M system_reset` after
+  it starts the machine again the hard way.
+- tools/run.sh, without `DISK=`: the machine's disk is kept, and
+  `python3 tools/mkdisk.py --systems <disk>` says which systems are on it.
+  When that is not the build's, the build goes along as
+  build/upgrade-<arch>.img, a disk with `/clara/at-once` on it. A disk
+  with no system that has a directory, one from before 0.0.26, is put
+  aside under a name that is said (`-old`), and so is the disk when
+  `FRESH=1` asks for a new one (`-before`): nothing of the machine's is
+  ever deleted there. No boot of `make test` goes that way, so after a
+  change it is run by hand, in a worktree of its own: twice with the same
+  build, once with another (a line added to a file of lisp/ and taken out
+  again), with `FRESH=1`, and with a disk of the old kind.
 - Shutting down (lisp/system.lisp, kernel/arch/<arch>/power.c,
   kernel/acpi.c). `leave` is the one procedure behind every way of asking,
   and `finish` its second half, in a thread of its own, since the thread
@@ -588,9 +661,11 @@ Rules:
   `arch_frame_size` bytes, and `arch_frame_init` fills in a new thread's.
   A register added to the frame is switched with the rest; a register
   left out of it is shared by all threads.
-- lisp/*.lisp is copied to the ESP's \clara directory, and the handoff
-  (kernel/boot.c) reads every file there into a `struct boot_file`, the
-  image too when there is one. Unless the world is an image's, the
+- lisp/*.lisp is copied to the system's directory on the ESP,
+  \clara\<the system's name> (upgrades, below), and the handoff
+  (kernel/boot.c) reads every file there but the kernels and the manifest
+  into a `struct boot_file`, and of \clara itself the image when there is
+  one and the file `stress`. Unless the world is an image's, the
   kernel loads boot.lisp itself and panics when that fails, with the file
   and the line. Any other file is loaded by `(load "name.lisp")`, from
   boot.lisp or from the prompt.

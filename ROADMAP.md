@@ -409,18 +409,35 @@ The compiler:
 
 Upgrades:
 
-- [ ] **M15a an upgrade in place.** A newer ClaraOS comes to a machine
-  today as another disk, and what was on the old one goes with it: the
-  files that were written there and the world that was saved. The upgrade
-  is done by the system that is running instead. It takes the newer system
-  from a second disk, the one that `make image` makes, attached as one
-  more VirtIO drive, and writes its kernels and its Lisp files onto the
-  disk that it was started from, where everything else stays as it is. It
-  writes them in an order that a machine can stop in at any moment and
-  still start, and the system that was there is kept until the new one has
-  come to its prompt. `make run-*` keeps its disk from one build to the
-  next and is given a new build the same way, and the manual's way of
-  putting a newer ClaraOS into UTM becomes this one.
+- [x] **M15a an upgrade in place** (2026-11-20, version 0.0.26). A newer
+  ClaraOS came to a machine as another disk, and what was on the old one
+  went with it: the files that were written there and the world that was
+  saved. The upgrade is now done by the system that is running. A system
+  is a directory on the disk, `/clara/<name>`, named by its version and
+  eight digits of its build, with its Lisp files, its kernels and a
+  manifest that lists them with their sums; the kernel reads the files of
+  its own directory and no others, so a second system lies beside the
+  first. `(clara.system:upgrade)` takes the system that another disk of
+  the machine holds, the one that `make image` makes, attached as one
+  more VirtIO drive: file by file, each held against the manifest, into a
+  directory of its own, with everything else on the disk left as it is.
+  Then the machine starts again and the newer system is tried: the
+  firmware starts the old kernel, which starts the new one in place of
+  itself, once. When the new system has come to its prompt it puts its
+  kernels where the firmware looks and takes the old directory away; when
+  it has not, the next start is the old system's, in the world it saved,
+  and it says so. A machine can stop at any moment of all that and still
+  start. Every start is counted on the disk by the handoff before it is
+  known how it goes, and a saved world that did not come to its prompt is
+  passed over at the next start, which is the key that was missing for a
+  world that does not start. The same count says which volume the machine
+  was started from, wherever its disk is on the bus. `make run-*` keeps
+  its disk from one build to the next and hands the machine each newer
+  build as a second disk to take at once, and the manual's way of putting
+  a newer ClaraOS into UTM is this one. Directories can be made and taken
+  away (`clara.fat:make-directory`). A world is started by the system
+  that saved it and by no other, so what was defined at a prompt does not
+  come across an upgrade yet: that is M15b and M15c.
 - [ ] **M15b work kept as text.** What is defined at the prompt is in the
   heap and nowhere else, so it lasts as long as the world it was defined
   in, and a world that was saved is of no use to a kernel that lays its
@@ -1455,52 +1472,69 @@ Shortcuts and loose ends, under the milestone that settles each one. A
 session reads its own group before it starts, and whatever it leaves open
 is added here in the same change.
 
-M15a, an upgrade in place:
+M15a, an upgrade in place, what it left:
 
-- Where things stand (2026-11-18). A newer ClaraOS reaches a machine as a
-  new disk: in UTM `build/claraos.img` is imported again in place of the
-  drive, and `make run-*` makes build/disk-<arch>.img again when build/esp
-  has something newer. The world that was saved and every file that was
-  written go with the old disk, which the manual says since 0.0.22, where
-  it also has the way to keep files meanwhile under QEMU: a second disk,
-  the user's own (`WORK=`, below under M15b). UTM keeps a drive that it imported as a qcow2
-  file of its own, so the host does not open it afterwards.
-- It was done by hand once, under QEMU on AArch64: 0.0.18 running from its
-  disk, the disk that tools/mkdisk.py makes of 0.0.19's build/esp attached
-  as a second VirtIO drive, and at the prompt, for every name of
-  `/EFI/BOOT/*` and `/clara/*.lisp` on the second volume,
-  `clara.fat:read-file` with `clara.fat:*volume*` bound to that volume,
-  `clara.fat:write-file` with it bound to the first, and
-  `clara.unsafe:free-memory`: eighteen files. Started again from that disk
-  the machine was 0.0.19 and a text file that had been written before was
-  there. The world that 0.0.18 had saved was refused, its objects being
-  laid out otherwise, and a function that was defined in it was gone. What
-  the host's checker makes of the volume after that was not looked at.
-- What the slice has to settle. Which volume is the system's: the kernel
-  does not know which disk it was booted from, and names are looked up on
-  the first volume on the bus, so a second disk that comes first is taken
-  for the system's. How the newer system says what it is, its version and
-  its files, before anything is written. The order: a file is written so
-  that a machine can stop at any moment, a set of files is not, and a
-  kernel of one version beside the Lisp files of another is a machine that
-  may not start. A directory of its own for the files of each version,
-  with the kernel written last, is one way. How the system that was there
-  is started when the new one does not come up: whether the firmware's
-  variables can still be written once boot services are left was not
-  looked into, and the firmware's shell starts a kernel that is kept under
-  another name. Both kernels are on the disk, and both are replaced.
-- UTM. The second drive is added by hand for an upgrade and taken out
-  after it; whether it has to come after the system's drive in UTM's list
-  was not tried, and nothing of this was tried in UTM. A folder that UTM
-  shares is no way in: of its two kinds one needs a SPICE agent in the
-  guest and the other a driver for a virtio-9p device (1af4:1009, which
-  0.0.19 lists as a device of a class without a name), and ClaraOS has
-  neither. A newer system over the network is M15d.
-- `make test` needs an older system to upgrade from, and CI has the tree
-  of one commit. A second kernel built of the same sources under another
-  version is one way; the image checks of M10 were done by hand with a
-  kernel that had a row more in a table.
-
+- UTM was not tried: a second VirtIO drive added for the upgrade and taken
+  out after it, whether it has to come after the system's drive in UTM's
+  list (the system finds its own volume by what the handoff wrote there,
+  so it should not have to), and what UTM makes of a machine that starts
+  itself again in the middle. A folder that UTM shares is still no way in.
+- The handoff writes to the boot volume at every start, through the
+  firmware's file system: `\clara\starts`, and `\clara\next` when a system
+  is tried. A volume that the firmware cannot write to gets neither. Such
+  a machine starts, never passes a world over, cannot be upgraded in
+  place, and takes the first volume on the bus for its own. Nothing says
+  so in the boot report.
+- The old kernel stays in memory while the system that it started is
+  tried: the firmware lists it as loaded, and the new kernel's allocator
+  leaves those two mebibytes alone until the next start. And the old
+  kernel's handoff is what starts the new one, so a kernel from before
+  0.0.26 cannot be upgraded from at all: tools/run.sh puts a disk of that
+  kind aside, under a name that it says, and starts from a new one.
+- A system that was tried and failed keeps its directory, with a file
+  `failed` in it, until an upgrade is asked for again or another system
+  takes the old one's place. The disk has room for it, and nothing shows
+  it but a listing of `/clara`.
+- The world does not come across. After an upgrade the saved world is
+  another system's and stays on the disk, refused at every start, until a
+  new one is saved over it. The window manager is not running in the new
+  world, whatever it was before. M15b and M15c.
+- A start that follows one which did not come to its prompt passes the
+  saved world over and leaves it where it is: the start after that tries
+  it again. A world that never comes to its prompt is so passed over at
+  every other start, until M15c saves a new one in its place.
+- Sums are held when a system is taken from another disk, and not when a
+  kernel is started: a file of the system's directory that went bad on the
+  disk afterwards is read as it is.
+- The upgrade takes any system that is not the one that runs, an older
+  one as well, and says nothing about which is newer: `make run-*` after a
+  `git checkout` of an older commit puts the older system on the disk.
+- Both kernels are on the disk and both are replaced, the other
+  processor's without ever having been started on this machine.
+- `make test` builds its systems to upgrade to from the same sources under
+  other names (build/system-other, build/system-broken), so what is tested
+  is the mechanism and never a real difference between two versions. An
+  upgrade from the release before to this tree would need that release
+  built, which CI's one commit does not have.
+- By hand, and in no test: tools/run.sh itself, which `make test` never
+  runs without `DISK=`. A disk kept across a build and given the build as
+  a second disk; the same build twice, which gives no second disk;
+  `FRESH=1`; a disk from before 0.0.26, a copy of Julio's, put aside; a
+  second machine on a disk that one is running from, which is refused
+  with the reason where `lsof` is there to ask; and a work disk beside all
+  of it, a copy of his, with his own file loaded from it.
+- What was broken on purpose: 67 mistakes in lisp/fat.lisp,
+  lisp/system.lisp, kernel/boot.c, kernel/lisp/image.c, kernel/sha512.c
+  and the function that says what a start was, each run through the host
+  tests or through the boots that upgrade. Five got through. Four became
+  tests: a line of a manifest that is no file and reads like one; a count
+  of free bytes that left the last cluster out; a directory that could
+  not be entered in a full root, whose cluster has to be given back; and
+  the count of starts, which a system on trial has to begin anew, seen
+  only where a disk says "at once", so `make test` has a boot that goes
+  that way (tools/at-once.txt). The fifth changes nothing: the length of
+  a file is held against the manifest before its sum is, and no file has
+  the right sum and the wrong length.
 M15b, work kept as text:
 
 - Which forms the listener writes down: DEFUN, DEFMACRO, DEFVAR,
@@ -1530,20 +1564,11 @@ M15b, work kept as text:
   loads looked for there. Which disk is the user's is "the second" today;
   a machine with more disks needs a mark on the volume. Directories cannot
   be made, so the user's are made on the host.
-- The disk driver has the gap that the file system had until 0.0.22: a
-  disk that a variable kept from an earlier start is asked as if it were
-  there (`request`, lisp/disk.lisp). No file function reaches one any
-  more; `clara.disk:read-sectors` and `write-sectors` still take it.
 - UTM. A second drive for the user's files was not tried there: whether
   UTM keeps it apart from the system's drive when that is imported again,
   and that it has to come after it in the list of drives. UTM turns an
   imported drive into a qcow2 file of its own, which the host does not
   open, so carrying files in and out by the host is QEMU's way only.
-- tools/run.sh makes build/disk-<arch>.img again when the build is newer,
-  also while a machine is still running from that file, which then has
-  its disk rewritten under it. The second machine does not start (QEMU's
-  lock), and the first is not told. Making the new disk beside the old
-  one and moving it into place would leave the running machine its own.
 
 M15c, a world made again:
 

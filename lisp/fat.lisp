@@ -38,13 +38,16 @@
 ;;;; that was there before under the name keeps its entry, and its old
 ;;;; clusters are free once the entry has the new ones. There is no clock
 ;;;; here, so every file is of the first day that the format has a date
-;;;; for. Directories are found, and not made.
+;;;; for. A directory is made the same way, its one cluster first, with the
+;;;; two entries in it that every directory begins with, and it is taken
+;;;; away when nothing is left in it.
 
 (defpackage "CLARA.FAT"
   (:use "COMMON-LISP")
   (:export "START" "VOLUMES" "*VOLUME*" "VOLUME-P" "VOLUME-DISK" "VOLUME-KIND" "VOLUME-FIRST"
            "ENTRIES" "ENTRY-P" "ENTRY-NAME" "ENTRY-SHORT" "ENTRY-DIRECTORY-P" "ENTRY-SIZE"
-           "NAMES" "FILE-TEXT" "READ-FILE" "WRITE-FILE" "REMOVE-FILE"))
+           "NAMES" "FILE-TEXT" "READ-FILE" "WRITE-FILE" "REMOVE-FILE"
+           "MAKE-DIRECTORY" "REMOVE-DIRECTORY" "FREE-BYTES"))
 (in-package "CLARA.FAT")
 
 (defstruct volume
@@ -712,12 +715,13 @@
 ;; The entry of a file, at an address: its short name, that it is a file
 ;; which nothing has put away since it was written (bit 5), the three days
 ;; of its making, its writing and its last reading, all of them the first
-;; of January 1980, its first cluster in two halves, and its size.
-(defun put-entry (at short cluster size)
+;; of January 1980, its first cluster in two halves, and its size. WHAT is
+;; bit 4 instead for the entry of a directory, which has no size.
+(defun put-entry (at short cluster size &optional (what #x20))
   (clear-entry at)
   (dotimes (i 11)
     (setf (clara.unsafe:memory-8 (+ at i)) (char-code (char short i))))
-  (setf (clara.unsafe:memory-8 (+ at 11)) #x20
+  (setf (clara.unsafe:memory-8 (+ at 11)) what
         (clara.unsafe:memory-16 (+ at 16)) #x21
         (clara.unsafe:memory-16 (+ at 18)) #x21
         (clara.unsafe:memory-16 (+ at 24)) #x21
@@ -792,8 +796,8 @@
 
 ;; A new entry in a directory, for the file NAME of SIZE bytes that begins
 ;; in CLUSTER: where a deleted one was, or after the last, in a directory
-;; that grows when it has to.
-(defun add-entry (volume directory name cluster size)
+;; that grows when it has to. WHAT is for PUT-ENTRY.
+(defun add-entry (volume directory name cluster size &optional (what #x20))
   (loop
     (when (call-with-directory
            volume (entry-cluster directory)
@@ -808,7 +812,7 @@
                        (setq sum (logand (+ (ash (logand sum 1) 7) (ash sum -1) (char-code (char short i))) 255)))
                      (dotimes (i long)
                        (put-name-entry (+ at (* 32 i)) (- long i) (= i 0) units sum))
-                     (put-entry (+ at (* 32 long)) short cluster size)
+                     (put-entry (+ at (* 32 long)) short cluster size what)
                      ;; The entry after the last one in use begins with a zero, and has to still.
                      (when (and open (< end bytes))
                        (setf (clara.unsafe:memory-8 (+ memory end)) 0)
@@ -1028,6 +1032,76 @@
               (unlink-clusters volume clusters)
               (note-free volume (length clusters)))))))
     name))
+
+;;; Directories that are made
+
+;; A directory of that name, with nothing in it, where the name says: one
+;; cluster of zeroes that begins with the two entries every directory has,
+;; "." for itself and ".." for the one it is in, which is cluster 0 when
+;; that is the root; then the table; then its entry. In that order, like a
+;; file. The name is returned.
+(defun make-directory (name)
+  (let ((volume (the-volume)))
+    (clara:with-lock-held ((volume-lock volume))
+      (multiple-value-bind (directory own) (place-of volume name)
+        (check-name own)
+        (when (find-in volume directory own)
+          (error "there is ~A already" name))
+        (with-table (volume)
+          (let* ((each (volume-cluster-sectors volume))
+                 (cluster (car (free-clusters volume 1)))
+                 (pages (page-frames (* 512 each)))
+                 (memory (clara.unsafe:allocate-memory pages))
+                 (entered nil))
+            (unwind-protect
+                 (progn
+                   (put-entry memory ".          " cluster 0 #x10)
+                   (put-entry (+ memory 32) "..         " (entry-cluster directory) 0 #x10)
+                   (clara.disk:write-sectors (volume-disk volume) (+ (volume-data volume) (* (- cluster 2) each))
+                                             each memory))
+              (clara.unsafe:free-memory memory pages))
+            (link-clusters volume (list cluster))
+            (flush-table volume)
+            ;; Without its entry the directory is a cluster that nobody will ever find: it is given back.
+            (unwind-protect
+                 (progn
+                   (add-entry volume directory own cluster 0 #x10)
+                   (setq entered t))
+              (unless entered
+                (unlink-clusters volume (list cluster))
+                (flush-table volume)))
+            (note-free volume -1)))))
+    name))
+
+;; The directory of that name is no more: one that has nothing in it, and
+;; no other.
+(defun remove-directory (name)
+  (let ((volume (the-volume)))
+    (clara:with-lock-held ((volume-lock volume))
+      (multiple-value-bind (directory own) (place-of volume name)
+        (let ((entry (find-in volume directory own)))
+          (cond ((null entry)
+                 (error "there is no directory ~A" name))
+                ((not (entry-directory-p entry))
+                 (error "~A is a file, and not a directory" name))
+                ((read-directory volume (entry-cluster entry))
+                 (error "the directory ~A is not empty" name)))
+          (with-table (volume)
+            (let ((clusters (file-clusters volume (entry-cluster entry))))
+              (remove-entry volume directory entry)
+              (unlink-clusters volume clusters)
+              (note-free volume (length clusters)))))))
+    name))
+
+;; How many bytes of the volume are nobody's: its free clusters, counted
+;; in the table, and not taken from what the volume says of itself.
+(defun free-bytes ()
+  (let ((volume (the-volume)) (free 0))
+    (clara:with-lock-held ((volume-lock volume))
+      (dotimes (i (volume-clusters volume))
+        (when (zerop (table-entry volume (+ i 2)))
+          (setq free (1+ free)))))
+    (* free 512 (volume-cluster-sectors volume))))
 
 ;;; Starting
 

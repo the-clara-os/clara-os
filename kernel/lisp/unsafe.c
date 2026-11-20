@@ -546,6 +546,26 @@ LISP_PRIMITIVE(lisp_p_power_button)
     return arch_power_button() > 0 ? T : NIL;
 }
 
+/* (sha-512 address bytes): the SHA-512 of that many bytes of memory, as a
+ * string of its 128 digits in base sixteen, in small letters, which is how
+ * such a sum is written down wherever it is kept. */
+LISP_PRIMITIVE(lisp_p_sha_512)
+{
+    uint64_t addr, bytes;
+    uint8_t sum[64];
+    char text[128];
+
+    (void)argc;
+    if (!number(argv[0], &addr) || !number(argv[1], &bytes) || !mapped(addr, bytes))
+        return NIL;
+    sha512((const void *)(uintptr_t)addr, bytes, sum);
+    for (unsigned i = 0; i < 64; i++) {
+        text[2 * i] = "0123456789abcdef"[sum[i] >> 4];
+        text[2 * i + 1] = "0123456789abcdef"[sum[i] & 15];
+    }
+    return lisp_string_from_utf8(text, sizeof text);
+}
+
 /* (keyboard-break): Ctrl-C has been typed on a keyboard. The driver of a
  * keyboard is a thread in Lisp, and this is how it does what the serial
  * port's Ctrl-C does: it stops what the thread that reads from the console

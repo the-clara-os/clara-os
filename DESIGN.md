@@ -46,8 +46,8 @@ manager, and the applications are Lisp programs loaded into that world.
 - **The image is the system.** Booting means taking a saved heap image for
   the heap and starting the world that is in it, with the window manager
   running when the world was saved with it running ("Images" and
-  "Windows", below). The boot handoff reads every
-  file in the ESP's `\clara` directory through the UEFI file protocol
+  "Windows", below). The boot handoff reads the files of the system's own
+  directory under the ESP's `\clara` through the UEFI file protocol
   before ExitBootServices, so no disk driver is needed to start: the image
   when there is one, and the Lisp sources that the build puts there from
   lisp/, which a machine without an image makes its world from.
@@ -673,21 +673,28 @@ architectures (kernel/vm.c).
   runs is that thread's view: so for as long as the heap is copied the
   bindings of the thread that saves are undone, as they are whenever a
   thread makes way for another.
-- An image outlives the kernel that saved it. A function in C is in the
-  heap as its place in a table, and a kernel with other rows in its
-  tables gives each such function its place again by its name; what the
-  newer kernel has more of is added to the world. What an older world
-  has in Lisp stays as it was saved: a newer boot.lisp is loaded into it
-  by whoever wants it.
+- A world is started by the system that saved it, and by no other (since
+  M15a; until then an image outlived the kernel that saved it). A world
+  holds the system's own Lisp as it was when the world was made: the
+  console, the file system, the window manager. A newer kernel that went
+  on in it would run under the older system's Lisp, with whatever the two
+  no longer agree on, and nobody would have asked for that. So an image
+  has its system's name in it, and a kernel of another system makes a
+  world of its own files (Upgrades, below). A function in C is still in
+  the heap as its place in a table and found again by its name, which is
+  what lets a row be put anywhere in a table without a new format.
 - An image is refused, with the reason in the boot report, and the world
   is made from the files as on a machine without one: when the file is
   not whole, by its length or by its checksum, which is taken of the heap
   where it lies after the copy; when it was saved on the other
   architecture, since what is defined in a world depends on the machine;
   when its objects are not laid out as this kernel has them, which is a
-  number in image.c that a change to lisp.h has to raise; and when it has
-  a function in C that this kernel has not. The files are read at every
-  boot for that reason, and stay in memory as before.
+  number in image.c that a change to lisp.h has to raise; when it has
+  a function in C that this kernel has not; and when another system saved
+  it. The files are read at every boot for that reason, and stay in
+  memory as before. An image that was started and did not come to its
+  prompt is not started a second time: the handoff does not read it
+  (Upgrades, below).
 - A world that came as an image is not tested by the kernel. The tests
   of the reader, the collector and the evaluator are for a world that
   this boot has made, and somebody else's world is not the place to try
@@ -1297,6 +1304,87 @@ architectures (kernel/vm.c).
   what is left is the making of a million conses and their collection,
   which the translation does not touch. The code of `fib` is 560 bytes on
   AArch64 and 660 on x86-64, where it was 732 and 828.
+
+## Upgrades (decided in M15a, 2026-11-20)
+
+- A system is one build: two kernels and the Lisp files that they were
+  built with. It has a name, its version and eight digits worked out from
+  every source that goes into it (tools/system.py), so the same sources
+  are the same system wherever they are built and any change is another.
+  The version alone would not do: a version is one number for many builds,
+  and what has to be told apart is builds.
+- On a disk a system is a directory, `\clara\<name>`: its Lisp files, a
+  copy of its two kernels, and a manifest that lists them all, each with
+  its length and its SHA-512. The kernel has its system's name in it and
+  reads the files of that directory and no others (kernel/boot.c). So two
+  systems lie side by side on one volume without either seeing the
+  other's files, which is the whole of what makes an upgrade safe: a
+  kernel is never started with Lisp that it was not built with. The world
+  that was saved, `\clara\clara.image`, is outside those directories and
+  has its system's name inside it.
+- An upgrade is done by the system that is running (lisp/system.lisp). It
+  takes the directory of another system from another disk, any disk that
+  ClaraOS starts from being such a disk, holds every file against the
+  manifest as it comes, and writes the manifest last, which is what says
+  that a system is whole. Nothing else on the volume is written to. A
+  machine that stops at any moment of that starts as it did before.
+- The newer system is tried before it takes the old one's place. The
+  upgrade ends by writing one line into `\clara\next`, "try" and the
+  system's name, and starting the machine again. The firmware starts the
+  kernel that it always started, the old one, whose handoff reads the
+  line, writes "tried" in its place, and has the firmware load and start
+  the new system's kernel from its directory, in place of itself. When
+  that system has come to its prompt it puts its kernels where the
+  firmware looks for them, each in the one step that writing a file over
+  another is, takes the line away, and then the old system's directory.
+  When it does not come to its prompt, the machine is started again by
+  whoever is there, the old kernel reads "tried", and goes on as itself,
+  in the world that it saved before the upgrade: the old system was never
+  touched. So the kernel that the firmware starts is always one that has
+  come to its prompt on this machine, until a newer one has.
+- There is still no boot loader. What chooses between two systems is the
+  first few hundred lines of the kernel that is in place, while the
+  firmware's services are there, and it chooses once, on a line that the
+  system itself wrote.
+- Every start is counted before it is known how it goes. The handoff
+  writes `\clara\starts`, through the firmware's file system, with how
+  many starts in a row have not come to a prompt, and the world deletes
+  the file when it has come to its prompt. A start that finds the file
+  knows that the one before it did not get there, and is more careful:
+  the saved world is passed over, and a new one made from the files. That
+  is the key that was missing since M10, for a world that was saved in a
+  state which does not start; it needs nobody at the keyboard at the right
+  moment, only that the machine be started once more. It has to be the
+  firmware that writes, since the point is that it holds when no Lisp
+  runs.
+- The same file says which volume the machine was started from. The
+  handoff puts a number into it that no other start was given, the kernel
+  knows the number, and the volume that has it is the system's own,
+  wherever its disk is on the bus. Until this, the first volume on the bus
+  was taken for it, and a second disk in front of it was mistaken for the
+  system's.
+- The manifest is a text that a later system may add to: a reader passes
+  over every line that it does not know. The upgrade of one version reads
+  the manifest of the next, so its form cannot be changed, only extended.
+- `make run-*` goes the same way, which is what keeps the mechanism
+  honest. The machine's disk is made once and kept. When the build is
+  another system than the one on it, tools/run.sh gives the machine the
+  build as a second disk with a file on it that says "at once", and the
+  system takes it as it starts and starts again by itself. A system that
+  was tried that way and failed is not taken a second time unasked.
+- What does not come across is the world. The newer system does not start
+  the older one's image (Images, above), so what was defined at a prompt
+  is gone after an upgrade unless it is in a file. M15b and M15c are
+  about that.
+- Upgrades are tested by doing them. The build makes two more systems of
+  the same sources under other names, one of which has a boot.lisp that
+  is no Lisp. A machine of each kind of processor takes the good one and
+  has to come up as it, by way of the old kernel, with the files that
+  were written before; a machine that takes the bad one has to be the old
+  system again after it is reset; and a world that is saved standing still
+  before its prompt has to be passed over at the next start. Under SBCL
+  the same procedures run on volumes that the tests make up and look at
+  afterwards without the file system.
 
 ## Shutting down (decided in M15e, 2026-11-20)
 

@@ -51,6 +51,11 @@
      (handler-case (progn ,form (failed "~S did not signal ~S" ',form ',type))
        (,type () nil))))
 
+;; What the error says that FUNCTION ends in, or NIL when it ends in none.
+(defun condition-text (function)
+  (handler-case (progn (funcall function) nil)
+    (error (condition) (princ-to-string condition))))
+
 ;;; The sources: each has to load, and without a warning.
 
 (defun load-source (name)
@@ -3245,8 +3250,17 @@
                     (coerce (loop for unit in (subseq units 0 end) collect (ldb (byte 8 0) unit) collect (ldb (byte 8 8) unit))
                             '(vector (unsigned-byte 8)))
                     :external-format :utf-16le))))
-             (walk (records path)
+             (walk (records path &optional own above)
                (let ((parts nil) (ended nil) (names nil) (shorts nil))
+                 ;; A directory that begins with an entry for itself has one for the directory it is in
+                 ;; after it, and each leads where it says: to its own first cluster, and to the other's,
+                 ;; or to none when that is the root.
+                 (when (and own (>= (length records) 64) (string= (short-of (subseq records 0 32)) "."))
+                   (flet ((leads (at) (+ (le records (+ at 26) 2) (if (= kind 32) (ash (le records (+ at 20) 2) 16) 0))))
+                     (unless (and (logbitp 4 (aref records 11)) (= (leads 0) own)
+                                  (string= (short-of (subseq records 32 64)) "..") (logbitp 4 (aref records 43))
+                                  (= (leads 32) above))
+                       (problem "the directory ~A does not begin with entries for itself and for the one it is in" path))))
                  (loop for at from 0 below (length records) by 32
                        for record = (subseq records at (+ at 32))
                        for first = (aref record 0)
@@ -3281,7 +3295,7 @@
                                    (push name names)
                                    (push (subseq record 0 11) shorts)
                                    (cond ((logbitp 4 what)
-                                          (walk (bytes-of (clusters-of cluster whole)) whole))
+                                          (walk (bytes-of (clusters-of cluster whole)) whole cluster (or own 0)))
                                          ((zerop size)
                                           (unless (zerop cluster)
                                             (problem "~A is empty, and begins in the cluster ~D" whole cluster))
@@ -3662,6 +3676,99 @@
                       (or (not (search " writes " (car file)))
                           (every (lambda (byte) (= byte (char-code (char (car file) 7)))) (cdr file))))
                     files))))
+
+;; Directories that are made: on volumes of every kind, at the root and
+;; inside another, by a name that is short and by one that is not. What is
+;; written is a volume in order, with the directory there, empty, and
+;; beginning with its two entries; a file goes into it and comes back; and
+;; it is taken away again when nothing is left in it, after which as many
+;; bytes are free as before.
+(dolist (kind '(12 16 32))
+  (let ((disk (fat-bytes (make-fat-volume kind *clean-tree* :cluster-sectors (if (= kind 32) 1 2) :information t))))
+    (start-files disk)
+    (let ((free (clara.fat:free-bytes)) (pages (clara.host:allocated-pages)))
+      (check '("/letters" "/letters/a directory with a long name" "/clara/inner/")
+             (list (clara.fat:make-directory "/letters")
+                   (clara.fat:make-directory "/letters/a directory with a long name")
+                   (clara.fat:make-directory "/clara/inner/")))
+      (check '(("a directory with a long name/") nil nil)
+             (list (clara.fat:names "/letters") (clara.fat:names "/letters/a directory with a long name")
+                   (clara.fat:names "/clara/inner")))
+      (check t (clara.fat:entry-directory-p (find "letters" (clara.fat:entries "/") :key #'clara.fat:entry-name
+                                                                                     :test #'string-equal)))
+      (put-text "/letters/a directory with a long name/first.txt" "in a directory that was made here")
+      (check "in a directory that was made here" (text-of-file "/LETTERS/A Directory With A Long Name/first.txt"))
+      (check (* 3 512 (if (= kind 32) 1 2)) (- free (clara.fat:free-bytes) (* 512 (if (= kind 32) 1 2))))
+      (multiple-value-bind (files problems) (inspect-volume disk)
+        (check nil problems)
+        (check t (equalp (octets "in a directory that was made here")
+                         (cdr (assoc "/letters/a directory with a long name/first.txt" files :test #'string=)))))
+      ;; What is there already, of either kind, is not made a second time; and a directory goes
+      ;; where there is one for it to be in.
+      (check "there is /letters already" (condition-text (lambda () (clara.fat:make-directory "/letters"))))
+      (check "there is /notes.txt already" (condition-text (lambda () (clara.fat:make-directory "/notes.txt"))))
+      (check-condition error (clara.fat:make-directory "/nowhere/inside"))
+      (check-condition error (clara.fat:make-directory "/letters/not: a name"))
+      (check-condition error (clara.fat:make-directory "/"))
+      ;; Taking one away: an empty one, and no other, and nothing that is a file.
+      (check "the directory /letters is not empty" (condition-text (lambda () (clara.fat:remove-directory "/letters"))))
+      (check "/notes.txt is a file, and not a directory"
+             (condition-text (lambda () (clara.fat:remove-directory "/notes.txt"))))
+      (check "there is no directory /nothing" (condition-text (lambda () (clara.fat:remove-directory "/nothing"))))
+      (check-condition error (clara.fat:remove-file "/letters"))
+      (clara.fat:remove-file "/letters/a directory with a long name/first.txt")
+      (check '("/letters/a directory with a long name" "/letters" "/clara/inner")
+             (list (clara.fat:remove-directory "/letters/a directory with a long name")
+                   (clara.fat:remove-directory "/letters") (clara.fat:remove-directory "/clara/inner")))
+      (check (list free pages nil) (list (clara.fat:free-bytes) (clara.host:allocated-pages)
+                                         (nth-value 1 (inspect-volume disk))))
+      (check t (equalp (inspect-volume disk) (sort (copy-list (tree-files *clean-tree*)) #'string< :key #'car))))))
+
+;; A directory of the root that is full, on the kinds whose root is no file,
+;; takes no directory more; and a volume without a cluster to spare none at all.
+(let ((disk (fat-bytes (make-fat-volume 12 '(("only.txt" "x")) :clusters 3))))
+  (start-files disk)
+  (check 1024 (clara.fat:free-bytes))             ; two of its three clusters, the last among them
+  (put-text "/one.txt" (make-string 512 :initial-element #\a))
+  (put-text "/two.txt" (make-string 512 :initial-element #\b))
+  (check 0 (clara.fat:free-bytes))
+  (check-condition error (clara.fat:make-directory "/more"))
+  (check nil (nth-value 1 (inspect-volume disk))))
+(let ((disk (fat-bytes (make-fat-volume 12 (loop for i below 224 collect (list (format nil "F~D" i) "x"))))))
+  (start-files disk)
+  (let ((free (clara.fat:free-bytes)))
+    (check "the directory of the root is full: it has 224 entries, and on a volume of this kind no more"
+           (condition-text (lambda () (clara.fat:make-directory "/MORE"))))
+    ;; The cluster that was to be the directory is nobody's again.
+    (check (list free nil) (list (clara.fat:free-bytes) (nth-value 1 (inspect-volume disk))))))
+
+;; A disk that stops while a directory is being made, at every request it
+;; could stop at: what was there is there, and the directory is whole or
+;; not there at all.
+(let ((request 0) (stopped t))
+  (loop while stopped
+        do (incf request)
+           (let* ((disk (fat-bytes (make-fat-volume 16 *clean-tree* :cluster-sectors 2 :stride 3)))
+                  (count 0))
+             (start-files disk)
+             (setf (vdev-watch *disk*)
+                   (lambda ()
+                     (when (= (incf count) request)
+                       (setf (vdev-answer *disk*) 1))))
+             (setq stopped (not (ignore-errors (clara.fat:make-directory "/clara/a directory that may not get made") t)))
+             (setf (vdev-answer *disk*) 0
+                   (vdev-watch *disk*) nil)
+             (multiple-value-bind (files problems) (inspect-volume disk)
+               (incf *checks*)
+               (unless (and (every (lambda (problem)
+                                     (or (search "are in no file, and not free" problem)
+                                         (search "the copies of the table differ" problem)))
+                                   problems)
+                            (equalp files (sort (copy-list (tree-files *clean-tree*)) #'string< :key #'car))
+                            (or stopped (null problems)))
+                 (failed "a disk that stopped at request ~D of making a directory is left out of order: ~{~A~^; ~}"
+                         request (or problems (list "its files are not what they were")))))))
+  (check t (> request 4)))
 
 ;; The image of the heap goes into a file like any other bytes, and what it
 ;; was in is given back.
@@ -4401,7 +4508,7 @@
 (setq clara.windows::*applications* *defined-applications*)
 ;; What lisp/terminal.lisp defined and installed when it was loaded: the two
 ;; that are files have a function here because the tests loaded the files.
-(check '(("Listener" nil) ("Editor" "/clara/editor.lisp") ("Files" "/clara/files.lisp"))
+(check '(("Listener" nil) ("Editor" "editor.lisp") ("Files" "files.lisp"))
        (mapcar (lambda (application)
                  (list (clara.windows::application-name application) (clara.windows::application-file application)))
                clara.windows::*applications*))
@@ -5300,10 +5407,6 @@
       (setf (sb-ext:symbol-global-value '*standard-output*) output))
     (get-output-stream-string text)))
 
-(defun condition-text (function)
-  (handler-case (progn (funcall function) nil)
-    (error (condition) (princ-to-string condition))))
-
 (defvar *cannot-off* "clara: this machine cannot be turned off from inside: it can be switched off now")
 (defvar *cannot-again* "clara: this machine cannot be started again from inside: that is for whoever runs it")
 
@@ -5420,7 +5523,8 @@
 (said-by #'clara.fat:start)
 (setq clara.windows::*running* nil
       clara.system::*leaving* :off)
-(check '(nil nil t) (list (clara.system:start) clara.system::*leaving* (clara:thread-alive-p clara.system::*watcher*)))
+(check (format nil "system: this is ClaraOS 0.0.0-host~%") (said-by-all #'clara.system:start))
+(check '(nil t) (list clara.system::*leaving* (clara:thread-alive-p clara.system::*watcher*)))
 (check '("power button" 2) (list (clara:thread-name clara.system::*watcher*) (length (clara:all-threads))))
 (check nil (clara.host:power))
 (check (format nil "clara: the power button was pressed~%clara: there is no disk to save the world on~%~
@@ -5431,8 +5535,254 @@
                       (eventually (lambda () (null clara.system::*leaving*))))))
 (check '(:off) (clara.host:power))
 (let ((first clara.system::*watcher*))       ; started again: one thread watches, and it is another
-  (clara.system:start)
+  (said-by-all #'clara.system:start)
   (check '(nil t) (list (eq first clara.system::*watcher*) (eventually (lambda () (not (clara:thread-alive-p first)))))))
+;;; A system is taken from another disk, tried, and takes the place of the
+;;; one before it (lisp/system.lisp). The disks are made up here: a volume
+;;; with a system in it, as a build lays one out, and another to take a
+;;; system from. What the kernel says of a start is what the tests say it
+;;; says, and afterwards the volume is looked at without the file system.
+
+(defvar *this-kernel* (if (member :arm64 *features*) "BOOTAA64.EFI" "BOOTX64.EFI"))
+(defvar *other-kernel* (if (member :arm64 *features*) "BOOTX64.EFI" "BOOTAA64.EFI"))
+
+;; The directory of a system, for MAKE-FAT-VOLUME: its files, each (name
+;; contents), and the manifest that lists them; with WRONG, the name of a
+;; file whose sum the manifest has wrong, and without MANIFEST, none.
+(defun system-tree (name files &key (manifest t) wrong)
+  (let ((lines (list "what a later system may say, and this one passes over" (format nil "ClaraOS system: ~A" name))))
+    (loop for (file contents) in files
+          do (push (format nil "file ~D ~A ~A" (length (octets contents))
+                           (if (equal file wrong)
+                               (make-string 128 :initial-element #\0)
+                               (clara.host:sha-512-of (octets contents)))
+                           file)
+                   lines))
+    (list name (append files (and manifest (list (list "manifest" (format nil "~{~A~%~}" (reverse lines)))))))))
+
+(defvar *old-files* (list '("boot.lisp" "(the old system)") (list *this-kernel* "the old kernel")
+                          (list *other-kernel* "the old kernel of the other processor")))
+(defvar *new-files* (list '("boot.lisp" "(the new system)") (list "long.lisp" *long-text*) '("empty.lisp" "")
+                          (list *this-kernel* "the new kernel") (list *other-kernel* "the new kernel of the other processor")))
+
+;; What a machine's own disk holds: where the firmware looks, the system
+;; that runs, the world it saved, what a start has left there, and a file
+;; of the user's.
+(defun machine-tree (&rest more)
+  `(("EFI" (("BOOT" ((,*this-kernel* "the old kernel") (,*other-kernel* "the old kernel of the other processor")))))
+    ("clara" (,(system-tree "0.0.0-host" *old-files*) ("clara.image" "the world that the old system saved") ,@more))
+    ("notes.txt" "written before any of this")))
+
+(defvar *machine-disk* nil)   ; the bytes of the disk that the machine was started from,
+(defvar *other-disk* nil)     ; and of the other one
+
+;; A machine with those two volumes, the other one first on the bus when
+;; FIRST says so, and the file system started on them.
+(defun two-disks (machine other &key (first :machine))
+  (setq *machine-disk* (fat-bytes (make-fat-volume 16 machine))
+        *other-disk* (fat-bytes (make-fat-volume 16 other)))
+  (if (eq first :machine)
+      (new-disks (list 3 *machine-disk*) (list 4 *other-disk*))
+      (new-disks (list 3 *other-disk*) (list 4 *machine-disk*)))
+  (setq clara.windows::*running* nil)
+  (said-by #'clara.disk:start)
+  (said-by #'clara.fat:start))
+
+;; What a file of a volume holds, as text, or NIL when the volume has none
+;; of that name; and whether anything on the volume is out of order.
+(defun on-disk (bytes name)
+  (let ((file (assoc name (inspect-volume bytes) :test #'string-equal)))
+    (and file (sb-ext:octets-to-string (coerce (cdr file) '(vector (unsigned-byte 8))) :external-format :utf-8))))
+
+(defun in-order-p (bytes)
+  (null (nth-value 1 (inspect-volume bytes))))
+
+;; What a manifest says, and what is none.
+(check '("0.0.1-new" ("boot.lisp" 5 "ab") ("a name with spaces.lisp" 0 "cd"))
+       (let ((ab (make-string 128 :initial-element #\a)) (cd (make-string 128 :initial-element #\c)))
+         (subst "cd" cd
+                (subst "ab" ab
+                       (clara.system::read-manifest
+                        (format nil "ClaraOS system: 0.0.1-new~%file 5 ~A boot.lisp~%signed by somebody~%~
+                                     file 0 ~A a name with spaces.lisp~%file 12 short-sum wrong.lisp~%~
+                                     file x ~A no-length.lisp~%file 3 ~A ../outside.lisp~%file 3 ~A in/side.lisp~%~
+                                     file 3 ~A .hidden~%file 7~%sums 9 ~A no-file-at-all.lisp~%"
+                                ab cd ab ab ab ab ab))
+                       :test #'equal)
+                :test #'equal)))
+(check '(nil nil nil) (list (clara.system::read-manifest "") (clara.system::read-manifest "file 5 x boot.lisp")
+                            (clara.system::read-manifest (format nil "Some other system: x~%"))))
+(check '(("a" "b" "c d e") ("a") ("" "b")) (list (clara.system::words "a b c d e" 2) (clara.system::words "a" 2)
+                                                (clara.system::words " b" 1)))
+(check '(0 1234567 nil nil nil) (mapcar #'clara.system::number-of '("0" "1234567" "" "12a" "1234567890123456")))
+
+;; The volume that the machine was started from is the one that has this
+;; start's number in /clara/starts, wherever its disk is on the bus; and a
+;; start that gets to its end takes that file away. The names of files are
+;; looked up there from then on, and the applications of the system are
+;; its files.
+(two-disks (machine-tree '("starts" "1 00000000000000aa
+")) `(("clara" (,(system-tree "0.0.1-new" *new-files*) ("starts" "1 00000000000000bb
+")))) :first :other)
+(clara.host:set-start-state :token "00000000000000aa")
+(check (format nil "system: this is ClaraOS 0.0.0-host~%") (said-by-all #'clara.system:start))
+(check '(t t "0.0.0-host" "/clara/0.0.0-host/boot.lisp" "/clara/0.0.0-host/")
+       (list (eq (clara.system:boot-volume) (second (clara.fat:volumes))) (eq clara.fat:*volume* (clara.system:boot-volume))
+             (clara.system:system) (clara.system:system-file "boot.lisp") clara.windows:*application-directory*))
+(check '(nil t) (list (on-disk *machine-disk* "/clara/starts") (and (on-disk *other-disk* "/clara/starts") t)))
+;; Without a number, or with one that no volume has, it is the first.
+(clara.host:set-start-state :token "00000000000000cc")
+(said-by-all #'clara.system:start)
+(check t (eq (clara.system:boot-volume) (first (clara.fat:volumes))))
+
+;; An upgrade: the other system's directory comes across file by file, the
+;; manifest last, and then /clara/next says that it is to be tried.
+;; Everything that was on the disk before is as it was, and what was taken
+;; for the copying is given back.
+(two-disks (machine-tree) `(("clara" (,(system-tree "0.0.1-new" *new-files*)))))
+(clara.host:set-start-state)
+(said-by-all #'clara.system:start)
+(let ((pages (clara.host:allocated-pages)) (before (inspect-volume *machine-disk*)))
+  (check (format nil "system: 0.0.1-new is on the disk, and is tried at the next start~%")
+         (said-by-all (lambda () (check "0.0.1-new" (clara.system:upgrade :start-again nil)))))
+  (check (list pages nil t) (list (clara.host:allocated-pages) (clara.host:power) (in-order-p *machine-disk*)))
+  (check (format nil "try 0.0.1-new~%") (on-disk *machine-disk* "/clara/next"))
+  (check t (loop for (name contents) in *new-files*
+                 always (equal contents (on-disk *machine-disk* (format nil "/clara/0.0.1-new/~A" name)))))
+  (check t (equal (on-disk *machine-disk* "/clara/0.0.1-new/manifest") (on-disk *other-disk* "/clara/0.0.1-new/manifest")))
+  (check t (every (lambda (file) (equalp file (assoc (car file) (inspect-volume *machine-disk*) :test #'string=))) before))
+  (check "the old kernel" (on-disk *machine-disk* (format nil "/EFI/BOOT/~A" *this-kernel*)))
+  ;; Asked a second time, what the first left is taken away and the system is taken again; and
+  ;; this time the machine is started again, which this one cannot be.
+  (check t (and (search (format nil "clara: the world is saved~%clara: starting the machine again~%")
+                        (said-by-all #'clara.system:upgrade))
+                t))
+  (check (list '(:again) t pages) (list (clara.host:power) (in-order-p *machine-disk*) (clara.host:allocated-pages)))
+  (check (format nil "try 0.0.1-new~%") (on-disk *machine-disk* "/clara/next")))
+
+;; What is not taken: a system with a file that is not what its manifest
+;; says, one without a kernel for this machine, one that is not whole, the
+;; system that runs, and anything when the disk has no room. Nothing then
+;; says that a system is to be tried, and the machine starts as it did.
+(dolist (how (list (list (system-tree "0.0.1-new" *new-files* :wrong "long.lisp")
+                         "the file /clara/0.0.1-new/long.lisp is not what the manifest of its system says it is")
+                   (list (system-tree "0.0.1-new" (remove *this-kernel* *new-files* :key #'car :test #'string=))
+                         (format nil "the system 0.0.1-new has no kernel for this machine, which would be ~A" *this-kernel*))
+                   (list (system-tree "0.0.1-new" *new-files* :manifest nil)
+                         "no other disk of this machine holds a ClaraOS other than this one, 0.0.0-host")
+                   (list (system-tree "0.0.0-host" *old-files*)
+                         "no other disk of this machine holds a ClaraOS other than this one, 0.0.0-host")
+                   (list (list "0.0.1-new" (cadr (system-tree "0.0.2-other" *new-files*)))
+                         "no other disk of this machine holds a ClaraOS other than this one, 0.0.0-host")))
+  (two-disks (machine-tree) `(("clara" (,(first how)))))
+  (said-by-all #'clara.system:start)
+  (let ((pages (clara.host:allocated-pages)))
+    (check (second how) (condition-text #'clara.system:upgrade))
+    (check (list nil nil t pages)
+           (list (on-disk *machine-disk* "/clara/next") (on-disk *machine-disk* "/clara/0.0.1-new/manifest")
+                 (in-order-p *machine-disk*) (clara.host:allocated-pages)))))
+(two-disks (machine-tree) `(("clara" (,(system-tree "0.0.1-new" *new-files*)))))
+(said-by-all #'clara.system:start)
+(check "that volume holds no ClaraOS other than this one, 0.0.0-host"
+       (condition-text (lambda () (clara.system:upgrade :from (clara.system:boot-volume)))))
+(check "0.0.1-new" (progn (said-by-all (lambda () (clara.system:upgrade :from (second (clara.fat:volumes)) :start-again nil)))
+                          (car (clara.system::system-on (second (clara.fat:volumes))))))
+(setq *machine-disk* (fat-bytes (make-fat-volume 12 (machine-tree) :clusters 40)))   ; a disk with 20 KiB to it
+(new-disks (list 3 *machine-disk*) (list 4 (fat-bytes (make-fat-volume 16 `(("clara" (,(system-tree "0.0.1-new" *new-files*))))))))
+(said-by #'clara.disk:start)
+(said-by #'clara.fat:start)
+(said-by-all #'clara.system:start)
+(check t (let ((said (condition-text #'clara.system:upgrade)))
+           (and (search "KiB free, and the system 0.0.1-new takes" said) (null (on-disk *machine-disk* "/clara/next"))
+                (in-order-p *machine-disk*))))
+;; A machine that was not started from a disk has nowhere to put a system.
+(new-disks)
+(said-by #'clara.disk:start)
+(said-by #'clara.fat:start)
+(check (format nil "system: this is ClaraOS 0.0.0-host~%") (said-by-all #'clara.system:start))
+(check '(nil nil) (list (clara.system:boot-volume) clara.windows:*application-directory*))
+(check-condition error (clara.system:upgrade))
+
+;; On trial: the system that the old kernel started in place of itself has
+;; come to its prompt, and takes the old one's place. Its kernels are where
+;; the firmware looks, /clara/next is gone, and so is the old system's
+;; directory, and the count of this start.
+(two-disks (append (machine-tree '("next" "tried 0.0.1-new
+") '("starts" "1 0000000000000001
+")) nil)
+           '(("nothing.txt" "of interest")))
+(setq *machine-disk* (fat-bytes (make-fat-volume 16 (let ((tree (machine-tree '("next" "tried 0.0.1-new
+") '("starts" "1 0000000000000001
+"))))
+                                                    (setf (second (second tree))
+                                                          (cons (system-tree "0.0.1-new" *new-files*) (second (second tree))))
+                                                    tree))))
+(new-disks (list 3 *machine-disk*))
+(said-by #'clara.disk:start)
+(said-by #'clara.fat:start)
+(clara.host:set-start-state :system "0.0.1-new" :trial t :token "0000000000000001")
+(check (format nil "system: this is ClaraOS 0.0.1-new, on trial: the system before it is still in place~%~
+                    system: 0.0.1-new has come to its prompt, and is the system of this machine from here on~%")
+       (said-by-all #'clara.system:start))
+(check '("the new kernel" "the new kernel of the other processor" nil nil nil "(the new system)" t)
+       (list (on-disk *machine-disk* (format nil "/EFI/BOOT/~A" *this-kernel*))
+             (on-disk *machine-disk* (format nil "/EFI/BOOT/~A" *other-kernel*))
+             (on-disk *machine-disk* "/clara/next") (on-disk *machine-disk* "/clara/starts")
+             (on-disk *machine-disk* "/clara/0.0.0-host/boot.lisp") (on-disk *machine-disk* "/clara/0.0.1-new/boot.lisp")
+             (in-order-p *machine-disk*)))
+(check '("written before any of this" "the world that the old system saved")
+       (list (on-disk *machine-disk* "/notes.txt") (on-disk *machine-disk* "/clara/clara.image")))
+(check '("0.0.1-new") (clara.system::systems-here))
+
+;; A trial that did not come to its prompt: the system from before says so
+;; when it is started again, and marks the one that failed.
+(setq *machine-disk* (fat-bytes (make-fat-volume 16 (let ((tree (machine-tree '("next" "failed 0.0.1-new
+"))))
+                                                    (setf (second (second tree))
+                                                          (cons (system-tree "0.0.1-new" *new-files*) (second (second tree))))
+                                                    tree))))
+(new-disks (list 3 *machine-disk*) (list 4 (fat-bytes (make-fat-volume 16 `(("clara" (,(system-tree "0.0.1-new" *new-files*)
+                                                                                     ("at-once" ""))))))))
+(said-by #'clara.disk:start)
+(said-by #'clara.fat:start)
+(clara.host:set-start-state :failed "0.0.1-new")
+;; It is on another disk as well, to be taken at once, and is not, having failed.
+(check (format nil "system: this is ClaraOS 0.0.0-host~%~
+                    system: 0.0.1-new was tried and did not come to its prompt: this is still 0.0.0-host~%~
+                    system: 0.0.1-new, on another disk, is not taken again: it did not come to its prompt~%")
+       (said-by-all #'clara.system:start))
+(check '(nil t t "the old kernel" nil)
+       (list (on-disk *machine-disk* "/clara/next") (and (on-disk *machine-disk* "/clara/0.0.1-new/failed") t)
+             (in-order-p *machine-disk*) (on-disk *machine-disk* (format nil "/EFI/BOOT/~A" *this-kernel*))
+             (clara.host:power)))
+;; Asked for, it is taken once more: what the failure left is replaced.
+(clara.host:set-start-state)
+(said-by-all (lambda () (clara.system:upgrade :start-again nil)))
+(check (list (format nil "try 0.0.1-new~%") nil t)
+       (list (on-disk *machine-disk* "/clara/next") (on-disk *machine-disk* "/clara/0.0.1-new/failed") (in-order-p *machine-disk*)))
+
+;; A disk that says "at once": the system on it is taken as the machine
+;; starts, and the machine started again to try it, without a word from
+;; anybody. The start that does that has not come to its prompt.
+(two-disks (machine-tree '("starts" "1 0000000000000002
+")) `(("clara" (,(system-tree "0.0.1-new" *new-files*) ("at-once" "")))))
+(clara.host:set-start-state :token "0000000000000002")
+(check t (let ((said (said-by-all #'clara.system:start)))
+           (and (search (format nil "system: this is ClaraOS 0.0.0-host~%~
+                                     system: 0.0.1-new is taken from another disk, and the machine starts again to try it~%~
+                                     clara: starting the machine again~%")
+                        said)
+                t)))
+(check (list '(:again) (format nil "try 0.0.1-new~%") t)
+       (list (clara.host:power) (on-disk *machine-disk* "/clara/next") (in-order-p *machine-disk*)))
+;; A disk that says so and has the system that runs is left alone.
+(two-disks (machine-tree) `(("clara" (,(system-tree "0.0.0-host" *old-files*) ("at-once" "")))))
+(clara.host:set-start-state)
+(check (format nil "system: this is ClaraOS 0.0.0-host~%") (said-by-all #'clara.system:start))
+(check '(nil nil) (list (clara.host:power) (on-disk *machine-disk* "/clara/next")))
+
+(clara.host:reset-machine)
+(clara.host:set-start-state)
 (clara:destroy-thread clara.system::*watcher*)
 (check t (eventually (lambda () (= (length (clara:all-threads)) 1))))
 

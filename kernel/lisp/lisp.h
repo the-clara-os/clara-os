@@ -693,6 +693,8 @@ LISP_PRIMITIVE(lisp_p_give_screen);
 LISP_PRIMITIVE(lisp_p_map_memory);
 LISP_PRIMITIVE(lisp_p_pci_configuration);
 LISP_PRIMITIVE(lisp_p_keyboard_break);
+LISP_PRIMITIVE(lisp_p_sha_512);
+LISP_PRIMITIVE(lisp_p_start_state);
 LISP_PRIMITIVE(lisp_p_power_off);
 LISP_PRIMITIVE(lisp_p_reset);
 LISP_PRIMITIVE(lisp_p_power_button);

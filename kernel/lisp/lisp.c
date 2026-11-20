@@ -9,6 +9,7 @@
 #define IMAGE "clara.image" /* the file of \clara that is a world, saved */
 
 static int g_resumed; /* the world is an image's: it was made on the boot that saved it, and not on this one */
+static const struct boot_info *g_boot; /* what the handoff learned of the starts before this one */
 
 /* The image among the files that the boot handoff read, when there is
  * one, taken out of their list: it is no file for LOAD to find. Its name
@@ -33,9 +34,14 @@ void lisp_init(struct boot_info *bi)
 {
     struct boot_file *image = take_image(bi);
 
+    g_boot = bi;
     lisp_heap_init();
     kprintf("lisp: objects are tagged 64-bit words, in a heap at %p that begins with NIL\n",
             (void *)(uintptr_t)VM_HEAP_BASE);
+    /* A world that did not come to its prompt the last time is not started a second time: the
+     * handoff did not read it (boot.c), and the world is made of the files, as on a new machine. */
+    if (bi->image_passed_over)
+        kprintf("lisp: clara.image is passed over: the start before this one did not come to its prompt\n");
     if (image) {
         g_resumed = lisp_image_load(image);
         /* What it held is in the heap by now, or of no use: the page frames it was read into are free. */
@@ -46,6 +52,39 @@ void lisp_init(struct boot_info *bi)
         lisp_symbols_init();
     lisp_eval_init(bi->files);
     lisp_unsafe_init(&bi->fb);
+}
+
+/* (start-state): what the kernel knows of this start and of the ones
+ * before it, for the Lisp that sees to the system as a whole
+ * (lisp/system.lisp), as a list of names and values: :SYSTEM, the name of
+ * this system; :RESUMED, whether the world is one that was saved, and not
+ * made on this start; :STARTS, how many starts in a row before this one
+ * did not come to a prompt; :TOKEN, the sixteen digits that the handoff
+ * wrote into \clara\starts on the volume that the machine was started
+ * from, or NIL when it could write nothing; :TRIAL, whether this system is
+ * being tried, with the one before it still in place; :FAILED, the name of
+ * a system that was tried and did not come to its prompt, or NIL; and
+ * :PASSED-OVER, whether a saved world was there and was not started. */
+LISP_PRIMITIVE(lisp_p_start_state)
+{
+    static const char digits[] = "0123456789abcdef";
+    lisp t = lisp_roots.t, state = LISP_NIL;
+    char token[16];
+
+    (void)argc;
+    (void)argv;
+#define FACT(name, value) state = lisp_cons(lisp_symbol_in(lisp_roots.keyword, name, 1), lisp_cons(value, state))
+    FACT("PASSED-OVER", g_boot->image_passed_over ? t : LISP_NIL);
+    FACT("FAILED", g_boot->failed[0] ? lisp_string_from_utf8(g_boot->failed, strlen(g_boot->failed)) : LISP_NIL);
+    FACT("TRIAL", g_boot->trial ? t : LISP_NIL);
+    for (unsigned i = 0; i < 16; i++)
+        token[i] = digits[g_boot->token >> (60 - 4 * i) & 15];
+    FACT("TOKEN", g_boot->token ? lisp_string_from_utf8(token, sizeof token) : LISP_NIL);
+    FACT("STARTS", lisp_fixnum((int64_t)g_boot->starts));
+    FACT("RESUMED", g_resumed ? t : LISP_NIL);
+    FACT("SYSTEM", lisp_string_from_utf8(clara_system, strlen(clara_system)));
+#undef FACT
+    return state;
 }
 
 /* Where the self-test prints to: memory, so that it can look at the text. */

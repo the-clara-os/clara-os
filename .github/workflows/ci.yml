@@ -9,7 +9,10 @@
 # and each machine boots a second time, from that disk, into the world it
 # saved (tools/resumed.txt); fsck.fat looks at every disk afterwards. What
 # the user manual shows of the prompt (site/manual.html) is typed at one
-# more machine, before and after it is started again. The
+# more machine, before and after it is started again. Each kind of
+# processor is shut down, started again and turned off by its power button
+# (tools/power.txt), and takes another system from a second disk
+# (tools/upgrade.txt, tools/at-once.txt, tools/trial.txt). The
 # runners have no hardware acceleration for QEMU, so every machine is
 # emulated. The website
 # is built as well: it reads ROADMAP.md, and stops building when a
@@ -34,7 +37,7 @@ concurrency:
 jobs:
   build-and-boot:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
 
     steps:
       - name: Checkout

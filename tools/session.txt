@@ -202,21 +202,25 @@ error: interrupted from the keyboard
 ^M mouse_move 30 20
 ^M mouse_button 1
 (30 20 1)
-> (list (directory "/e*") (directory "/clara/b*.LISP") (directory "/nowhere/*"))
-(("/EFI/") ("/clara/boot.lisp") NIL)
-> (list (probe-file "/CLARA/Listener.lisp") (probe-file "/clara") (probe-file "/clara/nothing.lisp"))
-("/CLARA/listener.lisp" "/clara/" NIL)
-> (with-open-file (in "/clara/self-test.lisp") (list (read-line in) (read-line in)))
+> (list (directory "/e*") (directory "/clara/*") (directory "/clara/{{system}}/b*.LISP") (directory "/nowhere/*"))
+(("/EFI/") ("/clara/{{system}}/") ("/clara/{{system}}/boot.lisp") NIL)
+> (list (clara.system:system) (clara.system:system-file "boot.lisp") (probe-file "/clara") (probe-file "/clara/nothing.lisp"))
+("{{system}}" "/clara/{{system}}/boot.lisp" "/clara/" NIL)
+> (list (probe-file "/CLARA/{{system}}/Listener.lisp") (eq (clara.system:boot-volume) (car (clara.fat:volumes))))
+("/CLARA/{{system}}/listener.lisp" T)
+> (with-open-file (in (clara.system:system-file "self-test.lisp")) (list (read-line in) (read-line in)))
 (";;;; self-test.lisp: a file with a mistake in it, for the evaluator's" ";;;; self-test to load")
-> (load "/clara/listener.lisp")
-T
+> (list (load (clara.system:system-file "listener.lisp")) (load "/clara/listener.lisp") (load "listener.lisp"))
+(T T T)
+> (load (clara.system:system-file "self-test.lisp"))
+error: CAR wants a list, and NOT-A-LIST is not one, in the form at line 15 of /clara/{{system}}/self-test.lisp
 > (load "/clara/self-test.lisp")
-error: CAR wants a list, and NOT-A-LIST is not one, in the form at line 15 of /clara/self-test.lisp
+error: CAR wants a list, and NOT-A-LIST is not one, in the form at line 15 of self-test.lisp
 > (load "/clara/nothing.lisp")
 error: LOAD finds no file "/clara/nothing.lisp": no disk has it, and \clara had none of that name at boot
 > (directory "/efi/boot/boot*")
 ("/efi/boot/BOOTAA64.EFI" "/efi/boot/BOOTX64.EFI")
-> (let ((entry (find-if (lambda (entry) (string= (clara.fat:entry-name entry) "boot.lisp")) (clara.fat:entries "/clara"))))
+> (let ((entry (find-if (lambda (entry) (string= (clara.fat:entry-name entry) "boot.lisp")) (clara.fat:entries "/clara/{{system}}"))))
     (list (clara.fat:entry-directory-p entry) (> (clara.fat:entry-size entry) 30000)))
 (NIL T)
 > (clara.fat:file-text "/EFI/BOOT/bootx64.efi")

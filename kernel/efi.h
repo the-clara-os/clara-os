@@ -97,7 +97,7 @@ typedef struct {
     void *RaiseTPL, *RestoreTPL;
     EFI_STATUS (*AllocatePages)(uint32_t allocate_type, uint32_t memory_type, UINTN pages,
                                 EFI_PHYSICAL_ADDRESS *memory);
-    void *FreePages;
+    EFI_STATUS (*FreePages)(EFI_PHYSICAL_ADDRESS memory, UINTN pages);
     EFI_STATUS (*GetMemoryMap)(UINTN *size, EFI_MEMORY_DESCRIPTOR *map, UINTN *key,
                                UINTN *desc_size, uint32_t *desc_version);
     void *AllocatePool, *FreePool;
@@ -106,9 +106,14 @@ typedef struct {
     EFI_STATUS (*HandleProtocol)(EFI_HANDLE handle, const EFI_GUID *protocol, void **interface);
     void *Reserved, *RegisterProtocolNotify, *LocateHandle, *LocateDevicePath;
     void *InstallConfigurationTable;
-    void *LoadImage, *StartImage, *Exit, *UnloadImage;
+    /* An image that is in memory already is loaded from there, when source says where. */
+    EFI_STATUS (*LoadImage)(BOOLEAN boot_policy, EFI_HANDLE parent, void *device_path, void *source, UINTN size,
+                            EFI_HANDLE *image);
+    EFI_STATUS (*StartImage)(EFI_HANDLE image, UINTN *exit_data_size, CHAR16 **exit_data);
+    void *Exit, *UnloadImage;
     EFI_STATUS (*ExitBootServices)(EFI_HANDLE image, UINTN map_key);
-    void *GetNextMonotonicCount, *Stall, *SetWatchdogTimer;
+    EFI_STATUS (*GetNextMonotonicCount)(uint64_t *count); /* a number that no earlier call was given, on any boot */
+    void *Stall, *SetWatchdogTimer;
     void *ConnectController, *DisconnectController;
     void *OpenProtocol, *CloseProtocol, *OpenProtocolInformation;
     void *ProtocolsPerHandle, *LocateHandleBuffer;
@@ -162,10 +167,13 @@ struct EFI_FILE_PROTOCOL {
     EFI_STATUS (*Open)(EFI_FILE_PROTOCOL *self, EFI_FILE_PROTOCOL **file, const CHAR16 *name,
                        uint64_t mode, uint64_t attributes);
     EFI_STATUS (*Close)(EFI_FILE_PROTOCOL *self);
-    void *Delete;
+    EFI_STATUS (*Delete)(EFI_FILE_PROTOCOL *self); /* and the file is closed, whether or not it went */
     /* On a directory, Read returns one EFI_FILE_INFO per call and a size of 0 at the end. */
     EFI_STATUS (*Read)(EFI_FILE_PROTOCOL *self, UINTN *size, void *buffer);
-    void *Write, *GetPosition, *SetPosition, *GetInfo, *SetInfo, *Flush;
+    EFI_STATUS (*Write)(EFI_FILE_PROTOCOL *self, UINTN *size, const void *buffer);
+    void *GetPosition;
+    EFI_STATUS (*SetPosition)(EFI_FILE_PROTOCOL *self, uint64_t position); /* 0 on a directory: read it from its start */
+    void *GetInfo, *SetInfo, *Flush;
 };
 
 typedef struct EFI_SIMPLE_FILE_SYSTEM_PROTOCOL EFI_SIMPLE_FILE_SYSTEM_PROTOCOL;
@@ -183,7 +191,9 @@ typedef struct {
     CHAR16   FileName[];           /* null-terminated */
 } EFI_FILE_INFO;
 
-#define EFI_FILE_MODE_READ 0x1ULL
+#define EFI_FILE_MODE_READ   0x1ULL
+#define EFI_FILE_MODE_WRITE  0x2ULL
+#define EFI_FILE_MODE_CREATE 0x8000000000000000ULL /* with the other two: make the file when there is none */
 #define EFI_FILE_DIRECTORY 0x10ULL  /* an Attribute bit */
 
 /* Graphics Output Protocol */

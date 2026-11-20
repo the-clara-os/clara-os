@@ -5,7 +5,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define CLARA_VERSION "0.0.25"
+#define CLARA_VERSION "0.0.26"
 
 #define PAGE_SHIFT 12
 #define PAGE_SIZE  (1ULL << PAGE_SHIFT)
@@ -39,7 +39,14 @@ struct boot_file {
     uint64_t    size;          /* in bytes */
 };
 
-/* What the boot handoff learned from the firmware before taking the machine. */
+/* system.c: what this system is called, its version and the digits of its
+ * build, which is also the name of its directory under \clara on the boot
+ * volume. A name is this long at most, the 0 at its end included. */
+#define SYSTEM_NAME 40
+extern const char clara_system[];
+
+/* What the boot handoff learned from the firmware before taking the machine,
+ * and from the boot volume about the starts before this one. */
 struct boot_info {
     struct framebuffer fb;
     void    *memory_map;       /* EFI memory map; descriptors are desc_size bytes apart */
@@ -47,7 +54,12 @@ struct boot_info {
     uint64_t desc_size;
     void    *acpi_rsdp;        /* ACPI 2.0 root pointer, or NULL */
     void    *dtb;              /* flattened device tree, or NULL */
-    struct boot_file *files;   /* in directory order, or NULL */
+    struct boot_file *files;   /* the system's own, in directory order, and the world that was saved; or NULL */
+    unsigned starts;           /* how many starts in a row, before this one, did not come to a prompt */
+    uint64_t token;            /* what the handoff wrote on the boot volume for this start, which says which volume that is; or 0 */
+    int      trial;            /* this system is being tried: the one before it started it, and is still there */
+    char     failed[SYSTEM_NAME]; /* the system that was tried and did not come to its prompt, or "" */
+    int      image_passed_over; /* a saved world is there and was not read, the start before this not having come to a prompt */
 };
 
 /* boot.c: the stack kmain starts on. It is part of the kernel image, and its
@@ -166,6 +178,10 @@ void thread_selftest(void);
 void lock_acquire(struct lock *l);   /* waits its turn; never in an interrupt handler */
 void lock_release(struct lock *l);
 
+/* sha512.c: the sixty-four bytes that stand for any number of bytes (FIPS 180-4) */
+void sha512(const void *data, uint64_t bytes, uint8_t sum[64]);
+void sha512_selftest(void);
+
 /* string.c */
 void  *memset(void *dst, int c, size_t n);
 void  *memcpy(void *dst, const void *src, size_t n);
@@ -175,6 +191,7 @@ size_t strlen(const char *s);
 
 /* arch/<arch>/arch.c */
 extern const char *const arch_name;
+extern const char *const arch_kernel; /* what the firmware calls the kernel of this architecture: "BOOTX64.EFI" */
 extern const char *const arch_feature; /* what *FEATURES* calls it, as SBCL does: "X86-64", "ARM64" */
 void arch_early_init(void);   /* right after ExitBootServices: interrupts off, serial ready */
 void arch_serial_putc(char c);

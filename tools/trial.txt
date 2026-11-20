@@ -1,0 +1,28 @@
+> (cl:in-package "COMMON-LISP-USER")
+#<PACKAGE "COMMON-LISP-USER">
+> (list (delete-file "/clara/stress") (defvar *before* 'the-trial))
+(T *BEFORE*)
+> (clara.system:upgrade)
+system: {{version}}-broken is on the disk, and is tried at the next start
+clara: the world is saved
+clara: starting the machine again
+^W ^panic: lisp: boot.lisp did not load
+^M system_reset
+^R
+> (list *before* (equal (clara.system:system) "{{system}}") (getf (clara.unsafe:start-state) :resumed) (getf (clara.unsafe:start-state) :failed))
+(THE-TRIAL T T "{{version}}-broken")
+> (list (clara.fat:names "/clara/") (and (member "failed" (clara.fat:names "/clara/{{version}}-broken/") :test #'equal) t))
+(("{{system}}/" "{{version}}-broken/" "a file with a long name.text" "clara.image" "hello.lisp" "kept.lisp") T)
+> (progn (setf (symbol-function 'clara.system::came-to-prompt)
+               (lambda () (write-line "standing still on purpose") (loop (clara:wait-event (clara:make-event) 1000))))
+         (clara:save-image))
+"/clara/clara.image"
+> (clara.system:start-again :save nil)
+clara: starting the machine again
+^W ^standing still on purpose
+^M system_reset
+^R
+> (list (getf (clara.unsafe:start-state) :starts) (getf (clara.unsafe:start-state) :passed-over) (getf (clara.unsafe:start-state) :resumed))
+(1 T NIL)
+> (list (boundp '*before*) (clara.fat:names "/clara/"))
+(NIL ("{{system}}/" "{{version}}-broken/" "a file with a long name.text" "clara.image" "hello.lisp" "kept.lisp"))

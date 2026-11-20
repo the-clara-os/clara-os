@@ -43,7 +43,8 @@
            "OPEN-WINDOW" "CLOSE-WINDOW" "SHOW" "WINDOW-P" "WINDOW-TITLE" "WINDOW-SURFACE" "WINDOW-POSITION"
            "MOVE-WINDOW" "RAISE-WINDOW" "RENAME-WINDOW" "NEXT-EVENT" "WINDOWS" "FOCUSED-WINDOW"
            "DEFINE-APPLICATION" "INSTALL-APPLICATION" "UNLOAD-APPLICATION" "REMOVE-APPLICATION"
-           "APPLICATIONS" "LAUNCH" "DEFINE-COMMAND" "REMOVE-COMMAND" "COMMANDS" "UNFINISHED"
+           "APPLICATIONS" "LAUNCH" "*APPLICATION-DIRECTORY*" "DEFINE-COMMAND" "REMOVE-COMMAND" "COMMANDS"
+           "UNFINISHED"
            "KEY-TYPED" "POINTER-MOVED"))
 (in-package "CLARA.WINDOWS")
 
@@ -82,6 +83,7 @@
 (defvar *dirty* nil)        ; rectangles of the screen that are to be put together again, none over another
 (defvar *applications* nil) ; the applications there are, in the order of the launcher's list
 (defvar *commands* nil)     ; and under them the commands, each (name . function), in that order
+(defvar *application-directory* nil) ; where the file of an application is that was installed by a bare name, or NIL
 (defvar *loading* (clara:make-lock "applications")) ; the file of one application is loaded at a time
 (defvar *launched* nil)     ; the threads that LAUNCH made
 (defvar *launching* nil)    ; in the thread of an application: the event that LAUNCH waits for, until its window is open
@@ -647,6 +649,20 @@
 (defun applications ()
   (mapcar #'application-name *applications*))
 
+;; The name of the file of an application. One that was installed by a
+;; name without a directory is a file of the system's own, wherever the
+;; system keeps its files, which it says in *APPLICATION-DIRECTORY*
+;; (lisp/system.lisp); on a machine without a disk nothing says so, and
+;; LOAD finds the file by its bare name among what was read at boot.
+(defun application-path (application)
+  (let ((file (application-file application)) (bare t))
+    (dotimes (i (length file))
+      (when (char= (char file i) #\/)
+        (setq bare nil)))
+    (if (and bare *application-directory*)
+        (concatenate 'string *application-directory* file)
+        file)))
+
 ;; The function of an application, its file loaded first when that is still
 ;; to be done. The packages that are there after the file and were not
 ;; before are the application's, also when the file failed halfway.
@@ -654,12 +670,12 @@
   (clara:with-lock-held (*loading*)
     (unless (application-function application)
       (let ((before (list-all-packages)))
-        (unwind-protect (load (application-file application))
+        (unwind-protect (load (application-path application))
           (setf (application-packages application)
                 (append (remove-if (lambda (package) (member package before)) (list-all-packages))
                         (application-packages application)))))
       (unless (application-function application)
-        (error "the file ~A was loaded, and it defined no application ~S" (application-file application)
+        (error "the file ~A was loaded, and it defined no application ~S" (application-path application)
                (application-name application))))
     (application-function application)))
 

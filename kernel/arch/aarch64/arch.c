@@ -1,6 +1,7 @@
 #include "arch.h"
 
 const char *const arch_name = "aarch64";
+const char *const arch_kernel = "BOOTAA64.EFI";
 const char *const arch_feature = "ARM64";
 
 /* PL011 UART of the QEMU/UTM "virt" machine. The address is assumed, not

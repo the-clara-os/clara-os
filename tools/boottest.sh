@@ -13,7 +13,11 @@
 #                 "clara: turning the machine off" for it: the machine then has
 #                 to go by itself, and there is no screen left to save.)
 #        SESSION=tools/session.txt (what is typed and what has to come back;
-#                 empty: only Ctrl-D is typed)
+#                 empty: only Ctrl-D is typed. {{system}} in it is the name of
+#                 the system that was built, and {{version}} its version.)
+#        PANICS=1 (how many times the kernel is to stop with a report on the
+#                 way, a panic or an exception: 0 unless this says otherwise,
+#                 and one more than that ends the boot at once)
 #        NAME=aarch64-gic2 (what the files in build/ are called; default: the arch)
 #        MKDISK="--fat 16 --table mbr" (the kind of disk that is made of the ESP
 #                 directory for the machine to boot from: tools/mkdisk.py)
@@ -51,6 +55,15 @@ boot=build/boot-$name.img
 mkdir -p build
 rm -f "$shot" "$sock" "$keys" "$orders" "$heard" "$typing".* "$scratch"
 : > "$log"
+
+# A session can name the system that was built and its version, which are
+# different for every build: they are written into a copy of it.
+if [ -n "$session" ]; then
+    system=$(ls "${ESP:-build/esp}/clara" 2> /dev/null | head -1)
+    version=$(sed -n 's/^#define CLARA_VERSION "\(.*\)"/\1/p' kernel/kernel.h)
+    sed -e "s/{{system}}/$system/g" -e "s/{{version}}/$version/g" "$session" > "build/typed-$name.txt"
+    session=build/typed-$name.txt
+fi
 
 # The disk that the machine boots from, and that its kernel writes to: a
 # new one, or a copy of the one that was asked for, so that a disk is only
@@ -102,6 +115,9 @@ dd if=/dev/zero of="$scratch" bs=1024 count=1024 2> /dev/null
 #   ^R          the machine starts again here, by the form in the line before
 #               it: what follows is typed at the kernel that comes up then,
 #               once it reads.
+#   ^W pattern  wait until the kernel has printed a line that the pattern
+#               fits, grep's kind of pattern, before what follows: a ^M that
+#               is for a kernel which says nothing more by itself.
 # So the session is typed in parts, and a part waits for a line of the
 # kernel's: a Ctrl-C or a command, and what follows them, until the kernel
 # has echoed the line before, which it is evaluating by then; a line for
@@ -115,6 +131,7 @@ dd if=/dev/zero of="$scratch" bs=1024 count=1024 2> /dev/null
 #   $typing.N.monitor  the commands it sends to the monitor first
 #   $typing.N.after    the line that the kernel has to have printed
 #   $typing.N.boots    or how many times it has to have said that it reads
+#   $typing.N.grep     or a pattern that a line of what it printed has to fit
 LC_ALL=C awk -v out="$typing" -v goes="$goes" '
     function keyname(c,    i) {
         if (c ~ /^[a-z0-9]$/) return c
@@ -140,6 +157,7 @@ LC_ALL=C awk -v out="$typing" -v goes="$goes" '
                   print "sendkey ret" > (out "." part ".monitor"); commands = 1; next }
     /^\^K$/     { begin_part(before); keyboard = 1; next }
     /^\^R$/     { part++; boots++; print boots + 1 > (out "." part ".boots"); commands = 0; next }
+    /^\^W /     { part++; print substr($0, 4) > (out "." part ".grep"); commands = 0; next }
     /^[> ] /    { if (keyboard) {
                       for (i = 3; i <= length($0); i++)
                           print "sendkey " keyname(substr($0, i, 1)) > (out "." part ".monitor")
@@ -197,6 +215,8 @@ type_part() {
 echoed() {
     if [ -f "$typing.$part.boots" ]; then
         [ "$(grep -c '^clara: reading' "$log")" -ge "$(cat "$typing.$part.boots")" ]
+    elif [ -f "$typing.$part.grep" ]; then
+        grep -q -- "$(cat "$typing.$part.grep")" "$log"
     else
         [ -f "$typing.$part.after" ] &&
             { LC_ALL=C tr -d '\r' < "$log"; printf '\001'; } | LC_ALL=C grep -qxF -- "$(cat "$typing.$part.after")"
@@ -315,8 +335,9 @@ while [ "$i" -lt $((timeout * 4)) ]; do
     elif echoed; then
         type_part
     fi
-    # A kernel that has stopped with a report is not going to say more.
-    if grep -q '^panic: \|^exception: ' "$log"; then
+    # A kernel that has stopped with a report is not going to say more,
+    # unless the session is one that starts the machine again after it.
+    if [ "$(grep -c '^panic: \|^exception: ' "$log")" -gt "${PANICS:-0}" ]; then
         break
     fi
     kill -0 "$pid" 2>/dev/null || break

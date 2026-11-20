@@ -1,9 +1,15 @@
 /* Boot handoff. ClaraOS is itself the UEFI application: the firmware loads
  * BOOTX64.EFI or BOOTAA64.EFI and calls efi_main. Everything the kernel wants
  * from the firmware is collected here, while boot services still exist: the
- * ACPI tables, the framebuffer, the files in the boot volume's \clara
- * directory and, last, the memory map. Then the machine is ours, and kmain
- * starts on the kernel's own stack. */
+ * ACPI tables, the framebuffer, the files of this system in the boot
+ * volume's \clara directory and, last, the memory map. Then the machine is
+ * ours, and kmain starts on the kernel's own stack.
+ *
+ * This is also where a start is counted, and where a newer system that is
+ * on the volume is tried, which are the two things that the firmware's
+ * file system is written to for: both have to happen before the kernel
+ * has run a line of Lisp, so that they hold when the Lisp does not come to
+ * its prompt. */
 #include "efi.h"
 #include "kernel.h"
 
@@ -93,6 +99,76 @@ static void find_framebuffer(void)
     fb->pitch = info->PixelsPerScanLine;
 }
 
+/* The boot volume: the one this image came from, and its \clara directory,
+ * open for reading and for writing. Everything below that has to do with
+ * files goes through these two, and does nothing when the volume has no
+ * such directory. */
+static EFI_HANDLE g_device;
+static EFI_FILE_PROTOCOL *g_dir;
+
+union entry { /* what reading a directory gives, with room for a FAT name of 255 characters */
+    EFI_FILE_INFO info;
+    uint8_t room[sizeof(EFI_FILE_INFO) + 256 * sizeof(CHAR16)];
+};
+
+static void open_boot_volume(EFI_HANDLE image)
+{
+    static const EFI_GUID loaded_image_guid = EFI_LOADED_IMAGE_PROTOCOL_GUID;
+    static const EFI_GUID file_system_guid = EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_GUID;
+    EFI_BOOT_SERVICES *bs = g_st->BootServices;
+    EFI_LOADED_IMAGE_PROTOCOL *loaded = NULL;
+    EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *volume = NULL;
+    EFI_FILE_PROTOCOL *root = NULL;
+
+    if (EFI_ERROR(bs->HandleProtocol(image, &loaded_image_guid, (void **)&loaded)) ||
+        EFI_ERROR(bs->HandleProtocol(loaded->DeviceHandle, &file_system_guid, (void **)&volume)) ||
+        EFI_ERROR(volume->OpenVolume(volume, &root))) {
+        efi_puts(L"ClaraOS: the volume that the kernel came from cannot be read\r\n");
+        return;
+    }
+    g_device = loaded->DeviceHandle;
+    /* For writing as well, where the volume can be written; and for reading where it cannot. */
+    if (EFI_ERROR(root->Open(root, &g_dir, BOOT_DIR, EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE, 0)) &&
+        EFI_ERROR(root->Open(root, &g_dir, BOOT_DIR, EFI_FILE_MODE_READ, 0))) {
+        g_dir = NULL;
+        efi_puts(L"ClaraOS: the boot volume has no " BOOT_DIR L" directory\r\n");
+    }
+    root->Close(root);
+}
+
+/* A name in ASCII, as the firmware wants names: 16 bits to the character. */
+static void widen(CHAR16 *to, size_t room, const char *from)
+{
+    size_t i = 0;
+
+    for (; from[i] && i + 1 < room; i++)
+        to[i] = (CHAR16)(uint8_t)from[i];
+    to[i] = 0;
+}
+
+/* Is that what the file is called, in letters of either case, as FAT has it? */
+static int named(const CHAR16 *file, const char *name)
+{
+    size_t i = 0;
+
+    for (; file[i] && name[i]; i++) {
+        CHAR16 a = file[i], b = (CHAR16)(uint8_t)name[i];
+
+        if ((a >= 'A' && a <= 'Z' ? a | 0x20 : a) != (b >= 'A' && b <= 'Z' ? b | 0x20 : b))
+            return 0;
+    }
+    return !file[i] && !name[i];
+}
+
+static int ends_with(const CHAR16 *file, const char *end)
+{
+    size_t length = 0, n = strlen(end);
+
+    while (file[length])
+        length++;
+    return length >= n && named(file + length - n, end);
+}
+
 /* One file, in one allocation: the header, the name, then the contents. */
 static struct boot_file *read_file(EFI_FILE_PROTOCOL *dir, const EFI_FILE_INFO *info)
 {
@@ -120,40 +196,31 @@ static struct boot_file *read_file(EFI_FILE_PROTOCOL *dir, const EFI_FILE_INFO *
     return EFI_ERROR(s) || size != f->size ? NULL : f;
 }
 
-/* Read every file in the \clara directory of the volume this image came
- * from. Until the kernel can drive a disk, this is how the Lisp sources reach
- * it (DESIGN.md). Subdirectories are not followed, and names that start with
- * a dot are skipped: macOS leaves "._" files of its own on FAT volumes. */
-static void read_boot_files(EFI_HANDLE image)
+/* The files of a directory, each read and put at the end of the list of
+ * boot files when WANTED says so of its name. Subdirectories are not
+ * followed, and names that start with a dot are skipped: macOS leaves "._"
+ * files of its own on FAT volumes. */
+static void read_files(EFI_FILE_PROTOCOL *dir, const CHAR16 *where, int (*wanted)(const CHAR16 *name))
 {
-    static const EFI_GUID loaded_image_guid = EFI_LOADED_IMAGE_PROTOCOL_GUID;
-    static const EFI_GUID file_system_guid = EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_GUID;
-    EFI_BOOT_SERVICES *bs = g_st->BootServices;
-    EFI_LOADED_IMAGE_PROTOCOL *loaded = NULL;
-    EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *volume = NULL;
-    EFI_FILE_PROTOCOL *root = NULL, *dir = NULL;
     struct boot_file **tail = &g_boot.files;
-    union {
-        EFI_FILE_INFO info;
-        uint8_t room[sizeof(EFI_FILE_INFO) + 256 * sizeof(CHAR16)]; /* a FAT name: 255 characters */
-    } entry;
+    union entry entry;
 
-    if (EFI_ERROR(bs->HandleProtocol(image, &loaded_image_guid, (void **)&loaded)) ||
-        EFI_ERROR(bs->HandleProtocol(loaded->DeviceHandle, &file_system_guid, (void **)&volume)) ||
-        EFI_ERROR(volume->OpenVolume(volume, &root)) ||
-        EFI_ERROR(root->Open(root, &dir, BOOT_DIR, EFI_FILE_MODE_READ, 0))) {
-        efi_puts(L"ClaraOS: the boot volume has no " BOOT_DIR L" directory\r\n");
-        return;
-    }
+    while (*tail)
+        tail = &(*tail)->next;
+    dir->SetPosition(dir, 0);
     for (;;) {
         UINTN size = sizeof entry;
+
         if (EFI_ERROR(dir->Read(dir, &size, &entry)) || size == 0)
             break;
-        if ((entry.info.Attribute & EFI_FILE_DIRECTORY) || entry.info.FileName[0] == L'.')
+        if ((entry.info.Attribute & EFI_FILE_DIRECTORY) || entry.info.FileName[0] == L'.' ||
+            !wanted(entry.info.FileName))
             continue;
         struct boot_file *f = read_file(dir, &entry.info);
         if (!f) {
-            efi_puts(L"ClaraOS: could not read " BOOT_DIR L"\\");
+            efi_puts(L"ClaraOS: could not read ");
+            efi_puts(where);
+            efi_puts(L"\\");
             efi_puts(entry.info.FileName);
             efi_puts(L"\r\n");
             continue;
@@ -161,8 +228,242 @@ static void read_boot_files(EFI_HANDLE image)
         *tail = f;
         tail = &f->next;
     }
+}
+
+/* The few bytes of a small file of \clara as text, with a 0 after them:
+ * how many there were, and 0 when there is no such file. */
+static size_t read_small(const CHAR16 *name, char *text, size_t room)
+{
+    EFI_FILE_PROTOCOL *file = NULL;
+    UINTN size = room - 1;
+
+    text[0] = 0;
+    if (!g_dir || EFI_ERROR(g_dir->Open(g_dir, &file, name, EFI_FILE_MODE_READ, 0)))
+        return 0;
+    if (EFI_ERROR(file->Read(file, &size, text)))
+        size = 0;
+    file->Close(file);
+    text[size] = 0;
+    return size;
+}
+
+/* A small file of \clara, made or written over from its first byte on.
+ * What is written is never shorter than what was there. On a volume that
+ * cannot be written nothing happens, and nothing is said. */
+static void write_small(const CHAR16 *name, const char *text)
+{
+    EFI_FILE_PROTOCOL *file = NULL;
+    UINTN size = strlen(text);
+
+    if (!g_dir || EFI_ERROR(g_dir->Open(g_dir, &file, name,
+                                        EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE | EFI_FILE_MODE_CREATE, 0)))
+        return;
+    file->SetPosition(file, 0);
+    file->Write(file, &size, text);
+    file->Close(file);
+}
+
+static void delete_small(const CHAR16 *name)
+{
+    EFI_FILE_PROTOCOL *file = NULL;
+
+    if (g_dir && !EFI_ERROR(g_dir->Open(g_dir, &file, name, EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE, 0)))
+        file->Delete(file);
+}
+
+/* Text put together in a buffer: a text, and a number in sixteen digits. */
+static char *put_text(char *to, const char *from)
+{
+    while (*from)
+        *to++ = *from++;
+    *to = 0;
+    return to;
+}
+
+static char *put_hex(char *to, uint64_t value)
+{
+    for (int shift = 60; shift >= 0; shift -= 4)
+        *to++ = "0123456789abcdef"[value >> shift & 15];
+    *to = 0;
+    return to;
+}
+
+static int same_text(const char *a, const char *b)
+{
+    return strlen(a) == strlen(b) && !memcmp(a, b, strlen(a));
+}
+
+/* Another system's kernel is started in place of this one: the file
+ * \clara\<system>\<kernel> is read, the firmware makes an image of what
+ * was read, the image is told which volume it came from, as this one was,
+ * and it is started. Returns only when that did not work. */
+static void start_system(EFI_HANDLE image, const char *system)
+{
+    static const EFI_GUID loaded_image_guid = EFI_LOADED_IMAGE_PROTOCOL_GUID;
+    EFI_BOOT_SERVICES *bs = g_st->BootServices;
+    EFI_LOADED_IMAGE_PROTOCOL *loaded = NULL;
+    EFI_FILE_PROTOCOL *dir = NULL, *file = NULL;
+    EFI_HANDLE other = NULL;
+    CHAR16 name[SYSTEM_NAME];
+    union entry entry;
+    void *kernel = NULL;
+    UINTN size = 0;
+
+    widen(name, SYSTEM_NAME, system);
+    if (EFI_ERROR(g_dir->Open(g_dir, &dir, name, EFI_FILE_MODE_READ, 0)))
+        return;
+    for (;;) {
+        UINTN n = sizeof entry;
+
+        if (EFI_ERROR(dir->Read(dir, &n, &entry)) || n == 0)
+            break;
+        if ((entry.info.Attribute & EFI_FILE_DIRECTORY) || !named(entry.info.FileName, arch_kernel))
+            continue;
+        size = entry.info.FileSize;
+        kernel = efi_alloc(size);
+        if (kernel && !EFI_ERROR(dir->Open(dir, &file, entry.info.FileName, EFI_FILE_MODE_READ, 0))) {
+            UINTN got = size;
+
+            if (EFI_ERROR(file->Read(file, &got, kernel)) || got != size)
+                size = 0;
+            file->Close(file);
+        } else
+            size = 0;
+        break;
+    }
     dir->Close(dir);
-    root->Close(root);
+    if (!kernel || !size)
+        return;
+    if (EFI_ERROR(bs->LoadImage(0, image, NULL, kernel, size, &other)) ||
+        EFI_ERROR(bs->HandleProtocol(other, &loaded_image_guid, (void **)&loaded)))
+        return;
+    /* The image is a copy by now, and what was read is not needed any more. */
+    bs->FreePages((EFI_PHYSICAL_ADDRESS)(uintptr_t)kernel, (size + PAGE_SIZE - 1) >> PAGE_SHIFT);
+    loaded->DeviceHandle = g_device;
+    efi_puts(L"ClaraOS: starting the system that is to be tried\r\n");
+    bs->StartImage(other, NULL, NULL);
+}
+
+/* A newer system that the running one has put on the volume is tried
+ * before it takes the place of the one that is there (lisp/system.lisp).
+ * The file \clara\next says where that stands, in one line:
+ *
+ *   try <system>     the system is on the volume, whole, and is to be tried
+ *                    at the next start. The kernel that the firmware starts
+ *                    is still the old one, this one: it writes that the
+ *                    system has been tried, and starts that system's kernel
+ *                    in place of itself.
+ *   tried <system>   it has been started. When it is that system which
+ *                    reads this, it is on trial: once it has come to its
+ *                    prompt it takes the place of the old one and deletes
+ *                    the file. When it is the old one, the trial did not
+ *                    get that far, and the machine was started again: the
+ *                    old system goes on, and says so.
+ *   failed <system>  what the old one makes of the line then, so that the
+ *                    starts are counted again from here on.
+ *
+ * So the kernel that the firmware starts is one that has come to its
+ * prompt before, until a newer one has. */
+static void try_next(EFI_HANDLE image)
+{
+    char state[96], line[96], *name = NULL, *end;
+    int tried = 0, failed = 0;
+
+    read_small(L"next", state, sizeof state);
+    if (!memcmp(state, "try ", 4))
+        name = state + 4;
+    else if (!memcmp(state, "tried ", 6))
+        name = state + 6, tried = 1;
+    else if (!memcmp(state, "failed ", 7))
+        name = state + 7, failed = 1;
+    else
+        return;
+    for (end = name; (uint8_t)*end > ' '; end++)
+        ;
+    *end = 0;
+    if (!*name || strlen(name) >= SYSTEM_NAME)
+        return;
+    if (same_text(name, clara_system)) {
+        g_boot.trial = !failed;
+        return;
+    }
+    memcpy(g_boot.failed, name, strlen(name) + 1);
+    if (failed)
+        return;
+    if (!tried) {
+        put_text(put_text(put_text(line, "tried "), name), "\n");
+        write_small(L"next", line);
+        delete_small(L"starts"); /* the count of starts is the new system's from here */
+        start_system(image, name);
+    }
+    put_text(put_text(put_text(line, "failed "), name), "\n");
+    write_small(L"next", line);
+    delete_small(L"starts");
+}
+
+/* A start is counted before it is known how it goes: the file \clara\starts
+ * holds how many starts in a row have not come to a prompt, this one
+ * included, and the world deletes it when it has come to its prompt
+ * (lisp/system.lisp). So what is found here is how many starts before this
+ * one did not get there, and the kernel goes by that: after one, the world
+ * that was saved is passed over, and after two, so is what the user keeps
+ * as text. Behind the count is a number that no other start was given: the
+ * volume that has this file with this number in it is the one that the
+ * machine was started from, whichever disk comes first on the bus. */
+static void count_start(void)
+{
+    char text[40], *end;
+    uint64_t token = 0;
+
+    read_small(L"starts", text, sizeof text);
+    g_boot.starts = text[0] >= '1' && text[0] <= '9' ? (unsigned)(text[0] - '0') : 0;
+    if (EFI_ERROR(g_st->BootServices->GetNextMonotonicCount(&token)) || !token)
+        token = 1;
+    g_boot.token = token;
+    text[0] = (char)('0' + (g_boot.starts < 8 ? g_boot.starts + 1 : 9));
+    text[1] = ' ';
+    end = put_hex(text + 2, token);
+    put_text(end, "\n");
+    write_small(L"starts", text);
+}
+
+static int of_the_system(const CHAR16 *name)
+{
+    return !ends_with(name, ".EFI") && !named(name, "manifest"); /* the kernels are in memory already */
+}
+
+static int of_the_volume(const CHAR16 *name)
+{
+    if (named(name, "clara.image") && g_boot.starts) {
+        g_boot.image_passed_over = 1;
+        return 0;
+    }
+    return named(name, "clara.image") || named(name, "stress");
+}
+
+/* What the kernel needs of the boot volume before it has a driver for any
+ * disk: the files of its own system, which are in the directory of the
+ * system's name; and of \clara itself the world that was saved, unless the
+ * start before this one did not come to its prompt, and the file that asks
+ * for the collector's slow test. */
+static void read_boot_files(void)
+{
+    EFI_FILE_PROTOCOL *dir = NULL;
+    CHAR16 name[SYSTEM_NAME];
+
+    if (!g_dir)
+        return;
+    widen(name, SYSTEM_NAME, clara_system);
+    if (EFI_ERROR(g_dir->Open(g_dir, &dir, name, EFI_FILE_MODE_READ, 0))) {
+        efi_puts(L"ClaraOS: the boot volume has no directory " BOOT_DIR L"\\");
+        efi_puts(name);
+        efi_puts(L", where the files of this system would be\r\n");
+    } else {
+        read_files(dir, name, of_the_system);
+        dir->Close(dir);
+    }
+    read_files(g_dir, BOOT_DIR, of_the_volume);
+    g_dir->Close(g_dir);
 }
 
 /* Snapshot the memory map and take the machine from the firmware. The map
@@ -204,7 +505,12 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
     efi_puts(L"ClaraOS: taking the machine from the firmware\r\n");
     find_config_tables();
     find_framebuffer();
-    read_boot_files(image);
+    open_boot_volume(image);
+    if (g_dir) {
+        try_next(image);
+        count_start();
+    }
+    read_boot_files();
 
     EFI_STATUS s = exit_boot_services(image);
     if (EFI_ERROR(s)) {

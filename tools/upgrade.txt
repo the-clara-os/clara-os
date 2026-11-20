@@ -1,0 +1,33 @@
+> (cl:in-package "COMMON-LISP-USER")
+#<PACKAGE "COMMON-LISP-USER">
+> (list (equal (clara.system:system) "{{system}}") (fact 5) (eq (clara.system:boot-volume) (first (clara.fat:volumes))))
+(T 120 T)
+> (list (length (clara.fat:volumes)) (delete-file "/clara/stress") (clara.fat:make-directory "/letters"))
+(2 T "/letters")
+> (with-open-file (out "/letters/first.txt" :direction :output) (write-line "written before the upgrade" out))
+"written before the upgrade"
+> (clara.system:upgrade :from (first (clara.fat:volumes)))
+error: that volume holds no ClaraOS other than this one, {{system}}
+> (clara.system:upgrade)
+system: {{version}}-other is on the disk, and is tried at the next start
+clara: the world is saved
+clara: starting the machine again
+^R
+> (list (clara.system:system) (getf (clara.unsafe:start-state) :resumed) (getf (clara.unsafe:start-state) :trial) (fboundp 'fact))
+("{{version}}-other" NIL T NIL)
+> (list (with-open-file (in "/letters/first.txt") (read-line in)) (with-open-file (in "/clara/kept.lisp") (read-line in)))
+("written before the upgrade" "(defvar *from-a-file* \"written by ClaraOS\")")
+> (list (clara.fat:names "/clara/") (clara.fat:names "/EFI/BOOT/") (clara.fat:names "/letters/"))
+(("{{version}}-other/" "a file with a long name.text" "clara.image" "hello.lisp" "kept.lisp") ("BOOTAA64.EFI" "BOOTX64.EFI") ("first.txt"))
+> (defun since-the-upgrade () 'defined-in-the-new-system)
+SINCE-THE-UPGRADE
+> (clara.system:start-again)
+clara: the world is saved
+clara: starting the machine again
+^R
+> (list (clara.system:system) (getf (clara.unsafe:start-state) :resumed) (getf (clara.unsafe:start-state) :trial) (since-the-upgrade))
+("{{version}}-other" T NIL DEFINED-IN-THE-NEW-SYSTEM)
+> (clara.system:upgrade)
+error: no other disk of this machine holds a ClaraOS other than this one, {{version}}-other
+> (list (clara.fat:remove-file "/letters/first.txt") (clara.fat:remove-directory "/letters") (probe-file "/letters"))
+("/letters/first.txt" "/letters" NIL)

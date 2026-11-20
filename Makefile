@@ -16,7 +16,6 @@ CC     := $(if $(LLVM),$(LLVM)/)clang
 LD     := $(if $(LLD),$(LLD)/)lld-link
 BUILD  := build
 ESP    := $(BUILD)/esp/EFI/BOOT
-BOOTDIR := $(BUILD)/esp/clara
 
 CFLAGS := -std=c11 -O2 -g -Wall -Wextra -Werror \
           -ffreestanding -fno-builtin -fno-stack-protector -fno-stack-check \
@@ -25,9 +24,24 @@ LDFLAGS := /nologo /subsystem:efi_application /entry:efi_main /nodefaultlib /deb
 
 ASFLAGS := -g -Ikernel -Wa,--fatal-warnings
 
-COMMON_SRCS := $(wildcard kernel/*.c kernel/lisp/*.c)
+COMMON_SRCS := $(filter-out kernel/system.c,$(wildcard kernel/*.c kernel/lisp/*.c))
 HEADERS     := $(wildcard kernel/*.h kernel/lisp/*.h kernel/arch/*/*.h)
 BOOT_FILES  := $(BUILD)/boot-files.stamp
+
+# What this build is called: its version, and eight digits that are worked
+# out from every source that goes into it (tools/system.py), so that the
+# same sources are the same system wherever they are built, and a change to
+# any of them is another one. Both kernels have the name in them
+# (kernel/system.c), and the Lisp files of the system, with a copy of the
+# kernels and a list of what there is, are in the directory of that name
+# on the boot volume, \clara\<name>: a kernel starts with the files that it
+# was built with, and a newer system can be put beside the one that runs
+# (lisp/system.lisp).
+VERSION     := $(shell sed -n 's/^\#define CLARA_VERSION "\(.*\)"/\1/p' kernel/kernel.h)
+SYSTEM_SRCS := $(sort kernel/system.c $(COMMON_SRCS) $(HEADERS) kernel/lisp/self-test.lisp \
+                 $(wildcard kernel/arch/*/*.c kernel/arch/*/*.S lisp/*.lisp))
+SYSTEM      := $(VERSION)-$(shell python3 -I tools/system.py id $(SYSTEM_SRCS))
+BOOTDIR     := $(BUILD)/esp/clara/$(SYSTEM)
 
 .PHONY: all test host-test image font site screenshot clean
 all:
@@ -41,7 +55,13 @@ $(BUILD)/$(1)/%.o: kernel/%.c $(HEADERS)
 $(BUILD)/$(1)/%.o: kernel/%.S $(HEADERS)
 	@mkdir -p $$(dir $$@)
 	$(CC) $(ASFLAGS) --target=$(2) -c $$< -o $$@
-$(ESP)/$(4): $$($(1)_OBJS)
+$(BUILD)/$(1)/system-%.o: kernel/system.c $(HEADERS)
+	@mkdir -p $$(dir $$@)
+	$(CC) $(CFLAGS) --target=$(2) $(3) -DCLARA_SYSTEM='"$$*"' -c $$< -o $$@
+$(ESP)/$(4): $$($(1)_OBJS) $(BUILD)/$(1)/system-$(SYSTEM).o
+	@mkdir -p $$(dir $$@)
+	$(LD) $(LDFLAGS) /machine:$(5) /out:$$@ $$^
+$(BUILD)/system-%/esp/EFI/BOOT/$(4): $$($(1)_OBJS) $(BUILD)/$(1)/system-$(VERSION)-%.o
 	@mkdir -p $$(dir $$@)
 	$(LD) $(LDFLAGS) /machine:$(5) /out:$$@ $$^
 all: $(ESP)/$(4)
@@ -50,15 +70,33 @@ endef
 $(eval $(call ARCH_RULES,x86_64,x86_64-unknown-windows,-mno-red-zone,BOOTX64.EFI,x64))
 $(eval $(call ARCH_RULES,aarch64,aarch64-unknown-windows,,BOOTAA64.EFI,arm64))
 
-# The boot handoff reads every file in the ESP's \clara directory: what is
-# in lisp/ now, and nothing that was there before and has gone since. The
-# file that the evaluator's self-test loads goes with them.
-$(BOOT_FILES): lisp $(wildcard lisp/*.lisp) kernel/lisp/self-test.lisp
-	rm -rf $(BOOTDIR)
+# The boot handoff reads the files in the system's directory on the ESP:
+# what is in lisp/ now, and nothing that was there before and has gone
+# since. The file that the evaluator's self-test loads goes with them, and
+# so do the two kernels, a second time: a system is its directory, which is
+# what another machine takes when it is given this disk to upgrade from.
+# The manifest is written last, and is what says that a system is whole.
+$(BOOT_FILES): lisp $(wildcard lisp/*.lisp) kernel/lisp/self-test.lisp $(ESP)/BOOTX64.EFI $(ESP)/BOOTAA64.EFI tools/system.py
+	rm -rf $(BUILD)/esp/clara
 	mkdir -p $(BOOTDIR)
-	cp lisp/*.lisp kernel/lisp/self-test.lisp $(BOOTDIR)/
+	cp lisp/*.lisp kernel/lisp/self-test.lisp $(ESP)/BOOTX64.EFI $(ESP)/BOOTAA64.EFI $(BOOTDIR)/
+	python3 -I tools/system.py manifest $(BOOTDIR) $(SYSTEM)
 	touch $@
 all: $(BOOT_FILES)
+
+# Another system, for the tests of upgrades, which need a system to upgrade
+# to: the same sources under another name, the version and what the % is,
+# as build/system-%/esp. Its kernels are this build's with the other name
+# in them, which costs two links. One whose name begins with "broken" has
+# a boot.lisp that is no Lisp: a system that does not come to its prompt.
+$(BUILD)/system-%/stamp: $(BUILD)/system-%/esp/EFI/BOOT/BOOTX64.EFI $(BUILD)/system-%/esp/EFI/BOOT/BOOTAA64.EFI $(BOOT_FILES)
+	rm -rf $(BUILD)/system-$*/esp/clara
+	mkdir -p $(BUILD)/system-$*/esp/clara/$(VERSION)-$*
+	cp lisp/*.lisp kernel/lisp/self-test.lisp $(BUILD)/system-$*/esp/EFI/BOOT/BOOTX64.EFI \
+		$(BUILD)/system-$*/esp/EFI/BOOT/BOOTAA64.EFI $(BUILD)/system-$*/esp/clara/$(VERSION)-$*/
+	case $* in broken*) echo '(this is no Lisp' > $(BUILD)/system-$*/esp/clara/$(VERSION)-$*/boot.lisp;; esac
+	python3 -I tools/system.py manifest $(BUILD)/system-$*/esp/clara/$(VERSION)-$* $(VERSION)-$*
+	touch $@
 
 run-%: all
 	tools/run.sh $*
@@ -86,7 +124,23 @@ host-test:
 # and has to come up in the world that it saved on the way; and its power
 # button is pressed, as a host does to stop a machine, after which it has
 # to save the world once more and be gone by itself, with its volume in
-# order. Then the user manual: what it shows of
+# order. Then upgrades (lisp/system.lisp), for which the build makes two
+# more systems of the same sources, each under a name of its own, and a
+# disk of each. One machine starts from the disk of its first session with
+# the disk of the other system beside it (tools/upgrade.txt): it is told
+# to take that system, starts again, and has to come up as the other
+# system, by way of the old kernel, with the files that were written
+# before; and after one more start it has to be that system from the
+# firmware on. A machine of the other kind of processor, whose firmware is
+# another program, starts from a new disk with a second one that says "at
+# once", which is how `make run-*` hands a machine a newer build
+# (tools/at-once.txt): it has to take the system without being told, start
+# again by itself, and come to its first prompt as the other system. And
+# one machine is given a system that does not
+# come to its prompt (tools/trial.txt): it has to be the system from
+# before again when it is started the next time, and say so; and then it
+# saves a world that stands still before its prompt, which the start
+# after that one has to pass over. Then the user manual: what it shows of
 # the prompt (site/manual.html) is typed at a machine, which saves its
 # world, and at the same machine started again. That machine has a second
 # disk, with a volume that has nothing on it, given to it the way
@@ -112,9 +166,11 @@ host-test:
 # `make run-*`, stays out of all of them: a machine here has the disks that
 # its line gives it.
 test: export WORK :=
-POWER := SESSION=tools/power.txt MARKER='^clara: turning the machine off' EXPECT='^lisp: the heap is an image'
+SECOND = -drive if=none,id=second,format=raw,readonly=on,file=$(BUILD)/$(1).img -device virtio-blk-pci,drive=second
+UPGRADED := EXPECT='^ClaraOS: starting the system that is to be tried;;^system: .*-other has come to its prompt'
+POWER :=SESSION=tools/power.txt MARKER='^clara: turning the machine off' EXPECT='^lisp: the heap is an image'
 RESUME := SESSION=tools/resumed.txt EXPECT='^lisp: the heap is an image;;^lisp: and with it [0-9]* KiB of code for the processor;;^lisp:   of the functions .* and 0 are walked;;^lisp:   the processor runs [1-9][0-9]* of the compiled ones itself, .* and the machine 3[^0-9]*$$'
-test: all host-test
+test: all host-test $(BUILD)/system-other/stamp $(BUILD)/system-broken/stamp
 	tools/boottest.sh x86_64
 	NAME=x86_64-resumed DISK=$(BUILD)/boot-x86_64.img $(RESUME) tools/boottest.sh x86_64
 	MKDISK="--fat 16 --table mbr" tools/boottest.sh aarch64 -machine gic-version=3
@@ -124,6 +180,20 @@ test: all host-test
 		tools/boottest.sh aarch64 -machine gic-version=2
 	NAME=x86_64-power DISK=$(BUILD)/boot-x86_64.img $(POWER) tools/boottest.sh x86_64
 	NAME=aarch64-power DISK=$(BUILD)/boot-aarch64.img $(POWER) tools/boottest.sh aarch64 -machine gic-version=3
+	python3 -I tools/mkdisk.py $(BUILD)/system-other/esp $(BUILD)/other.img
+	python3 -I tools/mkdisk.py $(BUILD)/system-broken/esp $(BUILD)/broken.img
+	NAME=x86_64-upgrade DISK=$(BUILD)/boot-x86_64.img SESSION=tools/upgrade.txt TIMEOUT=300 $(UPGRADED) \
+		tools/boottest.sh x86_64 $(call SECOND,other)
+	rm -rf $(BUILD)/at-once
+	cp -R $(BUILD)/system-other/esp $(BUILD)/at-once
+	touch $(BUILD)/at-once/clara/at-once
+	python3 -I tools/mkdisk.py $(BUILD)/at-once $(BUILD)/at-once.img
+	NAME=aarch64-at-once SESSION=tools/at-once.txt TIMEOUT=300 \
+		EXPECT='^system: .*-other is taken from another disk;;^ClaraOS: starting the system that is to be tried;;^system: .*-other has come to its prompt' \
+		tools/boottest.sh aarch64 -machine gic-version=3 $(call SECOND,at-once)
+	NAME=aarch64-trial DISK=$(BUILD)/boot-aarch64.img SESSION=tools/trial.txt TIMEOUT=300 PANICS=1 \
+		EXPECT='^system: .*-broken was tried and did not come to its prompt;;^lisp: clara.image is passed over' \
+		tools/boottest.sh aarch64 -machine gic-version=3 $(call SECOND,broken)
 	python3 -I site/build.py --sessions $(BUILD)
 	rm -rf $(BUILD)/empty && mkdir -p $(BUILD)/empty && python3 -I tools/mkdisk.py $(BUILD)/empty $(BUILD)/work.img
 	NAME=manual WORK=$(BUILD)/work.img SESSION=$(BUILD)/manual-first.txt tools/boottest.sh aarch64 -machine gic-version=3

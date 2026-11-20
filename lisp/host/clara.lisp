@@ -35,7 +35,7 @@
            "INTERRUPT-EVENT" "FRAMEBUFFER" "SERIAL-DEVICE" "SERIAL-BYTE" "SERIAL-BREAK"
            "TAKE-SCREEN" "GIVE-SCREEN"
            "MAP-MEMORY" "PCI-CONFIGURATION" "MESSAGE-INTERRUPT" "KEYBOARD-BREAK" "MEMORY-STRING"
-           "POWER-OFF" "RESET" "POWER-BUTTON"
+           "POWER-OFF" "RESET" "POWER-BUTTON" "SHA-512" "START-STATE"
            "STRING-BYTES" "STRING-MEMORY" "HEAP-IMAGE"
            "MAKE-COMPILED-FUNCTION" "COMPILED-FUNCTION-CODE"
            "NATIVE-LAYOUT" "INSTALL-NATIVE-CODE" "NATIVE-CODE-BYTES" "NATIVE-FUNCTION"
@@ -48,7 +48,7 @@
            "TYPE-BYTES" "RAISE-INTERRUPT" "SERIAL-BREAK-P"
            "SET-PCI-CONFIGURATION" "SEND-MESSAGE" "MESSAGE-INTERRUPTS" "KEYBOARD-BREAKS"
            "ALLOCATED-PAGES" "PROVIDED-FILES" "SET-HEAP-IMAGE" "PROVIDED-COMPILER"
-           "POWER" "PRESS-POWER-BUTTON"))
+           "POWER" "PRESS-POWER-BUTTON" "SET-START-STATE" "SHA-512-OF"))
 
 ;;; CLARA: threads
 
@@ -275,6 +275,8 @@
 (defvar *keyboard-breaks* 0) ; how often KEYBOARD-BREAK was called
 (defvar *power* nil)         ; what the machine was told of its power, the last first: :OFF and :AGAIN
 (defvar *button* nil)        ; its power button was pressed, and nobody has asked since
+(defvar *start-state*        ; what START-STATE gives: what the kernel knows of this start
+  (list :system "0.0.0-host" :resumed nil :starts 0 :token nil :trial nil :failed nil :passed-over nil))
 (defvar *ports* nil)         ; the same for I/O ports
 (defvar *framebuffer* nil)   ; what FRAMEBUFFER gives, as a list, or NIL
 (defvar *serial-device* nil) ; (kind base)
@@ -354,6 +356,63 @@
 
 (defun press-power-button ()
   (setq *button* t))
+
+;; What the kernel is to say of this start: the names of CLARA.UNSAFE:START-STATE,
+;; each with its value, and the ones that are not named as on a first start.
+(defun set-start-state (&key (system "0.0.0-host") resumed (starts 0) token trial failed passed-over)
+  (setq *start-state* (list :system system :resumed resumed :starts starts :token token :trial trial
+                            :failed failed :passed-over passed-over)))
+
+;; SHA-512 (FIPS 180-4), for the sum that the kernel has in C: of a vector
+;; of bytes, as the 128 digits that it is written with.
+(defun root (n k)
+  (let ((low 0) (high 1))
+    (loop while (<= (expt high k) n) do (setq high (* 2 high)))
+    (loop while (< low (1- high))
+          do (let ((middle (floor (+ low high) 2)))
+               (if (<= (expt middle k) n) (setq low middle) (setq high middle))))
+    low))
+
+(defvar *primes* (loop with found = nil
+                       for n from 2
+                       until (= (length found) 80)
+                       do (when (notany (lambda (prime) (zerop (mod n prime))) found)
+                            (setq found (append found (list n))))
+                       finally (return found)))
+(defvar *sha-k* (coerce (loop for prime in *primes* collect (ldb (byte 64 0) (root (ash prime 192) 3))) 'vector))
+(defvar *sha-h* (loop for prime in (subseq *primes* 0 8) collect (ldb (byte 64 0) (root (ash prime 128) 2))))
+
+(defun sha-512-of (bytes)
+  (flet ((rotate (x n) (ldb (byte 64 0) (logior (ash x (- n)) (ash x (- 64 n))))))
+    (let* ((length (length bytes))
+           (padded (concatenate 'vector bytes '(#x80)
+                                (make-list (mod (- 111 length) 128) :initial-element 0)
+                                (loop for shift from 120 downto 0 by 8 collect (ldb (byte 8 shift) (* 8 length)))))
+           (h (copy-list *sha-h*))
+           (w (make-array 80)))
+      (loop for start from 0 below (length padded) by 128
+            do (dotimes (i 16)
+                 (setf (aref w i) (loop with word = 0
+                                        for j below 8
+                                        do (setq word (+ (ash word 8) (aref padded (+ start (* 8 i) j))))
+                                        finally (return word))))
+               (loop for i from 16 below 80
+                     do (let ((a (aref w (- i 15))) (b (aref w (- i 2))))
+                          (setf (aref w i)
+                                (ldb (byte 64 0)
+                                     (+ (aref w (- i 16)) (logxor (rotate a 1) (rotate a 8) (ash a -7))
+                                        (aref w (- i 7)) (logxor (rotate b 19) (rotate b 61) (ash b -6)))))))
+               (destructuring-bind (a b c d e f g last) h
+                 (dotimes (i 80)
+                   (let ((one (ldb (byte 64 0)
+                                   (+ last (logxor (rotate e 14) (rotate e 18) (rotate e 41))
+                                      (logxor (logand e f) (logandc1 e g)) (aref *sha-k* i) (aref w i))))
+                         (two (ldb (byte 64 0)
+                                   (+ (logxor (rotate a 28) (rotate a 34) (rotate a 39))
+                                      (logxor (logand a b) (logand a c) (logand b c))))))
+                     (setq last g g f f e e (ldb (byte 64 0) (+ d one)) d c c b b a a (ldb (byte 64 0) (+ one two)))))
+                 (setq h (mapcar (lambda (x y) (ldb (byte 64 0) (+ x y))) h (list a b c d e f g last)))))
+      (format nil "~(~{~16,'0X~}~)" h))))
 
 ;; How many page frames are handed out: a driver that gives back what it
 ;; takes leaves this as it was.
@@ -602,6 +661,13 @@
 (defun power-button ()
   (prog1 clara.host::*button*
     (setq clara.host::*button* nil)))
+
+(defun sha-512 (address bytes)
+  (let ((index (clara.host::memory-index address bytes)))
+    (clara.host:sha-512-of (subseq clara.host::*memory* index (+ index bytes)))))
+
+(defun start-state ()
+  (copy-list clara.host::*start-state*))
 
 ;; The text that some bytes of memory are: UTF-8, or it is an error.
 (defun memory-string (address bytes)

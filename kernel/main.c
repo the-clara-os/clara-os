@@ -31,6 +31,7 @@ void kmain(struct boot_info *bi)
     pmm_reclaim(bi);
     fault_selftest();
 
+    sha512_selftest();
     acpi_init(bi->acpi_rsdp);
     arch_interrupts_init();
     timer_selftest();
