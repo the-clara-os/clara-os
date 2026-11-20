@@ -599,6 +599,29 @@ Rules:
   tests `system-tree` makes a system's directory with a right manifest or
   a wrong one, `two-disks` a machine with its own disk and another, and
   `clara.host:set-start-state` what the kernel says of the start.
+- Work kept as text (lisp/system.lisp, lisp/listener.lisp). A listener
+  calls `clara.listener:*record*` with every form that was typed and went
+  well, its text and the name of the package it was read in.
+  `clara.system::record` writes the ones that define something
+  (`defining-p`) into `/home/defined.lisp` on the volume that the machine
+  was started from, and a world that this start made from the files loads
+  `/home/init.lisp` and then that file (`load-home`, from `settle`), a
+  form at a time, each file in a thread that is given `*patience*`. So
+  what a session defines at the top of a line is written to the disk of
+  its boot, and is loaded by every later boot that makes a world from
+  that disk: the upgrade boots and the stress boot. A form of
+  tools/session.txt that must not come back that way, one that starts a
+  thread or redefines a function of the language's, is typed inside a
+  PROGN. What a new world says of the text, the lines that begin with
+  `home:`, is asked for with `EXPECT=` (`UPGRADED` in the Makefile). The
+  file's form is read by every later system, like the manifest's: forms,
+  comments and `(cl:in-package "NAME")` lines, and nothing else. A world
+  is saved on that volume too, whatever `clara.fat:*volume*` holds
+  (`clara.fat:*image-volume*`). In the host tests `home-tree` gives a
+  machine a `/home` and `one-disk` a machine with one disk; a test that
+  types definitions sets the start to `:resumed t`, since a world that
+  was made loads them in a thread, and SBCL then warns that a function is
+  defined a second time.
 - A session can wait for the kernel to say something before it goes on:
   `^W pattern`, for a kernel that will say nothing more by itself, a panic
   for one, which `PANICS=1` allows the boot once. `^M system_reset` after

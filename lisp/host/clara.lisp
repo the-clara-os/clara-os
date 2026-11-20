@@ -221,15 +221,15 @@
 
 (defvar *files* nil)
 
-(defun provide-files (&key text names write delete)
-  (setq *files* (if (and text names) (list text names write delete)))
+(defun provide-files (&key text names write delete image)
+  (setq *files* (if (and text names) (list text names write delete (or image write))))
   nil)
 
 ;; SAVE-IMAGE as lisp/boot.lisp has it: the heap goes into a file, by way
 ;; of the file system that is there. The heap of this machine is whatever a
 ;; test says it is (CLARA.HOST:SET-HEAP-IMAGE).
 (defun save-image (&optional (name "/clara/clara.image"))
-  (let ((write (third *files*)))
+  (let ((write (fifth *files*)))
     (unless write
       (error "the file ~A cannot be written: no disk has a file system that is known here" name))
     (multiple-value-bind (memory bytes pages) (clara.unsafe:heap-image)

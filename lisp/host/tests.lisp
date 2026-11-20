@@ -3808,6 +3808,23 @@
 (check (heard "> ~%error: boom 7~%> ~%1~%> ~%") (listen-to (format nil "(error \"boom ~~D\" 7)~%1~%")))
 (check (heard "> x~%\"x\"~%> ~%") (listen-to (format nil "(write-string \"x\")~%")))
 (check (heard ">   ~%the input ended in the middle of a form~%") (listen-to (format nil "(car~%")))
+;; Whoever wants to keep what was typed is told of every form that went
+;; well, with the text it was read from and the package it was read in,
+;; and of none that ended in an error or could not be read.
+(let ((told nil))
+  (let ((clara.listener:*record* (lambda (form text package)
+                                   (push (list form (string-trim '(#\Space #\Newline) text) package) told))))
+    (listen-to (format nil "(list 1~% 2) (car 5)~%(in-package \"COMMON-LISP-USER\")~%'told-in-it ) (list 3)~%"))
+    (setq *package* (find-package "CLARA.TESTS")))
+  (check (list (list '(list 1 2) (format nil "(list 1~% 2)") "CLARA.TESTS")
+               (list '(in-package "COMMON-LISP-USER") "(in-package \"COMMON-LISP-USER\")" "CLARA.TESTS")
+               (list ''cl-user::told-in-it "'told-in-it" "COMMON-LISP-USER"))
+         (reverse told)))
+(check '(t nil) (let ((well nil) (badly t))
+                  (with-output-to-string (*standard-output*)
+                    (setq well (clara.listener:answer '(+ 1 2))
+                          badly (clara.listener:answer '(car 5))))
+                  (list well badly)))
 (let ((heard (listen-to (format nil "1 ) 2~%3~%"))))    ; what cannot be read is dropped, and said
   (check t (and (search (format nil "> ~%1~%error: ") heard)
                 (search (format nil "~%> ~%3~%> ~%") heard)
@@ -5403,7 +5420,10 @@
 (defun said-by-all (function)
   (let ((output (sb-ext:symbol-global-value '*standard-output*)) (text (make-string-output-stream)))
     (setf (sb-ext:symbol-global-value '*standard-output*) text)
-    (unwind-protect (let ((*standard-output* text)) (funcall function))
+    ;; What SBCL has to say about a form that a test has loaded a second time is nobody's business.
+    (unwind-protect (let ((*standard-output* text))
+                      (handler-bind ((warning #'muffle-warning))
+                        (funcall function)))
       (setf (sb-ext:symbol-global-value '*standard-output*) output))
     (get-output-stream-string text)))
 
@@ -5780,6 +5800,242 @@
 (clara.host:set-start-state)
 (check (format nil "system: this is ClaraOS 0.0.0-host~%") (said-by-all #'clara.system:start))
 (check '(nil nil) (list (clara.host:power) (on-disk *machine-disk* "/clara/next")))
+
+;;; What the user keeps as text (lisp/system.lisp): /home on the volume
+;;; that the machine was started from, with the file that the listeners
+;;; write, each form that defines something as it was typed, and the file
+;;; that is the user's own. A world that is made from the files loads both.
+
+(defvar *order* nil)   ; what the files of the tests' /home say as they are loaded
+
+(defun home-tree (&rest files)
+  (append (machine-tree) (list (list "home" files))))
+
+(defun one-disk (tree)
+  (setq *machine-disk* (fat-bytes (make-fat-volume 16 tree))
+        *disk* (car (new-disks (list 3 *machine-disk*))))
+  (setq clara.windows::*running* nil)
+  (said-by #'clara.disk:start)
+  (said-by #'clara.fat:start))
+
+;; What is written down, and what is not: a form that defines, by a word
+;; of the language's, by a macro that is called that way or by anything
+;; that is called DEFINE-, and a LOAD; not a function that happens to
+;; begin with the three letters, and not a LOAD of one of the two files,
+;; which would then load itself.
+(defmacro deftest (name) `(quote ,name))
+(defun default-of (value) value)
+(defmacro defective (name) (error "~S cannot be expanded" name))
+(check '(t t t t t t t t t t nil nil nil nil nil nil nil nil nil nil)
+       (mapcar (lambda (form) (and (clara.system::defining-p form) t))
+               '((defun f ()) (defmacro m ()) (defvar *v* 1) (defparameter *p* 1) (define-condition c () ()) (defstruct s a)
+                 (deftest of-the-users) (load "/x.lisp") (clara.windows:define-application "Mine" #'car) (define-whatever)
+                 (default-of 1) (defective one) (defer-nothing) (load "/home/defined.lisp") (load "/HOME/Init.lisp")
+                 (setq *v* 2) (in-package "X") 5 ((lambda ())) (let () (defun f ())))))
+(check (list (concatenate 'string (make-string 84 :initial-element #\a) " ...") "one line ..." "short")
+       (list (clara.system::brief (make-string 85 :initial-element #\a)) (clara.system::brief (format nil "  one line~%and another"))
+             (clara.system::brief "short")))
+(check '(t t nil nil nil)
+       (mapcar (lambda (name) (and (clara.system::home-name-p name) t))
+               '("/home/init.lisp" "/home/DEFINED.lisp" "/home/other.lisp" "/defined.lisp" defined)))
+(check '("" "a b" "a" "(f)") (mapcar #'clara.system::trimmed (list "" (format nil " ~% a b~%  ") "a" (format nil "~%(f)"))))
+(check '(4 4 14 2) (list (clara.system::form-start "    (f)" 0 7) (clara.system::form-start "(a) (f)" 3 7)
+                          (clara.system::form-start (format nil " ; (not this)~%(f)") 0 17)
+                          (clara.system::form-start "  " 0 2)))
+(check '(3 3 0) (list (clara.system::form-end "(f) " 0 4) (clara.system::form-end "(f)" 0 3) (clara.system::form-end "  " 0 2)))
+
+;; A machine without /home gets one when it starts, and what is defined
+;; from then on is written into it: a new form at the end, a form that
+;; defines a name again in the place of the first, and a line between forms
+;; that were read in different packages.
+(one-disk (machine-tree))
+(clara.host:set-start-state)
+(check (format nil "system: this is ClaraOS 0.0.0-host~%") (said-by-all #'clara.system:start))
+(check '("clara/" "EFI/" "home/" "notes.txt") (clara.fat:names "/"))
+(check t (eq clara.listener:*record* #'clara.system::record))
+(defpackage "CLARA.TESTS.PLAY" (:use "COMMON-LISP"))
+(flet ((typed (text package)
+         (let ((form (let ((*package* (find-package package))) (read-from-string text))))
+           (clara.system::record form (format nil "~% ~A " text) package))))
+  (let ((pages (clara.host:allocated-pages)))
+    (typed "(defun one () 1)" "COMMON-LISP-USER")
+    (typed "(+ 1 2)" "COMMON-LISP-USER")
+    (typed "(defvar *two* 2)" "COMMON-LISP-USER")
+    (typed "(defun ball () 'round)" "CLARA.TESTS.PLAY")
+    (typed "(defun one () 'in-play)" "CLARA.TESTS.PLAY")
+    (typed (format nil "(defun one ()~%  ;; a second time~%  'again)") "COMMON-LISP-USER")
+    (typed "(load \"/tools.lisp\")" "COMMON-LISP-USER")
+    (typed "(defun ONE () 'in-play-again)" "CLARA.TESTS.PLAY")
+    (typed "(load \"/tools.lisp\")" "COMMON-LISP-USER")
+    (typed "(defvar one 'a-variable-of-the-name-of-a-function)" "COMMON-LISP-USER")
+    (check (format nil "~A~%(defun one ()~%  ;; a second time~%  'again)~%~%(defvar *two* 2)~%~%~
+                        (cl:in-package \"CLARA.TESTS.PLAY\")~%~%(defun ball () 'round)~%~%(defun ONE () 'in-play-again)~%~%~
+                        (cl:in-package \"COMMON-LISP-USER\")~%~%(load \"/tools.lisp\")~%~%~
+                        (defvar one 'a-variable-of-the-name-of-a-function)~%"
+                   clara.system::*first-lines*)
+           (on-disk *machine-disk* "/home/defined.lisp"))
+    (check (list pages t) (list (clara.host:allocated-pages) (in-order-p *machine-disk*)))))
+;; It goes to the disk that the machine was started from, wherever names
+;; are looked up at the moment; and what cannot be written is said, and is
+;; nobody's error.
+(check "" (said-by-all (lambda ()
+                         (let ((clara.fat:*volume* nil))
+                           (clara.system::record '(defun three () 3) "(defun three () 3)" "COMMON-LISP-USER")))))
+(check t (and (search "(defun three () 3)" (on-disk *machine-disk* "/home/defined.lisp")) t))
+(setf (vdev-answer *disk*) 1)
+(check t (and (search "home: what was defined could not be written down in /home/defined.lisp: the disk 00:03.0 could not"
+                      (said-by-all (lambda () (clara.system::record '(defun four () 4) "(defun four () 4)" "COMMON-LISP-USER"))))
+              t))
+(setf (vdev-answer *disk*) 0)
+
+;; A file that the user has written into: what stands before a form stays
+;; before it, and a form in a package that is not there, or a place that
+;; cannot be read, leaves everything from there on as it is, with the new
+;; form after it and the name of its package before it. (The world of
+;; these is one that was saved, so that nothing of the files is loaded.)
+(clara.host:set-start-state :resumed t)
+(one-disk (home-tree (list "defined.lisp" (format nil ";; mine~%(defun one () 1) ; the first~%~%;; and the second~%(defun two () 2)~%"))))
+(said-by-all #'clara.system:start)
+(clara.system::record '(defun two () 22) "(defun two () 22)" "COMMON-LISP-USER")
+(clara.system::record '(defun one () 11) "(defun one () 11)" "COMMON-LISP-USER")
+(check (format nil ";; mine~%(defun one () 11) ; the first~%~%;; and the second~%(defun two () 22)~%")
+       (on-disk *machine-disk* "/home/defined.lisp"))
+(one-disk (home-tree (list "defined.lisp" (format nil "(defun one () 1)~%(cl:in-package \"NO-SUCH-PACKAGE-HERE\")~%(defun two () 2)~%"))))
+(said-by-all #'clara.system:start)
+(clara.system::record '(defun two () 22) "(defun two () 22)" "COMMON-LISP-USER")
+(clara.system::record '(defun one () 11) "(defun one () 11)" "COMMON-LISP-USER")
+(check (format nil "(defun one () 11)~%(cl:in-package \"NO-SUCH-PACKAGE-HERE\")~%(defun two () 2)~%~%~
+                    (cl:in-package \"COMMON-LISP-USER\")~%~%(defun two () 22)~%")
+       (on-disk *machine-disk* "/home/defined.lisp"))
+(one-disk (home-tree (list "defined.lisp" (format nil "(defun one () 1)~%(defun two () (~%"))))
+(said-by-all #'clara.system:start)
+(clara.system::record '(defun two () 22) "(defun two () 22)" "COMMON-LISP-USER")
+(check (format nil "(defun one () 1)~%(defun two () (~%~%(cl:in-package \"COMMON-LISP-USER\")~%~%(defun two () 22)~%")
+       (on-disk *machine-disk* "/home/defined.lisp"))
+
+;; A world that was made on this start loads what /home has: init.lisp and
+;; then defined.lisp, each form by itself, in COMMON-LISP-USER until a form
+;; says otherwise. A form that fails is passed over and said, with the
+;; reason; what cannot be read ends that file; and the package that names
+;; are read in afterwards is the one from before.
+(one-disk (home-tree (list "init.lisp" (format nil "(push :init clara.tests::*order*)~%(error \"this form fails\")~%~
+                                                    (cl:in-package \"CLARA.TESTS\")~%(push (package-name *package*) *order*)~%"))
+                     (list "defined.lisp" (format nil "(push (list :defined (package-name *package*)) clara.tests::*order*)~%~
+                                                       (car 'not-a-list)~%(push :after clara.tests::*order*)~%(this (is not whole~%"))))
+(clara.host:set-start-state)
+(setq *order* nil)
+(let ((package *package*)
+      (said (said-by-all #'clara.system:start)))
+  (check '(:init "CLARA.TESTS" (:defined "COMMON-LISP-USER") :after) (reverse *order*))
+  (check t (eq package *package*))
+  (check t (and (search (format nil "home: /home/init.lisp is loaded, 3 forms of it, and 1 was passed over:~%~
+                                     home:   (error \"this form fails\")~%home:     this form fails~%")
+                        said)
+                (search "home: /home/defined.lisp is loaded, 2 forms of it, and 2 were passed over:" said)
+                (search "home:   (car 'not-a-list)" said)
+                (search "home:   (this (is not whole" said)
+                t)))
+(check 2 (length (clara:all-threads)))                ; the thread that loaded is gone, and one watches the button
+;; A world that was saved has it all already, and is not loaded into; and
+;; after two starts that did not come to a prompt, the text may be why.
+(setq *order* nil)
+(clara.host:set-start-state :resumed t)
+(check (format nil "system: this is ClaraOS 0.0.0-host~%") (said-by-all #'clara.system:start))
+(clara.host:set-start-state :starts 1)
+(check t (and (search "home: /home/init.lisp is loaded" (said-by-all #'clara.system:start)) t))
+(setq *order* nil)
+(clara.host:set-start-state :starts 2)
+(check (format nil "system: this is ClaraOS 0.0.0-host~%~
+                    home: the two starts before this one did not come to a prompt: what is in /home/ is not loaded~%")
+       (said-by-all #'clara.system:start))
+(check nil *order*)
+
+;; A text that does not come to an end is given so long, and stopped: the
+;; machine comes to its prompt all the same, and the file after it is
+;; loaded.
+(one-disk (home-tree (list "init.lisp" (format nil "(push :begun clara.tests::*order*)~%(loop (sleep 0.01))~%(push :never clara.tests::*order*)~%"))
+                     (list "defined.lisp" "(push :defined clara.tests::*order*)")))
+(clara.host:set-start-state)
+(setq *order* nil)
+(let ((clara.system:*patience* 300))
+  (check (format nil "system: this is ClaraOS 0.0.0-host~%~
+                      home: /home/init.lisp was not loaded to its end: it took more than 0 seconds, or could not be read~%~
+                      home: /home/defined.lisp is loaded, 1 form~%")
+         (said-by-all #'clara.system:start)))
+(check '(:begun :defined) (reverse *order*))
+(check t (eventually (lambda () (= (length (clara:all-threads)) 2))))
+
+;; A file that would load itself, or the other of the two, by a LOAD at
+;; its top: such a form is refused and said, whether the name is written
+;; there or worked out, and the rest of the file is loaded.
+(one-disk (home-tree (list "init.lisp" (format nil "(push :init clara.tests::*order*)~%(load \"/home/defined.lisp\")~%"))
+                     (list "defined.lisp" (format nil "(push :defined clara.tests::*order*)~%~
+                                                       (load (clara.system:home-file \"defined.lisp\"))~%~
+                                                       (load \"/HOME/INIT.LISP\")~%(push :after clara.tests::*order*)~%"))))
+(clara.host:set-start-state)
+(setq *order* nil)
+(let ((said (said-by-all #'clara.system:start)))
+  (check '(:init :defined :after) (reverse *order*))
+  (check t (and (search (format nil "home: /home/init.lisp is loaded, 1 form of it, and 1 was passed over:~%~
+                                     home:   (load \"/home/defined.lisp\")~%~
+                                     home:     /home/defined.lisp is loaded into a new world by itself, and not by a form of /home/~%")
+                        said)
+                (search "home: /home/defined.lisp is loaded, 2 forms of it, and 2 were passed over:" said)
+                (search (format nil "home:   (load (clara.system:home-file \"defined.lisp\"))~%~
+                                     home:     /home/defined.lisp is loaded into a new world by itself, and not by a form of /home/~%")
+                        said)
+                (search (format nil "home:   (load \"/HOME/INIT.LISP\")~%~
+                                     home:     /HOME/INIT.LISP is loaded into a new world by itself, and not by a form of /home/~%")
+                        said)
+                t)))
+
+;; The two files are the ones on the disk that the machine was started
+;; from, also when a form of the first has names looked up on another disk
+;; from then on, whether that has a /home of its own or none. And the
+;; start has not come to its prompt while they are loaded: the file that
+;; counts it is still there, so that a text which takes the machine down
+;; is found out.
+(dolist (other '((("home" (("defined.lisp" "(push :of-the-other-disk clara.tests::*order*)"))))
+                 (("mine.txt" "a disk without a home"))))
+  (two-disks (append (machine-tree '("starts" "1 00000000000000ee
+"))
+                     (list (list "home" (list (list "init.lisp"
+                                                    (format nil "(push (clara.system::there-p \"/clara/\" \"starts\") clara.tests::*order*)~%~
+                                                                 (setq clara.fat:*volume* (first (clara.fat:volumes)))"))
+                                              (list "defined.lisp" "(push :of-the-machine clara.tests::*order*)")))))
+             other :first :other)
+  (clara.host:set-start-state :token "00000000000000ee")
+  (setq *order* nil)
+  (check (format nil "system: this is ClaraOS 0.0.0-host~%~
+                      home: /home/init.lisp is loaded, 2 forms~%home: /home/defined.lisp is loaded, 1 form~%")
+         (said-by-all #'clara.system:start))
+  (check '((:of-the-machine t) t nil) (list *order* (eq clara.fat:*volume* (first (clara.fat:volumes)))
+                                            (on-disk *machine-disk* "/clara/starts"))))
+
+;; A world is saved on the disk that the machine was started from, also
+;; while the names of files are looked up on another.
+(two-disks (machine-tree '("starts" "1 00000000000000dd
+")) '(("mine.txt" "on a disk of my own")) :first :other)
+(clara.host:set-start-state :token "00000000000000dd")
+(said-by-all #'clara.system:start)
+(clara.host:set-heap-image (octets "a world, saved from anywhere"))
+(setq clara.fat:*volume* (first (clara.fat:volumes)))
+(check '(("mine.txt") "/clara/clara.image") (list (clara.fat:names "/") (clara:save-image)))
+(check '("a world, saved from anywhere" nil t)
+       (list (on-disk *machine-disk* "/clara/clara.image") (on-disk *other-disk* "/clara/clara.image")
+             (and (in-order-p *machine-disk*) (in-order-p *other-disk*))))
+;; A volume of an earlier start is no place for a world, whoever names it:
+;; its disk is not this start's. The world then goes where names are looked
+;; up first.
+(let ((earlier clara.fat:*image-volume*))
+  (said-by #'clara.fat:start)
+  (check nil clara.fat:*image-volume*)
+  (setq clara.fat:*image-volume* earlier)
+  (clara.host:set-heap-image (octets "a world of a later start"))
+  (check '(nil "there is no directory for a file /clara/clara.image to be in")
+         (list (and (member earlier (clara.fat:volumes)) t) (condition-text #'clara:save-image)))
+  (check '("a world, saved from anywhere" nil) (list (on-disk *machine-disk* "/clara/clara.image")
+                                                     (on-disk *other-disk* "/clara/clara.image"))))
 
 (clara.host:reset-machine)
 (clara.host:set-start-state)

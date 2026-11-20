@@ -438,17 +438,28 @@ Upgrades:
   away (`clara.fat:make-directory`). A world is started by the system
   that saved it and by no other, so what was defined at a prompt does not
   come across an upgrade yet: that is M15b and M15c.
-- [ ] **M15b work kept as text.** What is defined at the prompt is in the
-  heap and nowhere else, so it lasts as long as the world it was defined
-  in, and a world that was saved is of no use to a kernel that lays its
-  objects out in another way. So the work is kept as text as well, which
-  every version reads: a directory on the boot volume that is the user's,
-  and that no upgrade writes to; a file there that every world loads once
-  it has been made from the files; and a second one that the listener
-  writes, each form that defines something as it was typed, so that a
-  world that is made again has what was defined in the one before it
-  without anybody having written it down. The image stays what makes a
-  machine start quickly.
+- [x] **M15b work kept as text** (2026-11-20, version 0.0.27). What is
+  defined at a prompt was in the heap and nowhere else, so it lasted as
+  long as the world it was defined in, and a world that was saved is of no
+  use to another system: after an upgrade it was gone. The work is now
+  kept as text as well, which every system reads, in a directory that is
+  the user's and that no upgrade touches: `/home`, on the disk that the
+  machine starts from, which a system makes when it is not there.
+  `/home/defined.lisp` is written by the listeners, the one on the serial
+  port and the ones in windows: each form that defines something, as it
+  was typed, comments and all, once it has been evaluated, with a form
+  that defines a name again in the place of the earlier one, and the
+  package that forms are read in said between them. `/home/init.lisp` is
+  the user's to write. A world that is made from the files loads the two,
+  a form at a time: a form that fails is said in the report and passed
+  over, a file that does not come to an end is stopped after a minute,
+  and after two starts in a row that did not come to a prompt nothing of
+  it is loaded. So an upgrade ends in a world that has what was defined
+  in the one before it, the functions, the macros, the structures, the
+  packages and the variables as their forms give them, and so does a
+  start that had to pass a saved world over. A world is saved on the disk
+  that the machine started from, wherever names are looked up at the
+  moment. The image stays what makes a machine start quickly.
 - [ ] **M15c a world made again.** An upgrade ends in a world of the new
   system. After one, the world is made from the new system's files, the
   user's text is loaded into it and it is saved, without anybody asking,
@@ -1495,10 +1506,11 @@ M15a, an upgrade in place, what it left:
   `failed` in it, until an upgrade is asked for again or another system
   takes the old one's place. The disk has room for it, and nothing shows
   it but a listing of `/clara`.
-- The world does not come across. After an upgrade the saved world is
-  another system's and stays on the disk, refused at every start, until a
-  new one is saved over it. The window manager is not running in the new
-  world, whatever it was before. M15b and M15c.
+- The world does not come across. What was defined at a prompt does,
+  as text, since M15b. After an upgrade the saved world is another
+  system's and stays on the disk, refused at every start, until a new one
+  is saved over it. The window manager is not running in the new world,
+  whatever it was before. M15c.
 - A start that follows one which did not come to its prompt passes the
   saved world over and leaves it where it is: the start after that tries
   it again. A world that never comes to its prompt is so passed over at
@@ -1535,40 +1547,82 @@ M15a, an upgrade in place, what it left:
   that way (tools/at-once.txt). The fifth changes nothing: the length of
   a file is held against the manifest before its sum is, and no file has
   the right sum and the wrong length.
-M15b, work kept as text:
+M15b, work kept as text, what it left:
 
-- Which forms the listener writes down: DEFUN, DEFMACRO, DEFVAR,
-  DEFPARAMETER, DEFSTRUCT, DEFPACKAGE, DEFINE-CONDITION and their like,
-  with the package that each was read in; whether a LOAD is written down
-  as a LOAD; and what to make of a form that defines something by way of a
-  macro of the user's. A name that is defined a second time is in the file
-  twice: when the file is made shorter, and by whom. A form that a newer
-  system cannot evaluate has to be said and passed over, and not keep the
-  world from being made. The listener of the serial port and the one in a
-  window write the one file.
+- What is written down is decided by a form's first word (DESIGN.md), so
+  a good deal of what changes a world is not: a form inside another, a
+  PROGN or a LET; a SETQ, and a SETF of a function or of a property; what
+  was done to a package after its DEFPACKAGE, by EXPORT, IMPORT or
+  USE-PACKAGE, so that a package which was put together by hand comes
+  back as its DEFPACKAGE made it; what Ctrl-E evaluated in the editor,
+  which is in the editor's file; and the forms of a file that was loaded,
+  of which the LOAD is written down and nothing else.
 - What is not a definition is not kept: a variable that was changed after
-  its DEFVAR comes back with the value that the form gives it. That is
-  M15c's, below.
-- Where the directory is and what it is called, and whether `make image`
-  and tools/mkdisk.py make it. Whether a second disk can be the user's:
-  since 0.0.22 `WORK=` gives a machine under QEMU one, and the manual says
-  how files are kept there, all of it by hand. What that leaves for this
-  slice. The volume has no name of its own: it is reached by binding or
-  setting `clara.fat:*volume*`, and a name of a file does not say which
-  volume it is on. A LET of the variable does not reach another thread, so
-  the Editor and the file browser follow a SETQ only, and a user who sets
-  it has to set it back. SAVE-IMAGE writes where the variable points: an
-  error on a volume without `/clara`, and on one that has it a world that
-  no start finds. So: a name for the user's volume, SAVE-IMAGE on the boot
-  volume whatever the variable holds, and the file that every new world
-  loads looked for there. Which disk is the user's is "the second" today;
-  a machine with more disks needs a mark on the volume. Directories cannot
-  be made, so the user's are made on the host.
-- UTM. A second drive for the user's files was not tried there: whether
-  UTM keeps it apart from the system's drive when that is imported again,
-  and that it has to come after it in the list of drives. UTM turns an
-  imported drive into a qcow2 file of its own, which the host does not
-  open, so carrying files in and out by the host is QEMU's way only.
+  its DEFVAR comes back with the value that the form gives it, and a form
+  that got its value by doing something does it again, or fails: a DEFVAR
+  that opened a window is passed over in a world without a window
+  manager. That is M15c's, below.
+- The file keeps a definition where its name was first defined. A later
+  version of it that leans on something which was defined in between, a
+  macro for one, is loaded before that, compiled as a call of a function,
+  and fails when it is called. The order of a session is not always an
+  order that loads, and nothing here sorts it: the user moves the form in
+  the file.
+- A world that came back as an image is not loaded into. What was defined
+  after it was saved, on a machine that then stopped without a shutdown,
+  is in the file and not in the world until `(clara.system:load-home)` is
+  typed. Whether a start should see that for itself, a world remembering
+  what it has written down, is open.
+- A LOAD is written down as it was typed, and the name of a file does not
+  say which volume it is on: a new world looks it up on the volume that
+  the machine started from. A file that was loaded from a disk of the
+  user's own, with `clara.fat:*volume*` set, is not found there, which the
+  report says. The volume has no name of its own yet. A LET of the
+  variable does not reach another thread, so the Editor and the file
+  browser follow a SETQ only, and a user who sets it has to set it back.
+  Which disk is the user's is "the second" still; a machine with more
+  disks needs a mark on the volume.
+- The file is read and written whole for every form that is written down,
+  and read a form at a time to find the one to replace. That is nothing
+  for the hundreds of forms of a session and grows with the file; nothing
+  makes it shorter but the user.
+- A text that takes the kernel down, a fault and not an error, costs two
+  starts, and the third has nothing of `/home` and says so. The file is
+  not marked: once a start has come to its prompt the count begins anew,
+  and the next world that is made from the files loads the text again.
+  It is for the user to put the file right at that third start, or to
+  save the world there.
+- A file is given a minute (`clara.system:*patience*`), by the clock,
+  whatever the machine: where a machine is emulated, an honest file that
+  loads a great deal may be cut short. The variable is the world's, so a
+  form of `init.lisp` can give `defined.lisp` longer, and nothing can
+  give `init.lisp` longer but a world that was saved with another value.
+- The two files are refused as the argument of a LOAD that stands at the
+  top of either. A file that one of them loads, and that loads one of
+  them, goes round until the stack is full or the minute is over.
+- UTM was not tried: that `/home` is made and written on the drive that
+  UTM made of the image. A second drive for the user's files was not
+  tried there either (0.0.22): whether UTM keeps it apart from the
+  system's drive when that is imported again. UTM turns an imported drive
+  into a qcow2 file of its own, which the host does not open, so carrying
+  files in and out by the host is QEMU's way only.
+- A form of the text that fills the stack is passed over on ClaraOS, which
+  the upgrade boot sees. Under SBCL a full stack in a thread ends the
+  whole run, so the host tests have no such form.
+- What was broken on purpose: 64 mistakes in lisp/system.lisp,
+  lisp/listener.lisp, lisp/fat.lisp and lisp/boot.lisp, each run through
+  the host tests, and through the upgrade boot or the manual's where only
+  a kernel can tell. Seven got through. Five became tests: the package
+  that a listener says a form was read in, which the test could not tell
+  from the package afterwards; a variable and a function of one name,
+  which are two entries of the file; a LOAD whose name is worked out, on
+  the host and at a kernel; and a volume of an earlier start, which the
+  file system has to forget and has to refuse as the place for a world.
+  Two change nothing: the name that a form defines is printed in the
+  form's own package, and any one package would do as long as it is the
+  same for both forms; and a text that names a package which is not there
+  is marked as not read to its end, where the name alone has the same
+  effect.
 
 M15c, a world made again:
 
@@ -1668,9 +1722,9 @@ M15e, shutting down, what it left:
   prompt is saved broken, and starts like that: `:save nil` is for the one
   who knows, and what a machine does about a world that does not come to
   its prompt is M15c's.
-- The world is saved where `clara.fat:*volume*` points, like any world
-  (M15b's group, above): with the variable set to a second disk, the
-  shutdown stops with the error of SAVE-IMAGE, and nothing is turned off.
+- (Settled in M15b: a world is saved on the volume that the machine was
+  started from, wherever `clara.fat:*volume*` points, so a shutdown with
+  the variable set to a second disk no longer stops at SAVE-IMAGE.)
 - tools/run.sh no longer starts QEMU with `-no-reboot`, under which a
   machine that started itself again ended QEMU instead. A kernel that
   resets the machine by a fault it cannot report, three faults in a row on

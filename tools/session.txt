@@ -146,8 +146,8 @@ error: interrupted from the keyboard
 > (clara:join-thread (clara:make-thread (lambda () (car 5)) :name "faulty"))
 error in #<THREAD "faulty">: CAR wants a list, and 5 is not one
 error: the thread #<THREAD "faulty"> ended with an error: CAR wants a list, and 5 is not one
-> (defvar *spinner* (clara:make-thread (lambda () (loop)) :name "spinner"))
-*SPINNER*
+> (progn (defvar *spinner* (clara:make-thread (lambda () (loop)) :name "spinner")) 'spinning)
+SPINNING
 > (list (fact 10) (clara:thread-alive-p *spinner*))
 (3628800 T)
 > (clara:destroy-thread *spinner*)
@@ -490,7 +490,7 @@ OK
 *SVREF*
 > (defvar *asked* 0)
 *ASKED*
-> (defun svref (vector index) (setq *asked* (+ *asked* 1)) (aref vector index))
+> (progn (defun svref (vector index) (setq *asked* (+ *asked* 1)) (aref vector index)))
 SVREF
 > (defun first-of (vector) (svref vector 0))
 FIRST-OF

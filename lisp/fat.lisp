@@ -44,7 +44,7 @@
 
 (defpackage "CLARA.FAT"
   (:use "COMMON-LISP")
-  (:export "START" "VOLUMES" "*VOLUME*" "VOLUME-P" "VOLUME-DISK" "VOLUME-KIND" "VOLUME-FIRST"
+  (:export "START" "VOLUMES" "*VOLUME*" "*IMAGE-VOLUME*" "VOLUME-P" "VOLUME-DISK" "VOLUME-KIND" "VOLUME-FIRST"
            "ENTRIES" "ENTRY-P" "ENTRY-NAME" "ENTRY-SHORT" "ENTRY-DIRECTORY-P" "ENTRY-SIZE"
            "NAMES" "FILE-TEXT" "READ-FILE" "WRITE-FILE" "REMOVE-FILE"
            "MAKE-DIRECTORY" "REMOVE-DIRECTORY" "FREE-BYTES"))
@@ -81,6 +81,7 @@
 
 (defvar *volumes* nil) ; the volumes that START found, in the order of their disks
 (defvar *volume* nil)  ; the one that names are looked up on
+(defvar *image-volume* nil) ; the one that a world is saved on, which the machine was started from: lisp/system.lisp says which
 
 (defun volumes ()
   *volumes*)
@@ -1103,6 +1104,13 @@
           (setq free (1+ free)))))
     (* free 512 (volume-cluster-sectors volume))))
 
+;; A file like WRITE-FILE makes, on the volume that a world is saved on,
+;; whichever volume names are looked up on: a machine starts from one disk,
+;; and finds its world there or nowhere.
+(defun write-image (name address size)
+  (let ((*volume* (if (member *image-volume* *volumes*) *image-volume* (car *volumes*))))
+    (write-file name address size)))
+
 ;;; Starting
 
 (defun size (sectors)
@@ -1115,7 +1123,8 @@
 ;; volume's.
 (defun start ()
   (setq *volumes* nil
-        *volume* nil)
+        *volume* nil
+        *image-volume* nil)
   (dolist (disk (clara.disk:disks))
     (handler-case
         (let ((volumes (disk-volumes disk)))
@@ -1130,7 +1139,8 @@
         (format t "files: the disk ~A could not be looked at: ~A~%" (clara.disk:disk-name disk) condition))))
   (cond (*volumes*
          (setq *volume* (car *volumes*))
-         (clara:provide-files :text #'file-text :names #'names :write #'write-file :delete #'remove-file)
+         (clara:provide-files :text #'file-text :names #'names :write #'write-file :delete #'remove-file
+                              :image #'write-image)
          (when (cdr *volumes*)
            (format t "files: names are looked up on the first of these volumes~%")))
         (t

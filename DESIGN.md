@@ -1373,9 +1373,9 @@ architectures (kernel/vm.c).
   system takes it as it starts and starts again by itself. A system that
   was tried that way and failed is not taken a second time unasked.
 - What does not come across is the world. The newer system does not start
-  the older one's image (Images, above), so what was defined at a prompt
-  is gone after an upgrade unless it is in a file. M15b and M15c are
-  about that.
+  the older one's image (Images, above). What was defined at a prompt
+  comes across as text (Work kept as text, below); what only the heap
+  had, a value that a variable came to, does not.
 - Upgrades are tested by doing them. The build makes two more systems of
   the same sources under other names, one of which has a boot.lisp that
   is no Lisp. A machine of each kind of processor takes the good one and
@@ -1385,6 +1385,64 @@ architectures (kernel/vm.c).
   before its prompt has to be passed over at the next start. Under SBCL
   the same procedures run on volumes that the tests make up and look at
   afterwards without the file system.
+
+## Work kept as text (decided in M15b, 2026-11-20)
+
+- A world is kept two ways. The image is the heap, quick to start and
+  good for the system that saved it and no other. The text is what was
+  typed, which every system reads. So what a user defines is written down
+  as text as it is defined, without anybody asking, and a world that is
+  made from the files is given that text.
+- It lives in `/home`, on the volume that the machine was started from.
+  The directory is the user's: no system writes there but for one file,
+  no upgrade touches it, and a system makes it at its first start, so
+  neither `make image` nor tools/mkdisk.py knows of it. It is on the boot
+  volume, and not on a disk of the user's own, because a machine may have
+  no second disk, and because the text has to be where the system that
+  reads it is: an upgrade in place leaves both where they are.
+- Two files there. `init.lisp` is the user's to write, for whatever a new
+  world should begin with. `defined.lisp` is written by the listeners
+  (`clara.listener:*record*`, `clara.system::record`): a form that was
+  typed at a prompt, at the top and not inside another, that was
+  evaluated without an error, and that defines something. The file is
+  plain Lisp, and the user's to read and to change.
+- What "defines something" means is decided by the form's first word,
+  since nothing short of evaluating a form says what it does: a word that
+  begins with DEFINE-, whatever it names, as the window manager's
+  DEFINE-APPLICATION, which is a function; a word that begins with DEF
+  and is one of the language's own or a macro, which is what a defining
+  form is called, the user's own among them; and LOAD, since what a file
+  defined is in none of the forms that were typed. A function whose name
+  happens to begin with the three letters, DEFAULT-SIZE, is called and
+  not written down.
+- A form is kept as it was typed, comments and all, and not as the
+  printer would write it: the text is for a person to read. A form that
+  defines a name again takes the place of the earlier one, so the file
+  holds each definition once, where it was first made, and does not grow
+  with every correction. Which name a form defines is its first two
+  words, in the package that it was read in; a line `(cl:in-package ...)`
+  stands wherever the package changes.
+- A world that was made from the files loads `init.lisp` and then
+  `defined.lisp`, a form at a time. A form that fails is said, with the
+  reason, and passed over, and the rest goes on: the forms were written
+  under another system, and one that this system does not understand must
+  not keep a world from being made. A world that came as an image is not
+  loaded into: it is as it was saved.
+- Nothing in the text may keep a machine from its prompt. Each file is
+  loaded by a thread that is given a minute (`*patience*`) and is stopped
+  after it. A LOAD of one of the two files from one of them is refused,
+  since the file would load itself without end. And after two starts in a
+  row that did not come to a prompt the text is not loaded at all: the
+  first such start costs the image (Upgrades, above), the second the
+  text, and the third is the system's files alone.
+- A world is saved on the volume that the machine was started from,
+  wherever names are looked up at the moment (`clara.fat:*image-volume*`):
+  a machine looks for an image there and nowhere else. Until this, a
+  world saved while `clara.fat:*volume*` named another disk was an error,
+  or a file that no start found.
+- What is not text is not kept: the value that a variable came to after
+  it was defined, an object that was built by hand, whatever a form did
+  that was no definition. M15c is about saying so.
 
 ## Shutting down (decided in M15e, 2026-11-20)
 

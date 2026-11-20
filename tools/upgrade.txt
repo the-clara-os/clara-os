@@ -6,6 +6,35 @@
 (2 T "/letters")
 > (with-open-file (out "/letters/first.txt" :direction :output) (write-line "written before the upgrade" out))
 "written before the upgrade"
+> (defun doubled (n) (* n 2))
+DOUBLED
+> (progn (defun not-written-down () 'inside-a-progn) (setq *jobs* 'changed-and-not-defined-again))
+CHANGED-AND-NOT-DEFINED-AGAIN
+> (defun doubled (n)
+    ;; defined a second time: this is the one that is kept
+    (+ n n))
+DOUBLED
+> (load (concatenate 'string "/clara/" "kept.lisp"))
+T
+> (defun default-of (value) value)
+DEFAULT-OF
+> (default-of 4)
+4
+> (defun written-down (text)
+    (with-open-file (in "/home/defined.lisp")
+      (let ((count 0))
+        (loop (let ((line (read-line in nil)))
+                (unless line (return count))
+                (when (equal line text) (setq count (+ count 1))))))))
+WRITTEN-DOWN
+> (with-open-file (in "/home/defined.lisp") (list (read-line in) (probe-file "/home/init.lisp")))
+(";;;; What was defined at the prompt, as it was typed. ClaraOS writes a form" NIL)
+> (with-open-file (out "/home/init.lisp" :direction :output)
+    (write-line "(defvar *from-init* (list 'loaded 'before (boundp '*jobs*)))" out)
+    (write-line "(this-is-not-defined-anywhere)" out)
+    (write-line "(labels ((deeper (n) (+ 1 (deeper n)))) (deeper 1))" out)
+    (write-line "(load \"/home/init.lisp\")" out))
+"(load \"/home/init.lisp\")"
 > (clara.system:upgrade :from (first (clara.fat:volumes)))
 error: that volume holds no ClaraOS other than this one, {{system}}
 > (clara.system:upgrade)
@@ -13,8 +42,14 @@ system: {{version}}-other is on the disk, and is tried at the next start
 clara: the world is saved
 clara: starting the machine again
 ^R
-> (list (clara.system:system) (getf (clara.unsafe:start-state) :resumed) (getf (clara.unsafe:start-state) :trial) (fboundp 'fact))
-("{{version}}-other" NIL T NIL)
+> (list (clara.system:system) (getf (clara.unsafe:start-state) :resumed) (getf (clara.unsafe:start-state) :trial))
+("{{version}}-other" NIL T)
+> (list (fact 5) (doubled 21) (unless-zero 4 'not-zero) (point-y (make-point :x 3)) (package-name (find-package "PLAY")))
+(120 42 NOT-ZERO 0 "PLAY")
+> (list *from-init* *jobs* (fboundp 'not-written-down) (handler-case (error 'low-fuel :left 3) (low-fuel (c) (fuel-left c))))
+((LOADED BEFORE NIL) 0 NIL 3)
+> (list *from-a-file* (written-down "(load (concatenate 'string \"/clara/\" \"kept.lisp\"))") (written-down "(default-of 4)") (written-down "(defun default-of (value) value)"))
+("written by ClaraOS" 1 0 1)
 > (list (with-open-file (in "/letters/first.txt") (read-line in)) (with-open-file (in "/clara/kept.lisp") (read-line in)))
 ("written before the upgrade" "(defvar *from-a-file* \"written by ClaraOS\")")
 > (list (clara.fat:names "/clara/") (clara.fat:names "/EFI/BOOT/") (clara.fat:names "/letters/"))

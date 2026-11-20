@@ -77,6 +77,7 @@ td:first-child { white-space: nowrap; }
     <li><a href="#compiler">The compiler</a></li>
     <li><a href="#files">Files</a></li>
     <li><a href="#image">Saving the world</a></li>
+    <li><a href="#home">What you define, kept as text</a></li>
     <li><a href="#upgrade">A newer ClaraOS</a></li>
     <li><a href="#threads">Threads</a></li>
     <li><a href="#drawing">Drawing</a></li>
@@ -165,7 +166,7 @@ draw: a screen of 800 by 600 pixels
 system: this is ClaraOS {{version}}-41d0c97b
 clara: reading the serial port and the keyboard: a form is evaluated, Ctrl-C stops it, Ctrl-D ends
 &gt; </code></pre>
-    <p>The lines that begin with <code>pci:</code>, <code>input:</code>, <code>disk:</code>, <code>files:</code> and <code>draw:</code> say what the machine has: its devices, the keyboards and pointers among them, its disks, the volume that names of files are looked up on, and the screen that <a href="#drawing">pictures</a> are shown on. The line <code>system:</code> says which build of ClaraOS this is, its version and eight digits that are different for every build, and more lines follow it when <a href="#upgrade">a newer system</a> was taken. A line that begins with <code>panic:</code> or <code>exception:</code> means the kernel has stopped. <a href="#trouble">When something goes wrong</a> has more about those.</p>
+    <p>The lines that begin with <code>pci:</code>, <code>input:</code>, <code>disk:</code>, <code>files:</code> and <code>draw:</code> say what the machine has: its devices, the keyboards and pointers among them, its disks, the volume that names of files are looked up on, and the screen that <a href="#drawing">pictures</a> are shown on. The line <code>system:</code> says which build of ClaraOS this is, its version and eight digits that are different for every build, and more lines follow it when <a href="#upgrade">a newer system</a> was taken. Lines that begin with <code>home:</code> say what was loaded of <a href="#home">your own text</a> into a world that was made anew. A line that begins with <code>panic:</code> or <code>exception:</code> means the kernel has stopped. <a href="#trouble">When something goes wrong</a> has more about those.</p>
 
     <h3 id="stop">Stopping it</h3>
     <p>The machine is shut down by asking it to:</p>
@@ -437,7 +438,7 @@ FIB
 
     <h3 id="listing">What is there</h3>
 <pre class="session">&gt; (directory "/*")
-("/clara/" "/EFI/")
+("/clara/" "/EFI/" "/home/")
 &gt; (directory "/EFI/BOOT/*")
 ("/EFI/BOOT/BOOTAA64.EFI" "/EFI/BOOT/BOOTX64.EFI")
 &gt; (probe-file "/efi/boot/bootaa64.efi")
@@ -445,14 +446,14 @@ FIB
 &gt; (probe-file "/nothing.lisp")
 NIL</pre>
     <p><code>directory</code> takes a pattern, in which <code>*</code> stands for any characters in the last part of the name, and gives the names that fit, a directory's with a slash at its end. <code>probe-file</code> gives the name of a file as the disk spells it, or <code>NIL</code> when there is none.</p>
-    <p>A new disk has two directories. <code>/EFI/BOOT</code> holds the two kernels, where the firmware looks for the one to start. <code>/clara</code> is the system's own: it holds a directory for the system that runs, named after it, and in time the <a href="#image">world that was saved</a>. A system's name is its version and eight digits that are different for every build, so the names of its files are asked for and not spelt out:</p>
+    <p>A disk has three directories once the machine has started from it. <code>/EFI/BOOT</code> holds the two kernels, where the firmware looks for the one to start. <code>/home</code> is yours, and is where the system keeps <a href="#home">what you define as text</a>. <code>/clara</code> is the system's own: it holds a directory for the system that runs, named after it, and in time the <a href="#image">world that was saved</a>. A system's name is its version and eight digits that are different for every build, so the names of its files are asked for and not spelt out:</p>
 <pre><code>&gt; (clara.system:system)
 "{{version}}-8f3a1c2e"
 &gt; (clara.system:system-file "boot.lisp")
 "/clara/{{version}}-8f3a1c2e/boot.lisp"</code></pre>
 <pre class="session">&gt; (clara.fat:names (clara.system:system-file ""))
 ("arm64.lisp" "boot.lisp" "BOOTAA64.EFI" "BOOTX64.EFI" "compiler.lisp" "console.lisp" "disk.lisp" "draw.lisp" "editor.lisp" "fat.lisp" "files.lisp" "font.lisp" "input.lisp" "listener.lisp" "manifest" "native.lisp" "pci.lisp" "self-test.lisp" "system.lisp" "terminal.lisp" "virtio.lisp" "windows.lisp" "x86-64.lisp")</pre>
-    <p>Those are the system's Lisp files: the language's part that is written in Lisp, the compiler, the console, the drivers, the file system, the window manager and what sees to <a href="#stop">the machine as a whole</a>, and two that are not loaded until they are wanted, the <a href="#applications">applications</a> <code>editor.lisp</code> and <code>files.lisp</code>. <code>native.lisp</code> is what <a href="#processor">translates for the processor</a>, with a file for each kind of processor, <code>arm64.lisp</code> and <code>x86-64.lisp</code>, of which a machine loads its own. Beside them are a second copy of the kernels and <code>manifest</code>, the list of what the system is made of, which is what <a href="#upgrade">another machine reads</a> when it takes this system from this disk. Everything outside <code>/clara</code> and <code>/EFI</code> is yours, and no system writes there.</p>
+    <p>Those are the system's Lisp files: the language's part that is written in Lisp, the compiler, the console, the drivers, the file system, the window manager and what sees to <a href="#stop">the machine as a whole</a>, and two that are not loaded until they are wanted, the <a href="#applications">applications</a> <code>editor.lisp</code> and <code>files.lisp</code>. <code>native.lisp</code> is what <a href="#processor">translates for the processor</a>, with a file for each kind of processor, <code>arm64.lisp</code> and <code>x86-64.lisp</code>, of which a machine loads its own. Beside them are a second copy of the kernels and <code>manifest</code>, the list of what the system is made of, which is what <a href="#upgrade">another machine reads</a> when it takes this system from this disk. Everything outside <code>/clara</code> and <code>/EFI</code> is yours, and no system writes there but for one file in <code>/home</code>.</p>
 
     <h3 id="reading">Reading and loading</h3>
 <pre class="session">&gt; (with-open-file (in (clara.system:system-file "listener.lisp")) (list (read-line in) (read-line in)))
@@ -541,12 +542,12 @@ COPY-TEXT
     <p>A <code>let</code> reaches the forms inside it and nothing else. To work on your disk for a while, set the variable instead: then every name is looked up there, in every thread, so the <a href="#applications">Editor and the file browser</a> open and save there as well.</p>
 <pre class="session">&gt; (progn (setq clara.fat:*volume* (work)) (directory "/*"))
 ("/hello.lisp" "/mine.lisp")
-&gt; (clara:save-image)
-error: there is no directory for a file /clara/clara.image to be in
+&gt; (list (clara:save-image) (probe-file "/clara/clara.image"))
+("/clara/clara.image" NIL)
 &gt; (progn (setq clara.fat:*volume* (first (clara.fat:volumes))) (directory "/*"))
-("/clara/" "/EFI/" "/hello.lisp")</pre>
-    <p>As the error in the middle shows, the world is saved where names are looked up, and the machine only starts from an image that is on the system's disk: set the variable back to the first volume before you <a href="#image">save the world</a>. The applications start either way, since <code>load</code> finds the system's own files in what the machine read of them as it started.</p>
-    <p>The next time the machine starts, your disk is as you left it, whatever became of the system's in the meantime. In a world that was made anew, by <a href="#upgrade">a newer system</a> for one, nothing that you defined is defined, and one line brings it back:</p>
+("/clara/" "/EFI/" "/hello.lisp" "/home/")</pre>
+    <p>Two things do not follow the variable, as the form in the middle shows for the first. <a href="#image">The world is saved</a> on the disk that the machine was started from, since that is where a machine looks for one, and <a href="#home">what you define is written down</a> there as well. The applications start either way: the system finds its own files where it started from.</p>
+    <p>The next time the machine starts, your disk is as you left it, whatever became of the system's in the meantime. A world that was made anew, by <a href="#upgrade">a newer system</a> for one, has what you defined at a prompt, and not what a file of this disk defined. One line brings that back, at a prompt or in <a href="#init"><code>/home/init.lisp</code></a>:</p>
 <pre class="session again">&gt; (let ((clara.fat:*volume* (second (clara.fat:volumes)))) (load "/mine.lisp"))
 T
 &gt; (mine)
@@ -562,7 +563,7 @@ T
 
   <section id="image">
     <h2>{{spleen:Saving the world}}</h2>
-    <p>Everything that you define lives in the machine's memory, and is gone when the machine stops, unless you save it. <code>clara:save-image</code> writes the whole Lisp world to one file on the disk, as it is at that moment.</p>
+    <p>Everything that you define lives in the machine's memory, and is gone when the machine stops, unless you save it. <code>clara:save-image</code> writes the whole Lisp world to one file on the disk, as it is at that moment. (What you define at a prompt is also <a href="#home">written down as text</a>, as you go, which is what a world is made of again when the saved one cannot be used.)</p>
 <pre class="session">&gt; (clara:save-image)
 "/clara/clara.image"</pre>
     <p>The next time the machine starts, it finds that file and takes it for its world, in place of loading the Lisp files. The report says so:</p>
@@ -615,6 +616,63 @@ T</pre>
     <p>A world that is broken and comes to its prompt all the same is yours to delete: <a href="#unsave">Going back to the files</a>.</p>
   </section>
 
+  <section id="home">
+    <h2>{{spleen:What you define, kept as text}}</h2>
+    <p>A saved world is quick to start and is only good for the system that saved it. So the system keeps your work a second way, as text, which every ClaraOS reads: in <code>/home</code>, on the disk that the machine started from. Two files there are what a world is made of beside the system's own.</p>
+    <table class="wrap">
+      <tr><td><code>/home/defined.lisp</code></td><td>is written by the system: every form that defines something, as you typed it at a prompt.</td></tr>
+      <tr><td><code>/home/init.lisp</code></td><td>is yours to write: whatever a new world should begin with.</td></tr>
+    </table>
+    <p>Whenever a world is made anew, from the Lisp files and not from an image, the two are loaded into it, <code>init.lisp</code> first: after <a href="#upgrade">an upgrade</a>, after the image was <a href="#unsave">deleted</a>, and when an image was <a href="#prompt-not-reached">passed over</a>. A world that comes back from its image is as it was saved, and nothing is loaded into it. So what was defined after the world was last saved, on a machine that then stopped without saving, is in the file and not in that world: <code>(clara.system:load-home)</code> loads the two files into the world that it is typed in, the way a start does.</p>
+
+    <h3 id="defined">What is written down</h3>
+<pre class="session">&gt; (defun area (width height) (* width height))
+AREA
+&gt; (defun area (width height)
+    ;; of a rectangle
+    (* width height))
+AREA
+&gt; (probe-file "/home/defined.lisp")
+"/home/defined.lisp"</pre>
+    <p>The file has the second <code>area</code>, comment and all, where the first one stood:</p>
+<pre><code>;;;; What was defined at the prompt, as it was typed. ClaraOS writes a form
+;;;; here when it has been evaluated, in the place of an earlier one that
+;;;; defined the same name, and loads this file into a world that is made
+;;;; anew, after init.lisp. It is yours to read and to change.
+
+<span class="note">...</span>
+
+(defun area (width height)
+  ;; of a rectangle
+  (* width height))</code></pre>
+    <ul>
+      <li>A form is written down when it was typed at a prompt, in any listener, on the serial port or in a window; when it stands by itself, and not inside a <code>progn</code> or a <code>let</code>; when it went well; and when its first word says that it defines something. That is a word of the language's own, <code>defun</code>, <code>defmacro</code>, <code>defvar</code>, <code>defparameter</code>, <code>defstruct</code>, <code>defpackage</code>, <code>define-condition</code>; a macro of yours whose name begins with <code>def</code>; and anything whose name begins with <code>define-</code>, as <code>clara.windows:define-application</code>. Any other call of a function is not written down, whatever the function is called. A <code>load</code> is, since what a file defined is in none of the forms that were typed, unless it is one of the two files of <code>/home</code> that is loaded.</li>
+      <li>A form that defines a name again takes the place of the form that defined it before, so the file has every definition once, in the order in which each was first made.</li>
+      <li>Forms that were read in another package than the ones before them have a line <code>(cl:in-package "NAME")</code> before them.</li>
+      <li>What is not a definition is not kept. A variable that was changed after its <code>defvar</code> comes back with the value that the <code>defvar</code> gives it; what a <code>defvar</code> did to get its value, it does again; and what <kbd>Ctrl-E</kbd> evaluated in the <a href="#editor">editor</a> is in the editor's file, and not here.</li>
+      <li>The file is text, and yours: read it, and take out of it what you no longer want, in the editor. What the system cannot read of it any more it leaves as it is, and goes on after it.</li>
+    </ul>
+
+    <h3 id="init">A file of your own</h3>
+    <p><code>/home/init.lisp</code> is not there until you write it. Whatever should happen in every new world goes into it: loading your own files, starting the <a href="#windows">window manager</a>, anything that is not a definition typed at a prompt.</p>
+<pre class="session">&gt; (with-open-file (out "/home/init.lisp" :direction :output)
+    (write-line "(defvar *motto* \"a world made anew, and mine\")" out))
+"(defvar *motto* \"a world made anew, and mine\")"
+&gt; (list (clara.system:home) (clara.system:home-file "init.lisp"))
+("/home/" "/home/init.lisp")</pre>
+    <p>When a world is made, the report says what was loaded, and what was not:</p>
+<pre><code>home: /home/init.lisp is loaded, 1 form
+home: /home/defined.lisp is loaded, 34 forms of it, and 1 was passed over:
+home:   (defvar *window* (clara.windows:open-window "A picture" 200 120 :x 500 :y 400))
+home:     there is no window manager to open a window with: (clara.windows:start) starts it</code></pre>
+    <ul>
+      <li>Each form is evaluated by itself. One that fails is passed over, with its beginning and the reason in the report, and the rest goes on: a form that a newer system no longer understands does not keep a world from being made.</li>
+      <li>A file gets a minute. One that has not come to its end by then is stopped where it is, and the machine goes on to its prompt. <code>clara.system:*patience*</code> is that time, in milliseconds.</li>
+      <li>A <code>load</code> of <code>/home/init.lisp</code> or <code>/home/defined.lisp</code> that stands in one of the two is passed over like a form that fails: the file would load itself without end. A file of yours anywhere else is loaded from <code>init.lisp</code> like from a prompt, with its name looked up on the disk that the machine started from.</li>
+      <li>After two starts in a row that did not come to a prompt, nothing of <code>/home</code> is loaded, in case that is the reason: the world is then the system's alone, the report says so, and the files are there to be put right.</li>
+    </ul>
+  </section>
+
   <section id="upgrade">
     <h2>{{spleen:A newer ClaraOS}}</h2>
     <p>A system is one build of ClaraOS: its two kernels and its Lisp files. On a disk it is a directory, <code>/clara</code> and then its name, with a list in it of what it is made of. A newer ClaraOS is another such directory, and the system that is running puts it on its own disk, beside itself: that is an upgrade. The files that you wrote stay where they are, and nothing else on the disk is touched.</p>
@@ -649,7 +707,8 @@ system: {{version}}-41d0c97b has come to its prompt, and is the system of this m
     <h3 id="across">What comes across</h3>
     <ul>
       <li>Every file that you wrote, wherever it is on the disk. The upgrade writes into <code>/clara</code> and <code>/EFI</code> and nowhere else.</li>
-      <li>Not the world that was saved. A world belongs to the system that saved it: the newer system makes a world of its own files, and what was defined at the prompt of the old one is not defined in it. Keep what matters in a file and load it: <a href="#files">Files</a>.</li>
+      <li>What you defined at a prompt, as text: the newer system loads <a href="#home"><code>/home/init.lisp</code> and <code>/home/defined.lisp</code></a> into the world that it makes.</li>
+      <li>Not the world that was saved. A world belongs to the system that saved it, and the newer system makes one of its own files. So what only the old world had is gone: the value that a variable came to after it was defined, and whatever was built by hand and never defined.</li>
       <li>Not the windows, nor whether the window manager was running: the newer system starts at the console.</li>
     </ul>
     <p>The disk needs room for two systems while the newer one is tried, some four mebibytes beside what is there. When it has less, the upgrade says so and does nothing.</p>
@@ -1072,7 +1131,8 @@ error: nothing is mapped at #x0</pre>
       <tr><td>Boxes on the screen where characters should be.</td><td>The screen's font has the characters of ASCII. The characters themselves are right, and show on the serial port.</td></tr>
       <tr><td>A picture that was shown has text over it, or is no longer where it was put.</td><td>The console writes on the same screen, and moves everything on it up with every new line: <a href="#showing">Showing what has changed</a>. Show the picture again.</td></tr>
       <tr><td><code>error: this surface is of a machine that was switched off</code></td><td>The surface was made before the world was saved, and its pixels were not saved with it. Make a new one and draw on that: <a href="#surfaces">Memory</a>.</td></tr>
-      <tr><td>After a <code>make</code>, what was defined at the prompt is gone, and the files are there.</td><td>The build is another system, the machine took it as it started, and a newer system makes a world of its own: <a href="#across">What comes across</a>.</td></tr>
+      <tr><td>After a <code>make</code>, a variable has the value it was defined with, and not the one it had come to.</td><td>The build is another system, the machine took it as it started, and a newer system makes a world of its own, into which what you defined is loaded as text: <a href="#across">What comes across</a>.</td></tr>
+      <tr><td><code>home: ... was passed over</code>, in the report</td><td>A form of <code>/home/init.lisp</code> or <code>/home/defined.lisp</code> failed when it was loaded into a new world, and the line after it says why. The rest was loaded. <a href="#init">A file of your own</a>.</td></tr>
       <tr><td><code>system: ... was tried and did not come to its prompt</code></td><td>A newer system was taken, did not get as far as its prompt, and the machine was started again: this is the system from before, as it was. <a href="#trial">What happens at the next start</a>.</td></tr>
       <tr><td><code>lisp: clara.image is passed over</code></td><td>The start before this one did not come to its prompt, so the world that was saved was not started a second time: <a href="#prompt-not-reached">A world that does not come to its prompt</a>.</td></tr>
       <tr><td><code>tools/run.sh: a machine is running from build/disk-aarch64.img already</code></td><td>There is one machine to a disk. Shut the other one down first.</td></tr>
@@ -1141,8 +1201,8 @@ error: nothing is mapped at #x0</pre>
     <p class="names" data-package="CLARA.TERMINAL"><code>clara.terminal:open-terminal</code> <code>clara.terminal:terminal-p</code> <code>clara.terminal:terminal-stream</code> <code>clara.terminal:terminal-window</code> <code>clara.terminal:clear</code> <code>clara.terminal:listener</code></p>
 
     <h3>The package CLARA.SYSTEM</h3>
-    <p>The machine as a whole: <a href="#stop">shutting it down and starting it again</a>, and <a href="#upgrade">taking a newer system</a>. <code>system</code> is the name of the system that runs, <code>system-file</code> the name of one of its files, and <code>boot-volume</code> the volume that the machine was started from. <code>start</code> is called by the kernel as the machine comes up: it sees to a system that is on trial, and has a thread watch the power button from then on.</p>
-    <p class="names" data-package="CLARA.SYSTEM"><code>clara.system:shut-down</code> <code>clara.system:start-again</code> <code>clara.system:upgrade</code> <code>clara.system:system</code> <code>clara.system:system-file</code> <code>clara.system:boot-volume</code> <code>clara.system:start</code></p>
+    <p>The machine as a whole: <a href="#stop">shutting it down and starting it again</a>, and <a href="#upgrade">taking a newer system</a>. <code>system</code> is the name of the system that runs, <code>system-file</code> the name of one of its files, and <code>boot-volume</code> the volume that the machine was started from. <code>home</code> is the directory where <a href="#home">your work is kept as text</a>, <code>home-file</code> the name of a file in it, and <code>load-home</code> loads its two files into the world. <code>start</code> is called by the kernel as the machine comes up: it sees to a system that is on trial, and has a thread watch the power button from then on.</p>
+    <p class="names" data-package="CLARA.SYSTEM"><code>clara.system:shut-down</code> <code>clara.system:start-again</code> <code>clara.system:upgrade</code> <code>clara.system:system</code> <code>clara.system:system-file</code> <code>clara.system:boot-volume</code> <code>clara.system:home</code> <code>clara.system:home-file</code> <code>clara.system:load-home</code> <code>clara.system:*patience*</code> <code>clara.system:start</code></p>
 
     <h3>The package CLARA.COMPILER</h3>
     <p><a href="#compiler">The compiler</a> is a file of Lisp as well. What it is used by are Common Lisp's own names, <code>eval</code>, <code>load</code>, <code>compile</code> and <code>disassemble</code>; the one name of its own is the function that <code>eval</code> calls.</p>
@@ -1165,8 +1225,8 @@ error: nothing is mapped at #x0</pre>
     <p class="names" data-package="CLARA.VIRTIO"><code>clara.virtio:device-type</code> <code>clara.virtio:open-device</code> <code>clara.virtio:start-device</code> <code>clara.virtio:device-p</code> <code>clara.virtio:device-pci</code> <code>clara.virtio:device-event</code> <code>clara.virtio:device-features</code> <code>clara.virtio:register-8</code> <code>clara.virtio:register-16</code> <code>clara.virtio:register-32</code> <code>clara.virtio:open-queue</code> <code>clara.virtio:queue-p</code> <code>clara.virtio:queue-size</code> <code>clara.virtio:queue-add</code> <code>clara.virtio:queue-notify</code> <code>clara.virtio:queue-take</code></p>
     <p class="names" data-package="CLARA.INPUT"><code>clara.input:start</code> <code>clara.input:devices</code> <code>clara.input:pointer</code> <code>clara.input:pointer-changed</code> <code>clara.input:set-pointer-limits</code> <code>clara.input:key-character</code> <code>clara.input:send-keys-to</code> <code>clara.input:send-pointer-to</code> <code>clara.input:*repeat-delay*</code> <code>clara.input:*repeat-interval*</code> <code>clara.input:+up+</code> <code>clara.input:+down+</code> <code>clara.input:+left+</code> <code>clara.input:+right+</code> <code>clara.input:+home+</code> <code>clara.input:+end+</code> <code>clara.input:+page-up+</code> <code>clara.input:+page-down+</code> <code>clara.input:+insert+</code> <code>clara.input:+f1+</code> <code>clara.input:+alt+</code></p>
     <p class="names" data-package="CLARA.DISK"><code>clara.disk:start</code> <code>clara.disk:disks</code> <code>clara.disk:disk-p</code> <code>clara.disk:disk-name</code> <code>clara.disk:disk-sectors</code> <code>clara.disk:disk-read-only</code> <code>clara.disk:read-sectors</code> <code>clara.disk:write-sectors</code> <code>clara.disk:flush</code> <code>clara.disk:*patience*</code></p>
-    <p class="names" data-package="CLARA.FAT"><code>clara.fat:start</code> <code>clara.fat:volumes</code> <code>clara.fat:*volume*</code> <code>clara.fat:volume-p</code> <code>clara.fat:volume-disk</code> <code>clara.fat:volume-kind</code> <code>clara.fat:volume-first</code> <code>clara.fat:entries</code> <code>clara.fat:entry-p</code> <code>clara.fat:entry-name</code> <code>clara.fat:entry-short</code> <code>clara.fat:entry-directory-p</code> <code>clara.fat:entry-size</code> <code>clara.fat:names</code> <code>clara.fat:file-text</code> <code>clara.fat:read-file</code> <code>clara.fat:write-file</code> <code>clara.fat:remove-file</code> <code>clara.fat:make-directory</code> <code>clara.fat:remove-directory</code> <code>clara.fat:free-bytes</code></p>
-    <p class="names" data-package="CLARA.LISTENER"><code>clara.listener:run</code> <code>clara.listener:answer</code> <code>clara.listener:read-and-answer</code> <code>clara.listener:answer-lines</code></p>
+    <p class="names" data-package="CLARA.FAT"><code>clara.fat:start</code> <code>clara.fat:volumes</code> <code>clara.fat:*volume*</code> <code>clara.fat:*image-volume*</code> <code>clara.fat:volume-p</code> <code>clara.fat:volume-disk</code> <code>clara.fat:volume-kind</code> <code>clara.fat:volume-first</code> <code>clara.fat:entries</code> <code>clara.fat:entry-p</code> <code>clara.fat:entry-name</code> <code>clara.fat:entry-short</code> <code>clara.fat:entry-directory-p</code> <code>clara.fat:entry-size</code> <code>clara.fat:names</code> <code>clara.fat:file-text</code> <code>clara.fat:read-file</code> <code>clara.fat:write-file</code> <code>clara.fat:remove-file</code> <code>clara.fat:make-directory</code> <code>clara.fat:remove-directory</code> <code>clara.fat:free-bytes</code></p>
+    <p class="names" data-package="CLARA.LISTENER"><code>clara.listener:run</code> <code>clara.listener:answer</code> <code>clara.listener:read-and-answer</code> <code>clara.listener:answer-lines</code> <code>clara.listener:*record*</code></p>
 
     <h3>The package CLARA.UNSAFE</h3>
     <p>For drivers. What can be read with one of the first seven can be written with <code>setf</code>. The eight after <code>give-screen</code> are the compiler's and the translator's. The first two are a function made of code, and the code of a function: code is looked at before it is made a function, and refused when it points where it should not; that it uses its stack as it says is taken on trust, which is why the two are here. The other six are for <a href="#processor">the processor's own instructions</a>: where the kernel keeps what they read, the instructions of a function handed to the kernel, how many bytes of them a function has, whether the processor runs a function, what the compiler made of every function that the processor does not run yet, and every function that has such instructions entered by them from then on. Those instructions are run as they are given, and nothing looks at them first. <code>power-off</code> and <code>reset</code> turn the machine off and start it again there and then, with nothing saved and nobody asked, which is what <a href="#stop">shutting down</a> sees to before it calls them; <code>power-button</code> says whether the machine's power button has been pressed since it was last asked. <code>sha-512</code> is the sum of some bytes of memory, by which a system's files are known to be what its list says, and <code>start-state</code> is what the kernel knows of this start and of the ones before it.</p>
