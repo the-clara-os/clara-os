@@ -8,8 +8,8 @@ and beside the manifest a file manifest.sig: the Ed25519 signature of the
 manifest's bytes, 128 digits in base sixteen. A system that fetches a
 release holds the manifest against the signature, with the public half of
 the key, which it has in it, and every file against the manifest
-(lisp/system.lisp). So it does not matter by which road the files came,
-and the road can be plain HTTP.
+(lisp/system.lisp). So what a system takes does not depend on the road
+by which the files came.
 
     releases/
       latest               one line: the name of the newest system there

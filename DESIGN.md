@@ -1548,7 +1548,11 @@ architectures (kernel/vm.c).
   thousands of bits. What an upgrade needs is less than what TLS gives:
   not that nobody reads a system which is published for everybody, but
   that what arrives is what was published. So a release is signed, and
-  the road is not trusted at all.
+  the road is not trusted at all. That is as far as it goes: Julio's word
+  on it (2026-11-20) is that ClaraOS is not published over plain HTTP. So
+  what this fetches is a release from a web server on the same computer
+  or the same network, and a release from where ClaraOS is published
+  waits for TLS, with the signature under it as before.
 - A release is a system as a disk holds it, a directory with its files
   and its manifest, on a web server, and beside the manifest a signature
   of it (tools/release.py): Ed25519, whose check is five hundred lines of

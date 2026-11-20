@@ -86,7 +86,7 @@
 (defvar *known* nil)        ; the text that this world has of the files of /home, as ((file . text) ...)
 (defvar *follows* nil)      ; this world was given the text of /home, and takes what is new of it at every start
 (defvar *system-packages* nil) ; the names of the packages that were there when this world was made
-(defvar *releases* nil)     ; where ClaraOS is published: the address of a directory, as "http://claraos.org/releases/", or NIL
+(defvar *releases* nil)     ; where ClaraOS is published: the address of a directory there, or NIL while it is published nowhere
 (defvar *release-key* nil)  ; the public half of the key that what is published there is signed with: 64 digits, or NIL
 
 ;; A line for whoever is watching, on the console: the serial port, and the
@@ -1241,7 +1241,7 @@
 ;; A newer ClaraOS, or any other, takes the place of this one. FROM says
 ;; where it is taken from: a volume, for the system that another disk of
 ;; the machine holds; the address of a place where ClaraOS is published,
-;; as "http://claraos.org/releases/"; or nothing, and then it is the first
+;; as "http://10.0.2.2:8000/releases/"; or nothing, and then it is the first
 ;; other disk that holds a system, and without one the place that this
 ;; system knows of. From a disk any system is taken that is not the one
 ;; that runs. From another machine it is the newest one that is published

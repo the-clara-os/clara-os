@@ -1738,22 +1738,40 @@ M15c, a world made again, what it left:
 
 M15d, upgrades over the network, what it left:
 
-- Three things are Julio's to decide, and until then no machine takes a
-  release from anywhere without being given an address and a key by hand.
-  Where ClaraOS is published: `clara.system:*releases*` is NIL. It has to
-  be a place that answers plain HTTP, which GitHub's releases do not, and
-  which the website does only with "Enforce HTTPS" switched off for
-  claraos.org; `http://claraos.org/releases/` would then be it. The key:
-  `clara.system:*release-key*` is NIL. `python3 tools/release.py key
-  <file>` makes one and prints the public half, which goes into
-  lisp/system.lisp; the secret half stays with him, and with whatever
-  publishes for him as a secret. And publishing: nothing builds a release
-  when a version is merged. `python3 tools/release.py make
-  build/esp/clara/<system> <directory> <key file>` lays one out, and a
-  workflow that does it is not written, since it would need the key.
-- No TLS, by decision (DESIGN.md). An address that begins with https://
-  is refused with those words, and so is a web server that sends a
-  request on to one, which GitHub's does for everything.
+- ClaraOS is not published, and no machine takes a release from anywhere
+  without being given an address and a key by hand:
+  `clara.system:*releases*` and `clara.system:*release-key*` are NIL.
+  Three things stand between that and a machine that upgrades by itself,
+  and Julio has said his word on each (2026-11-20). Where ClaraOS is
+  published: not at a place that answers plain HTTP, which is what this
+  slice had asked for, with "Enforce HTTPS" switched off for the website
+  ("we don't do that here"). So it will be a place that answers HTTPS,
+  and ClaraOS has to speak TLS before it can fetch from there: the next
+  point. The key: he is fine with one. `python3 tools/release.py key
+  <file>` makes it, on his computer, and prints the public half, which
+  goes into lisp/system.lisp; the secret half stays with him, and with
+  whatever publishes for him as a secret. The key says whose releases a
+  machine takes over the network and nothing else: a system from a disk
+  is held against its manifest and against no key, and somebody who
+  publishes a ClaraOS of their own gives the variable the public half of
+  their own key. And publishing: nothing builds a release when a version
+  is merged. `python3 tools/release.py make build/esp/clara/<system>
+  <directory> <key file>` lays one out, and a workflow that does it is
+  not written, since it needs the place and the key.
+- No TLS, and that is what a published release waits for. The entry had
+  left two ways open, HTTPS in ClaraOS or a file that is trusted and a
+  road that is not, and this slice took the second (DESIGN.md): what it
+  built fetches by plain HTTP. Julio's word since is that nothing is
+  published that way, so what is here is for a web server on the same
+  computer or the same network, which is how the tests use it. An
+  address that begins with https:// is refused with those words, and so
+  is a web server that sends a request on to one, which GitHub's does
+  for everything. What TLS takes: an exchange of keys, ciphers,
+  certificates and their chain to a root that is trusted, the time of
+  day to hold them against, which the system does not know, numbers that
+  nobody can guess, which it cannot make, and arithmetic on integers of
+  thousands of bits. It has no milestone yet. The signature stays when
+  it comes: what arrives is still held against the key.
 - The network is the client's half of each protocol, and of that the part
   that fetching needs. One card, the first. IPv4, and no IPv6. No pieces
   of packets, in either direction. No ICMP: the machine does not answer a
