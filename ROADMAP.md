@@ -1975,219 +1975,6 @@ M15d, upgrades over the network, what it left:
   of the machine's. A web server sends the one piece again, once, and so
   does it now.
 
-M17a, the rest of a network, what it left:
-
-- Still not there. One card, the first that the machine has. No pieces
-  of packets: one of IPv4's that was taken apart on the way is dropped,
-  and the machine's own packets say of themselves that they are not to
-  be taken apart. Of what ICMP can say, the machine hears that a
-  packet did not arrive and that one was too long, and answers a ping;
-  that a packet went round until its time was over, and that there is a
-  better way than the one it took, it passes over. It does not answer a
-  ping that was sent to everybody.
-- A connection that is open is not ended by the word that the other
-  side cannot be reached: that is believed of one that is beginning,
-  whose number the word has to have, and anything later ends in the
-  other side's silence, after as long as patience is.
-- How fast a connection sends is found out roughly: ten pieces at first,
-  one more for every word that more has arrived, half after a piece was
-  lost, one after a silence, and never more than 64 KiB on their way.
-  There is no stretch in which it grows slowly (RFC 5681 has one), the
-  time that it waits for a word is a second that doubles, and is not
-  measured (RFC 6298), small pieces are not kept back until there are
-  more, and nothing is sent over a connection that is quiet to see
-  whether the other side is still there.
-- The server that gave the address is the only one that is asked whether
-  the machine may keep it. When that server is gone the address is lost
-  when its time is over, and the machine asks for one anew the next time
-  that something wants the network; a connection that was open then
-  goes on speaking from an address that is no longer its own, until
-  the other side's silence ends it.
-- A name is known by the first address that an answer has for it. A
-  question says nothing of how long an answer this machine takes (EDNS),
-  so an answer by UDP is 512 bytes at most, and anything longer is asked
-  for again by TCP.
-- What a real kernel was not seen to do, because QEMU's network does not
-  bring it about: hearing by UDP that a port takes no questions (QEMU
-  says nothing when the port of the host is closed, and the machine
-  waits as long as patience is), hearing that a packet was too long, and
-  asking whether it may keep its address, which QEMU gives for a day.
-  Those three are tested against the network that the host tests make
-  up, and against nothing else.
-
-M17b, a machine that listens, what it left:
-
-- Nothing keeps a connection closed that the machine takes: TLS here is
-  the half that asks. So there is no web server in the system, since one
-  would hand out its pages in the open, which is not how ClaraOS
-  publishes anything (Julio, 2026-11-20, on plain HTTP: "we don't do that
-  here"). A server's half of TLS 1.3 would need a certificate and a key
-  of the machine's own, signatures made and not only checked, which the
-  arithmetic in C does not do, and somewhere to keep the key. Whether
-  that is wanted is Julio's to say; nothing of it is begun.
-- A stream over a connection is lines of text, because that is what a
-  stream is in this language: a function that writes a string and one
-  that reads a line. So there are no bytes that are no text, a line is
-  UTF-8 or an error, and one of more than 64 KiB is an error. Reading
-  waits as long as `clara.net:*patience*` is and then fails; a function
-  cannot wait for a line and for something else at once.
-- What is written goes out as it is written: `write-line` is two
-  segments, the text and the end of the line. Nothing gathers small
-  pieces (Nagle's rule), which costs packets and no time.
-- `close` ends a connection both ways: this side cannot say that it is
-  done and go on listening.
-- A port takes connections at every address that the machine has; there
-  is no taking them from the machine itself only.
-- UDP is not there for a program: the machine takes its packets for DHCP
-  and for names, and nothing lets a function listen at a port of UDP's.
-- A machine that begins connections and does not go on with them keeps
-  a port busy: each such beginning holds one of the port's places, eight
-  unless SERVE was told otherwise, for as long as patience is, and
-  others are told meanwhile that there is no connection for them.
-- `stop-serving` stops the threads that have connections, wherever each
-  is: a function that was writing a file is stopped in the middle of it.
-- The ports come back with a world that was saved, and the machine asks
-  for its address as it starts for that, in a thread, so the line that
-  says which address it has comes when it comes, between the lines of the
-  boot report or after the prompt. A world that is made again, after an
-  upgrade, takes no connections until a file of `/home` says so.
-- Seen at a real kernel: a connection from outside, through the port that
-  QEMU hands on, answered, and 300000 bytes sent to it (tools/network.txt,
-  where the test's web server does the knocking, `/knock/`), on AArch64;
-  and the machine speaking to itself, on all three machines
-  (tools/session.txt). Not seen there: several connections at once, a
-  port that is full, another side that goes quiet, a saved world that
-  takes connections again; those are the host tests'. And UTM, where the
-  machine is on a network that it shares with the Mac and should be
-  reached at its address: untried.
-
-M17c, IPv6, what it left:
-
-- The machine does not ask whether somebody else on the network has the
-  address that it makes for itself (RFC 4862 has it ask, and wait a
-  second for an answer): two machines whose cards have the same address
-  would both go on.
-- The second half of its addresses is its card's address, the same on
-  every network that the machine is ever on, which tells whoever sees
-  both that it is the same machine. Addresses that do not give that away
-  (RFC 8981, RFC 7217) are not made.
-- It learns what a network is from the routers' own word and from
-  nothing else. A network whose router says "ask a DHCP server for your
-  address", or for who knows names, gives the machine neither: there is
-  no DHCP for IPv6 here.
-- One router, the first that said it is a way out, and no word about a
-  better one is heard. What a neighbour said of its card is believed
-  until the machine is started again: nobody is asked whether it is
-  still so, and nothing is forgotten.
-- Packets in pieces are dropped, as over IPv4, and none are made. What
-  stands between the head of a packet and what it carries is passed
-  over when it says how long it is, and the machine puts nothing there
-  itself. It does not tell the network which addresses for many machines
-  it listens to (MLD), which a switch may want to know before it hands
-  the neighbours' questions on. How long a packet a router says the
-  network takes is not looked at: pieces of a connection are 1380 bytes
-  until somebody says that this was too long.
-- Which address of a name is tried first is one rule out of the many of
-  RFC 6724. When nothing answers at the first, the next is tried after
-  as long as patience is, ten seconds, and not at the same time.
-- A machine that comes onto a network without a router waits a second
-  for one, the first time that something wants the network, and asks
-  twice more, four seconds apart, in the background.
-- What a router says later, a new network, an end to an old one, changes
-  the machine's addresses without a word: `(clara.net:addresses)` shows
-  them.
-- Written out, an address of IPv4 inside one of IPv6 ("::ffff:10.0.2.2")
-  is not read.
-- Seen at a real kernel, under QEMU, whose network has a router: the
-  address, the way out and who knows names; pings to the router's two
-  addresses and to the machine itself; a file by HTTP and by HTTPS from
-  the computer that QEMU runs on, by a name that has only an address of
-  IPv6 and by the address between brackets; a connection of the
-  machine's own to itself. Not seen there: a connection from outside by
-  IPv6, since QEMU hands on a port by IPv4 only; an address of the
-  Internet's own, and with it IPv6 going first; a network with IPv6
-  alone; what a router said running out. Those are the host tests'. And
-  not seen at all: UTM, and any network that is not made up.
-- The boots that fetch need the computer that runs them to have IPv6 at
-  all, at least to itself (::1): the test's web server listens there for
-  what the machine sends to fec0::2.
-- The line that the machine says about IPv6 names its address and the
-  way out, and not who knows names, though it has that from the router
-  too. Under QEMU the router names somebody only when the computer that
-  QEMU runs on has a name server of IPv6 itself, so with it the line was
-  one thing on the Mac and another in the Ubuntu container, and would
-  have been another on the Mac from one network to the next. The
-  container found it before CI did: every boot of `make test` was run
-  there before the first push.
-
-M17a to M17c, the three together, what checking them found:
-
-- What was broken on purpose: 134 mistakes in lisp/net.lisp and
-  lisp/tls.lisp, one at a time, each run through the host tests in a copy
-  of the tree. Eighteen got through the first time, and each is a test
-  now, or made one stricter: a name server that cannot say, after which
-  the next has to be asked at once and not a second later; the answer to
-  an earlier ping, which is no answer to this one; a server that says
-  that the machine may not keep its address, which has to count before
-  the time runs out by itself; the word that bytes have arrived which
-  were never sent; a beginning that is said again every second and not
-  after twice as long; the word that a machine cannot be reached, about
-  a packet that another machine sent; a name server that is silent about
-  addresses of IPv6, which must not cost the address of IPv4; a
-  connection that both sides have ended, which has to be forgotten then
-  and not when patience is over; threads that `stop-serving` has to
-  stop, and not leave to their own patience; a side that says how long
-  a piece it takes, to a machine that had not begun the connection; a
-  function that goes on writing to a side that has given up; a router's
-  word from an address that is not on this wire; a message of ICMPv6's
-  whose checksum is wrong, and a packet of UDP's over IPv6 that has
-  none; two ways of writing an address with one colon too many; and, two
-  of them, what had come early and waits behind a gap while the machine
-  makes room in front of it, which needed a network that loses pieces on
-  their way to the machine before it showed. Two more were planted after
-  that and change nothing that a test can see: whether a thread other
-  than the card's goes by the card's note of where the packet came from
-  that it is looking at, now that the note is read once (below); and
-  the order in which a machine that begins to speak IPv6 writes down
-  that it asked the routers and that it has an address, which the
-  card's thread could read in between, a thousandth of a second wide.
-- The network that the tests make up threw away what came early, which
-  no machine does: so every piece after a lost one had to be sent again,
-  the machine's quick way of sending a lost piece again had nothing to
-  be quick for, and a lost piece cost a second. It keeps what comes
-  early now, as the machine itself does, and a lost piece costs a tenth
-  of that; two tests hold the machine to it.
-- A fault that a test found, one run in several, and that was in the
-  network of M15d as well: whoever sends a packet looked whether the
-  card's thread had a note of where an answer to this address goes,
-  read the note a second time to compare, and a third time to take the
-  card from it, and by then the card's thread could have taken the note
-  away. The packet then went to a card's address that was none, which is
-  an error and no packet. It showed when a file had moved: the answer
-  that says so and the second connection are to the same address at the
-  same moment. The note is read once now, and by the card's thread only.
-- Twice a boot stood still, and what it was is not known. Once in the
-  Ubuntu container, in the boot that fetches, while eight runs of the
-  host tests had the Mac to themselves: the same boot alone, and the
-  whole of `make test` again on a quiet computer, passed. And once on CI,
-  in the first run of this pull request: the x86_64 machine that
-  upgrades was told to start again, a second time, said that it was
-  starting again, and nothing more came from its serial port in the four
-  minutes that were left, neither from the firmware nor from the system.
-  That boot had not touched the network, these slices changed nothing in
-  C, and the machine starts itself again by the same instructions as
-  before; the same boot then passed fourteen times running in the
-  container and twelve on the Mac. Eleven runs of CI before this pull
-  request had not shown it, so it is put down here as something that
-  these slices may have brought about, and not as chance. A boot that
-  does not get to its end now leaves a picture of its screen with its
-  logs (tools/boottest.sh), since the serial port says nothing of a
-  machine that stands still: the next time that picture tells a
-  firmware that did not start the system from a system that reported a
-  fault, and both from a machine that never went down.
-
-M15e, shutting down, what it left:
-
 M15e, shutting down, what it left:
 
 - UTM was not tried. Its Request power down sends QEMU the same
@@ -2505,6 +2292,223 @@ ClaraOS, published, what it left:
   nothing else: the session is still the thing to make cheaper before
   more goes into the world.
 - UTM: not tried, as before.
+
+M17a, the rest of a network, what it left:
+
+- Still not there. One card, the first that the machine has. No pieces
+  of packets: one of IPv4's that was taken apart on the way is dropped,
+  and the machine's own packets say of themselves that they are not to
+  be taken apart. Of what ICMP can say, the machine hears that a
+  packet did not arrive and that one was too long, and answers a ping;
+  that a packet went round until its time was over, and that there is a
+  better way than the one it took, it passes over. It does not answer a
+  ping that was sent to everybody.
+- A connection that is open is not ended by the word that the other
+  side cannot be reached: that is believed of one that is beginning,
+  whose number the word has to have, and anything later ends in the
+  other side's silence, after as long as patience is.
+- How fast a connection sends is found out roughly: ten pieces at first,
+  one more for every word that more has arrived, half after a piece was
+  lost, one after a silence, and never more than 64 KiB on their way.
+  There is no stretch in which it grows slowly (RFC 5681 has one), the
+  time that it waits for a word is a second that doubles, and is not
+  measured (RFC 6298), small pieces are not kept back until there are
+  more, and nothing is sent over a connection that is quiet to see
+  whether the other side is still there.
+- The server that gave the address is the only one that is asked whether
+  the machine may keep it. When that server is gone the address is lost
+  when its time is over, and the machine asks for one anew the next time
+  that something wants the network; a connection that was open then
+  goes on speaking from an address that is no longer its own, until
+  the other side's silence ends it.
+- A name is known by the first address that an answer has for it. A
+  question says nothing of how long an answer this machine takes (EDNS),
+  so an answer by UDP is 512 bytes at most, and anything longer is asked
+  for again by TCP.
+- What a real kernel was not seen to do, because QEMU's network does not
+  bring it about: hearing by UDP that a port takes no questions (QEMU
+  says nothing when the port of the host is closed, and the machine
+  waits as long as patience is), hearing that a packet was too long, and
+  asking whether it may keep its address, which QEMU gives for a day.
+  Those three are tested against the network that the host tests make
+  up, and against nothing else.
+
+M17b, a machine that listens, what it left:
+
+- Nothing keeps a connection closed that the machine takes: TLS here is
+  the half that asks. So there is no web server in the system, since one
+  would hand out its pages in the open, which is not how ClaraOS
+  publishes anything (Julio, 2026-11-20, on plain HTTP: "we don't do that
+  here"). A server's half of TLS 1.3 would need a certificate and a key
+  of the machine's own, signatures made and not only checked, which the
+  arithmetic in C does not do, and somewhere to keep the key. Whether
+  that is wanted is Julio's to say; nothing of it is begun.
+- A stream over a connection is lines of text, because that is what a
+  stream is in this language: a function that writes a string and one
+  that reads a line. So there are no bytes that are no text, a line is
+  UTF-8 or an error, and one of more than 64 KiB is an error. Reading
+  waits as long as `clara.net:*patience*` is and then fails; a function
+  cannot wait for a line and for something else at once.
+- What is written goes out as it is written: `write-line` is two
+  segments, the text and the end of the line. Nothing gathers small
+  pieces (Nagle's rule), which costs packets and no time.
+- `close` ends a connection both ways: this side cannot say that it is
+  done and go on listening.
+- A port takes connections at every address that the machine has; there
+  is no taking them from the machine itself only.
+- UDP is not there for a program: the machine takes its packets for DHCP
+  and for names, and nothing lets a function listen at a port of UDP's.
+- A machine that begins connections and does not go on with them keeps
+  a port busy: each such beginning holds one of the port's places, eight
+  unless SERVE was told otherwise, for as long as patience is, and
+  others are told meanwhile that there is no connection for them.
+- `stop-serving` stops the threads that have connections, wherever each
+  is: a function that was writing a file is stopped in the middle of it.
+- The ports come back with a world that was saved, and the machine asks
+  for its address as it starts for that, in a thread, so the line that
+  says which address it has comes when it comes, between the lines of the
+  boot report or after the prompt. A world that is made again, after an
+  upgrade, takes no connections until a file of `/home` says so.
+- Seen at a real kernel: a connection from outside, through the port that
+  QEMU hands on, answered, and 300000 bytes sent to it (tools/network.txt,
+  where the test's web server does the knocking, `/knock/`), on AArch64;
+  and the machine speaking to itself, on all three machines
+  (tools/session.txt). Not seen there: several connections at once, a
+  port that is full, another side that goes quiet, a saved world that
+  takes connections again; those are the host tests'. And UTM, where the
+  machine is on a network that it shares with the Mac and should be
+  reached at its address: untried.
+
+M17c, IPv6, what it left:
+
+- The machine does not ask whether somebody else on the network has the
+  address that it makes for itself (RFC 4862 has it ask, and wait a
+  second for an answer): two machines whose cards have the same address
+  would both go on.
+- The second half of its addresses is its card's address, the same on
+  every network that the machine is ever on, which tells whoever sees
+  both that it is the same machine. Addresses that do not give that away
+  (RFC 8981, RFC 7217) are not made.
+- It learns what a network is from the routers' own word and from
+  nothing else. A network whose router says "ask a DHCP server for your
+  address", or for who knows names, gives the machine neither: there is
+  no DHCP for IPv6 here.
+- One router, the first that said it is a way out, and no word about a
+  better one is heard. What a neighbour said of its card is believed
+  until the machine is started again: nobody is asked whether it is
+  still so, and nothing is forgotten.
+- Packets in pieces are dropped, as over IPv4, and none are made. What
+  stands between the head of a packet and what it carries is passed
+  over when it says how long it is, and the machine puts nothing there
+  itself. It does not tell the network which addresses for many machines
+  it listens to (MLD), which a switch may want to know before it hands
+  the neighbours' questions on. How long a packet a router says the
+  network takes is not looked at: pieces of a connection are 1380 bytes
+  until somebody says that this was too long.
+- Which address of a name is tried first is one rule out of the many of
+  RFC 6724. When nothing answers at the first, the next is tried after
+  as long as patience is, ten seconds, and not at the same time.
+- A machine that comes onto a network without a router waits a second
+  for one, the first time that something wants the network, and asks
+  twice more, four seconds apart, in the background.
+- What a router says later, a new network, an end to an old one, changes
+  the machine's addresses without a word: `(clara.net:addresses)` shows
+  them.
+- Written out, an address of IPv4 inside one of IPv6 ("::ffff:10.0.2.2")
+  is not read.
+- Seen at a real kernel, under QEMU, whose network has a router: the
+  address, the way out and who knows names; pings to the router's two
+  addresses and to the machine itself; a file by HTTP and by HTTPS from
+  the computer that QEMU runs on, by a name that has only an address of
+  IPv6 and by the address between brackets; a connection of the
+  machine's own to itself. Not seen there: a connection from outside by
+  IPv6, since QEMU hands on a port by IPv4 only; an address of the
+  Internet's own, and with it IPv6 going first; a network with IPv6
+  alone; what a router said running out. Those are the host tests'. And
+  not seen at all: UTM, and any network that is not made up.
+- The boots that fetch need the computer that runs them to have IPv6 at
+  all, at least to itself (::1): the test's web server listens there for
+  what the machine sends to fec0::2.
+- The line that the machine says about IPv6 names its address and the
+  way out, and not who knows names, though it has that from the router
+  too. Under QEMU the router names somebody only when the computer that
+  QEMU runs on has a name server of IPv6 itself, so with it the line was
+  one thing on the Mac and another in the Ubuntu container, and would
+  have been another on the Mac from one network to the next. The
+  container found it before CI did: every boot of `make test` was run
+  there before the first push.
+
+M17a to M17c, the three together, what checking them found:
+
+- What was broken on purpose: 134 mistakes in lisp/net.lisp and
+  lisp/tls.lisp, one at a time, each run through the host tests in a copy
+  of the tree. Eighteen got through the first time, and each is a test
+  now, or made one stricter: a name server that cannot say, after which
+  the next has to be asked at once and not a second later; the answer to
+  an earlier ping, which is no answer to this one; a server that says
+  that the machine may not keep its address, which has to count before
+  the time runs out by itself; the word that bytes have arrived which
+  were never sent; a beginning that is said again every second and not
+  after twice as long; the word that a machine cannot be reached, about
+  a packet that another machine sent; a name server that is silent about
+  addresses of IPv6, which must not cost the address of IPv4; a
+  connection that both sides have ended, which has to be forgotten then
+  and not when patience is over; threads that `stop-serving` has to
+  stop, and not leave to their own patience; a side that says how long
+  a piece it takes, to a machine that had not begun the connection; a
+  function that goes on writing to a side that has given up; a router's
+  word from an address that is not on this wire; a message of ICMPv6's
+  whose checksum is wrong, and a packet of UDP's over IPv6 that has
+  none; two ways of writing an address with one colon too many; and, two
+  of them, what had come early and waits behind a gap while the machine
+  makes room in front of it, which needed a network that loses pieces on
+  their way to the machine before it showed. Two more were planted after
+  that and change nothing that a test can see: whether a thread other
+  than the card's goes by the card's note of where the packet came from
+  that it is looking at, now that the note is read once (below); and
+  the order in which a machine that begins to speak IPv6 writes down
+  that it asked the routers and that it has an address, which the
+  card's thread could read in between, a thousandth of a second wide.
+- The network that the tests make up threw away what came early, which
+  no machine does: so every piece after a lost one had to be sent again,
+  the machine's quick way of sending a lost piece again had nothing to
+  be quick for, and a lost piece cost a second. It keeps what comes
+  early now, as the machine itself does, and a lost piece costs a tenth
+  of that; two tests hold the machine to it.
+- A fault that a test found, one run in several, and that was in the
+  network of M15d as well: whoever sends a packet looked whether the
+  card's thread had a note of where an answer to this address goes,
+  read the note a second time to compare, and a third time to take the
+  card from it, and by then the card's thread could have taken the note
+  away. The packet then went to a card's address that was none, which is
+  an error and no packet. It showed when a file had moved: the answer
+  that says so and the second connection are to the same address at the
+  same moment. The note is read once now, and by the card's thread only.
+- Twice a boot stood still, and what it was is not known. Once in the
+  Ubuntu container, in the boot that fetches, while eight runs of the
+  host tests had the Mac to themselves: the same boot alone, and the
+  whole of `make test` again on a quiet computer, passed. And once on CI,
+  in the first run of this pull request: the x86_64 machine that
+  upgrades was told to start again, a second time, said that it was
+  starting again, and nothing more came from its serial port in the four
+  minutes that were left, neither from the firmware nor from the system.
+  That boot had not touched the network, these slices changed nothing in
+  C, and the machine starts itself again by the same instructions as
+  before; the same boot then passed fourteen times running in the
+  container and twelve on the Mac, and the same commit passed on CI when
+  the run was started again. Eleven runs of CI before this pull
+  request had not shown it, so it is put down here as something that
+  these slices may have brought about, and not as chance. A boot that
+  does not get to its end now leaves a picture of its screen with its
+  logs (tools/boottest.sh), since the serial port says nothing of a
+  machine that stands still: the next time that picture tells a
+  firmware that did not start the system from a system that reported a
+  fault, and both from a machine that never went down.
+- What the three cost CI, on the run that passed: 13m18s for the whole
+  job where main's last run had 12m21s, the stress boot 281 s of its 900
+  where it had 251, and no other boot more than a second from what it
+  took before. The runners differ by more than that from one run to the
+  next, so it says only that nothing here made a boot slow.
 
 No milestone yet, to be picked up when they start to matter:
 
