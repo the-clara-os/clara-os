@@ -390,7 +390,16 @@ while [ "$i" -lt $((timeout * 4)) ]; do
     sleep 0.25
     i=$((i + 1))
 done
+# The machine did not get there. What its screen shows goes with the logs,
+# when the machine is still there to be asked: the serial port has no more
+# to say of one that stands still, and the screen tells a firmware that
+# did not start the system from a system that reported a fault, and both
+# from a machine that was told to start again and did not.
+if kill -0 "$pid" 2>/dev/null; then
+    screenshot_and_quit || true
+fi
 stop_qemu
+[ -s "$shot" ] && echo "boottest $name: the screen as it was is in $shot"
 echo "boottest $name: FAILED, no '$marker' after $((i / 4))s of ${timeout}s"
 echo "--- qemu ---"; cat "build/qemu-$name.log"
 echo "--- serial ---"; tail -40 "$log"

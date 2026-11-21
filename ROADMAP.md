@@ -2166,11 +2166,25 @@ M17a to M17c, the three together, what checking them found:
   an error and no packet. It showed when a file had moved: the answer
   that says so and the second connection are to the same address at the
   same moment. The note is read once now, and by the card's thread only.
-- One run of the whole of `make test` in the container stood still in
-  the boot that fetches, while eight runs of the host tests had the Mac
-  to themselves; the same boot alone, and the whole of it again on a
-  quiet computer, passed. What it was is not known: when CI shows it,
-  the serial log of that boot is in the run's artifact.
+- Twice a boot stood still, and what it was is not known. Once in the
+  Ubuntu container, in the boot that fetches, while eight runs of the
+  host tests had the Mac to themselves: the same boot alone, and the
+  whole of `make test` again on a quiet computer, passed. And once on CI,
+  in the first run of this pull request: the x86_64 machine that
+  upgrades was told to start again, a second time, said that it was
+  starting again, and nothing more came from its serial port in the four
+  minutes that were left, neither from the firmware nor from the system.
+  That boot had not touched the network, these slices changed nothing in
+  C, and the machine starts itself again by the same instructions as
+  before; the same boot then passed fourteen times running in the
+  container and twelve on the Mac. Eleven runs of CI before this pull
+  request had not shown it, so it is put down here as something that
+  these slices may have brought about, and not as chance. A boot that
+  does not get to its end now leaves a picture of its screen with its
+  logs (tools/boottest.sh), since the serial port says nothing of a
+  machine that stands still: the next time that picture tells a
+  firmware that did not start the system from a system that reported a
+  fault, and both from a machine that never went down.
 
 M15e, shutting down, what it left:
 

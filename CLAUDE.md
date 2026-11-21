@@ -927,6 +927,14 @@ Rules:
   digits began with c, d, e or f, one in four, which nobody saw until
   0.0.30 was one of them. Take the system's own name out of such a list,
   and ask for it by itself.
+- A boot that does not get to its end, a machine that stands still or a
+  kernel that stopped with a report, leaves build/screen-<name>.png like
+  one that passed: tools/boottest.sh asks QEMU for the screen before it
+  stops the machine. Look at it before anything else when a boot ran out
+  of time and its serial log just ends: twice a machine that was told to
+  start again said so and was never heard from again (ROADMAP.md, "the
+  three together"), and the log alone could not say whether the firmware
+  or the system stood still.
 - A session can wait for the kernel to say something before it goes on:
   `^W pattern`, for a kernel that will say nothing more by itself, a panic
   for one, which `PANICS=1` allows the boot once. `^M system_reset` after
