@@ -2520,14 +2520,21 @@ M17a to M17c, the three together, what checking them found:
   point, which every call of a function in Lisp is, in every thread; and
   the card's thread had come to make a dozen such calls four times a
   second, on a machine that never used its network, to look at what time
-  had brought about. On a slow machine that was most of what the machine
-  did. An idle card's thread wakes once a second now, four times while
-  the machine has an address to keep and twenty while there is a
-  connection, and reads two words before it looks further. Measured as
+  had brought about. An idle card's thread wakes once a second now,
+  four times while the machine has an address to keep and twenty while
+  there is a connection, and reads two words before it looks further.
+  Measured as
   the note under "What a translated world costs CI" says, on the Mac
   with the machine emulated: 186 s before, 169 s after, 167 s with no
   network card at all, and 157 s for main the day before, so what is
-  left is the world, which is larger by what lisp/net.lisp grew.
+  left is the world, which is larger by what lisp/net.lisp grew. That is
+  a tenth of the boot on the Mac. How much of the 549 s it was is not
+  settled: the run of CI after the change took 13m59s and its stress
+  boot 288 s, on a runner about as fast as the one that had taken 281 s
+  before it, so CI shows no difference that is larger than the one
+  between two runners, and the slow run may have been the runner's
+  alone. The stress boot's limit stays at 900 s, and 549 is the most
+  that it has been seen to take.
 
 No milestone yet, to be picked up when they start to matter:
 
