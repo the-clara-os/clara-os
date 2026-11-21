@@ -28,6 +28,7 @@
 (6 "written by ClaraOS" NIL)
 > (list (clara.net:address) (clara.net:resolve "10.0.2.2"))
 net: this machine is 10.0.2.15 on its network, 10.0.2.2 is the way out, 10.0.2.3 knows names
+net: by IPv6 it is fec0::5054:ff:fe12:3456, fe80::2 is the way out
 ("10.0.2.15" "10.0.2.2")
 > (list (length (clara.tls:roots)) (< -1 (clara.random:below 6) 6) (< (abs (- (get-universal-time) {{now}})) 900))
 tls: this system trusts {{roots}} certificates to say who a machine is

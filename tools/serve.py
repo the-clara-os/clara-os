@@ -7,11 +7,15 @@ keeps its connections closed (TLS).
 
 usage: serve.py <directory> <file to write the ports' numbers to> [<directory of certificates>]
 
-A machine under QEMU reaches this computer at 10.0.2.2, so what is served
-here is http://10.0.2.2:<port>/ to it, and https://<name>:<other port>/ for
-every name that the certificates are for (tools/boottest.sh, SERVE= and
-CERTS=). The file gets the two ports' numbers on one line, the second
-being 0 without certificates.
+A machine under QEMU reaches this computer at 10.0.2.2, and by IPv6 at
+fec0::2, so what is served here is http://10.0.2.2:<port>/ to it, and
+http://[fec0::2]:<port>/, and https://<name>:<other port>/ for every name
+that the certificates are for (tools/boottest.sh, SERVE= and CERTS=): the
+two servers listen at 127.0.0.1 and at ::1, which is where QEMU hands
+what the machine sends to those addresses. The file gets the two ports' numbers on one line, the second
+being 0 without certificates, and a third: a port of this computer that
+was free, which QEMU is to hand on to a port of the machine's
+(tools/run.sh, FORWARD=), so that the machine can be spoken to.
 
 The web server hands out the files of the directory, and a few things
 that are no files, for what a fetch has to cope with:
@@ -23,6 +27,8 @@ that are no files, for what a fetch has to cope with:
     /unsized/<path>  the file, without saying how long it is, and the connection ended after it
     /cut/<path>      the same, and the connection only dropped: on a closed one, without the word that it is over
     /short/<path>    the file, said to be longer than what is sent
+    /knock/<text>    what the machine itself says when it is told <text>, as a line, at the port that
+                     is handed on to it, and has heard that nothing more is coming
 
 The certificates are the ones that tools/certs.py makes: for each name a
 file <name>.pem with what the server shows and <name>.key with its key.
@@ -33,7 +39,14 @@ or the first that there is.
 
 The name server answers on the first port, by UDP: every name that ends
 in ".test" is this computer, 10.0.2.2, and any other name is said not to
-exist. That is all of DNS that it knows.
+exist. A name that begins with "six." has an address of IPv6 and no
+other, fec0::2, which is this computer too; the other names have none of
+IPv6. A name that begins with "long." gets an answer that says of
+itself that it was cut short, as one does that is too long for a packet
+of UDP's, and its whole answer only by TCP, at the same port: a question
+that comes that way begins with its length, in two bytes, where a
+request of HTTP's begins with a word, and the web server tells the two
+apart by that. That is all of DNS that it knows.
 """
 import http.server
 import os
@@ -43,8 +56,9 @@ import ssl
 import struct
 import sys
 import threading
+import urllib.parse
 
-PORTS = [0, 0]  # the port where nothing is kept closed, and the one where everything is
+PORTS = [0, 0, 0]  # the port where nothing is kept closed, the one where everything is, and the one that leads to the machine
 
 
 class Handler(http.server.SimpleHTTPRequestHandler):
@@ -61,6 +75,28 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.send_header("Connection", "close")
         self.end_headers()
 
+    def handle(self):
+        if not isinstance(self.connection, ssl.SSLSocket):
+            try:
+                first = self.connection.recv(2, socket.MSG_PEEK)
+            except OSError:
+                first = b""
+            if len(first) == 2 and not first.isalpha():
+                self.name_by_tcp()
+                return
+        super().handle()
+
+    def name_by_tcp(self):
+        """A question about a name, with its length before it, and the answer likewise (RFC 7766)."""
+        try:
+            length = struct.unpack(">H", self.rfile.read(2))[0]
+            said = answer(self.rfile.read(length), True)
+            if said:
+                self.wfile.write(struct.pack(">H", len(said)) + said)
+                self.wfile.flush()
+        except (OSError, struct.error):
+            pass
+
     def do_GET(self):
         self.close_connection = True
         if self.path.startswith("/moved/"):
@@ -71,6 +107,28 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.moved("http://releases.test:%d%s" % (PORTS[0], self.path[len("/open"):]))
         elif self.path == "/round":
             self.moved("/round")
+        elif self.path.startswith("/knock/"):
+            said = urllib.parse.unquote(self.path[len("/knock/"):]).encode() + b"\n"
+            heard = b""
+            try:
+                with socket.create_connection(("127.0.0.1", PORTS[2]), timeout=60) as knock:
+                    knock.sendall(said)
+                    knock.shutdown(socket.SHUT_WR)
+                    while True:
+                        more = knock.recv(65536)
+                        if not more:
+                            break
+                        heard += more
+            except OSError as error:
+                self.send_error(502, "the machine was not to be spoken to: %s" % error)
+                return
+            sys.stderr.write("told the machine %r, and heard %d bytes\n" % (said, len(heard)))
+            sys.stderr.flush()
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(heard)))
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.wfile.write(heard)
         elif self.path.startswith("/unsized/") or self.path.startswith("/short/") or self.path.startswith("/cut/"):
             kind, rest = self.path[1:].split("/", 1)
             try:
@@ -106,6 +164,10 @@ class Web(socketserver.ThreadingMixIn, http.server.HTTPServer):
         sys.stderr.flush()
 
 
+class Web6(Web):
+    address_family = socket.AF_INET6
+
+
 def closed(certificates):
     """What keeps the connections of the second server closed: one context for each name that has a
     certificate, and the first of them picks the one that a connection asks for by name."""
@@ -130,30 +192,47 @@ def closed(certificates):
     return first
 
 
+def answer(question, whole):
+    """What the name server says to a question for an address: a name that ends in .test is 10.0.2.2, and
+    no other name exists. One that begins with six. is fec0::2 instead, and has no address of IPv4. One
+    that begins with long. is too long to be said by UDP: WHOLE is whether the question came by TCP.
+    None for what is no question."""
+    if len(question) < 17:
+        return None
+    number, flags, count = struct.unpack(">HHH", question[:6])
+    at, labels = 12, []
+    while at < len(question) and question[at]:
+        labels.append(question[at + 1:at + 1 + question[at]].decode("ascii", "replace"))
+        at += 1 + question[at]
+    asked_for = question[12:at + 5]
+    name = ".".join(labels).lower()
+    kind = struct.unpack(">H", question[at + 1:at + 3])[0] if len(question) >= at + 3 else 0
+    sys.stderr.write("asked which address %s has, of the kind %d%s\n" % (name, kind, ", by TCP" if whole else ""))
+    sys.stderr.flush()
+    if not name.endswith(".test"):
+        return struct.pack(">HHHHHH", number, 0x8183, 1, 0, 0, 0) + asked_for
+    if name.startswith("long.") and not whole:
+        return struct.pack(">HHHHHH", number, 0x8380, 1, 0, 0, 0) + asked_for
+    if kind == 28 and name.startswith("six."):
+        said = struct.pack(">HHHHHH", number, 0x8180, 1, 1, 0, 0) + asked_for
+        return said + b"\xc0\x0c" + struct.pack(">HHIH", 28, 1, 60, 16) + socket.inet_pton(socket.AF_INET6, "fec0::2")
+    if kind == 1 and not name.startswith("six."):
+        said = struct.pack(">HHHHHH", number, 0x8180, 1, 1, 0, 0) + asked_for
+        return said + b"\xc0\x0c" + struct.pack(">HHIH", 1, 1, 60, 4) + bytes([10, 0, 2, 2])
+    # the name is there, and has no address of that kind
+    return struct.pack(">HHHHHH", number, 0x8180, 1, 0, 0, 0) + asked_for
+
+
 def names(port):
-    """Answer questions for addresses: a name that ends in .test is 10.0.2.2, and no other name exists."""
+    """Answer the questions for addresses that come by UDP."""
     asked = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     asked.bind(("127.0.0.1", port))
     while True:
         try:
             question, who = asked.recvfrom(512)
-            if len(question) < 17:
-                continue
-            number, flags, count = struct.unpack(">HHH", question[:6])
-            at, labels = 12, []
-            while at < len(question) and question[at]:
-                labels.append(question[at + 1:at + 1 + question[at]].decode("ascii", "replace"))
-                at += 1 + question[at]
-            asked_for = question[12:at + 5]
-            name = ".".join(labels).lower()
-            sys.stderr.write("asked which address %s has\n" % name)
-            sys.stderr.flush()
-            if name.endswith(".test"):
-                answer = struct.pack(">HHHHHH", number, 0x8180, 1, 1, 0, 0) + asked_for
-                answer += b"\xc0\x0c" + struct.pack(">HHIH", 1, 1, 60, 4) + bytes([10, 0, 2, 2])
-            else:
-                answer = struct.pack(">HHHHHH", number, 0x8183, 1, 0, 0, 0) + asked_for
-            asked.sendto(answer, who)
+            said = answer(question, False)
+            if said:
+                asked.sendto(said, who)
         except OSError:
             pass
 
@@ -166,13 +245,32 @@ def main(argv):
     web = Web(("127.0.0.1", 0), handler)
     PORTS[0] = web.server_address[1]
     threading.Thread(target=names, args=(PORTS[0],), daemon=True).start()
+    also = [(Web6, "::1", PORTS[0], None)]
     if len(argv) == 4:
+        keeps = closed(argv[3])
         secure = Web(("127.0.0.1", 0), handler)
         PORTS[1] = secure.server_address[1]
-        secure.socket = closed(argv[3]).wrap_socket(secure.socket, server_side=True)
+        secure.socket = keeps.wrap_socket(secure.socket, server_side=True)
         threading.Thread(target=secure.serve_forever, daemon=True).start()
+        also.append((Web6, "::1", PORTS[1], keeps))
+    # the same two servers once more, for what comes by IPv6: at the same ports, where a computer has them free
+    for kind, address, port, keeps in also:
+        try:
+            more = kind((address, port), handler)
+        except OSError as error:
+            sys.stderr.write("nothing is served at [%s]:%d: %s\n" % (address, port, error))
+            sys.stderr.flush()
+            continue
+        if keeps:
+            more.socket = keeps.wrap_socket(more.socket, server_side=True)
+        threading.Thread(target=more.serve_forever, daemon=True).start()
+    # a port that is free at the moment, for QEMU to listen at: it is let go of here, and taken there
+    free = socket.socket()
+    free.bind(("127.0.0.1", 0))
+    PORTS[2] = free.getsockname()[1]
+    free.close()
     with open(argv[2] + ".new", "w") as out:
-        out.write("%d %d\n" % (PORTS[0], PORTS[1]))
+        out.write("%d %d %d\n" % (PORTS[0], PORTS[1], PORTS[2]))
     os.replace(argv[2] + ".new", argv[2])
     web.serve_forever()
 

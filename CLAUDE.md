@@ -32,7 +32,7 @@ starting one, say what it will take, and let Julio choose.
 Build with `make` (Homebrew's llvm and lld under /opt/homebrew/opt when they
 are there, otherwise clang and lld-link from the PATH; `LLVM=` and `LLD=`
 name other directories). `make test` runs the host tests of the Lisp
-files under SBCL (`make host-test`, twenty seconds), then boots both
+files under SBCL (`make host-test`, a minute), then boots both
 architectures headless under QEMU, fifteen boots in about five minutes,
 types a session at each kernel, and saves what each screen shows to
 build/screen-<name>.png; look at those images when a change touches the
@@ -668,7 +668,7 @@ Rules:
   has an address, does that before. Numbers on the wire have their
   highest byte first (`two`, `four`, `put-two`), and a checksum is
   `clara.unsafe:internet-sum`, folded. What arrives is handled in the
-  card's thread (`serve`), which never waits for an answer, since it is
+  card's thread (`take`), which never waits for an answer, since it is
   the one that would have to take it: it answers what is answered at
   once and goes on. Whoever waits for something does it with `ask-until`,
   which looks, asks again every second and gives up after `*patience*`.
@@ -682,6 +682,120 @@ Rules:
   option. That network must not answer every repeated acknowledgement
   with everything again: it did, and one lost piece became thirty
   thousand in a second, which looked like a fault of the machine's.
+- What a connection sends (lisp/net.lisp, "What a connection sends").
+  The bytes lie in page frames of the connection's (`out`) until the
+  other side has said that it has them, and the card's thread sends them:
+  `heard-of` when the other side says how far it has them, `tend` when
+  time has passed, both by way of `pump` and `again`. Those run with the
+  connection's lock held, because the bytes move in that memory, so
+  nothing in them may wait for the network: they bind `*waits*` to NIL,
+  under which `station-of` signals an error for an address that nobody
+  has claimed yet, having sent the question. Whoever puts bytes into a
+  connection asks for the other side's card before it takes the lock
+  (`say-bytes`). The card's thread has the global `*patience*` and
+  `*again*` and not the caller's bindings, so a connection carries the
+  ones of whoever last used it (`lend`): a new function that waits on a
+  connection lends first. What goes wrong in `tend` has nobody to be
+  told and is kept in `card-trouble`, which the tests want to be NIL
+  where they look. The lists of a card that several threads change
+  (connections, listeners, echoes, what is known) are changed with
+  `card-book` held, and nothing is called while it is.
+- In the host tests the made-up network has a port 9, where everything
+  that the machine sends is kept (`network-sunk`, `sent-whole`), and
+  options for what the machine has to bear as a sender: `:lose-pieces`,
+  `:room`, `:longest`, `:narrow`. It fails the run when the machine
+  sends more than there was room for. `:unreachable`, `:names-closed`,
+  `:cut`, `:ttl`, `:lease-time` and `:renewals` are the other side of
+  ICMP, of the name servers and of an address that is kept. A test that
+  binds `clara.net:*again*` to something small has to do so around
+  `begin`, which is where a connection takes its first wait from.
+- A machine that listens (lisp/net.lisp, "A connection as a stream" and
+  "A machine that listens"). The ports are `*doors*`, a variable of the
+  world's: START finds them there after a saved world came back, and the
+  host tests' `stop-network` empties the list, so that the next machine
+  is another world (`new-network :doors` hands one a list). The card's
+  thread answers a beginning (`answer-beginning`, the state `:answered`)
+  and starts the connection's thread when the other side has answered
+  that (`admit`): the user's function never runs in the card's thread. A
+  stream reads with `next-line`, which takes from the front of the
+  connection's memory (`taken`, `pack`) with the connection's lock, and
+  tells the other side when that made room; it writes with `write-text`,
+  which is `say-bytes` told not to wait. A packet for the machine itself
+  goes by `send-inside` to the card's thread and never by the wire
+  (`own-p`), so nobody asks which card has an address of the machine's
+  own: `say-bytes` does not.
+- In the host tests a machine of the made-up network opens connections to
+  the machine: `call-machine port :say ... :end t`, a `call`, which the
+  network's thread moves along (`call-step`), and which can lose the
+  machine's answers and pieces, go quiet, or begin and not go on. Its
+  sender keeps to the room that the machine says it has, so what a test
+  wants said to a machine that has stopped reading is handed to the call
+  afterwards (`call-say`). `clara.net:*patience*` for a connection that
+  the machine took is the card's thread's and the function's thread's,
+  which is the global value: a test sets it with SETQ and puts it back.
+- At a real kernel, `SERVE=` also has QEMU hand on a port of this
+  computer to the machine's port 7007 (`FORWARD=`, tools/run.sh), and
+  the test's web server speaks to the machine through it when it is
+  asked for `/knock/<text>`, answering with what the machine said. A
+  session asks `(clara.net:serving)` after such a knock, when the
+  machine's function is known to be done, and never right after a
+  connection of the machine's own to itself, where the function may
+  still be on its way out. `with-connection` gives the values of its
+  body, and READ-LINE has two.
+- IPv6 (lisp/net.lisp). An address is a number (IPv4) or a list of eight
+  numbers (IPv6): compare two with EQUAL and never with `=`, look one up
+  with `:test #'equal`, and ask `(consp address)` only where a packet is
+  put together or taken apart. `source-for` says which address the
+  machine speaks from to another, `own-p` whether an address is the
+  machine's, `station-of` which card a packet goes to, each for both
+  kinds. Whatever is added above the packets takes its addresses as they
+  come and is tried over both. What a router said is kept with the time
+  until which it holds (`hold`), and `keep-six`, from `tend`, lets go of
+  it. `up` waits `*router-wait*` for a router, a second; the host tests
+  set that to 0, since most of their networks have no router, and a test
+  that wants to hear one calls `up-with-routers`.
+- In the host tests a network speaks IPv6 when it is made with `:six t`
+  (`:prefix`, `:router-time`, `:prefix-time`, `:prefix-flags`, `:names6`,
+  `:six-closed`). Its web server, name servers and callers know only
+  IPv4: `network-heard-six` turns what the machine sends by IPv6 into the
+  same thing over IPv4 and binds `*six*`, under which
+  `packet-to-machine` sends the answer back by IPv6, and a connection
+  remembers that it came that way (`served-six`, `call-six`;
+  `call-machine port :six t`). So a new thing that the network serves is
+  written once, for IPv4, and a test only has to ask for it by an
+  address of IPv6. What only IPv6 has is in `network-heard-control-six`.
+- What a line of a session shows must not depend on the computer that
+  the boot runs on, or on that computer's network. Who knows names by
+  IPv6 did: QEMU's router names somebody only when the host has a name
+  server of IPv6 itself. So the machine does not say it, and a new line
+  that says something of the network is held against the container
+  below before it is pushed, as every change to the network is.
+- A thread that wakes by itself, the card's for one, is paid for by
+  every boot: in the stress boot each call of a function in Lisp is a
+  collection, in every thread, and a dozen calls four times a second in
+  a thread that had nothing to do were a tenth of that boot on the Mac,
+  and perhaps what made it twice as long once on a slow runner of CI
+  (ROADMAP.md, "What the three cost CI", has what was measured and what
+  was not). What such a thread does when there is nothing to do is
+  read a word or two and go back to sleep, and it sleeps as long as it
+  can: `take` wakes once a second on a machine without an address, and
+  whoever gives it more to look after signals its event.
+- `card-answering`, the card's note of where the packet came from that
+  it is looking at, is the card's thread's, and `answering-card` is the
+  one place that reads it, once. Whatever the card's thread writes that
+  another thread reads is read once into a variable: between two calls a
+  thread can lose its turn, under SBCL at any instruction, and the note
+  is gone.
+- The made-up network keeps what the machine sends early, behind a gap,
+  as a machine does (`served-early`, `call-early`): one that threw it
+  away made every lost piece cost the machine a second, and hid that the
+  machine's quick resending had never run.
+- At a real kernel QEMU's network has a router, so every machine there
+  says two lines when it comes onto the network, and the sessions and
+  the manual show both. The test's web server listens at ::1 as well,
+  which is where QEMU hands what the machine sends to fec0::2, and its
+  name server gives a name that begins with `six.` an address of IPv6
+  and no other. A computer without IPv6 to itself cannot run those boots.
 - When the host tests end with SBCL's "unhandled condition in
   --disable-debugger mode" and a reader's error about a package that does
   not exist, somewhere far down lisp/host/tests.lisp, look for a
@@ -823,6 +937,14 @@ Rules:
   digits began with c, d, e or f, one in four, which nobody saw until
   0.0.30 was one of them. Take the system's own name out of such a list,
   and ask for it by itself.
+- A boot that does not get to its end, a machine that stands still or a
+  kernel that stopped with a report, leaves build/screen-<name>.png like
+  one that passed: tools/boottest.sh asks QEMU for the screen before it
+  stops the machine. Look at it before anything else when a boot ran out
+  of time and its serial log just ends: twice a machine that was told to
+  start again said so and was never heard from again (ROADMAP.md, "the
+  three together"), and the log alone could not say whether the firmware
+  or the system stood still.
 - A session can wait for the kernel to say something before it goes on:
   `^W pattern`, for a kernel that will say nothing more by itself, a panic
   for one, which `PANICS=1` allows the boot once. `^M system_reset` after

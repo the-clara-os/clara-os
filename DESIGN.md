@@ -1712,6 +1712,177 @@ architectures (kernel/vm.c).
   M15d built for plain HTTP stays for `clara.net:fetch`, for a web server
   on one's own computer: it is no way to publish, and it is not shut off.
 
+## The rest of a network (decided in M17a, 2026-11-21)
+
+- What a connection sends is looked after by the thread of the card.
+  Until now whoever had something to say sent a piece and waited for the
+  word that it had arrived, which does for a request and for nothing
+  longer: the other side waits a while before it says that one piece
+  has arrived, in case a second follows, so a piece went out every
+  twentieth of a second at best. Now what is to be sent lies in memory
+  of the connection's until the other side has it. Whoever says
+  something puts it there, and the thread that takes what arrives sends
+  more as the other side makes room, sends again what was lost, and
+  gives up when nothing comes back. `say-bytes` still returns when all
+  of it has arrived, which is what a request wants, so HTTP and TLS are
+  as they were.
+- That thread still waits for nobody, and it now also acts when nothing
+  arrives: it looks at what time has brought about (`tend`) twenty times
+  a second while there is a connection, four times while the machine has
+  an address to keep, and once a second on a machine that has nothing to
+  do with its network, which should pay next to nothing for having one.
+  Since it cannot wait to learn which card has an address, it sends that
+  question, drops what it meant to send, and comes to it again at its
+  next turn.
+- Bytes go out with the connection's lock held, because the memory that
+  they lie in moves up when the other side says that it has some of
+  them. So nothing waits for the network with that lock: whoever puts
+  bytes there has asked who has the other side's address before, and
+  inside the lock an address that nobody has claimed is an error and not
+  a wait (`*waits*`).
+- How much is on its way at once is a rough answer to a question that
+  has careful ones (RFC 5681): ten pieces at first, one more for every
+  word that more has arrived, half after the other side has said three
+  times that it lacks a piece, one piece after a silence, and never more
+  than the other side has room for. A piece that is missing goes out
+  again as soon as the other side says so three times, and after a
+  second otherwise, then two, then four; when more than one piece was
+  lost, each word that some more has arrived sends the next that is
+  missing (RFC 6582). A side that has no room is asked with one byte
+  whether it has some again.
+- A connection ends in the background. Whoever is done with one says so
+  and goes: the word that this side is done is sent behind what is
+  still to be sent, and sent again like any piece, the other side's
+  word is taken, and then the connection is forgotten, or after as long
+  as patience is when the other side says nothing. What arrives for it
+  after its owner has gone is answered with the word that nobody takes
+  it. The patience is the owner's: a thread that looks after the
+  connections of others has its own bindings of `*patience*` and
+  `*again*`, so each connection keeps the ones of whoever last used it.
+- What other machines say about this machine's packets (ICMP) is
+  anybody's to send, and is believed as far as it can be held against
+  something that an outsider would have to guess. The word that a
+  machine cannot be reached ends a connection that is beginning, when
+  the word has that connection's number; it does not end one that is
+  open. The word that a packet was too long makes the pieces of that
+  connection shorter, which costs time and nothing else when it is a
+  lie. The word that a connection is given up (TCP's own) is taken when
+  it has the number that is expected next.
+- The numbers that tell one exchange from another, the number that a
+  connection counts its bytes from, the number of a question, the port
+  that it is asked from, are from the device that makes numbers which
+  nobody can guess, when the machine has one (lisp/random.lisp). They
+  were worked out from the clock, which somebody who wants to put a
+  word in from outside can do as well.
+- The machine keeps its address by asking the server that gave it,
+  from half the time on for which it was given. When the time is over
+  without an answer, the address is given up, and whatever wants the
+  network next asks for one as a machine does that never had one.
+- The name servers are asked in turn, a second apart, and the next at
+  once when one says that it cannot say or the word comes back that it
+  takes no questions. An answer that says of itself that it was cut
+  short is asked for again by TCP. What is known of a name is forgotten
+  when the time is over that the answer gave it.
+- The network that the tests make up learned the other side of each of
+  these: it answers a ping and says when something cannot be reached or
+  was too long, gives an address for a time and is asked for it again,
+  has two name servers that can refuse, fail or cut an answer short,
+  loses pieces that the machine sends, says how much room it has, and
+  fails the run when more arrives than that. On a real kernel QEMU's
+  network is at the other end, which brings about less of it; ROADMAP.md
+  says which three things no kernel was seen to do.
+
+## A machine that listens (decided in M17b, 2026-11-21)
+
+- A connection is handed to a program as a stream, and a stream here is
+  two functions, one that writes a string and one that reads a line. So a
+  connection is lines of text to whoever has it. That is what the
+  Internet's older protocols are made of, and it is all that the
+  language can say about a stream; bytes that are no text would need
+  another kind of stream, which is not here.
+- Nothing is taken at a port until somebody says so (`serve`), and what
+  is taken is handed to a function of the user's, each connection in a
+  thread of its own. The card's thread answers the beginning of a
+  connection, since that is something that is answered at once, keeps
+  what TCP needs of it, and starts the thread when the other side has
+  said that it heard the answer. Nothing of the user's runs in the
+  card's thread. A port takes as many connections at once as it was told
+  (eight), and a machine that asks for one more is told that there is
+  none, which it hears at once, and does not wait for an answer that is
+  not coming.
+- What the function ends in, when that is an error, is kept and not
+  printed: another side that goes away in the middle of a line is an
+  everyday thing for a machine that listens, and the prompt is no place
+  for it. `(clara.net:serving)` shows the last one.
+- Reading takes from the front of what has arrived. The memory is put in
+  order, what was not read moved to its front, when all of it was read
+  or sixteen thousand bytes of it were; the room that the other side is
+  told of is what is free behind what arrived, and when reading makes
+  room where there was next to none, the other side is told at once, or
+  it would wait for room that it never hears of.
+- What is written is the connection's to send when the write returns,
+  and not yet the other side's (the card's thread sends it, above). That
+  the other side is gone shows at the next write or read. `close` says
+  that this side is done, behind what is still to be sent.
+- A machine reaches itself without the wire. A packet for an address of
+  its own, or for 127.0.0.1, is put together in a page frame and left
+  for the card's thread, which takes it as it takes what arrives: so one
+  thread looks at everything that arrives, wherever it came from, no
+  protocol calls itself, and no lock is taken twice. From the wire,
+  nothing is taken that is for 127.0.0.1 or that says it is from this
+  machine's own address.
+- The ports are the world's and not the card's (`*doors*`). A world that
+  is saved while it takes connections takes them again when it starts,
+  on the card of that start; the connections themselves are gone, like
+  every thread. For that the machine needs its address at once, which a
+  thread asks for, so the start does not wait for a network that may say
+  nothing.
+- There is no web server, and no TLS for what the machine takes. What M15f
+  wrote is the half of TLS that asks. A machine that hands out pages in
+  the open is what Julio ruled out for ClaraOS's own publishing, so it is
+  not put into the system by the way; ROADMAP.md has what the other half
+  would take.
+
+## IPv6 (decided in M17c, 2026-11-21)
+
+- An address is a number when it is one of IPv4's and a list of eight
+  numbers of sixteen bits when it is one of IPv6's. The language has no
+  number of 128 bits, and a list is what it compares (EQUAL), prints and
+  takes apart without help. Everything above the packets takes an
+  address as it comes: UDP, TCP, the name servers, HTTP, TLS and the
+  ports that take connections are written once, and only what puts a
+  packet together or takes one apart asks which kind it has.
+- The machine speaks IPv6 unless it is told not to (`clara.net:*ipv6*`).
+  That costs a network that has none of it one question to the routers,
+  when something first wants the network, and up to a second of waiting
+  for an answer that does not come. It was that or a machine that has to
+  be told which networks have routers.
+- It makes its addresses itself (RFC 4862): the one that goes no further
+  than its own network, and one on each network that a router names for
+  that, each with its card's address as the second half. It does not ask
+  first whether another machine has the same address, and it makes no
+  address that hides the card; ROADMAP.md says what that costs.
+- What neighbours and routers tell each other is believed only when
+  nobody handed it on, which the number 255 says that a packet has left
+  of the times it may be handed on: that is all that keeps a machine
+  elsewhere from naming itself this network's router (RFC 4861).
+- Which address of a name comes first is one rule: IPv6 when the
+  machine's own address of that kind is one of the Internet's, IPv4
+  otherwise. Under QEMU the machine's addresses of IPv6 mean something
+  on a network that QEMU makes up, and whether the Internet is reached
+  through them depends on the computer that QEMU runs on; the rule keeps
+  a machine there on the road that it has always taken. When nothing
+  takes a connection at the first address, the next is tried.
+- A network with IPv6 alone is good enough: a DHCP server that does not
+  answer is said once, and is not asked again for a minute.
+- The network that the tests make up serves IPv6 without a second web
+  server, name server or caller. What the machine sends by IPv6 is
+  turned into the same thing over IPv4 before the code that knows only
+  that looks at it, and what that code sends back is turned the other
+  way, with the checksums put right for the other addresses both times.
+  What only IPv6 has, a router's word, the neighbours' questions and
+  ICMPv6, is written there as itself.
+
 ## Shutting down (decided in M15e, 2026-11-20)
 
 - Shutting down is something the system does, and not something that is

@@ -36,7 +36,11 @@
 #                 (tools/serve.py). {{port}} in the session is that port,
 #                 which the machine reaches at 10.0.2.2, and {{key}} is what
 #                 KEY= says, the public half of the key that a release there
-#                 is signed with)
+#                 is signed with. And the machine can be spoken to: what
+#                 connects to another port of this computer is handed on to
+#                 the port 7007 of the machine, and the web server does that
+#                 when it is asked for /knock/<text>, and answers with what
+#                 the machine said)
 #        CERTS=directory (and the same directory by HTTPS, on another port,
 #                 which is {{secure}} in the session: the certificates that
 #                 the server shows are the ones in that directory, which
@@ -69,7 +73,7 @@ rm -f "$shot" "$sock" "$keys" "$orders" "$heard" "$typing".* "$scratch"
 
 # A machine that is to fetch something gets somewhere to fetch it from,
 # which lasts as long as this script does.
-port=0 secure=0
+port=0 secure=0 knock=0
 if [ -n "${SERVE:-}" ]; then
     rm -f "build/serve-$name.port"
     python3 -I tools/serve.py "$SERVE" "build/serve-$name.port" ${CERTS:+"$CERTS"} > "build/serve-$name.log" 2>&1 &
@@ -80,12 +84,15 @@ if [ -n "${SERVE:-}" ]; then
         sleep 0.1
         n=$((n + 1))
     done
-    read -r port secure < "build/serve-$name.port" 2> /dev/null || port=0
+    read -r port secure knock < "build/serve-$name.port" 2> /dev/null || port=0
     if [ "$port" = 0 ]; then
         echo "boottest $name: FAILED, tools/serve.py did not start"
         cat "build/serve-$name.log"
         exit 1
     fi
+    # the port of this computer that leads to the machine's port 7007, which the web server found free
+    FORWARD=$knock:7007
+    export FORWARD
 fi
 
 # A session can name the system that was built and its version, which are
@@ -383,7 +390,16 @@ while [ "$i" -lt $((timeout * 4)) ]; do
     sleep 0.25
     i=$((i + 1))
 done
+# The machine did not get there. What its screen shows goes with the logs,
+# when the machine is still there to be asked: the serial port has no more
+# to say of one that stands still, and the screen tells a firmware that
+# did not start the system from a system that reported a fault, and both
+# from a machine that was told to start again and did not.
+if kill -0 "$pid" 2>/dev/null; then
+    screenshot_and_quit || true
+fi
 stop_qemu
+[ -s "$shot" ] && echo "boottest $name: the screen as it was is in $shot"
 echo "boottest $name: FAILED, no '$marker' after $((i / 4))s of ${timeout}s"
 echo "--- qemu ---"; cat "build/qemu-$name.log"
 echo "--- serial ---"; tail -40 "$log"

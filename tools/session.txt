@@ -210,9 +210,22 @@ error: interrupted from the keyboard
 ("/CLARA/{{system}}/listener.lisp" T)
 > (list (clara.net:station) (clara.net:address))
 net: this machine is 10.0.2.15 on its network, 10.0.2.2 is the way out, 10.0.2.3 knows names
+net: by IPv6 it is fec0::5054:ff:fe12:3456, fe80::2 is the way out
 ("52:54:00:12:34:56" "10.0.2.15")
 > (list (< -1 (clara.random:below 6) 6) (< (abs (- (get-universal-time) {{now}})) 900) (length clara.net:*secure*))
 (T T 12)
+> (list (< -1 (clara.net:ping "10.0.2.2") 1000) (clara.net::card-trouble clara.net::*card*) (clara.net::card-dropped clara.net::*card*))
+(T NIL 0)
+> (progn (clara.net:serve 7 (lambda (stream) (write-line (string-upcase (read-line stream)) stream))) (clara.net:with-connection (stream "127.0.0.1" 7) (write-line "to myself" stream) (read-line stream)))
+"TO MYSELF"
+NIL
+> (clara.net:with-connection (stream "::1" 7) (write-line "and by the longer address" stream) (read-line stream))
+"AND BY THE LONGER ADDRESS"
+NIL
+> (list (< -1 (clara.net:ping "127.0.0.1") 1000) (clara.net:stop-serving 7) (clara.net:serving))
+(T T NIL)
+> (list (clara.net:addresses) (< -1 (clara.net:ping "fec0::2") 1000) (< -1 (clara.net:ping "::1") 1000))
+(("10.0.2.15" "fec0::5054:ff:fe12:3456" "fe80::5054:ff:fe12:3456") T T)
 > (let ((page (clara.unsafe:allocate-memory 1)))
     (flet ((at (place count) (let ((number 0)) (dotimes (i count number) (setq number (+ (* 256 number) (clara.unsafe:memory-8 (+ page place i))))))))
       (setf (clara.unsafe:memory-8 page) 97 (clara.unsafe:memory-8 (+ page 1)) 98 (clara.unsafe:memory-8 (+ page 2)) 99
