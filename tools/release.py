@@ -21,8 +21,9 @@ usage: release.py key <file>              a new key: the secret half goes into t
        release.py public <file>           the public half of the key in that file
        release.py sign <file> <what>      the signature of the file <what>, with the key in <file>, printed
        release.py verify <public> <what> <signature>
-       release.py make <system directory> <releases directory> <key file>
-                                          the system becomes the newest release there
+       release.py make <system directory> <releases directory> <key file> [<public>]
+                                          the system becomes the newest release there; with a public half,
+                                          only when the key is the one that it is the half of
 
 The key file holds the secret half: 64 digits in base sixteen, and nothing
 else. Whoever has it can publish a ClaraOS that every machine takes for
@@ -179,8 +180,14 @@ def main(argv):
         good = verify(bytes.fromhex(argv[2]), open(argv[3], "rb").read(), bytes.fromhex(open(argv[4]).read().strip()))
         print("the signature is that key's" if good else "the signature is not that key's of that file")
         sys.exit(0 if good else 1)
-    elif len(argv) == 5 and argv[1] == "make":
+    elif len(argv) in (5, 6) and argv[1] == "make":
         system, releases, key = argv[2].rstrip("/"), argv[3], read_key(argv[4])
+        # A release that is signed with another key than the one that the
+        # systems have is taken by none of them: where the caller says
+        # which key that is, nothing is laid out with another.
+        if len(argv) == 6 and public_of(key).hex() != argv[5]:
+            sys.exit("release.py: the key in %s has the public half %s, and not \"%s\", which is the one to hold it against: "
+                     "nothing is laid out" % (argv[4], public_of(key).hex(), argv[5]))
         manifest = open(os.path.join(system, "manifest"), "rb").read()
         first = manifest.split(b"\n", 1)[0].decode()
         if not first.startswith("ClaraOS system: "):

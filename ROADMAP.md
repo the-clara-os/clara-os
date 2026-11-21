@@ -703,6 +703,29 @@ Infrastructure, done:
   do, says that a disk left open is ejected, and has the lock in its table
   of what goes wrong.
 
+- **ClaraOS, published** (2026-11-20, version 0.0.31). The newest ClaraOS
+  is at `https://claraos.org/releases/`, and a machine takes it from
+  there: `(clara.system:upgrade)` on a machine with no other disk that
+  holds a system says where it looks, asks which system is the newest,
+  and takes it when it is newer than the one that runs and signed with
+  the key whose public half the system has. The address and that half
+  are in lisp/system.lisp now (`clara.system:*releases*`,
+  `clara.system:*release-key*`). The secret half is Julio's, on his
+  computer, and a secret of the environment that the website is deployed
+  from, `github-pages`, which takes deployments from main and from
+  nowhere else. The website's workflow (.github/workflows/site.yml) runs
+  for every change to the system as well as to the site, builds both
+  kernels, and has `make release` lay the system out beside the pages,
+  sign it, and hold what it laid out against the public half in the
+  source, as a machine will: with another key in the secret, or with
+  none, the job fails, and the site stays as it was. A system without a
+  key asks for nothing, where it used to ask and then refuse. `make
+  release-test`, which `make test` begins with, runs `make release` with
+  a key that it makes: the release has to be laid out when that key is
+  the one to go by, and refused when it is held against the system's.
+  And a build no longer goes wrong when its sources go back to what they
+  were at an earlier build (below).
+
 Infrastructure, for sessions with budget left over:
 
 - Read the UART base from ACPI (SPCR or DBG2) instead of assuming
@@ -1756,36 +1779,23 @@ M15c, a world made again, what it left:
 
 M15d, upgrades over the network, what it left:
 
-- ClaraOS is not published, and no machine takes a release from anywhere
-  without being given an address and a key by hand:
-  `clara.system:*releases*` and `clara.system:*release-key*` are NIL.
-  Three things stand between that and a machine that upgrades by itself,
-  and Julio has said his word on each (2026-11-20). Where ClaraOS is
-  published: not at a place that answers plain HTTP, which is what this
-  slice had asked for, with "Enforce HTTPS" switched off for the website
-  ("we don't do that here"). So it is to be a place that answers HTTPS,
-  which M15f lets a machine fetch from: the website does, as it is, and
-  that is where he chose, the same day: `https://claraos.org/releases/`,
-  the directory `releases` of what the site's workflow publishes. The
-  address is not in lisp/system.lisp yet. It goes there with the key, in
-  one change: a system that knew the place and had no key would ask the
-  place and then take nothing. The key: he is fine with one. `python3 tools/release.py key <file>` makes it, on
-  his computer, and prints the public half, which goes into
-  lisp/system.lisp; the secret half stays with him, and with whatever
-  publishes for him as a secret. The key says whose releases a machine
-  takes over the network and nothing else: a system from a disk is held
-  against its manifest and against no key, and somebody who publishes a
-  ClaraOS of their own gives the variable the public half of their own
-  key. And publishing: nothing builds a release when a version is merged.
-  `python3 tools/release.py make build/esp/clara/<system> <directory>
-  <key file>` lays one out, and the workflow that does it is not
-  written, since it needs the key. It is the website's own
-  (.github/workflows/site.yml), which would build both kernels as well,
-  lay the release out as the directory `releases` of what it publishes,
-  and sign it with the key, kept as a secret of the environment that the
-  site is deployed from, which only a deployment from main can read; and
-  it would have to run for every change to the system, where it now runs
-  for a change to the site.
+- ClaraOS was not published when this slice ended, and no machine took a
+  release without being given an address and a key by hand. It is since
+  0.0.31 ("ClaraOS, published", under the infrastructure that is done),
+  with what Julio said to each of the three things that stood in the way
+  (2026-11-20). Where: not at a place that answers plain HTTP, which is
+  what this slice had asked for, with "Enforce HTTPS" switched off for
+  the website ("we don't do that here"), but at
+  `https://claraos.org/releases/`, the directory `releases` of what the
+  site's workflow publishes, which M15f lets a machine fetch from. The
+  key: he made one (`python3 tools/release.py key <file>`), its public
+  half is in lisp/system.lisp, and the secret half is his and the
+  publishing's. It says whose releases a machine takes over the network
+  and nothing else: a system from a disk is held against its manifest
+  and against no key, and somebody who publishes a ClaraOS of their own
+  gives the variable the public half of their own key. And publishing:
+  the website's workflow builds, signs and lays out a release for every
+  change that is merged. What that left has a group of its own, below.
 - No TLS was this slice's, and is M15f's. The entry had left two ways
   open, HTTPS in ClaraOS or a file that is trusted and a road that is
   not, and this slice took the second: what it built fetches by plain
@@ -2072,6 +2082,116 @@ M15f, HTTPS, what it left:
   too long. The host tests failed for it one time in two with six of
   them running at once, and never alone. They are run eight at once
   after a change to lisp/net.lisp now, three times.
+
+ClaraOS, published, what it left:
+
+- The workflow has not run. The environment `github-pages` takes
+  deployments from main only, and its secret is read by nothing else, so
+  the first run is the one that the merge of the pull request starts.
+  What was tried instead, on the Mac: the script of the signing step,
+  taken out of the workflow file as it is written there and run by bash
+  with a key that was made for the purpose. With no secret it stops and
+  says so; with a key that is not the system's, `make release` refuses,
+  and nothing is in `_site/releases`; with a key whose public half
+  `make release` was told to go by, the release is laid out and holds.
+  The file with the key is gone afterwards each time. The build is CI's
+  own, with the same packages, and `make release` runs in CI with every
+  `make test` (`make release-test`). Not tried, since they cannot be before the
+  merge: that the secret holds the key whose public half is in the
+  source (if not, the step fails and the site stays as it was); the
+  upload and the deployment with a directory `releases` in them; and how
+  Pages hands out files that end in `.EFI`, `.pem` and `.sig`, or in
+  nothing. The first thing to do after the merge: `(clara.system:newest)`
+  on a machine, which has to name the system of main.
+- No machine has taken a release from there. The first that can is one
+  that runs an older system than the published one, so the next version
+  is the first real upgrade over the Internet. Until then what is known
+  is the two halves: a machine that takes a release by HTTPS from a web
+  server on this computer (`make test`), and one that fetches pages and
+  a picture from claraos.org (M15f, by hand).
+- Only the newest release is there. A deployment puts the whole site in
+  the place of the one before, and the release of the one before goes
+  with it. Pages lets a file be kept for ten minutes by whoever fetched
+  it on the way, so for that long after a deployment `latest` may name
+  the release before, whose files are gone, or a file may be the one of
+  the build before: the machine says that a file is not there, or is not
+  what the manifest says, takes nothing, and has to be asked again
+  later.
+- What is published is main, as soon as it is merged, without waiting
+  for the run of CI on main: the check that a pull request must pass is
+  what stands before it, and behind it the trial that every machine
+  gives a new system, which keeps the old one until the new one has come
+  to its prompt. The kernels that are published are built by the
+  website's job, and are not the files that CI booted: the same sources,
+  and the same compiler as long as both jobs install the same packages.
+  A release that waits for a green run on main, or is made of the very
+  files that were booted, would be one workflow started by the other,
+  and the site would wait a quarter of an hour for it. Julio was told of
+  the two ways (2026-11-20, in the pull request and in the report); it
+  is published at the merge until he says otherwise.
+- A system's name says which sources it is, and not who built it: the
+  system that the Mac builds from a commit and the one that is published
+  from it have one name and kernels that differ. A machine that runs the
+  one is told that it has the newest. And a deployment for a change to
+  the site alone builds the same system again, with whatever compiler
+  the runner has by then.
+- One key, with no end and no successor. A machine takes what is signed
+  with the key that its system has, so a new key reaches the machines by
+  a release that is signed with the old one, which is only possible
+  while the old one is there. Nothing says what happens when it is lost,
+  or read by somebody else: every machine would have to be given the new
+  half by hand, `(setq clara.system:*release-key* ...)`, or a system from
+  a disk.
+- `https://claraos.org/releases/` shows a browser nothing, a page that is
+  not there: the directory has files and no page, and the manual names
+  the address without linking to it.
+- No test asks the place. The host tests look at what the two variables
+  are, set both to NIL, and say where they look each time. A session
+  that tells a machine to upgrade when no other disk has a system for it
+  sets `clara.system:*releases*` first (tools/upgrade.txt,
+  tools/at-once.txt), or has given the machine a name server that knows
+  no name outside this computer (tools/network.txt, which so shows that
+  the place is asked for: "there is no machine of the name
+  claraos.org"). Nothing but that rule stops a new session from asking
+  the real place: QEMU's network reaches the Internet.
+- Found on the way, in M15a's Makefile, and mended: a build whose sources
+  had gone back to what they were at an earlier build did not start. A
+  Lisp file is changed, the system is built, the change is taken out
+  again, and the system is built once more: its name is the earlier one
+  again, the object with that name in it is still there, and older than
+  the kernels of the build in between, so make did not link them again.
+  They kept the other name, looked for their files in a directory that
+  was gone, and the machine stopped with "boot.lisp did not load". Now
+  the name is in a file, build/system.name, which is written when the
+  name changes, and the object is made again when that file is newer;
+  and the build stops when a kernel does not name the system whose
+  directory it is copied into. Tried by hand in a copy of the tree: from
+  that state, with nothing changed, with a Lisp file changed, and with
+  the change taken out and the file as old as before. No test does it,
+  since a test would have to change a source. make still goes by the
+  second: a file that is put back in the second in which a build ended
+  is not seen, which a script does and a person does not.
+- By hand, and in no test, from a machine under tools/boottest.sh with a
+  session of its own: a file of this repository of 568,718 bytes, more
+  than either kernel, by HTTPS from raw.githubusercontent.com, held
+  against its SHA-512; and `(clara.system:newest)` and
+  `(clara.system:upgrade)` at the real place, which answered 404 for
+  `/releases/latest`, as it must before anything is published.
+- What was broken on purpose: 23 mistakes. Fifteen in lisp/system.lisp,
+  in the order of what an upgrade over the network looks at, in what it
+  says and when, and in the place and the key themselves: the host tests
+  noticed thirteen, and the boot that fetches the other two, another
+  address and a key with one digit changed, which is why its session
+  names both in full. Eight in tools/release.py, the Makefile and the
+  line that the Makefile reads the key from: `make release-test` noticed
+  six. Two change nothing by themselves. Without the line that holds the
+  release against the key once more, everything is laid out as before;
+  that line speaks when the tool signs wrongly, which a planted wrong
+  signature showed. And the count of the key's digits is only a clearer
+  word for what the tool refuses anyway. The workflow file itself is
+  held against nothing: a step that is left out of it is not noticed
+  before a merge.
+- UTM: not tried, as before.
 
 No milestone yet, to be picked up when they start to matter:
 

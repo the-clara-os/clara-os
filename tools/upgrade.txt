@@ -63,6 +63,8 @@ clara: starting the machine again
 ^R
 > (list (clara.system:system) (getf (clara.unsafe:start-state) :resumed) (getf (clara.unsafe:start-state) :trial) (since-the-upgrade))
 ("{{version}}-other" T NIL DEFINED-IN-THE-NEW-SYSTEM)
+> (setq clara.system:*releases* nil)
+NIL
 > (clara.system:upgrade)
 error: no other disk of this machine holds a ClaraOS other than this one, {{version}}-other
 > (list (clara.fat:remove-file "/letters/first.txt") (clara.fat:remove-directory "/letters") (probe-file "/letters"))

@@ -784,20 +784,22 @@ clara: starting the machine again</code></pre></li>
     <p><code>(clara.system:upgrade :start-again nil)</code> takes the system and leaves the machine running; the newer system is tried whenever the machine is next started. <code>:from</code> names the volume to take it from, one of <code>(clara.fat:volumes)</code>, where the first disk that holds another system is taken otherwise. From a disk it need not be a newer one: any ClaraOS that is not the one that runs is taken, an older one as well.</p>
 
     <h3 id="upgrade-network">Over the network</h3>
-    <p>A newer ClaraOS can also be fetched, from a place where it is published: a directory on a web server that holds a system as a disk does, and beside the list of its files a signature of that list.</p>
-<pre><code>&gt; (clara.system:upgrade :from "https://releases.test:8443/")
-system: {{version}}-41d0c97b is published at https://releases.test:8443/, and signed with the key that this system has: its files are fetched
+    <p>A newer ClaraOS can also be fetched. The newest one is published at <code>https://claraos.org/releases/</code>: a directory on the website that holds a system as a disk does, and beside the list of its files a signature of that list. When no other disk of the machine holds a system, <code>(clara.system:upgrade)</code> looks there, and says so before it does:</p>
+<pre><code>&gt; (clara.system:upgrade)
+system: no other disk of this machine holds another ClaraOS, so the newest one is looked for at https://claraos.org/releases/
+system: {{version}}-41d0c97b is published at https://claraos.org/releases/, and signed with the key that this system has: its files are fetched
 system: {{version}}-41d0c97b is on the disk, and is tried at the next start
 clara: the world is saved
 clara: starting the machine again</code></pre>
-    <p>From there on it is the upgrade from a disk: the newer system is tried at the next start, and the old one is there until the new one has come to its prompt.</p>
+    <p>From there on it is the upgrade from a disk: the newer system is tried at the next start, and the old one is there until the new one has come to its prompt. A machine that has the newest ClaraOS already is told so, and has fetched one line.</p>
     <ul>
+      <li>The machine asks there when it is told to, and at no other time. <code>(clara.system:newest)</code> asks which system is the newest that is published, and fetches nothing else.</li>
+      <li>What is published there is the system of the newest commit on the main branch of ClaraOS's repository: it is built and signed there each time a change is merged, and takes the place of the one before.</li>
+      <li>A disk goes first: when another disk of the machine holds a system, that one is taken and nothing is asked of the network.</li>
       <li>It is fetched by <a href="#https">HTTPS</a>, and from no address that begins otherwise: nobody on the way reads what the machine fetches, or tells it that an older release is the newest.</li>
       <li>And nothing is believed for having arrived. The list of the system's files is held against its signature, with the public half of the key that the release was signed with, which the system has in <code>clara.system:*release-key*</code>; and every file is held against the list, by its length and its SHA-512. What fails either is not taken, and the machine starts as it did before. So a release is its publisher's whatever web server hands it out.</li>
       <li>Only a newer system is taken: one whose version is higher than that of the system that runs. <code>:any t</code> takes whatever is published there, an older one as well.</li>
-      <li><code>(clara.system:newest "https://...")</code> says which system is the newest that is published at an address, and fetches nothing else.</li>
-      <li><code>clara.system:*releases*</code> is the place that <code>(clara.system:upgrade)</code> looks at when no other disk of the machine holds a system.</li>
-      <li><strong>This version knows of no such place and has no key</strong>: both variables are <code>NIL</code>, so it takes nothing over the network until you give it both. ClaraOS is not published anywhere yet in this form.</li>
+      <li>The system has the place in <code>clara.system:*releases*</code> and the key in <code>clara.system:*release-key*</code>. Another place is named with <code>:from</code>: <code>(clara.system:upgrade :from "https://...")</code> takes the newest system that is published at that address, when it is signed with the key that the system has, and <code>(clara.system:newest "https://...")</code> says which one that is.</li>
     </ul>
     <p>To publish a system yourself: make a key, once, and lay the system out as a release, on the computer that builds it.</p>
 <pre><code>python3 tools/release.py key my.key          <span class="note"># once: the secret half goes into my.key, the public half is printed</span>
@@ -806,6 +808,7 @@ python3 tools/release.py make build/esp/clara/{{version}}-41d0c97b releases my.k
     <p>Then put the directory <code>releases</code> where a web server hands it out by HTTPS. With a web server whose certificate an authority signed, that is all, and on the machine, with the 64 digits that the first line printed:</p>
 <pre><code>&gt; (setq clara.system:*release-key* "8c33f9eb730e625013b19d5ea0646d3dd45fa3a03e5977912319a1cee6529fbe")
 &gt; (clara.system:upgrade :from "https://example.org/releases/")</code></pre>
+    <p>A system that is to look at your place by itself has the address and those digits where <code>lisp/system.lisp</code> defines the two variables, before it is built. <code>make release KEY=my.key RELEASES=releases</code> then lays the release out, and refuses a key whose public half is not the one in that file.</p>
     <p>To try it from your own computer, which no authority signs for, the build has a web server and makes the certificates for it:</p>
 <pre><code>python3 tools/certs.py certs releases.test    <span class="note"># a root of your own, and a certificate for that name</span>
 python3 tools/serve.py releases ports certs   <span class="note"># the file "ports" gets two numbers: a port for names, and the one for HTTPS</span></code></pre>
@@ -816,7 +819,9 @@ python3 tools/serve.py releases ports certs   <span class="note"># the file "por
     <p>Whoever has <code>my.key</code> can publish a ClaraOS that every machine with that public half takes for the real one. It belongs to nobody but the one who publishes.</p>
     <table class="wrap">
       <tr><td><code>... does not begin with https://: a release is fetched over a connection that is kept closed, and over no other</code></td><td>The address is one for plain HTTP.</td></tr>
-      <tr><td><code>this system has no key to hold a release against</code></td><td><code>clara.system:*release-key*</code> is <code>NIL</code>.</td></tr>
+      <tr><td><code>... which is the system that runs</code></td><td>The machine has the newest ClaraOS that is published there.</td></tr>
+      <tr><td><code>this system has no key to hold a release against</code></td><td><code>clara.system:*release-key*</code> is <code>NIL</code>. Nothing was fetched.</td></tr>
+      <tr><td><code>there is no machine of the name claraos.org</code>, or another error about the network</td><td>The machine has no way to the Internet: see <a href="#network">the network</a>.</td></tr>
       <tr><td><code>the manifest of ... is not signed with the key that this system has</code></td><td>The release was signed with another key, or what arrived is not what was signed.</td></tr>
       <tr><td><code>the file ... is not what the manifest of its system says it is</code></td><td>A file arrived damaged or changed. Nothing is tried; ask again.</td></tr>
       <tr><td><code>... which is no newer than this one</code></td><td>The newest system there has the version of the one that runs, or a lower one. <code>:any t</code> takes it all the same.</td></tr>

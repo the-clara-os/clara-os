@@ -1574,7 +1574,8 @@ architectures (kernel/vm.c).
   and nothing protects from that.
 - A system without a key takes nothing over the network, and a system
   that knows of no place where ClaraOS is published looks nowhere: both
-  are variables that are empty until there is a key and a place.
+  are variables, which were empty until there was a key and a place.
+  Since 0.0.31 the system has both (below).
 - Signatures are checked here and never made. The secret half of the key
   is with whoever publishes, in no repository and on no machine that runs
   ClaraOS.
@@ -1587,6 +1588,46 @@ architectures (kernel/vm.c).
   name server on the host (tools/serve.py), from which a machine fetches a
   signed release of another system and has to come up as it. The check
   of signatures is held against the examples of RFC 8032 at every boot.
+
+## Where ClaraOS is published (decided 2026-11-20)
+
+- The place is the website: `https://claraos.org/releases/`, which was
+  Julio's choice. It answers HTTPS as it is, so nothing had to be set up
+  or switched off for it, and a deployment was there already. The system
+  has the address in it (`clara.system:*releases*`), and the public half
+  of the key that what is published there is signed with
+  (`clara.system:*release-key*`): the two came in one change, since a
+  system with a place and no key would ask and then take nothing.
+- A machine asks there when it is told to upgrade and no other disk of
+  it holds a system, and at no other time: nothing looks for a newer
+  ClaraOS by itself. It says where it looks before it does. That is the
+  one address which a machine asks without somebody having typed it.
+- A system without a key asks for nothing. The key is looked for before
+  the network is: whatever came could be held against nothing.
+- What is published is the system of main's newest commit. Pages puts a
+  whole site in the place of the one before, so every deployment has to
+  carry the release, and the website's workflow builds it, each time,
+  from the commit that it publishes the pages of
+  (.github/workflows/site.yml). There is one release there, the newest,
+  and no history of them: a machine only ever asks for the newest.
+- The secret half of the key is a secret of the environment that the
+  site is deployed from, which takes deployments from main and from no
+  other branch. So what can be signed is what was merged, and a pull
+  request cannot read the key, whatever it changes in the workflow. The
+  price is that the publishing cannot be tried before a merge. What can
+  be tried is everything but the secret: the laying out and the signing
+  are `make release`, which `make test` runs with a key that it makes
+  (`make release-test`).
+- `make release` lays nothing out with a key whose public half is not the
+  one in the source, and holds what it did lay out against that half,
+  with the check that a machine makes, before anything is uploaded. A
+  secret that holds another key therefore publishes nothing: the job
+  fails, and the site that is there stays, with its release.
+  The same for a secret that is missing, since a site without a release
+  would take away the one that machines are told to look for.
+- No test asks the place. What is tested is a system that knows of none,
+  or of one on this computer: the tests are to say the same thing with
+  the Internet and without it, and the website is not theirs to load.
 
 ## A connection that is kept closed (decided in M15f, 2026-11-20)
 

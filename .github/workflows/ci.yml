@@ -16,7 +16,11 @@
 # fetches a signed release by HTTPS from a web server that the test starts
 # on the runner, over QEMU's own network, with certificates that are made
 # for the run, and upgrades to it (tools/network.txt, tools/serve.py,
-# tools/certs.py). The
+# tools/certs.py). The build itself is laid out as a release too, with a
+# key that is made for the run, by the `make release` with which the
+# website's workflow publishes it (.github/workflows/site.yml), since that
+# workflow has its key from an environment that only main deploys to, and
+# so cannot be tried here. The
 # runners have no hardware acceleration for QEMU, so every machine is
 # emulated. The website
 # is built as well: it reads ROADMAP.md, and stops building when a

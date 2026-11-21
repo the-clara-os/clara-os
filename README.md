@@ -98,11 +98,13 @@ there is a network (lisp/net.lisp), a driver for virtio's network card
 with ARP, IPv4, UDP, DHCP, DNS, TCP and HTTP over it, as far as fetching a
 file takes, and HTTPS (lisp/tls.lisp): TLS 1.3, with certificates held
 against the authorities that sign for the web,
-`(clara.net:fetch-text "https://claraos.org/")`. And
-`(clara.system:upgrade :from "https://.../")` takes the newest release that
-is published at an address, when its manifest is signed with the key that
-the system has (Ed25519, checked in the kernel) and every file is what the
-manifest says. What a connection is kept closed with is in the kernel too,
+`(clara.net:fetch-text "https://claraos.org/")`. The newest ClaraOS is
+published at `https://claraos.org/releases/`, built and signed each time
+a change is merged, and `(clara.system:upgrade)` takes it from there when
+no other disk of the machine holds a system: when it is newer than the
+one that runs, its manifest is signed with the key that the system has
+(Ed25519, checked in the kernel), and every file is what the manifest
+says. `:from "https://.../"` names another place. What a connection is kept closed with is in the kernel too,
 each piece held against the examples of its standard at every boot.
 The same Lisp files load
 under SBCL on the host, where they are tested against a machine that is
@@ -162,6 +164,9 @@ Then, on either:
     make site         # build/site: the website, which is not built when the manual lacks a name that
                       # the system defines, or when its picture is of another version than the kernel's
     make screenshot   # after make test: site/boot.png, the website's picture, of the screen as it was left
+    make release KEY=my.key RELEASES=releases
+                      # the build as a release in that directory, signed with the key in that file: what the
+                      # website's workflow publishes at https://claraos.org/releases/, with the project's key
 
 Layout:
 

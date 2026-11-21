@@ -90,6 +90,20 @@
 (defvar *defined-applications* clara.windows::*applications*) ; what the files defined, for the tests to put back
 (defvar *defined-commands* clara.windows::*commands*)
 
+;; What this system knows of where ClaraOS is published, and the key that
+;; it holds a release against: an address that begins with https:// and
+;; ends with a /, and the 64 digits of a key. The tests are then run by a
+;; system that knows of neither, as one is that somebody builds for a
+;; place of their own, and each says where it looks and with which key:
+;; what is tested here asks nothing of the place that the system names.
+(check '(t #\/ 64 t)
+       (list (and (clara.net::secure-address-p clara.system:*releases*) t)
+             (char clara.system:*releases* (1- (length clara.system:*releases*)))
+             (length clara.system:*release-key*)
+             (and (every (lambda (digit) (digit-char-p digit 16)) clara.system:*release-key*) t)))
+(setq clara.system:*releases* nil
+      clara.system:*release-key* nil)
+
 ;;; Names. boot.lisp is the part of Common Lisp that ClaraOS has in Lisp,
 ;;; and SBCL has all of it already, so it is read here as text. What it
 ;;; exports from COMMON-LISP has to be Common Lisp's, what it defines there
@@ -8839,7 +8853,9 @@
 (check "no other disk of this machine holds a ClaraOS other than this one, 0.0.0-host" (condition-text #'clara.system:upgrade))
 (setq clara.system:*releases* "https://10.0.2.2/releases/")
 (check t (let ((said (said-by-all #'clara.system:upgrade)))
-           (and (search "system: 0.0.1-new is published at https://10.0.2.2/releases/" said)
+           (and (eql 0 (search (format nil "system: no other disk of this machine holds another ClaraOS, so the newest one is looked for at ~
+                                            https://10.0.2.2/releases/~%system: 0.0.1-new is published at https://10.0.2.2/releases/")
+                               said))
                 (search "clara: starting the machine again" said)
                 t)))
 (check (list '(:again) (format nil "try 0.0.1-new~%") 0)
@@ -8862,6 +8878,12 @@
                  (and (on-disk *machine-disk* "/clara/0.0.1-new/boot.lisp") t) (in-order-p *machine-disk*))
       (unless (eventually (lambda () (= pages (clara.host:allocated-pages))))
         (failed "an upgrade that was refused kept ~D page frames" (- (clara.host:allocated-pages) pages))))))
+
+;; What an upgrade says, and what it ends with when it ends with an error.
+(defun said-and-complaint (&rest arguments)
+  (let ((complaint nil))
+    (list (said-by-all (lambda () (setq complaint (condition-text (lambda () (apply #'clara.system:upgrade arguments))))))
+          complaint)))
 
 ;; A release that somebody else signed; one whose signature is no
 ;; signature; and one whose manifest was changed after it was signed.
@@ -8902,22 +8924,28 @@
 (check '("the newest ClaraOS at https://releases.test/releases/ is 0.0.0-host, which is the system that runs" nil nil nil t)
        (not-taken (release "0.0.0-host" *old-files*) :any t))
 ;; A release is fetched over a connection that is kept closed, and over no other: not when the address is given, and not
-;; when it is the one that the system knows of. Nothing is asked of the network for it.
+;; when it is the one that the system knows of, which the machine then does not say that it looks at. Nothing is asked
+;; of the network for it.
 (machine-and-releases (release "0.0.1-new" *new-files*))
 (check '("http://releases.test/releases/ does not begin with https://: a release is fetched over a connection that is kept closed, and over no other"
          "http://releases.test/releases/ does not begin with https://: a release is fetched over a connection that is kept closed, and over no other"
-         "releases.test/releases/ does not begin with https://: a release is fetched over a connection that is kept closed, and over no other"
+         ("" "releases.test/releases/ does not begin with https://: a release is fetched over a connection that is kept closed, and over no other")
          0 nil)
        (list (condition-text (lambda () (clara.system:newest "http://releases.test/releases/")))
              (condition-text (lambda () (clara.system:upgrade :from "http://releases.test/releases/" :any t)))
-             (let ((clara.system:*releases* "releases.test/releases/")) (condition-text #'clara.system:upgrade))
+             (let ((clara.system:*releases* "releases.test/releases/")) (said-and-complaint))
              (network-saw *network* :get) (on-disk *machine-disk* "/clara/next")))
-;; Without a key nothing that is fetched can be held against anything.
+;; Without a key nothing that is fetched can be held against anything, so
+;; nothing is fetched, and the machine does not say that it looks
+;; anywhere: not where the address is given, and not where it is the one
+;; that the system knows of.
 (machine-and-releases (release "0.0.1-new" *new-files*))
 (setq clara.system:*release-key* nil)
 (check "this system has no key to hold a release against: CLARA.SYSTEM:*RELEASE-KEY* is NIL"
        (condition-text (lambda () (clara.system:upgrade :from "https://releases.test/releases/"))))
-(check '(nil nil) (list (on-disk *machine-disk* "/clara/next") (clara.host:power)))
+(check '("" "this system has no key to hold a release against: CLARA.SYSTEM:*RELEASE-KEY* is NIL")
+       (let ((clara.system:*releases* "https://releases.test/releases/")) (said-and-complaint :any t)))
+(check '(0 nil nil) (list (network-saw *network* :get) (on-disk *machine-disk* "/clara/next") (clara.host:power)))
 ;; A disk still goes before the network: a machine that knows where
 ;; ClaraOS is published and has another disk with a system on it takes the
 ;; one on the disk, and asks the network nothing.

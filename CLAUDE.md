@@ -574,7 +574,15 @@ Rules:
   begins with `broken` gets a boot.lisp that is no Lisp. The Makefile must
   never have `.SECONDARY:`: with it make does not relink a kernel when
   the system's name has changed, and the kernel then looks for a
-  directory that the build did not make.
+  directory that the build did not make. The same happened without it
+  when the name went back to one that had been built before, a change to
+  a Lisp file that was built and taken out again: the object of that
+  name was still there, and older than the kernels. So the name is in
+  build/system.name, which is written only when the name is another, the
+  object with the name in it depends on that file, and the rule that
+  fills the system's directory stops the build when a kernel does not
+  name that system. Whatever else is made from the name depends on that
+  file too.
 - What the handoff does with files (kernel/boot.c), all of it through the
   firmware's file system and before a line of Lisp runs, so that it holds
   when the Lisp does not start. `\clara\starts` counts the starts that did
@@ -715,6 +723,36 @@ Rules:
   `clara.host:ed25519-sign` signs what a test then offers
   (`release`, `machine-and-releases`). No key is in the repository:
   `make test` makes one for the run, in build/.
+- Where ClaraOS is published (DESIGN.md has what was decided). The system
+  has the place and the public half of the key in lisp/system.lisp:
+  `clara.system:*releases*`, `https://claraos.org/releases/`, and
+  `clara.system:*release-key*`. The Makefile reads that half from its
+  `defvar` line with sed, so the line keeps its form: `(defvar
+  *release-key* "` at the start of a line, and the 64 digits. The secret
+  half is Julio's alone: a file on his computer, which is never read, by
+  a tool either, and the secret RELEASE_KEY of the environment
+  `github-pages`. `make release KEY=<file> RELEASES=<directory>` lays
+  the build out as a release, with no other key than the one whose half
+  is in the source, and holds what it laid out against that half; it is
+  what .github/workflows/site.yml runs, and that workflow cannot be
+  tried before a merge, so whatever it is to do goes into `make
+  release`, which `make release-test` runs with a key of its own, at the
+  beginning of `make test` (`PUBLIC=` on the command line says which
+  half to go by; the environment does not). Change the step of the
+  workflow itself as little as possible, and try its script by hand when
+  you do: take it out of the file and run it with bash, with
+  `RUNNER_TEMP`, `RELEASE_KEY` from a key made with `tools/release.py
+  key`, and `PUBLIC=` on the `make release` line. A scratch directory
+  `_site` in the tree is yours to take away afterwards.
+- No test asks the place where ClaraOS is published, and nothing typed
+  by hand does without need. lisp/host/tests.lisp sets both variables
+  to NIL once it has looked at them. A session that types
+  `(clara.system:upgrade)` at a machine with no other disk that holds
+  another system would ask claraos.org, since QEMU's network reaches the
+  Internet: such a session sets `clara.system:*releases*` first, to NIL
+  (tools/upgrade.txt, tools/at-once.txt) or to the web server of the
+  test, or has given the machine the test's name server, which knows no
+  name outside this computer (tools/network.txt).
 - A connection that is kept closed (lisp/tls.lisp; DESIGN.md has what was
   decided). The arithmetic is C, a file to each kind (kernel/sha256.c,
   hmac.c, aes.c, the X25519 of ed25519.c, bignum.c, ecdsa.c), each with a
@@ -1201,8 +1239,10 @@ Rules:
   site/build.py from ROADMAP.md, kernel/kernel.h (the version)
   and the console font (`make site`, then open build/site/index.html), and
   published by .github/workflows/site.yml on every push to main that touches
-  them. The page reads the milestone entries of ROADMAP.md, so keep their
-  form.
+  them, or the system: the same workflow builds the system of that
+  commit and publishes it beside the pages, as the release at
+  `https://claraos.org/releases/` (above). The page reads the milestone
+  entries of ROADMAP.md, so keep their form.
 - The user manual is site/manual.html, the second page of the website
   (Julio, 2026-11-17: it "should have everything a user needs to operate
   ClaraOS, from installation to command line operations", and "should be

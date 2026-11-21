@@ -44,8 +44,22 @@ SYSTEM_SRCS := $(sort kernel/system.c $(COMMON_SRCS) $(HEADERS) kernel/lisp/self
 SYSTEM      := $(VERSION)-$(shell python3 -I tools/system.py id $(SYSTEM_SRCS))
 BOOTDIR     := $(BUILD)/esp/clara/$(SYSTEM)
 
-.PHONY: all test host-test image font site screenshot clean
+.PHONY: all test host-test image font site screenshot release release-test clean FORCE
 all:
+
+# The name of this build, in a file that is written when the name is not
+# the one that the file says, and left alone otherwise. The object that
+# has the name in it is made again when the file is newer, and the kernels
+# are linked again then. Without it a build went wrong whose sources had
+# gone back to what they were at an earlier build, a change to a Lisp file
+# that was taken out again: the object of that name was still there, and
+# older than the kernels of the build in between, so they were not linked
+# again, kept that build's name, and looked for their files in a directory
+# that was no longer there.
+$(BUILD)/system.name: FORCE
+	@mkdir -p $(BUILD)
+	@[ "$$(cat $@ 2> /dev/null)" = "$(SYSTEM)" ] || echo "$(SYSTEM)" > $@
+FORCE:
 
 # $(1) arch  $(2) clang target  $(3) extra CFLAGS  $(4) EFI file name  $(5) lld machine
 define ARCH_RULES
@@ -56,7 +70,7 @@ $(BUILD)/$(1)/%.o: kernel/%.c $(HEADERS)
 $(BUILD)/$(1)/%.o: kernel/%.S $(HEADERS)
 	@mkdir -p $$(dir $$@)
 	$(CC) $(ASFLAGS) --target=$(2) -c $$< -o $$@
-$(BUILD)/$(1)/system-%.o: kernel/system.c $(HEADERS)
+$(BUILD)/$(1)/system-%.o: kernel/system.c $(HEADERS) $(BUILD)/system.name
 	@mkdir -p $$(dir $$@)
 	$(CC) $(CFLAGS) --target=$(2) $(3) -DCLARA_SYSTEM='"$$*"' -c $$< -o $$@
 $(ESP)/$(4): $$($(1)_OBJS) $(BUILD)/$(1)/system-$(SYSTEM).o
@@ -77,10 +91,16 @@ $(eval $(call ARCH_RULES,aarch64,aarch64-unknown-windows,,BOOTAA64.EFI,arm64))
 # so do the two kernels, a second time: a system is its directory, which is
 # what another machine takes when it is given this disk to upgrade from.
 # The manifest is written last, and is what says that a system is whole.
+# A kernel that names another system than the directory it is put in would
+# look for its files somewhere else, and find none: the build stops there.
 $(BOOT_FILES): lisp $(wildcard lisp/*.lisp) lisp/roots.pem kernel/lisp/self-test.lisp $(ESP)/BOOTX64.EFI $(ESP)/BOOTAA64.EFI tools/system.py
 	rm -rf $(BUILD)/esp/clara
 	mkdir -p $(BOOTDIR)
 	cp lisp/*.lisp lisp/roots.pem kernel/lisp/self-test.lisp $(ESP)/BOOTX64.EFI $(ESP)/BOOTAA64.EFI $(BOOTDIR)/
+	@for kernel in $(ESP)/BOOTX64.EFI $(ESP)/BOOTAA64.EFI; do \
+		LC_ALL=C grep -q -F "$(SYSTEM)" $$kernel || { \
+			echo "make: $$kernel was linked as another system than $(SYSTEM), which is what this build is: remove it, and make again" >&2; \
+			exit 1; }; done
 	python3 -I tools/system.py manifest $(BOOTDIR) $(SYSTEM)
 	touch $@
 all: $(BOOT_FILES)
@@ -184,7 +204,7 @@ SECOND = -drive if=none,id=second,format=raw,readonly=on,file=$(BUILD)/$(1).img 
 UPGRADED := EXPECT='^ClaraOS: starting the system that is to be tried;;^system: .*-other has come to its prompt;;^world: made anew by ClaraOS .*-other;;^home: /home/init.lisp is loaded, 1 form of it, and 3 were passed over:;;^home:     the stack is full;;^home:     /home/init.lisp is loaded into a new world by itself;;^home: /home/defined.lisp is loaded, [0-9]* forms[^ ]*$$;;^world:   .*\*JOBS\*;;^world:   .*\*WINDOW\*;;^world:   .*NOT-WRITTEN-DOWN;;^world: it is saved as it is now;;^home: /home/defined.lisp has 1 form that this world did not have, which is loaded now'
 POWER :=SESSION=tools/power.txt MARKER='^clara: turning the machine off' EXPECT='^lisp: the heap is an image'
 RESUME := SESSION=tools/resumed.txt EXPECT='^lisp: the heap is an image;;^lisp: and with it [0-9]* KiB of code for the processor;;^lisp:   of the functions .* and 0 are walked;;^lisp:   the processor runs [1-9][0-9]* of the compiled ones itself, .* and the machine 3[^0-9]*$$'
-test: all host-test $(BUILD)/system-other/stamp $(BUILD)/system-broken/stamp
+test: all host-test release-test $(BUILD)/system-other/stamp $(BUILD)/system-broken/stamp
 	tools/boottest.sh x86_64
 	NAME=x86_64-resumed DISK=$(BUILD)/boot-x86_64.img $(RESUME) tools/boottest.sh x86_64
 	MKDISK="--fat 16 --table mbr" tools/boottest.sh aarch64 -machine gic-version=3
@@ -229,6 +249,45 @@ test: all host-test $(BUILD)/system-other/stamp $(BUILD)/system-broken/stamp
 
 image: all
 	tools/mkimage.sh
+
+# This build as a release: the system's directory laid out the way a web
+# server hands it out (tools/release.py), as the newest release of the
+# directory that RELEASES= names, and signed with the key in the file that
+# KEY= names. It is what the website's workflow publishes at
+# https://claraos.org/releases/ (.github/workflows/site.yml), which is
+# where a ClaraOS looks for a newer one (lisp/system.lisp). The key has
+# to be the one whose public half the system has in it, or nothing is laid
+# out: no ClaraOS would take a release that another key signed, so there
+# must be none to publish. And what was laid out is held against that half
+# once more, the way a machine will hold it. PUBLIC= names another public
+# half, for a key that was made for a test, which `make test` does.
+PUBLIC := $(shell sed -n 's/^(defvar \*release-key\* "\([0-9a-f]*\)").*/\1/p' lisp/system.lisp)
+release: all
+	@[ -n "$(KEY)" ] && [ -n "$(RELEASES)" ] || { \
+		echo "usage: make release KEY=<the file that holds the secret half of the key> RELEASES=<a directory>" >&2; exit 1; }
+	@[ $$(printf %s "$(PUBLIC)" | wc -c) -eq 64 ] || { \
+		echo "make release: lisp/system.lisp has no public half of a key where the Makefile reads it, 64 digits, so there is nothing to hold the key against" >&2; exit 1; }
+	python3 -I tools/release.py make $(BOOTDIR) $(RELEASES) $(KEY) "$(PUBLIC)"
+	python3 -I tools/release.py verify "$(PUBLIC)" $(RELEASES)/$(SYSTEM)/manifest $(RELEASES)/$(SYSTEM)/manifest.sig
+
+# `make release` as the website's workflow runs it, with a key that is made
+# for the purpose, since the workflow has its key from an environment that
+# only main deploys to and so cannot be tried anywhere else. Told that the
+# public half of that key is the one to go by, it has to lay the build out
+# as a release that names this system. Left to read the half that the
+# system has, it has to refuse the key for not being that one, and to lay
+# nothing out. `make test` begins with it.
+release-test: all
+	rm -rf $(BUILD)/try-key $(BUILD)/published $(BUILD)/refused
+	python3 -I tools/release.py key $(BUILD)/try-key > $(BUILD)/try-key.public
+	$(MAKE) --no-print-directory release KEY=$(BUILD)/try-key PUBLIC=$$(cat $(BUILD)/try-key.public) RELEASES=$(BUILD)/published
+	[ "$$(cat $(BUILD)/published/latest)" = "$(SYSTEM)" ]
+	if $(MAKE) --no-print-directory release KEY=$(BUILD)/try-key RELEASES=$(BUILD)/refused > $(BUILD)/release-refused.log 2>&1 \
+		|| ! grep -q "and not \"$(PUBLIC)\", which is the one to hold it against" $(BUILD)/release-refused.log \
+		|| [ -e $(BUILD)/refused ]; then \
+		cat $(BUILD)/release-refused.log; \
+		echo "make release: a key that is not the one which the system has was not refused for being that, or something was laid out with it"; \
+		exit 1; fi
 
 # Regenerate kernel/font.c and lisp/font.lisp, the same glyphs for the two
 # consoles, after changing the font or tools/bdf2c.py.

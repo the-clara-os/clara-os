@@ -86,8 +86,8 @@
 (defvar *known* nil)        ; the text that this world has of the files of /home, as ((file . text) ...)
 (defvar *follows* nil)      ; this world was given the text of /home, and takes what is new of it at every start
 (defvar *system-packages* nil) ; the names of the packages that were there when this world was made
-(defvar *releases* nil)     ; where ClaraOS is published: the address of a directory there, or NIL while it is published nowhere
-(defvar *release-key* nil)  ; the public half of the key that what is published there is signed with: 64 digits, or NIL
+(defvar *releases* "https://claraos.org/releases/") ; where ClaraOS is published: the address of a directory there, or NIL for a system that is to know of no such place
+(defvar *release-key* "2c67792528bac0b3570bb966e176e9b60ee04bfa0084ce50676db6cd8fca8dc6") ; the public half of the key that what is published there is signed with: 64 digits, or NIL
 
 ;; A line for whoever is watching, on the console: the serial port, and the
 ;; screen once the window manager has given it back.
@@ -1198,18 +1198,24 @@
 
 ;; The newest system that is published at an address, taken: its manifest
 ;; is fetched, and held against its signature with the key that this system
-;; has; then its files, each held against the manifest. An error when it
-;; is the system that runs, and when it is no newer, unless ANY says that
-;; it is wanted whatever its version. Its name.
-(defun take-release (base any)
+;; has; then its files, each held against the manifest. A system without
+;; a key asks for nothing: whatever came could be held against nothing.
+;; UNASKED says that nobody named the place, and then the machine says
+;; where it looks before it does. An error when the newest system is the
+;; one that runs, and when it is no newer, unless ANY says that it is
+;; wanted whatever its version. Its name.
+(defun take-release (base any unasked)
+  (unless *release-key*
+    (error "this system has no key to hold a release against: CLARA.SYSTEM:*RELEASE-KEY* is NIL"))
+  (releases base)
+  (when unasked
+    (say "system: no other disk of this machine holds another ClaraOS, so the newest one is looked for at ~A" base))
   (let ((name (newest base)))
     (when (string= name (system))
       (error "the newest ClaraOS at ~A is ~A, which is the system that runs" base name))
     (unless (or any (newer-p name (system)))
       (error "the newest ClaraOS at ~A is ~A, which is no newer than this one, ~A: :ANY T takes it all the same"
              base name (system)))
-    (unless *release-key*
-      (error "this system has no key to hold a release against: CLARA.SYSTEM:*RELEASE-KEY* is NIL"))
     (let ((signature (trimmed (clara.net:fetch-text (at-address base name "/manifest.sig") :limit 4096)))
           (kept nil))
       (multiple-value-bind (memory size pages) (clara.net:fetch (at-address base name "/manifest") :limit 1048576)
@@ -1248,15 +1254,15 @@
 ;; A newer ClaraOS, or any other, takes the place of this one. FROM says
 ;; where it is taken from: a volume, for the system that another disk of
 ;; the machine holds; the address of a place where ClaraOS is published,
-;; as "http://10.0.2.2:8000/releases/"; or nothing, and then it is the first
+;; as "https://claraos.org/releases/"; or nothing, and then it is the first
 ;; other disk that holds a system, and without one the place that this
-;; system knows of. From a disk any system is taken that is not the one
-;; that runs. From another machine it is the newest one that is published
-;; there, when it is signed with the key that this system has, and when it
-;; is newer than this system or ANY is true. The machine is started again
-;; to try it, unless START-AGAIN is NIL. The system that was there stays
-;; until the new one has come to its prompt. The name of the system that
-;; was taken.
+;; system knows of, which it names before it asks there. From a disk any
+;; system is taken that is not the one that runs. From another machine it
+;; is the newest one that is published there, when it is signed with the
+;; key that this system has, and when it is newer than this system or ANY
+;; is true. The machine is started again to try it, unless START-AGAIN is
+;; NIL. The system that was there stays until the new one has come to its
+;; prompt. The name of the system that was taken.
 (defun upgrade (&key from (start-again t) any)
   (unless *boot-volume*
     (error "the machine was not started from a disk that is known here, so there is nowhere to put a system"))
@@ -1267,9 +1273,9 @@
          (name (cond (source
                       (take (from-volume (car source) (car (cdr source))) (cdr source)))
                      ((stringp from)
-                      (take-release from any))
+                      (take-release from any nil))
                      ((and (null from) *releases*)
-                      (take-release *releases* any))
+                      (take-release *releases* any t))
                      (t
                       (error (if from
                                  "that volume holds no ClaraOS other than this one, ~A"

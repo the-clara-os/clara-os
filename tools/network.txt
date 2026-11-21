@@ -54,18 +54,21 @@ tls: this system trusts {{roots}} certificates to say who a machine is
 (T T T T)
 > (list (clara.system:newest "https://releases.test:{{secure}}/") (complaint (lambda () (clara.system:newest "http://releases.test:{{port}}/"))))
 ("{{version}}-other" "http://releases.test:{{port}}/ does not begin with https://: a release is fetched over a connection that is kept closed, and over no other")
+> (list clara.system:*releases* clara.system:*release-key* (complaint #'clara.system:newest))
+("https://claraos.org/releases/" "2c67792528bac0b3570bb966e176e9b60ee04bfa0084ce50676db6cd8fca8dc6" "there is no machine of the name claraos.org")
 > (clara.system:upgrade :from "https://releases.test:{{secure}}/")
 error: the newest ClaraOS at https://releases.test:{{secure}}/ is {{version}}-other, which is no newer than this one, {{system}}: :ANY T takes it all the same
 > (clara.system:upgrade :from "https://releases.test:{{secure}}/" :any t)
-error: this system has no key to hold a release against: CLARA.SYSTEM:*RELEASE-KEY* is NIL
-> (length (setq clara.system:*release-key* "0000000000000000000000000000000000000000000000000000000000000000"))
-64
-> (clara.system:upgrade :from "https://releases.test:{{secure}}/" :any t)
 error: the manifest of {{version}}-other at https://releases.test:{{secure}}/ is not signed with the key that this system has: nothing of it is taken
-> (list (clara.fat:names "/clara/") (length (setq clara.system:*release-key* "{{key}}")))
-(("{{system}}/") 64)
+> (list (clara.fat:names "/clara/") (setq clara.system:*release-key* nil))
+(("{{system}}/") NIL)
+> (clara.system:upgrade :from "https://10.0.2.2:1/" :any t)
+error: this system has no key to hold a release against: CLARA.SYSTEM:*RELEASE-KEY* is NIL
+> (length (setq clara.system:*release-key* "{{key}}"))
+64
 > (clara.system:upgrade)
-error: no other disk of this machine holds a ClaraOS other than this one, {{system}}
+system: no other disk of this machine holds another ClaraOS, so the newest one is looked for at https://claraos.org/releases/
+error: there is no machine of the name claraos.org
 > (defvar *carried* 'nothing-yet)
 *CARRIED*
 > (setq *carried* (list 'across "the network"))
@@ -73,13 +76,14 @@ error: no other disk of this machine holds a ClaraOS other than this one, {{syst
 > (setq clara.system:*releases* "https://releases.test:{{secure}}/")
 "https://releases.test:{{secure}}/"
 > (clara.system:upgrade :any t)
+system: no other disk of this machine holds another ClaraOS, so the newest one is looked for at https://releases.test:{{secure}}/
 system: {{version}}-other is published at https://releases.test:{{secure}}/, and signed with the key that this system has: its files are fetched
 system: {{version}}-other is on the disk, and is tried at the next start
 clara: the world is saved
 clara: starting the machine again
 ^R
-> (list (clara.system:system) (getf (clara.unsafe:start-state) :trial) *carried* clara.system:*releases*)
-("{{version}}-other" T (ACROSS "the network") NIL)
+> (list (clara.system:system) (getf (clara.unsafe:start-state) :trial) *carried* clara.system:*releases* (string= clara.system:*release-key* "{{key}}"))
+("{{version}}-other" T (ACROSS "the network") "https://claraos.org/releases/" NIL)
 > (list (clara.fat:names "/clara/") (clara.net:address))
 net: this machine is 10.0.2.15 on its network, 10.0.2.2 is the way out, 10.0.2.3 knows names
 (("{{version}}-other/" "clara.image") "10.0.2.15")
