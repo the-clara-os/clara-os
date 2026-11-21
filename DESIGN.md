@@ -1789,6 +1789,57 @@ architectures (kernel/vm.c).
   network is at the other end, which brings about less of it; ROADMAP.md
   says which three things no kernel was seen to do.
 
+## A machine that listens (decided in M17b, 2026-11-21)
+
+- A connection is handed to a program as a stream, and a stream here is
+  two functions, one that writes a string and one that reads a line. So a
+  connection is lines of text to whoever has it. That is what the
+  Internet's older protocols are made of, and it is all that the
+  language can say about a stream; bytes that are no text would need
+  another kind of stream, which is not here.
+- Nothing is taken at a port until somebody says so (`serve`), and what
+  is taken is handed to a function of the user's, each connection in a
+  thread of its own. The card's thread answers the beginning of a
+  connection, since that is something that is answered at once, keeps
+  what TCP needs of it, and starts the thread when the other side has
+  said that it heard the answer. Nothing of the user's runs in the
+  card's thread. A port takes as many connections at once as it was told
+  (eight), and a machine that asks for one more is told that there is
+  none, which it hears at once, and does not wait for an answer that is
+  not coming.
+- What the function ends in, when that is an error, is kept and not
+  printed: another side that goes away in the middle of a line is an
+  everyday thing for a machine that listens, and the prompt is no place
+  for it. `(clara.net:serving)` shows the last one.
+- Reading takes from the front of what has arrived. The memory is put in
+  order, what was not read moved to its front, when all of it was read
+  or sixteen thousand bytes of it were; the room that the other side is
+  told of is what is free behind what arrived, and when reading makes
+  room where there was next to none, the other side is told at once, or
+  it would wait for room that it never hears of.
+- What is written is the connection's to send when the write returns,
+  and not yet the other side's (the card's thread sends it, above). That
+  the other side is gone shows at the next write or read. `close` says
+  that this side is done, behind what is still to be sent.
+- A machine reaches itself without the wire. A packet for an address of
+  its own, or for 127.0.0.1, is put together in a page frame and left
+  for the card's thread, which takes it as it takes what arrives: so one
+  thread looks at everything that arrives, wherever it came from, no
+  protocol calls itself, and no lock is taken twice. From the wire,
+  nothing is taken that is for 127.0.0.1 or that says it is from this
+  machine's own address.
+- The ports are the world's and not the card's (`*doors*`). A world that
+  is saved while it takes connections takes them again when it starts,
+  on the card of that start; the connections themselves are gone, like
+  every thread. For that the machine needs its address at once, which a
+  thread asks for, so the start does not wait for a network that may say
+  nothing.
+- There is no web server, and no TLS for what the machine takes. What M15f
+  wrote is the half of TLS that asks. A machine that hands out pages in
+  the open is what Julio ruled out for ClaraOS's own publishing, so it is
+  not put into the system by the way; ROADMAP.md has what the other half
+  would take.
+
 ## Shutting down (decided in M15e, 2026-11-20)
 
 - Shutting down is something the system does, and not something that is

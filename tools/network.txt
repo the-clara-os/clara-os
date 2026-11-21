@@ -9,6 +9,28 @@ COMPLAINT
 ("10.0.2.2" "10.0.2.2" "there is no machine of the name nowhere.example")
 > (list (clara.net:resolve "long.answer.test") (< -1 (clara.net:ping "releases.test") 1000) (< -1 (clara.net:ping "10.0.2.3") 1000))
 ("10.0.2.2" T T)
+> (defun shout (stream) (loop (let ((line (read-line stream nil))) (unless line (return)) (write-line (string-upcase line) stream))))
+SHOUT
+> (list (clara.net:serve 7007 'shout) (clara.net:serving))
+(7007 ((7007 0 0 NIL)))
+> (clara.net:fetch-text "http://10.0.2.2:{{port}}/knock/is%20anybody%20there")
+"IS ANYBODY THERE
+"
+> (clara.net:serving)
+((7007 1 0 NIL))
+> (clara.net:with-connection (stream "127.0.0.1" 7007) (write-line "to myself" stream) (read-line stream))
+"TO MYSELF"
+NIL
+> (list (clara.net:stop-serving 7007) (complaint (lambda () (clara.net:connect "127.0.0.1" 7007))))
+(T "127.0.0.1 takes no connection at its port 7007")
+> (defun much () (let ((text (make-string 300000))) (dotimes (i 300000 text) (setf (char text i) (code-char (+ 97 (mod (* i 7) 26)))))))
+MUCH
+> (clara.net:serve 7007 (lambda (stream) (read-line stream) (write-string (much) stream)))
+7007
+> (string= (clara.net:fetch-text "http://10.0.2.2:{{port}}/knock/go") (much))
+T
+> (list (clara.net:serving) (clara.net:stop-serving 7007) (clara.net::card-trouble clara.net::*card*) (clara.net::card-dropped clara.net::*card*))
+(((7007 1 0 NIL)) T NIL 0)
 > (list (clara.net:fetch-text "http://releases.test:{{port}}/latest") (clara.net:fetch-text "http://10.0.2.2:{{port}}/moved/latest"))
 ("{{version}}-other
 " "{{version}}-other

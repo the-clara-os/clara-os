@@ -24,6 +24,10 @@
 #        is a virtio card on a network that QEMU makes up, on which the machine
 #        is 10.0.2.15, this computer is 10.0.2.2, and whatever this computer
 #        reaches is reached through it. NET= gives a machine with no card)
+#        FORWARD=8007:7 (on that network nothing reaches the machine by itself.
+#        This hands on what connects to the port 8007 of this computer, from
+#        this computer and from nowhere else, to the port 7 of the machine, for
+#        a machine that takes connections there: `nc 127.0.0.1 8007`)
 #        RNG="-device virtio-rng-pci" (the device that makes numbers which nobody
 #        can guess, of the host's own making: the default. Nothing is fetched
 #        by HTTPS without one. RNG= gives a machine with none)
@@ -44,7 +48,8 @@ share=${QEMU_SHARE:-/opt/homebrew/share/qemu}
 serial=${SERIAL:-mon:stdio}
 mem=${MEM:-512M}
 input=${INPUT--device virtio-keyboard-pci -device virtio-mouse-pci -device virtio-tablet-pci}
-net=${NET--netdev user,id=net -device virtio-net-pci,netdev=net}
+forward=${FORWARD:+,hostfwd=tcp:127.0.0.1:${FORWARD%%:*}-:${FORWARD##*:}}
+net=${NET--netdev user,id=net$forward -device virtio-net-pci,netdev=net}
 random=${RNG--device virtio-rng-pci}
 # Left to itself QEMU gives some machines a card of its own choosing, so no
 # card has to be said.

@@ -11,7 +11,9 @@ A machine under QEMU reaches this computer at 10.0.2.2, so what is served
 here is http://10.0.2.2:<port>/ to it, and https://<name>:<other port>/ for
 every name that the certificates are for (tools/boottest.sh, SERVE= and
 CERTS=). The file gets the two ports' numbers on one line, the second
-being 0 without certificates.
+being 0 without certificates, and a third: a port of this computer that
+was free, which QEMU is to hand on to a port of the machine's
+(tools/run.sh, FORWARD=), so that the machine can be spoken to.
 
 The web server hands out the files of the directory, and a few things
 that are no files, for what a fetch has to cope with:
@@ -23,6 +25,8 @@ that are no files, for what a fetch has to cope with:
     /unsized/<path>  the file, without saying how long it is, and the connection ended after it
     /cut/<path>      the same, and the connection only dropped: on a closed one, without the word that it is over
     /short/<path>    the file, said to be longer than what is sent
+    /knock/<text>    what the machine itself says when it is told <text>, as a line, at the port that
+                     is handed on to it, and has heard that nothing more is coming
 
 The certificates are the ones that tools/certs.py makes: for each name a
 file <name>.pem with what the server shows and <name>.key with its key.
@@ -48,8 +52,9 @@ import ssl
 import struct
 import sys
 import threading
+import urllib.parse
 
-PORTS = [0, 0]  # the port where nothing is kept closed, and the one where everything is
+PORTS = [0, 0, 0]  # the port where nothing is kept closed, the one where everything is, and the one that leads to the machine
 
 
 class Handler(http.server.SimpleHTTPRequestHandler):
@@ -98,6 +103,28 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.moved("http://releases.test:%d%s" % (PORTS[0], self.path[len("/open"):]))
         elif self.path == "/round":
             self.moved("/round")
+        elif self.path.startswith("/knock/"):
+            said = urllib.parse.unquote(self.path[len("/knock/"):]).encode() + b"\n"
+            heard = b""
+            try:
+                with socket.create_connection(("127.0.0.1", PORTS[2]), timeout=60) as knock:
+                    knock.sendall(said)
+                    knock.shutdown(socket.SHUT_WR)
+                    while True:
+                        more = knock.recv(65536)
+                        if not more:
+                            break
+                        heard += more
+            except OSError as error:
+                self.send_error(502, "the machine was not to be spoken to: %s" % error)
+                return
+            sys.stderr.write("told the machine %r, and heard %d bytes\n" % (said, len(heard)))
+            sys.stderr.flush()
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(heard)))
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.wfile.write(heard)
         elif self.path.startswith("/unsized/") or self.path.startswith("/short/") or self.path.startswith("/cut/"):
             kind, rest = self.path[1:].split("/", 1)
             try:
@@ -207,8 +234,13 @@ def main(argv):
         PORTS[1] = secure.server_address[1]
         secure.socket = closed(argv[3]).wrap_socket(secure.socket, server_side=True)
         threading.Thread(target=secure.serve_forever, daemon=True).start()
+    # a port that is free at the moment, for QEMU to listen at: it is let go of here, and taken there
+    free = socket.socket()
+    free.bind(("127.0.0.1", 0))
+    PORTS[2] = free.getsockname()[1]
+    free.close()
     with open(argv[2] + ".new", "w") as out:
-        out.write("%d %d\n" % (PORTS[0], PORTS[1]))
+        out.write("%d %d %d\n" % (PORTS[0], PORTS[1], PORTS[2]))
     os.replace(argv[2] + ".new", argv[2])
     web.serve_forever()
 

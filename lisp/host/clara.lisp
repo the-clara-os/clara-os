@@ -186,13 +186,27 @@
                            sb-gray:fundamental-character-input-stream)
   ((write :initarg :write :initform nil)
    (read :initarg :read :initform nil)
+   (close :initarg :close :initform nil)
    (fresh :initform t)))
 
-(defun make-stream (&key write-string read-line)
-  (make-instance 'function-stream :write write-string :read read-line))
+(defun make-stream (&key write-string read-line close)
+  (make-instance 'function-stream :write write-string :read read-line :close close))
+
+;; A stream that is closed gives nothing more, and takes nothing; what it
+;; was given to call when it is closed is called, once.
+(defmethod close ((stream function-stream) &key abort)
+  (let ((close (slot-value stream 'close)))
+    (setf (slot-value stream 'close) nil
+          (slot-value stream 'read) nil
+          (slot-value stream 'write) nil)
+    (when (and close (not abort))
+      (funcall close)))
+  t)
 
 (defmethod sb-gray:stream-write-string ((stream function-stream) string &optional (start 0) end)
   (let ((part (subseq string start end)))
+    (unless (slot-value stream 'write)
+      (error "~S is not a stream that can be written to" stream))
     (when (plusp (length part))
       (funcall (slot-value stream 'write) part)
       (setf (slot-value stream 'fresh) (char= (char part (1- (length part))) #\Newline))))

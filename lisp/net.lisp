@@ -1,9 +1,9 @@
 ;;;; net.lisp: the network
 ;;;;
-;;;; What it takes to fetch a file from another machine: the driver for
-;;;; virtio's network card (Virtual I/O Device specification 1.2, 5.1, on
-;;;; top of lisp/virtio.lisp), and above it the protocols of the Internet,
-;;;; each as far as a machine needs it that asks and does not serve.
+;;;; What it takes to fetch a file from another machine, and to be a
+;;;; machine that others connect to: the driver for virtio's network card
+;;;; (Virtual I/O Device specification 1.2, 5.1, on top of
+;;;; lisp/virtio.lisp), and above it the protocols of the Internet.
 ;;;;
 ;;;;   Ethernet    frames on the wire, from one card to another
 ;;;;   ARP         which card has an address (RFC 826)
@@ -41,10 +41,19 @@
 ;;;; The machine asks for its address when something first wants the
 ;;;; network, and not as it starts: a machine that fetches nothing sends
 ;;;; nothing.
+;;;;
+;;;; A connection is a stream to whoever wants one: lines are read from it
+;;;; and text is written to it. CONNECT opens one to another machine. SERVE
+;;;; has the machine take the connections that others open to one of its
+;;;; ports, and hands each to a function, in a thread of its own. Nothing
+;;;; is taken at a port until somebody says so. A machine reaches itself
+;;;; the same way, at the address that it has or at 127.0.0.1, without
+;;;; anything going onto the wire.
 
 (defpackage "CLARA.NET"
   (:use "COMMON-LISP")
   (:export "START" "UP" "ADDRESS" "STATION" "RESOLVE" "PING" "FETCH" "FETCH-TEXT"
+           "CONNECT" "WITH-CONNECTION" "SERVE" "STOP-SERVING" "SERVING"
            "*PATIENCE*" "*AGAIN*" "*NAME-SERVER*" "*NAME-PORT*" "*SECURE*"))
 (in-package "CLARA.NET")
 
@@ -71,15 +80,28 @@
   echoes                ; ((identifier number . answer) ...): the pings that wait for their answers
   known                 ; ((name until . address) ...): the names that were asked for, and until when each holds
   connections           ; the TCP connections that there are
+  inside                ; ((place . bytes) ...): the packets that this machine has sent to itself, each in a page frame
   trouble               ; what last went wrong in what time brings about, as text: nobody was there to be told
   (count 1)             ; a number that no packet of this start has had yet
   (dropped 0))          ; how many frames could not be made sense of
 
+;; A port of this machine's at which connections are taken (SERVE).
+(defstruct door
+  port
+  function     ; what each connection is handed to, as a stream: a function, or the name of one
+  most         ; how many connections are taken at once
+  (count 0)    ; how many were taken since somebody said that they are to be
+  trouble)     ; what the function last ended in, when it ended in an error: as text
+
 (defstruct connection
   card from to to-port port
-  state        ; :asked, while the other side has not answered; :open; :refused; :unreachable; :broken, when the other
+  state        ; :asked, while the other side has not answered; :answered, while the other side, which began, has
+               ; not said that it has this side's answer; :open; :refused; :unreachable; :broken, when the other
                ; side gave it up; :silent, when it no longer says that it has what it is sent; :overrun, when more
                ; came than may; :closed
+  door thread  ; of a connection that another machine began: the door that it came by, and the thread that has it
+  (taken 0)    ; of a connection that is read a line at a time: how many bytes at the front of its memory were read,
+  (scanned 0)  ; and how far that memory has been looked through for the end of the next line
   said         ; who said that the other side cannot be reached
   first        ; the number that our bytes are counted from
   heard        ; how far the other side has said that it has them: the number of the first byte that it has not
@@ -127,6 +149,8 @@
 ;; connection, which that thread may be waiting for.
 (defvar *waits* t)
 (defvar *out-room* 65536)    ; how many bytes a connection keeps of what the other side has not said that it has
+(defvar *doors* nil)         ; the ports at which connections are taken: they are the world's, and outlast a card
+(defvar *doors-lock* (clara:make-lock "doors"))
 
 ;;; Numbers in memory, the highest byte first
 
@@ -376,34 +400,60 @@
 
 ;;; IPv4
 
+;; Is an address this machine's own: the one that the network gave it, or
+;; one of those by which every machine means itself (127.0.0.0/8)?
+(defun own-p (card address)
+  (or (and (card-address card) (= address (card-address card)))
+      (= (ash address -24) 127)))
+
+;; A packet for this machine itself does not go onto the wire. FILL puts
+;; it together in a page frame of its own, and it is left for the thread
+;; of the card, which takes it as it takes what arrives: so everything
+;; that arrives is looked at by one thread, wherever it came from.
+(defun send-inside (card fill)
+  (let ((page (clara.unsafe:allocate-memory 1)) (left nil))
+    (unwind-protect
+         (let ((bytes (funcall fill page)))
+           (clara:with-lock-held ((card-book card))
+             (setf (card-inside card) (append (card-inside card) (list (cons page bytes)))))
+           (setq left t)
+           (clara:signal-event (clara.virtio:device-event (card-device card)))
+           bytes)
+      (unless left
+        (clara.unsafe:free-memory page 1)))))
+
 ;; A packet goes to an address: twenty bytes that say how long it is, which
 ;; protocol it carries, who it is from and who it is for, with a checksum
 ;; of those twenty; and then what it carries, which FILL writes, giving how
 ;; many bytes. It is not to be taken apart on the way: nothing here puts
 ;; pieces together.
 (defun send-packet (card to protocol fill &optional (from (or (card-address card) 0)))
-  (let ((station (station-of card to)))
-    (send-frame card station #x0800
-                (lambda (at)
-                  (let ((bytes (+ 20 (funcall fill (+ at 20)))))
-                    (setf (card-count card) (+ (card-count card) 1))
-                    (put-one at #x45)
-                    (put-one (+ at 1) 0)
-                    (put-two (+ at 2) bytes)
-                    (put-two (+ at 4) (logand (card-count card) #xffff))
-                    (put-two (+ at 6) #x4000)
-                    (put-one (+ at 8) 64)
-                    (put-one (+ at 9) protocol)
-                    (put-two (+ at 10) 0)
-                    (put-four (+ at 12) from)
-                    (put-four (+ at 16) to)
-                    (put-two (+ at 10) (checksum (clara.unsafe:internet-sum at 20)))
-                    bytes)))))
+  (flet ((packet (at)
+           (let ((bytes (+ 20 (funcall fill (+ at 20)))))
+             (setf (card-count card) (+ (card-count card) 1))
+             (put-one at #x45)
+             (put-one (+ at 1) 0)
+             (put-two (+ at 2) bytes)
+             (put-two (+ at 4) (logand (card-count card) #xffff))
+             (put-two (+ at 6) #x4000)
+             (put-one (+ at 8) 64)
+             (put-one (+ at 9) protocol)
+             (put-two (+ at 10) 0)
+             (put-four (+ at 12) from)
+             (put-four (+ at 16) to)
+             (put-two (+ at 10) (checksum (clara.unsafe:internet-sum at 20)))
+             bytes)))
+    (if (own-p card to)
+        (send-inside card #'packet)
+        (send-frame card (station-of card to) #x0800 #'packet))))
 
-;; A packet has arrived. While it is looked at, the card remembers who sent
-;; it and through which card, for an answer, and where it begins, for
-;; whoever has to send its beginning back with the word that it was not
-;; taken.
+;; A packet has arrived: from the wire, through the card STATION, or from
+;; this machine itself, when that is NIL. One from the wire is for this
+;; machine or for everybody; it is not for an address by which a machine
+;; means itself, and it is not from an address of this machine's, which
+;; nobody else has. While it is looked at, the card remembers who sent it
+;; and through which card, for an answer, and where it begins, for whoever
+;; has to send its beginning back with the word that it was not taken.
 (defun packet-in (card at bytes station)
   (when (and (>= bytes 20) (= (ash (one at) -4) 4))
     (let ((header (* 4 (logand (one at) 15))) (whole (two (+ at 2)))
@@ -411,7 +461,10 @@
       (when (and (>= header 20) (<= header whole) (<= whole bytes)
                  (= 0 (logand (two (+ at 6)) #x3fff))     ; whole, and not a piece of a packet
                  (= (fold (clara.unsafe:internet-sum at header)) #xffff)
-                 (or (null (card-address card)) (= to (card-address card)) (= to #xffffffff)))
+                 (if station
+                     (and (not (own-p card from)) (/= (ash to -24) 127)
+                          (or (null (card-address card)) (= to (card-address card)) (= to #xffffffff)))
+                     (own-p card to)))
         (setf (card-answering card) (cons from station)
               (card-packet card) (cons at (min whole (+ header 8))))
         (unwind-protect
@@ -482,7 +535,7 @@
 ;; What came back with such a word: the head of a packet of IPv4's, which
 ;; has to be one that this machine sent, and eight bytes behind it.
 (defun returned (card from code room at bytes)
-  (when (and (>= bytes 28) (= (ash (one at) -4) 4) (card-address card) (= (four (+ at 12)) (card-address card)))
+  (when (and (>= bytes 28) (= (ash (one at) -4) 4) (own-p card (four (+ at 12))))
     (let* ((header (* 4 (logand (one at) 15))) (inside (+ at header)))
       (when (and (>= header 20) (>= bytes (+ header 8)))
         (told card from (one (+ at 9)) (four (+ at 16)) (two inside) (two (+ inside 2)) (four (+ inside 4))
@@ -496,7 +549,7 @@
 (defun control-in (card from to at bytes)
   (when (and (>= bytes 8) (= (fold (clara.unsafe:internet-sum at bytes)) #xffff))
     (let ((kind (one at)) (code (one (+ at 1))))
-      (cond ((and (= kind 8) (= code 0) (card-address card) (= to (card-address card)))
+      (cond ((and (= kind 8) (= code 0) (own-p card to))
              (control-out card from 0 0 (four (+ at 4))
                           (lambda (out)
                             (clara.unsafe:copy-memory out (+ at 8) (- bytes 8))
@@ -539,7 +592,7 @@
                  (dhcp-in card (+ at 8) (- whole 8)))
                 (listener
                  (funcall listener from (two at) (+ at 8) (- whole 8)))
-                ((and (card-address card) (= to (card-address card)))
+                ((own-p card to)
                  (return-packet card from 3))))))))
 
 (defun listen-at (card port function)
@@ -1273,14 +1326,20 @@
       (t (error "~A has given the connection up" to)))))
 
 ;; A connection is no more: nothing that arrives finds it, and what it
-;; still had to send is let go of.
+;; still had to send is let go of. So is the memory of what arrived, when
+;; nobody has taken the connection and that memory with it: one that
+;; another machine began and did not go on with.
 (defun forget (connection)
   (let ((card (connection-card connection)))
     (clara:with-lock-held ((card-book card))
       (setf (card-connections card) (remove connection (card-connections card))))
     (clara:with-lock-held ((connection-lock connection))
-      (when (eq (connection-state connection) :open)
+      (when (member (connection-state connection) '(:open :answered))
         (setf (connection-state connection) :closed))
+      (when (and (connection-memory connection) (not (connection-frozen connection)))
+        (setf (connection-frozen connection) t)
+        (clara.unsafe:free-memory (connection-memory connection) (floor (connection-room connection) 4096))
+        (setf (connection-memory connection) nil))
       (release-out connection))))
 
 ;; A segment has arrived for a connection.
@@ -1296,7 +1355,25 @@
                  ((and (eq state :open) (= number (connection-expected connection)))
                   (if (connection-closing connection)
                       (forget connection)
-                      (setf (connection-state connection) :broken)))))
+                      (setf (connection-state connection) :broken)))
+                 ((and (eq state :answered) (= number (connection-expected connection)))
+                  (forget connection))))
+          ((eq state :answered)
+           ;; The other side began, and this side has answered. When the beginning comes once more, the
+           ;; answer was lost, and goes out again. When the other side says that it has the answer, the
+           ;; connection is open, a thread is started for it, and whatever else the segment says is
+           ;; taken as on any connection that is open.
+           (cond ((/= 0 (logand flags 2))
+                  (when (= (wrap (1+ number)) (connection-expected connection))
+                    (segment-out (connection-card connection) (connection-from connection) (connection-to connection)
+                                 (connection-port connection) (connection-to-port connection)
+                                 (connection-first connection) (connection-expected connection) 18 (window connection))))
+                 ((and (/= 0 (logand flags 16)) (= arrived (wrap (1+ (connection-first connection)))))
+                  (setf (connection-heard connection) arrived
+                        (connection-theirs connection) theirs
+                        (connection-state connection) :open)
+                  (admit connection)
+                  (heard-segment connection number arrived flags theirs nil data bytes))))
           ((eq state :asked)
            ;; the answer to the beginning: the other side begins too, and has ours
            (when (and (= (logand flags 18) 18) (= arrived (wrap (1+ (connection-first connection)))))
@@ -1352,7 +1429,11 @@
                  (heard-segment connection number arrived flags (two (+ at 14))
                                 (and (/= 0 (logand flags 2)) (longest-piece at header)) (+ at header) carried))
                 ((/= 0 (logand flags 4)))
-                ((not (and (card-address card) (= to (card-address card)))))
+                ((not (own-p card to)))
+                ((and (= (logand flags 18) 2) (door-at to-port))
+                 ;; a connection begins, at a port where connections are taken
+                 (answer-beginning card (door-at to-port) from to from-port to-port number (two (+ at 14))
+                                   (longest-piece at header)))
                 ((/= 0 (logand flags 16))
                  (segment-out card to from to-port from-port arrived 0 4 0))
                 (t
@@ -1392,14 +1473,17 @@
 ;; BYTES bytes of memory go over a connection: they are put behind what it
 ;; still has to send, as far as there is room for them, and the rest when
 ;; there is room again; and this waits until the other side has said that
-;; it has them all. On a connection that is no longer open nothing more is
-;; said, and nothing is said about that here: whoever waits for the answer
-;; finds out why, and has the better words for it. Only that the other
-;; side does not take what it is sent is said here, where it is found.
-(defun say-bytes (connection memory bytes)
+;; it has them all, unless WHOLE says that it need not: then it returns
+;; when the bytes are the connection's to send. On a connection that is no
+;; longer open nothing more is said, and nothing is said about that here:
+;; whoever waits for the answer finds out why, and has the better words
+;; for it. Only that the other side does not take what it is sent is said
+;; here, where it is found.
+(defun say-bytes (connection memory bytes &optional (whole t))
   (let ((card (connection-card connection)) (done 0))
     (lend connection)
-    (when (eq (connection-state connection) :open)
+    ;; which card has the other side's address is asked now, where waiting for the answer is allowed
+    (when (and (eq (connection-state connection) :open) (not (own-p card (connection-to connection))))
       (station-of card (connection-to connection)))
     (loop
       (case (connection-state connection)
@@ -1419,7 +1503,7 @@
                        (pump connection))
                      (max fits 0)))))
         (setq done (+ done put))
-        (when (and (>= done bytes) (= (connection-out-held connection) 0))
+        (when (and (>= done bytes) (or (not whole) (= (connection-out-held connection) 0)))
           (return bytes)))
       (clara:wait-event (card-heard card) 50))))
 
@@ -1501,6 +1585,10 @@
 ;; So is one that is done on both sides but for the other side's word,
 ;; when that does not come. And what is on its way too long goes out again.
 (defun tend-connection (connection time)
+  ;; a connection that another machine began and did not go on with is not kept for long
+  (when (and (eq (connection-state connection) :answered)
+             (> (- time (connection-alive connection)) (connection-patience connection)))
+    (forget connection))
   (when (eq (connection-state connection) :open)
     (let ((quiet (> (- time (connection-alive connection)) (connection-patience connection))))
       (cond ((and quiet (waiting connection))
@@ -1511,6 +1599,233 @@
              (forget connection))
             (t
              (overdue connection time))))))
+
+;;; A connection as a stream
+
+;; What has arrived on a connection lies at the front of its memory again,
+;; without what was read of it. With the connection's lock.
+(defun pack (connection)
+  (let ((taken (connection-taken connection)) (memory (connection-memory connection))
+        (filled (connection-held connection)))
+    (when (> taken 0)
+      (dolist (piece (connection-later connection))
+        (setq filled (max filled (cdr piece))))
+      (when (> filled taken)
+        (clara.unsafe:copy-memory memory (+ memory taken) (- filled taken)))
+      (setf (connection-held connection) (- (connection-held connection) taken)
+            (connection-later connection) (mapcar (lambda (piece) (cons (- (car piece) taken) (- (cdr piece) taken)))
+                                                  (connection-later connection))
+            (connection-scanned connection) (max 0 (- (connection-scanned connection) taken))
+            (connection-taken connection) 0))))
+
+;; BYTES more bytes of it were read. The memory is put in order when all
+;; of it was read, which costs nothing, and when a good deal was. With the
+;; connection's lock.
+(defun advance (connection bytes)
+  (setf (connection-taken connection) (+ (connection-taken connection) bytes))
+  (when (or (>= (connection-taken connection) (connection-held connection)) (>= (connection-taken connection) 16384))
+    (pack connection)))
+
+;; Where the line ends that begins where the last one was read to: the
+;; place of the byte that ends it, as the bytes of the memory are counted,
+;; or NIL when that byte has not arrived. How far the memory was looked
+;; through is put down, so that no byte is looked at twice. With the
+;; connection's lock.
+(defun line-end (connection)
+  (let ((memory (connection-memory connection)) (held (connection-held connection))
+        (at (max (connection-scanned connection) (connection-taken connection))))
+    (loop
+      (when (>= at held)
+        (setf (connection-scanned connection) at)
+        (return nil))
+      (when (= (clara.unsafe:memory-8 (+ memory at)) 10)
+        (setf (connection-scanned connection) at)
+        (return at))
+      (setq at (1+ at)))))
+
+;; The next BYTES bytes that were not read, as a text, without the byte 13
+;; that the lines of the Internet's protocols have before their end; and
+;; they are read, with SKIP bytes more. With the connection's lock.
+(defun take-line (connection bytes skip)
+  (let* ((from (+ (connection-memory connection) (connection-taken connection)))
+         (length (if (and (> bytes 0) (= (clara.unsafe:memory-8 (+ from bytes -1)) 13)) (1- bytes) bytes))
+         (line (if (= length 0) "" (ignore-errors (clara.unsafe:memory-string from length)))))
+    (advance connection (+ bytes skip))
+    (or line
+        (error "~A sent a line that is no text: it is not UTF-8" (address-text (connection-to connection))))))
+
+;; The next line that the other side has said, without its end; NIL when
+;; the other side is done and has no more. What it said last without
+;; ending the line is a line too. The wait is as long as patience is. When
+;; reading makes room where there was next to none, the other side is
+;; told, or it would wait for room for ever.
+(defun next-line (connection)
+  (let ((line nil))
+    (flet ((look ()
+             (let* ((room 0)
+                    (found (clara:with-lock-held ((connection-lock connection))
+                             (when (connection-memory connection)
+                               (setq room (window connection))
+                               (let ((end (line-end connection)))
+                                 (cond (end
+                                        (setq line (take-line connection (- end (connection-taken connection)) 1))
+                                        t)
+                                       ((> (window connection) 0)
+                                        nil)
+                                       ((> (connection-taken connection) 0)
+                                        (pack connection)
+                                        nil)
+                                       (t
+                                        (error "~A sent a line of more than ~D bytes, which is more than is kept of one"
+                                               (address-text (connection-to connection)) (connection-limit connection)))))))))
+               (when (and (< room 4096) (>= (window connection) 4096))
+                 (ignore-errors (acknowledge connection)))
+               found)))
+      (unless (wait-for connection #'look)
+        (clara:with-lock-held ((connection-lock connection))
+          (when (connection-memory connection)
+            (let ((rest (- (connection-held connection) (connection-taken connection))))
+              (when (> rest 0)
+                (setq line (take-line connection rest 0)))))))
+      line)))
+
+;; A text goes over a connection: it is the connection's to send when this
+;; returns, and not yet the other side's. An error when the connection is
+;; no more.
+(defun write-text (connection text)
+  (let* ((bytes (clara.unsafe:string-bytes text)) (pages (max 1 (floor (+ bytes 4095) 4096)))
+         (memory (clara.unsafe:allocate-memory pages)))
+    (unwind-protect
+         (progn
+           (clara.unsafe:string-memory text memory)
+           (say-bytes connection memory bytes nil))
+      (clara.unsafe:free-memory memory pages))
+    (unless (eq (connection-state connection) :open)
+      (gone connection))
+    text))
+
+;; A connection as a stream: what is written to it goes to the other side,
+;; READ-LINE gives what the other side says, a line at a time, and CLOSE
+;; says that this side is done.
+(defun connection-stream (connection)
+  (clara:make-stream :write-string (lambda (text) (write-text connection text))
+                     :read-line (lambda () (next-line connection))
+                     :close (lambda () (disconnect connection))))
+
+(defun check-port (port)
+  (unless (and (integerp port) (< 0 port 65536))
+    (error "~S is no port: a port is a number from 1 to 65535" port))
+  port)
+
+;; A connection to a port of another machine, by its name or its address:
+;; a stream. It is the caller's to close.
+(defun connect (name port)
+  (check-port port)
+  (let ((card (up)))
+    (connection-stream (begin card (address-of name) port 65536 0))))
+
+;; The same, for as long as BODY takes: the stream is closed whichever way
+;; control leaves it.
+(defmacro with-connection ((stream name port) &body body)
+  `(let ((,stream (connect ,name ,port)))
+     (unwind-protect (progn ,@body)
+       (close ,stream))))
+
+;;; A machine that listens
+
+(defun door-at (port)
+  (find-if (lambda (door) (= (door-port door) port)) *doors*))
+
+;; The connections that came by a door and that somebody still has.
+(defun door-open (card door)
+  (remove-if-not (lambda (connection)
+                   (and (eq (connection-door connection) door) (null (connection-closing connection))))
+                 (card-connections card)))
+
+;; From now on the machine takes the connections that other machines open
+;; to PORT, as many at once as MOST says, and hands each to FUNCTION, a
+;; function or the name of one, as a stream, in a thread of its own. The
+;; connection is over when the function returns, or ends in an error,
+;; which is kept for SERVING to show. The machine asks for its address
+;; now, when it has none: there is no reaching a machine without one.
+(defun serve (port function &key (most 8))
+  (check-port port)
+  (unless (or (functionp function) (and function (symbolp function)))
+    (error "~S is no function, and no name of one, that a connection could be handed to" function))
+  (unless (and (integerp most) (> most 0))
+    (error "~S is no number of connections that could be taken at once" most))
+  (up)
+  (clara:with-lock-held (*doors-lock*)
+    (when (door-at port)
+      (error "connections are taken at the port ~D already: CLARA.NET:STOP-SERVING ends that" port))
+    (setq *doors* (cons (make-door :port port :function function :most most) *doors*)))
+  port)
+
+;; No more connections are taken at PORT, and the ones that were are over:
+;; their threads are stopped, which closes each. T when connections were
+;; taken there.
+(defun stop-serving (port)
+  (let ((door (door-at port)) (card *card*))
+    (when door
+      (clara:with-lock-held (*doors-lock*)
+        (setq *doors* (remove door *doors*)))
+      (when card
+        (dolist (connection (card-connections card))
+          (when (eq (connection-door connection) door)
+            (let ((thread (connection-thread connection)))
+              (cond ((null thread)
+                     (forget connection))
+                    ((and (clara:thread-alive-p thread) (not (eq thread (clara:current-thread))))
+                     (clara:destroy-thread thread)))))))
+      t)))
+
+;; Where connections are taken: for each port, (port taken open trouble),
+;; how many were taken since SERVE, how many of them somebody has at the
+;; moment, and what the function last ended in when that was an error.
+(defun serving ()
+  (let ((card *card*))
+    (mapcar (lambda (door)
+              (list (door-port door) (door-count door)
+                    (if card (length (remove-if-not #'connection-thread (door-open card door))) 0)
+                    (door-trouble door)))
+            (sort (copy-list *doors*) #'< :key #'door-port))))
+
+;; Another machine begins a connection at a port where connections are
+;; taken. When as many are open there as may be, it is told that there is
+;; none for it. Otherwise this side begins too, and waits for the other
+;; side's word that it has heard that; until then nothing is kept for the
+;; connection but its memory, and that not for long (TEND-CONNECTION).
+(defun answer-beginning (card door from to from-port to-port number theirs longest)
+  (if (>= (length (door-open card door)) (door-most door))
+      (segment-out card to from to-port from-port 0 (wrap (1+ number)) 20 0)
+      (let* ((first (fresh card)) (time (now))
+             (connection (make-connection :card card :from to :to from :to-port from-port :port to-port
+                                          :state :answered :door door :first first :heard first
+                                          :expected (wrap (1+ number)) :theirs theirs
+                                          :piece (max 64 (min 1400 (or longest 536)))
+                                          :memory (clara.unsafe:allocate-memory 16) :room 65536
+                                          :limit 65536 :allowed 65536
+                                          :lock (clara:make-lock "connection")
+                                          :patience *patience* :again *again* :wait *again* :moment time :alive time)))
+        (clara:with-lock-held ((card-book card))
+          (setf (card-connections card) (cons connection (card-connections card))))
+        (segment-out card to from to-port from-port first (connection-expected connection) 18 (window connection)))))
+
+;; A connection that another machine began is open: a thread is started
+;; that hands it to the function of its door, and closes it after that,
+;; however the function ended.
+(defun admit (connection)
+  (let ((door (connection-door connection)) (stream (connection-stream connection)))
+    (setf (door-count door) (1+ (door-count door)))
+    (setf (connection-thread connection)
+          (clara:make-thread (lambda ()
+                               (unwind-protect
+                                    (handler-case (funcall (door-function door) stream)
+                                      (error (condition)
+                                        (setf (door-trouble door) (princ-to-string condition))))
+                                 (ignore-errors (close stream))))
+                             :name (format nil "port ~D, for ~A" (door-port door)
+                                           (address-text (connection-to connection)))))))
 
 ;;; HTTP: a file from another machine
 
@@ -1779,6 +2094,20 @@
                 (error ()
                   (setf (card-dropped card) (1+ (card-dropped card))))))
             (clara.virtio:queue-add queue (list (list page 4096 t)) page)))
+        ;; and what this machine has sent to itself
+        (loop
+          (let ((packet (clara:with-lock-held ((card-book card))
+                          (let ((first (car (card-inside card))))
+                            (setf (card-inside card) (cdr (card-inside card)))
+                            first))))
+            (unless packet
+              (return))
+            (setq any t)
+            (unwind-protect
+                 (handler-case (packet-in card (car packet) (cdr packet) nil)
+                   (error ()
+                     (setf (card-dropped card) (1+ (card-dropped card)))))
+              (clara.unsafe:free-memory (car packet) 1))))
         (tend card)
         (when any
           (clara.virtio:queue-notify queue)
@@ -1831,4 +2160,14 @@
           (format t "net: ~A did not start: ~A~%" (clara.pci:location pci) condition)))))
   (when (null *card*)
     (format t "net: no network card that has a driver here: nothing is fetched from another machine~%"))
+  ;; A world that was saved while it took connections takes them again: the ports are the world's.
+  ;; For that the machine needs its address, which is asked for at once, and not by the start itself.
+  (when (and *card* *doors*)
+    (let ((ports (mapcar (lambda (door) (format nil "~D" (door-port door))) (sort (copy-list *doors*) #'< :key #'door-port))))
+      (format t "net: connections are taken at the port~A ~A, as before this start~%" (if (cdr ports) "s" "") (listed ports)))
+    (clara:make-thread (lambda ()
+                         (handler-case (up)
+                           (error (condition)
+                             (format t "net: ~A~%" condition))))
+                       :name "network address"))
   *card*)

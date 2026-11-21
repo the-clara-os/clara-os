@@ -661,10 +661,25 @@ The network:
   counts its bytes from, that an answer has to have and that a question
   is asked from are no longer worked out from the clock: they come from
   the device that makes numbers which nobody can guess.
-- [ ] **M17b a machine that listens**. A port of the machine's at which
-  connections from other machines are taken, each handed to a function
-  with a stream to read lines from and to write to; and the same stream
-  for a connection that the machine opens itself.
+- [x] **M17b a machine that listens** (2026-11-21, version 0.0.34). The
+  machine takes connections, where it only opened them. `(clara.net:serve
+  7 'shout)` has it take the ones that other machines open to its port 7,
+  as many at once as it is told, and hand each to the function, in a
+  thread of its own, as a stream: READ-LINE gives what the other side
+  says, a line at a time, and what is written to the stream goes to the
+  other side. When the function returns the connection is over, and an
+  error that it ends in is kept for `(clara.net:serving)` to show.
+  `(clara.net:connect "claraos.org" 80)` is the same stream for a
+  connection that the machine opens, and `clara.net:with-connection`
+  closes it. Nothing is taken at any port until somebody says so, and
+  `clara.net:stop-serving` ends it. A machine reaches itself, at its own
+  address and at 127.0.0.1, without a frame on the wire, which is how a
+  function is tried before another machine is there. A world that is
+  saved while it takes connections takes them again when it is started.
+  Under QEMU, whose network lets nothing in, `FORWARD=8007:7 make
+  run-aarch64` hands on what connects to a port of the computer. There is
+  no web server: what is served this way is in the open, and the half of
+  TLS that a server speaks is not written.
 - [ ] **M17c IPv6**. Addresses of 128 bits beside the ones of 32: the
   machine makes its own from what the routers of its network say, finds
   its neighbours, asks for the addresses of both kinds that a name has,
@@ -1981,6 +1996,52 @@ M17a, the rest of a network, what it left:
   asking whether it may keep its address, which QEMU gives for a day.
   Those three are tested against the network that the host tests make
   up, and against nothing else.
+
+M17b, a machine that listens, what it left:
+
+- Nothing keeps a connection closed that the machine takes: TLS here is
+  the half that asks. So there is no web server in the system, since one
+  would hand out its pages in the open, which is not how ClaraOS
+  publishes anything (Julio, 2026-11-20, on plain HTTP: "we don't do that
+  here"). A server's half of TLS 1.3 would need a certificate and a key
+  of the machine's own, signatures made and not only checked, which the
+  arithmetic in C does not do, and somewhere to keep the key. Whether
+  that is wanted is Julio's to say; nothing of it is begun.
+- A stream over a connection is lines of text, because that is what a
+  stream is in this language: a function that writes a string and one
+  that reads a line. So there are no bytes that are no text, a line is
+  UTF-8 or an error, and one of more than 64 KiB is an error. Reading
+  waits as long as `clara.net:*patience*` is and then fails; a function
+  cannot wait for a line and for something else at once.
+- What is written goes out as it is written: `write-line` is two
+  segments, the text and the end of the line. Nothing gathers small
+  pieces (Nagle's rule), which costs packets and no time.
+- `close` ends a connection both ways: this side cannot say that it is
+  done and go on listening.
+- A port takes connections at every address that the machine has; there
+  is no taking them from the machine itself only.
+- UDP is not there for a program: the machine takes its packets for DHCP
+  and for names, and nothing lets a function listen at a port of UDP's.
+- A machine that begins connections and does not go on with them keeps
+  a port busy: each such beginning holds one of the port's places, eight
+  unless SERVE was told otherwise, for as long as patience is, and
+  others are told meanwhile that there is no connection for them.
+- `stop-serving` stops the threads that have connections, wherever each
+  is: a function that was writing a file is stopped in the middle of it.
+- The ports come back with a world that was saved, and the machine asks
+  for its address as it starts for that, in a thread, so the line that
+  says which address it has comes when it comes, between the lines of the
+  boot report or after the prompt. A world that is made again, after an
+  upgrade, takes no connections until a file of `/home` says so.
+- Seen at a real kernel: a connection from outside, through the port that
+  QEMU hands on, answered, and 300000 bytes sent to it (tools/network.txt,
+  where the test's web server does the knocking, `/knock/`), on AArch64;
+  and the machine speaking to itself, on all three machines
+  (tools/session.txt). Not seen there: several connections at once, a
+  port that is full, another side that goes quiet, a saved world that
+  takes connections again; those are the host tests'. And UTM, where the
+  machine is on a network that it shares with the Mac and should be
+  reached at its address: untried.
 
 M15e, shutting down, what it left:
 

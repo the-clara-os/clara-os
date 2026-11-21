@@ -1129,8 +1129,9 @@
 
 ;; A stream that writes by calling WRITE-STRING with a string, and reads
 ;; by calling READ-LINE, which gives a line or NIL when no more will come.
-(defun make-stream (&key write-string read-line)
-  (cl::make-%stream :write write-string :read read-line))
+;; CLOSE, when there is one, is called when the stream is closed.
+(defun make-stream (&key write-string read-line close)
+  (cl::make-%stream :write write-string :read read-line :close close))
 
 ;; A file system says that it is there: TEXT gives the text of the file of
 ;; a name, NAMES the names of what the directory of a name holds, WRITE

@@ -709,6 +709,39 @@ Rules:
   ICMP, of the name servers and of an address that is kept. A test that
   binds `clara.net:*again*` to something small has to do so around
   `begin`, which is where a connection takes its first wait from.
+- A machine that listens (lisp/net.lisp, "A connection as a stream" and
+  "A machine that listens"). The ports are `*doors*`, a variable of the
+  world's: START finds them there after a saved world came back, and the
+  host tests' `stop-network` empties the list, so that the next machine
+  is another world (`new-network :doors` hands one a list). The card's
+  thread answers a beginning (`answer-beginning`, the state `:answered`)
+  and starts the connection's thread when the other side has answered
+  that (`admit`): the user's function never runs in the card's thread. A
+  stream reads with `next-line`, which takes from the front of the
+  connection's memory (`taken`, `pack`) with the connection's lock, and
+  tells the other side when that made room; it writes with `write-text`,
+  which is `say-bytes` told not to wait. A packet for the machine itself
+  goes by `send-inside` to the card's thread and never by the wire
+  (`own-p`), so nobody asks which card has an address of the machine's
+  own: `say-bytes` does not.
+- In the host tests a machine of the made-up network opens connections to
+  the machine: `call-machine port :say ... :end t`, a `call`, which the
+  network's thread moves along (`call-step`), and which can lose the
+  machine's answers and pieces, go quiet, or begin and not go on. Its
+  sender keeps to the room that the machine says it has, so what a test
+  wants said to a machine that has stopped reading is handed to the call
+  afterwards (`call-say`). `clara.net:*patience*` for a connection that
+  the machine took is the card's thread's and the function's thread's,
+  which is the global value: a test sets it with SETQ and puts it back.
+- At a real kernel, `SERVE=` also has QEMU hand on a port of this
+  computer to the machine's port 7007 (`FORWARD=`, tools/run.sh), and
+  the test's web server speaks to the machine through it when it is
+  asked for `/knock/<text>`, answering with what the machine said. A
+  session asks `(clara.net:serving)` after such a knock, when the
+  machine's function is known to be done, and never right after a
+  connection of the machine's own to itself, where the function may
+  still be on its way out. `with-connection` gives the values of its
+  body, and READ-LINE has two.
 - When the host tests end with SBCL's "unhandled condition in
   --disable-debugger mode" and a reader's error about a package that does
   not exist, somewhere far down lisp/host/tests.lisp, look for a
