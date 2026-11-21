@@ -498,6 +498,16 @@
           (setq asked time)))
       (clara:wait-event (card-heard card) 50))))
 
+;; The card that the packet came from which is being looked at, when
+;; ADDRESS is who sent it: where the answer goes. That is the business of
+;; the thread that looks at the packet and of nobody else. Another thread
+;; that sends to the same address in that moment would find the note
+;; there, and then, having lost its turn, find it gone: the card's
+;; address that it handed on would be none.
+(defun answering-card (card address)
+  (let ((answering (and (eq (clara:current-thread) (card-thread card)) (card-answering card))))
+    (and answering (equal (car answering) address) (cdr answering))))
+
 ;; The card that a packet for ADDRESS is handed to: the one that has the
 ;; address, when that is on this network, and otherwise the one that is the
 ;; way out of it. Everybody, for the address that means everybody. And for
@@ -510,8 +520,7 @@
          (station-of-six card address))
         ((= address #xffffffff)
          #xffffffffffff)
-        ((and (card-answering card) (equal (car (card-answering card)) address))
-         (cdr (card-answering card)))
+        ((answering-card card address))
         ((null (card-address card))
          (error "this machine has no address of IPv4, and ~A is one" (address-text address)))
         (t
@@ -672,8 +681,7 @@
 (defun station-of-six (card address)
   (cond ((>= (car address) #xff00)
          (+ (ash #x3333 32) (ash (nth 6 address) 16) (nth 7 address)))
-        ((and (card-answering card) (equal (car (card-answering card)) address))
-         (cdr (card-answering card)))
+        ((answering-card card address))
         (t
          (let* ((next (cond ((or (= (logand (car address) #xffc0) #xfe80)
                                  (assoc (network-of address) (card-prefixes6 card) :test #'equal))
@@ -893,6 +901,10 @@
 ;; further than its own network, made of its card's address, and asks the
 ;; routers what the network is.
 (defun begin-six (card)
+  ;; when the routers were asked, and how often, is there before the address is: the thread that looks
+  ;; at what time brings about goes by the address, and reads the other two
+  (setf (card-asked6 card) (now)
+        (card-times6 card) 0)
   (setf (card-addresses6 card) (list (cons (address-on card '(#xfe80 0 0 0)) nil)))
   (routers-out card))
 
@@ -904,17 +916,18 @@
       (return))
     (clara:wait-event (card-heard card) 20)))
 
-;; What the machine learned from a router is said, once.
+;; What the machine learned from a router is said, once: its address, and
+;; the way out. Who knows names is not said here. Under QEMU a router
+;; names somebody only when the computer that QEMU runs on has a name
+;; server of IPv6 itself, so the line would be another from one computer
+;; to the next, and from one network of that computer's to the next.
 (defun say-six (card)
   (when (and (card-heard6 card) (not (card-said6 card)))
     (setf (card-said6 card) t)
-    (let ((own (cadr (card-addresses6 card))) (router (car (car (card-routers6 card)))) (names (card-names6 card)))
-      (format t "net: by IPv6 it is ~A~A~A~%"
+    (let ((own (cadr (card-addresses6 card))) (router (car (car (card-routers6 card)))))
+      (format t "net: by IPv6 it is ~A~A~%"
               (address-text (car (or own (car (card-addresses6 card)))))
-              (if router (format nil ", ~A is the way out" (address-text router)) "")
-              (if names
-                  (format nil ", ~A ~A names" (listed (mapcar #'address-text names)) (if (cdr names) "know" "knows"))
-                  "")))))
+              (if router (format nil ", ~A is the way out" (address-text router)) "")))))
 
 ;; What time brings about for IPv6: routers that have not answered are
 ;; asked again, three times in all and four seconds apart (RFC 4861,

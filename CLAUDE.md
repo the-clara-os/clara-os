@@ -32,7 +32,7 @@ starting one, say what it will take, and let Julio choose.
 Build with `make` (Homebrew's llvm and lld under /opt/homebrew/opt when they
 are there, otherwise clang and lld-link from the PATH; `LLVM=` and `LLD=`
 name other directories). `make test` runs the host tests of the Lisp
-files under SBCL (`make host-test`, twenty seconds), then boots both
+files under SBCL (`make host-test`, a minute), then boots both
 architectures headless under QEMU, fifteen boots in about five minutes,
 types a session at each kernel, and saves what each screen shows to
 build/screen-<name>.png; look at those images when a change touches the
@@ -764,6 +764,22 @@ Rules:
   `call-machine port :six t`). So a new thing that the network serves is
   written once, for IPv4, and a test only has to ask for it by an
   address of IPv6. What only IPv6 has is in `network-heard-control-six`.
+- What a line of a session shows must not depend on the computer that
+  the boot runs on, or on that computer's network. Who knows names by
+  IPv6 did: QEMU's router names somebody only when the host has a name
+  server of IPv6 itself. So the machine does not say it, and a new line
+  that says something of the network is held against the container
+  below before it is pushed, as every change to the network is.
+- `card-answering`, the card's note of where the packet came from that
+  it is looking at, is the card's thread's, and `answering-card` is the
+  one place that reads it, once. Whatever the card's thread writes that
+  another thread reads is read once into a variable: between two calls a
+  thread can lose its turn, under SBCL at any instruction, and the note
+  is gone.
+- The made-up network keeps what the machine sends early, behind a gap,
+  as a machine does (`served-early`, `call-early`): one that threw it
+  away made every lost piece cost the machine a second, and hid that the
+  machine's quick resending had never run.
 - At a real kernel QEMU's network has a router, so every machine there
   says two lines when it comes onto the network, and the sessions and
   the manual show both. The test's web server listens at ::1 as well,

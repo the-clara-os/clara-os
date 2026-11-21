@@ -1,6 +1,6 @@
 > (list (clara.net:station) (clara.net:address))
 net: this machine is 10.0.2.15 on its network, 10.0.2.2 is the way out, 10.0.2.3 knows names
-net: by IPv6 it is fec0::5054:ff:fe12:3456, fe80::2 is the way out, fec0::3 knows names
+net: by IPv6 it is fec0::5054:ff:fe12:3456, fe80::2 is the way out
 ("52:54:00:12:34:56" "10.0.2.15")
 > (setq clara.net:*name-server* "10.0.2.2" clara.net:*name-port* {{port}})
 {{port}}
@@ -125,5 +125,5 @@ clara: starting the machine again
 ("{{version}}-other" T (ACROSS "the network") "https://claraos.org/releases/" NIL)
 > (list (clara.fat:names "/clara/") (clara.net:address))
 net: this machine is 10.0.2.15 on its network, 10.0.2.2 is the way out, 10.0.2.3 knows names
-net: by IPv6 it is fec0::5054:ff:fe12:3456, fe80::2 is the way out, fec0::3 knows names
+net: by IPv6 it is fec0::5054:ff:fe12:3456, fe80::2 is the way out
 (("{{version}}-other/" "clara.image") "10.0.2.15")

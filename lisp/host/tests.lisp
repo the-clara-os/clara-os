@@ -6651,6 +6651,9 @@
   another-record                ; its answer for a name has another record before the address
   (hosts (list (cons #x0a000209 #x525500000009))) ; other machines on it, each with its card: they serve what it serves
   false-start                   ; a connection's beginning is first answered with something that is no answer to it
+  false-reset                   ; and with the word that the connection is given up, as somebody sends it who cannot know its number
+  (lose-end 0)                  ; how many times the machine's word that it is done with a connection is lost
+  (most-ahead 0)                ; how many bytes of the machine's were ever on their way at once, beyond what it had been told had arrived
   pause                         ; how many seconds it waits after each piece of an answer
   strangers                     ; before each answer about an address or a name it sends one that is for another question
   spoil-names                   ; how many of its answers for a name arrive with a byte changed
@@ -6762,6 +6765,12 @@
   mute                          ; it says nothing to what the machine sends
   six                           ; the two addresses of IPv6 that it is between, the machine's first, when it is to go by IPv6
   lose                          ; which of the machine's segments with bytes in them it does not hear: by their count, from 0
+  swap                          ; which of its own segments go out after the one that follows them: by their count, from 0
+  drop dropped                  ; which pieces of what it says are lost the first time: by their place in it, from 0; and which were
+  reset                         ; it is to give the connection up
+  kept                          ; such a segment, until the next has gone
+  early                         ; ((number . bytes) ...): what the machine sent that came before what is missing in front of it
+  (sent-pieces 0)               ; how many segments with bytes in them it has sent
   (pieces 0))                   ; how many such segments have come
 
 (defvar *calls* 0)
@@ -6799,6 +6808,10 @@
          (incf (call-begun call))
          (call-segment call (call-first call) #x02 nil)))
       (:open
+       (when (call-reset call)
+         (call-segment call (call-next call) #x04 nil)
+         (setf (call-state call) :reset)
+         (return-from call-step nil))
        (let ((say (call-say call)))
          (when (and (< (call-heard call) (call-sent call)) (> (- now (call-moment call)) wait))
            (setf (call-sent call) (call-heard call)
@@ -6809,8 +6822,20 @@
                          (end (min (length say) (+ start (call-piece call)) (+ (call-heard call) (call-window call)))))
                     (when (= start (call-heard call))
                       (setf (call-moment call) now))
-                    (call-segment call (+ (call-first call) 1 start) #x18 (subseq say start end))
+                    (incf (call-sent-pieces call))
+                    (cond ((and (member (floor start (call-piece call)) (call-drop call)) (not (member start (call-dropped call))))
+                           (push start (call-dropped call)))
+                          ((and (member (1- (call-sent-pieces call)) (call-swap call)) (< end (length say)))
+                           (setf (call-kept call) (list (+ (call-first call) 1 start) #x18 (subseq say start end))))
+                          (t
+                           (call-segment call (+ (call-first call) 1 start) #x18 (subseq say start end))
+                           (when (call-kept call)
+                             (apply #'call-segment call (call-kept call))
+                             (setf (call-kept call) nil))))
                     (setf (call-sent call) end)))
+         (when (and (call-kept call) (= (call-sent call) (length say)))
+           (apply #'call-segment call (call-kept call))
+           (setf (call-kept call) nil))
          (when (and (call-end call) (not (call-ended call)) (= (call-heard call) (length say)))
            (call-segment call (+ (call-first call) 1 (length say)) #x11 nil)
            (setf (call-ended call) t)))))))
@@ -6851,9 +6876,21 @@
                  (failed "the machine sent a segment of ~D bytes to a machine that takes ~D" (length data) (call-longest call)))
                (cond ((member (1- (call-pieces call)) (call-lose call)))
                      ((= number (call-theirs call))
-                      (sb-thread:with-mutex ((network-lock network))
-                        (setf (call-got call) (bytes-of (call-got call) data)))
-                      (setf (call-theirs call) (ldb (byte 32 0) (+ number (length data))))
+                      (flet ((taken (data)
+                               (sb-thread:with-mutex ((network-lock network))
+                                 (setf (call-got call) (bytes-of (call-got call) data)))
+                               (setf (call-theirs call) (ldb (byte 32 0) (+ (call-theirs call) (length data))))))
+                        (taken data)
+                        (loop
+                          (let ((early (assoc (call-theirs call) (call-early call))))
+                            (unless early
+                              (return))
+                            (setf (call-early call) (remove early (call-early call)))
+                            (taken (cdr early)))))
+                      (call-segment call (call-next call) #x10 nil))
+                     ((and (< 0 (ldb (byte 32 0) (- number (call-theirs call))) #x80000000) (< (length (call-early call)) 64))
+                      (unless (assoc number (call-early call))
+                        (push (cons number data) (call-early call)))
                       (call-segment call (call-next call) #x10 nil))
                      (t
                       (call-segment call (call-next call) #x10 nil))))
@@ -6890,6 +6927,7 @@
   again                         ; the piece that was sent a second time because the machine said three times that it lacks it
   secure                        ; what the network keeps of a connection that is kept closed
   six                           ; the two addresses of IPv6 that it is between, the machine's first, when it came by IPv6
+  early                         ; ((number . bytes) ...): what the machine sent that came before what is missing in front of it
   more                          ; more is to come after what there is of the answer: it is not said to be over
   dropped spoiled swapped held)
 
@@ -7286,6 +7324,9 @@
                   (let ((quoted (subseq frame 14 42)))
                     (when (eq (network-unreachable network) :forged)
                       (setf (be quoted 24 4) (ldb (byte 32 0) (+ 77 (be quoted 24 4)))))
+                    ;; or the packet that it speaks of is one that another machine sent
+                    (when (eq (network-unreachable network) :stranger)
+                      (setf (be quoted 12 4) #x0a000263))
                     (control-to-machine network (network-address network) (be frame 26 4) 3 1 0 quoted)))
                  ((or (network-refuse network) (and *six* (network-six-closed network)))
                   (segment-to-machine network (make-served :port port :to-port to-port :theirs (ldb (byte 32 0) (1+ number))
@@ -7297,6 +7338,12 @@
                                                   :theirs (ldb (byte 32 0) (1+ number)) :first (network-first network)
                                                   :address (be frame 30 4) :station (be frame 0 6) :six *six*))
                     (push connection (network-connections network)))
+                  (when (network-false-reset network)
+                    ;; from somebody who does not know the number that the machine began with
+                    (let ((theirs (served-theirs connection)))
+                      (setf (served-theirs connection) (ldb (byte 32 0) (+ theirs 77)))
+                      (segment-to-machine network connection 0 #x14 nil)
+                      (setf (served-theirs connection) theirs)))
                   (when (network-false-start network)
                     ;; something that is no answer to the beginning: it says that it has bytes that nobody sent
                     (let ((theirs (served-theirs connection)))
@@ -7318,10 +7365,13 @@
                    (beyond (ldb (byte 32 0) (- (+ number (length data)) (served-theirs connection)))))
                (incf (network-seen network))
                (setf (network-longest-seen network) (max (network-longest-seen network) (length data)))
+               (when (< beyond #x80000000)
+                 (setf (network-most-ahead network) (max (network-most-ahead network) beyond)))
                (cond ((plusp (network-lose-request network))
                       (decf (network-lose-request network)))
                      ((member index (network-lose-pieces network)))
-                     ((and (network-narrow network) (> (be frame 16 2) (network-narrow network)))
+                     ;; (a packet of IPv6's is twenty bytes longer than this, which is the same thing over IPv4)
+                     ((and (network-narrow network) (> (+ (be frame 16 2) (if *six* 20 0)) (network-narrow network)))
                       ;; too long for the way: it does not arrive, and the machine is told how long a packet may be
                       (network-note network :too-long (be frame 16 2))
                       (control-to-machine network (network-address network) (be frame 26 4) 3 4 (network-narrow network)
@@ -7334,31 +7384,51 @@
                                 beyond (network-room network)))
                       (segment-to-machine network connection (+ (served-first connection) 1 (served-sent connection)) #x10 nil))
                      ((= number (served-theirs connection))
-                      (setf (served-request connection) (bytes-of (served-request connection) data)
-                            (served-theirs connection) (ldb (byte 32 0) (+ number (length data))))
-                      (cond ((= (served-to-port connection) 9)
-                             (sb-thread:with-mutex ((network-lock network))
-                               (setf (network-sunk network) (bytes-of (network-sunk network) data)))
-                             (setf (served-request connection) nil))
-                            ((member (served-to-port connection) (network-secure network))
-                             (tls-heard network connection))
-                            (t
-                             (let ((answer (and (null (served-answer connection))
-                                                (if (= (served-to-port connection) 53)
-                                                    (network-name-request network (served-request connection))
-                                                    (network-request network connection (served-request connection))))))
-                               (when answer
-                                 (setf (served-answer connection) answer
-                                       (served-moment connection) (get-internal-real-time))))))
+                      (flet ((taken (data)
+                               (setf (served-request connection) (bytes-of (served-request connection) data)
+                                     (served-theirs connection) (ldb (byte 32 0) (+ (served-theirs connection) (length data))))
+                               (cond ((= (served-to-port connection) 9)
+                                      (sb-thread:with-mutex ((network-lock network))
+                                        (setf (network-sunk network) (bytes-of (network-sunk network) data)))
+                                      (setf (served-request connection) nil))
+                                     ((member (served-to-port connection) (network-secure network))
+                                      (tls-heard network connection))
+                                     (t
+                                      (let ((answer (and (null (served-answer connection))
+                                                         (if (= (served-to-port connection) 53)
+                                                             (network-name-request network (served-request connection))
+                                                             (network-request network connection (served-request connection))))))
+                                        (when answer
+                                          (setf (served-answer connection) answer
+                                                (served-moment connection) (get-internal-real-time))))))))
+                        (taken data)
+                        ;; and what had come early, and follows on now
+                        (loop
+                          (let ((early (assoc (served-theirs connection) (served-early connection))))
+                            (unless early
+                              (return))
+                            (setf (served-early connection) (remove early (served-early connection)))
+                            (taken (cdr early)))))
+                      (segment-to-machine network connection (+ (served-first connection) 1 (served-sent connection)) #x10 nil))
+                     ((and (< beyond #x80000000) (> beyond (length data)) (< (length (served-early connection)) 64))
+                      ;; It comes before what is missing in front of it: it is kept for then, as a machine keeps it,
+                      ;; and the machine is told once more how far its bytes have come without a gap.
+                      (unless (assoc number (served-early connection))
+                        (push (cons number data) (served-early connection)))
                       (segment-to-machine network connection (+ (served-first connection) 1 (served-sent connection)) #x10 nil))
                      (t
                       (segment-to-machine network connection (+ (served-first connection) 1 (served-sent connection)) #x10 nil)))))
            (when (logbitp 0 flags)
-             (when (= (ldb (byte 32 0) (+ number (length data))) (served-theirs connection))
-               (setf (served-theirs connection) (ldb (byte 32 0) (1+ (served-theirs connection))))
-               (network-note network :ended port))
-             (segment-to-machine network connection
-                                 (+ (served-first connection) 1 (served-sent connection) (if (served-ended connection) 1 0)) #x10 nil))
+             (cond ((plusp (network-lose-end network))
+                    (decf (network-lose-end network))
+                    (network-note network :end-lost port))
+                   (t
+                    (when (= (ldb (byte 32 0) (+ number (length data))) (served-theirs connection))
+                      (setf (served-theirs connection) (ldb (byte 32 0) (1+ (served-theirs connection))))
+                      (network-note network :ended port))
+                    (segment-to-machine network connection
+                                        (+ (served-first connection) 1 (served-sent connection) (if (served-ended connection) 1 0))
+                                        #x10 nil))))
            (when (and (logbitp 4 flags) (served-answer connection) (served-ended connection) (not (served-end-heard connection))
                       (= arrived (ldb (byte 32 0) (+ (served-first connection) 2 (length (served-answer connection))))))
              (setf (served-end-heard connection) t)
@@ -7457,7 +7527,8 @@
                (network-note network :name name to-port)
                (network-note network :name-kind (be frame (1+ place) 2) name)
                (network-note network :name-asked-of to)
-               (unless (member :names (network-mute network))
+               (unless (or (member :names (network-mute network))
+                           (and (= (be frame (1+ place) 2) 28) (member :names6 (network-mute network))))
                  (progn
                    (when (network-strangers network)
                      ;; the answer to another question, and the answer of somebody who was not asked
@@ -7496,6 +7567,9 @@
            (cond ((member :ping (network-mute network)))
                  ((network-unreachable network)
                   (control-to-machine network (network-address network) from 3 1 0 (subseq frame 14 (+ at 8))))
+                 ((member :stale-pings (network-mute network))
+                  ;; the answer to the question before this one, which is no answer to this one
+                  (control-to-machine network to from 0 0 (1- (be frame (+ at 4) 4)) (subseq frame (+ at 8) (+ at whole))))
                  (t
                   (let ((*from-station* (cdr (assoc to (network-hosts network)))))
                     (control-to-machine network to from 0 0 (be frame (+ at 4) 4) (subseq frame (+ at 8) (+ at whole)))))))
@@ -8473,8 +8547,12 @@
          (:error "10.0.2.2 sends more than the 100000 bytes that were to be taken from it") t)
        (list (fetched "http://releases.test/long" :limit 100000) (fetched "http://releases.test/unsized-long" :limit 100000)
              (equal *long* (fetched "http://releases.test/long" :limit 200000))))
-;; A connection that is over is forgotten once both sides have said that they are done.
-(check t (eventually (lambda () (null (clara.net::card-connections clara.net::*card*)))))
+;; A connection that is over is forgotten once both sides have said that they are done, and not when
+;; patience is over.
+(let ((begun (get-internal-real-time)))
+  (check "hello from the made-up network" (fetched "http://releases.test/hello.txt"))
+  (check '(t t) (list (and (eventually (lambda () (null (clara.net::card-connections clara.net::*card*)))) t)
+                      (< (- (get-internal-real-time) begun) internal-time-units-per-second))))
 
 ;; A wire loses things, changes them, and brings them in another order.
 ;; Whatever becomes of the pieces of a file on the way, the file is the
@@ -8597,6 +8675,11 @@
 (check '((:ping #x0a000202 1) (:ping #x0a000209 1) (:ping #x0a000202 1))
        (reverse (remove :ping (network-heard *network*) :key #'car :test-not #'eq)))
 (check nil (clara.net::card-echoes clara.net::*card*))
+;; Which card the packet came from that the card's thread is looking at is that thread's note, for its
+;; answer. Another thread that sends to the same address in that moment goes by what the network said of
+;; the address, and not by a note that may be gone before it has read all of it.
+(setf (clara.net::card-answering clara.net::*card*) (cons #x0a000202 nil))
+(check t (<= 0 (clara.net:ping "10.0.2.2") 3000))
 ;; One that does not answer is asked again, each time with the next number, and then it is an error.
 (setf (network-mute *network*) (list :ping))
 (let ((clara.net:*patience* 250) (clara.net:*again* 60) (asked (network-saw *network* :ping)))
@@ -8604,6 +8687,10 @@
   (check '(1 2 3)
          (let ((numbers (mapcar #'third (nthcdr asked (reverse (remove :ping (network-heard *network*) :key #'car :test-not #'eq))))))
            (and (>= (length numbers) 3) (subseq numbers 0 3)))))
+;; The answer to an earlier question is no answer to the one that is being asked.
+(setf (network-mute *network*) (list :stale-pings))
+(let ((clara.net:*patience* 250) (clara.net:*again* 60))
+  (check "10.0.2.2 does not answer a ping" (condition-text (lambda () (clara.net:ping "10.0.2.2")))))
 (setf (network-mute *network*) nil)
 ;; The way out says that a machine cannot be reached: that is the answer, and at once.
 (setf (network-unreachable *network*) t)
@@ -8647,6 +8734,17 @@
 (said-by #'clara.net:up)
 (let ((clara.net:*patience* 250) (clara.net:*again* 60))
   (check '(:error "192.168.7.7 does not answer at its port 80") (fetched "http://192.168.7.7/hello.txt")))
+;; And such a word about a packet that this machine did not send is about somebody else's.
+(new-network :files (files) :unreachable :stranger)
+(said-by #'clara.net:up)
+(let ((clara.net:*patience* 250) (clara.net:*again* 60))
+  (check '(:error "192.168.7.7 does not answer at its port 80") (fetched "http://192.168.7.7/hello.txt")))
+;; A beginning that is not answered is said again after a while that is twice as long each time.
+(new-network :mute (list :connections))
+(said-by #'clara.net:up)
+(let ((clara.net:*patience* 1000) (clara.net:*again* 100))
+  (check '(:error "10.0.2.2 does not answer at its port 80") (fetched "http://10.0.2.2/hello.txt"))
+  (check t (<= 3 (network-saw *network* :connect) 5)))
 
 ;; Who knows names. The network names two. The second is asked as soon as
 ;; the word comes back that the first takes no questions, or when the
@@ -8666,8 +8764,11 @@
 (check '(nil nil) (list (clara.net::card-closed clara.net::*card*) (clara.net::card-listeners clara.net::*card*)))
 (new-network :names-fail t)
 (said-by #'clara.net:up)
-(check '("10.0.2.2, who knows names, could not say which address releases.test has" 2)
-       (list (condition-text (lambda () (clara.net:resolve "releases.test"))) (network-saw *network* :name)))
+(let ((begun (get-internal-real-time)))
+  (check '("10.0.2.2, who knows names, could not say which address releases.test has" 2)
+         (list (condition-text (lambda () (clara.net:resolve "releases.test"))) (network-saw *network* :name)))
+  ;; the second was asked as soon as the first had said that it cannot say, and not a second later
+  (check t (< (- (get-internal-real-time) begun) (floor internal-time-units-per-second 2))))
 (new-network :mute (list :names))
 (said-by #'clara.net:up)
 (let ((clara.net:*patience* 250) (clara.net:*again* 60))
@@ -8708,9 +8809,10 @@
 ;; A server that says that the machine may not keep it takes the address
 ;; away, and so does the time, when the server says nothing: whatever
 ;; wants the network next asks for an address anew.
-(new-network :lease-time 1 :renewals :deny)
+(new-network :lease-time 2 :renewals :deny)
 (said-by #'clara.net:up)
-(check t (eventually (lambda () (null (clara.net::card-address clara.net::*card*)))))
+(sleep 1.6)
+(check nil (clara.net::card-address clara.net::*card*))
 (setf (network-renewals *network*) nil)
 (check (format nil "net: this machine is 10.0.2.15 on its network, 10.0.2.2 is the way out, 10.0.2.2 and 8.8.8.8 know names~%")
        (said-by #'clara.net:up))
@@ -8806,6 +8908,83 @@
   (clara.net::disconnect connection))
 (check nil (clara.net::card-connections clara.net::*card*))
 
+;; A machine that is told, with the right number, that the other side
+;; cannot be reached while its connection is open is told nothing that
+;; ends the connection: such a word ends a beginning, and no more.
+(new-network)
+(said-by #'clara.net:up)
+(let* ((connection (clara.net::begin clara.net::*card* #x0a000202 9 0)) (memory (clara.unsafe:allocate-memory 1))
+       (first (clara.net::connection-first connection)) (port (clara.net::connection-port connection)))
+  (control-to-machine *network* #x0a000202 #x0a00020f 3 1 0
+                      (list #x45 0 0 40 0 0 #x40 0 64 6 0 0 10 0 2 15 10 0 2 2)
+                      (number-bytes port 2) (number-bytes 9 2) (number-bytes first 4))
+  (sleep 0.1)
+  (check :open (clara.net::connection-state connection))
+  (clara.unsafe:string-memory "still there" memory)
+  (clara.net::say-bytes connection memory 11)
+  (check t (equalp (network-sunk *network*) (octets "still there")))
+  ;; The other side says that it has bytes which this machine never sent: that is believed of nobody.
+  (let ((served (car (network-connections *network*))))
+    (setf (network-lose-request *network*) 1000)
+    (clara.unsafe:string-memory "kept until it is heard of" memory)
+    (let ((thread (clara:make-thread (lambda () (ignore-errors (clara.net::say-bytes connection memory 25))))))
+      (check t (eventually (lambda () (= 25 (clara.net::connection-out-held connection)))))
+      (setf (served-theirs served) (ldb (byte 32 0) (+ (served-theirs served) 5000)))
+      (segment-to-machine *network* served (+ (served-first served) 1) #x10 nil)
+      (setf (served-theirs served) (ldb (byte 32 0) (- (served-theirs served) 5000)))
+      (sleep 0.1)
+      (check 25 (clara.net::connection-out-held connection))
+      (setf (network-lose-request *network*) 0)
+      (check t (eventually (lambda () (not (clara:thread-alive-p thread)))))))
+  (check t (equalp (network-sunk *network*) (octets "still therekept until it is heard of")))
+  (setf (network-sunk *network*) (octets "still there"))
+  ;; The numbers that tell this connection from another are from the device that makes numbers which
+  ;; nobody can guess: it was asked for the number that the bytes are counted from, and for the port.
+  (check t (>= (vdev-asked *numbers*) 2))
+  (clara.unsafe:free-memory memory 1)
+  (clara.net::disconnect connection))
+;; A connection that had nothing to say for longer than patience is, and then says something, is as good
+;; as it was: how long the other side has been quiet counts from when there was something for it to answer.
+(let* ((clara.net:*patience* 200) (connection (clara.net::begin clara.net::*card* #x0a000202 9 0))
+       (memory (clara.unsafe:allocate-memory 1)))
+  (sleep 0.5)
+  (clara.unsafe:string-memory ", and later" memory)
+  (clara.net::say-bytes connection memory 11)
+  (check '(:open t) (list (clara.net::connection-state connection) (equalp (network-sunk *network*) (octets "still there, and later"))))
+  (clara.unsafe:free-memory memory 1)
+  (clara.net::disconnect connection))
+(check t (eventually (lambda () (null (clara.net::card-connections clara.net::*card*)))))
+;; Ten pieces go out before the other side has said anything, and no more; and when it goes on saying
+;; nothing, the machine waits twice as long each time before it sends the first of them again.
+(new-network :lose-request 1000)
+(said-by #'clara.net:up)
+(let* ((clara.net:*again* 40) (clara.net:*patience* 1500) (connection (clara.net::begin clara.net::*card* #x0a000202 9 0))
+       (memory (clara.unsafe:allocate-memory 13)))
+  (clara.unsafe:string-memory (subseq *long* 0 50000) memory)
+  (let ((thread (clara:make-thread (lambda () (ignore-errors (clara.net::say-bytes connection memory 50000))))))
+    (sleep 0.7)
+    (check '(14000 t t) (list (network-most-ahead *network*) (>= (clara.net::connection-wait connection) 320)
+                              (< (network-seen *network*) 20)))
+    (clara.net::disconnect connection)
+    (check t (eventually (lambda () (not (clara:thread-alive-p thread))))))
+  (clara.unsafe:free-memory memory 13))
+;; A piece that is lost in the middle goes out again as soon as the other side has said three times that
+;; it lacks it, and when the pieces after it are lost too, each as soon as the one before it has arrived:
+;; neither waits the second that silence would take.
+(dolist (lost '((20) (20 21 22)))
+  (let ((begun (get-internal-real-time)))
+    (check (list lost t t) (list lost (sent-whole 200000 :lose-pieces lost)
+                                 (< (- (get-internal-real-time) begun) (* 0.9 internal-time-units-per-second))))))
+;; The word that this side is done is lost on the way: it is said again, until the other side has it.
+(let ((clara.net:*again* 50))
+  (check '(t t t) (list (sent-whole 3000 :lose-end 2) (= 2 (network-saw *network* :end-lost))
+                        (and (eventually (lambda () (plusp (network-saw *network* :ended)))) t))))
+;; The beginning of a connection is answered first by somebody who gives the connection up without
+;; knowing its number: that is nobody's word, and the connection begins all the same.
+(new-network :files (files) :false-reset t)
+(said-by #'clara.net:up)
+(check "hello from the made-up network" (fetched "http://10.0.2.2/hello.txt"))
+
 ;;; A machine that listens: the connections that other machines open to a
 ;;; port of the machine's are taken there, and each is handed to a
 ;;; function, as a stream of lines, in a thread of its own. A connection
@@ -8856,9 +9035,11 @@
     (let ((four (call-machine 7 :say (format nil "four~%") :end t)))
       (check t (done-p four))
       (check (format nil "FOUR~%") (call-text four)))
-    ;; When no more are to be taken, the one that is still open is over, and the next is told that there is none.
-    (check t (clara.net:stop-serving 7))
-    (check t (done-p two))
+    ;; When no more are to be taken, the one that is still open is over, at once and not when its function has
+    ;; waited in vain for a line, and the next is told that there is none.
+    (let ((begun (get-internal-real-time)))
+      (check t (clara.net:stop-serving 7))
+      (check '(t t) (list (done-p two) (< (- (get-internal-real-time) begun) internal-time-units-per-second))))
     (setf (call-end two) t)
     (let ((five (call-machine 7 :say "x")))
       (check t (eventually (lambda () (eq (call-state five) :refused)))))
@@ -8908,6 +9089,35 @@
   (let ((call (call-machine 9000 :say *lines* :end t)))
     (check t (done-p call))
     (check (format nil "4000 lines, ~D characters~%" (- (length *lines*) 4000)) (call-text call)))
+  ;; The same when pieces of it come in the wrong order, and when pieces are lost and come again later:
+  ;; what came early is kept behind the gap, and is still where it belongs after the machine has read
+  ;; everything in front of the gap and made room there.
+  (let ((call (call-machine 9000 :say *lines* :end t :swap (loop for i from 3 below 320 by 7 collect i))))
+    (check t (done-p call))
+    (check (format nil "4000 lines, ~D characters~%" (- (length *lines*) 4000)) (call-text call)))
+  (let ((call (call-machine 9000 :say *lines* :end t :drop (list 2 40 41 200))))
+    (check t (done-p call))
+    (check (format nil "4000 lines, ~D characters~%" (- (length *lines*) 4000)) (call-text call)))
+  ;; No piece of what the machine says is longer than the other side said that it takes, or than 536
+  ;; bytes when it did not say: the made-up network fails the run when one is.
+  (clara.net:serve 9005 (lambda (stream) (read-line stream) (write-string (subseq *long* 0 20000) stream)))
+  (dolist (longest '(500 nil))
+    (let ((call (call-machine 9005 :say (format nil "go~%") :longest longest)))
+      (check t (done-p call))
+      (check (list longest t) (list longest (string= (call-text call) (subseq *long* 0 20000))))
+      (setf (call-end call) t)))
+  ;; A function that goes on writing to another side that has given the connection up ends in that.
+  (clara.net:serve 9006 (lambda (stream)
+                          (read-line stream)
+                          (loop
+                            (write-line "more" stream)
+                            (clara:wait-event (clara:make-event) 20))))
+  (let ((call (call-machine 9006 :say (format nil "go~%"))))
+    (check t (eventually (lambda () (plusp (length (call-got call))))))
+    (setf (call-reset call) t)
+    (check t (eventually (lambda () (equal (fourth (assoc 9006 (clara.net:serving))) "10.0.2.2 has given the connection up")))))
+  (clara.net:stop-serving 9005)
+  (clara.net:stop-serving 9006)
   (clara.net:serve 9001 (lambda (stream) (read-line stream) (write-string *long* stream)))
   (dolist (lose '(nil (0) (3 4 5 30) (100)))
     (let ((call (call-machine 9001 :say (format nil "go~%") :lose lose)))
@@ -8957,8 +9167,16 @@
   (check t (settled pages)))
 
 ;; The machine reaches itself, at the address that it has and at
-;; 127.0.0.1, and nothing of that goes onto the wire.
+;; 127.0.0.1, and nothing of that goes onto the wire. What comes from the
+;; wire for 127.0.0.1 is nobody's, also while the machine has no address
+;; yet and takes what comes for any: here it would be told that there is
+;; no such connection.
 (new-network)
+(let ((segment (bytes-of (list 0 80 #xc0 #x01) (number-bytes 1000 4) (number-bytes 2000 4) (list #x50 #x10 #xff #xff 0 0 0 0))))
+  (setf (be segment 16 2) (logxor #xffff (wire-sum segment 0 20 (around-sum #x0a000202 #x7f000001 6 20))))
+  (packet-to-machine *network* #x0a000202 #x7f000001 6 segment)
+  (sleep 0.1)
+  (check '(0 0) (list (network-saw *network* :given-up) (clara.net::card-dropped clara.net::*card*))))
 (said-by #'clara.net:up)
 (let ((pages (clara.host:allocated-pages)) (heard (length (network-heard *network*))))
   (clara.net:serve 7 'shout)
@@ -9050,6 +9268,7 @@
        (mapcar #'clara.net::text-address
                '(":1:2:3:4:5:6:7" "1:2:3:4:5:6:7:" "1::2::3" "1:2:3:4:5:6:7:8:9" "12345::" "g::" ":::" "1:2" "" ":" "1:2:3:4:5:6:7"
                  "::ffff:10.0.2.2")))
+(check '(nil nil) (mapcar #'clara.net::text-address '(":1::2" "1::2:")))
 ;; In the address of something on a web server, an address of IPv6 stands between brackets.
 (check '(("fec0::2" 80 "/" nil) ("::1" 8443 "/x" t) ("fec0::2" 8000 "/a:b" nil))
        (mapcar (lambda (address) (multiple-value-list (clara.net::parse-address address)))
@@ -9069,10 +9288,12 @@
     (said-by #'clara.net:up)))
 
 (new-network :six t :files (files))
-(check (format nil "net: this machine is 10.0.2.15 on its network, 10.0.2.2 is the way out, 10.0.2.2 and 8.8.8.8 know names~%net: by IPv6 it is fec0::5054:ff:fe12:3456, fe80::2 is the way out, fec0::3 knows names~%")
+(check (format nil "net: this machine is 10.0.2.15 on its network, 10.0.2.2 is the way out, 10.0.2.2 and 8.8.8.8 know names~%net: by IPv6 it is fec0::5054:ff:fe12:3456, fe80::2 is the way out~%")
        (up-with-routers))
 (check '(("10.0.2.15" "fec0::5054:ff:fe12:3456" "fe80::5054:ff:fe12:3456") "10.0.2.15" 1 "")
        (list (clara.net:addresses) (clara.net:address) (network-saw *network* :routers-asked) (up-with-routers)))
+;; Who knows names by IPv6 is taken from the router's word as well, though the machine does not say so.
+(check '((#xfec0 0 0 0 0 0 0 3)) (clara.net::card-names6 clara.net::*card*))
 ;; Is a machine there? The router, by both its addresses, a machine of the network, one beyond it, which is
 ;; asked by way of the router, and the machine itself. Who has an address is asked of the neighbours, once.
 (check '(t t t t t t)
@@ -9092,6 +9313,28 @@
 (check "fec0::2 says that 2001:db8::7 cannot be reached" (condition-text (lambda () (clara.net:ping "2001:db8::7"))))
 (check '(:error "fec0::2 says that 2001:db8::7 cannot be reached") (fetched "http://[2001:db8::7]/hello.txt"))
 (setf (network-unreachable *network*) nil)
+;; What a router says counts when it comes from the router's own address on this wire, and from nobody who
+;; says it from further away; and what stands between the head of a packet and what it carries is passed over.
+(control-six-to-machine *network* '(#xfec0 0 0 0 0 0 0 2) (machine-six) 134 0 (+ (ash 64 24) 1800) 255 (number-bytes 0 8))
+;; A message whose checksum is wrong is no message, and a packet of UDP's without a checksum is none over
+;; IPv6: neither is answered.
+(let ((from '(#xfec0 0 0 0 0 0 0 2)) (to (machine-six '(#xfec0 0 0 0)))
+      (pongs (network-saw *network* :pong6)) (words (network-saw *network* :not-taken6)))
+  (frame-to-machine *network* #x86dd (list #x60 0 0 0) (number-bytes 11 2) (list 58 64) (six-bytes from) (six-bytes to)
+                    (list 128 0 #x12 #x34 #xbe #xef 0 6 9 8 7))
+  (frame-to-machine *network* #x86dd (list #x60 0 0 0) (number-bytes 10 2) (list 17 64) (six-bytes from) (six-bytes to)
+                    (list #x0f #xa0 0 9 0 10 0 0 104 105))
+  (sleep 0.1)
+  (check (list pongs words) (list (network-saw *network* :pong6) (network-saw *network* :not-taken6))))
+(let ((pongs (network-saw *network* :pong6))
+      (message (bytes-of (list 128 0 0 0 #xbe #xef 0 5 9 8 7))) (from '(#xfec0 0 0 0 0 0 0 2)) (to (machine-six '(#xfec0 0 0 0))))
+  (setf (be message 2 2) (logxor #xffff (wire-sum message 0 (length message) (+ (six-sum from) (six-sum to) 58 (length message)))))
+  (frame-to-machine *network* #x86dd (list #x60 0 0 0) (number-bytes (+ 8 (length message)) 2) (list 60 64)
+                    (six-bytes from) (six-bytes to) (list 58 0 1 4 0 0 0 0) message)
+  (check t (eventually (lambda () (> (network-saw *network* :pong6) pongs))))
+  (check '(:pong6 (#xbe #xef 0 5 9 8 7)) (find :pong6 (network-heard *network*) :key #'car)))
+(check '(((#xfe80 0 0 0 0 0 0 2)) "hello from the made-up network")
+       (list (mapcar #'car (clara.net::card-routers6 clara.net::*card*)) (fetched "http://[fec0::2]/moved")))
 ;; The machine tells a neighbour that asks who has an address of its own, with its card, and learns the
 ;; card of whoever asked; a question for another address, and one that somebody handed on, it does not answer.
 (flet ((ask (target &optional (hops 255))
@@ -9112,9 +9355,10 @@
   (check 2 (network-saw *network* :i-have6)))
 ;; It says that it is there when it is asked, and not when many are asked at once; and to a packet of
 ;; UDP's for a port where nobody listens it says that it was not taken, with the beginning of the packet.
-(control-six-to-machine *network* '(#xfec0 0 0 0 0 0 0 2) (machine-six '(#xfec0 0 0 0)) 128 0 #xbeef0007 64 (list 1 2 3 4 5))
-(check t (and (eventually (lambda () (plusp (network-saw *network* :pong6)))) t))
-(check '(:pong6 (#xbe #xef 0 7 1 2 3 4 5)) (find :pong6 (network-heard *network*) :key #'car))
+(let ((pongs (network-saw *network* :pong6)))
+  (control-six-to-machine *network* '(#xfec0 0 0 0 0 0 0 2) (machine-six '(#xfec0 0 0 0)) 128 0 #xbeef0007 64 (list 1 2 3 4 5))
+  (check t (and (eventually (lambda () (> (network-saw *network* :pong6) pongs))) t))
+  (check '(:pong6 (#xbe #xef 0 7 1 2 3 4 5)) (find :pong6 (network-heard *network*) :key #'car)))
 (control-six-to-machine *network* '(#xfec0 0 0 0 0 0 0 2) '(#xff02 0 0 0 0 0 0 1) 128 0 #xbeef0008 64 (list 1 2 3))
 (let ((*six* (cons (machine-six '(#xfec0 0 0 0)) '(#xfec0 0 0 0 0 0 0 2))))
   (datagram-to-machine *network* #x0a000202 #x0a00020f 4000 9 (list 104 105)))
@@ -9122,7 +9366,7 @@
 (let ((word (find :not-taken6 (network-heard *network*) :key #'car)))
   (check '(4 48 #x60 17 (#x0f #xa0 0 9))
          (list (second word) (length (third word)) (first (third word)) (nth 6 (third word)) (subseq (third word) 40 44))))
-(check '(1 nil) (list (network-saw *network* :pong6) (clara.net::card-trouble clara.net::*card*)))
+(check '(2 nil) (list (network-saw *network* :pong6) (clara.net::card-trouble clara.net::*card*)))
 ;; Names. The machine has addresses of both kinds, so it asks for both kinds of a name's, and goes by the
 ;; one of IPv4 first, since its own of IPv6 are good on its network only. A name that has an address of
 ;; IPv6 alone is reached by that; a name server is asked by IPv6 when that is its address.
@@ -9133,6 +9377,13 @@
 (check '((:name-kind 1 "releases.test") (:name-kind 28 "releases.test") (:name-kind 1 "six.test") (:name-kind 28 "six.test")
          (:name-kind 1 "nowhere.test") (:name-kind 28 "nowhere.test"))
        (reverse (remove :name-kind (network-heard *network*) :key #'car :test-not #'eq)))
+;; A name server that says nothing about the second kind of address does not take away what it said of
+;; the first.
+(setf (network-mute *network*) (list :names6)
+      (network-names *network*) (list (cons "half.answered.test" #x0a000208)))
+(let ((clara.net:*patience* 250) (clara.net:*again* 60))
+  (check "10.0.2.8" (clara.net:resolve "half.answered.test")))
+(setf (network-mute *network*) nil)
 (let ((clara.net:*name-server* "fec0::3") (asked (network-saw *network* :six)))
   (setf (network-names *network*) (list (cons "by.six.test" #x0a000207)))
   (check '("10.0.2.7" t) (list (clara.net:resolve "by.six.test") (> (network-saw *network* :six) asked))))
@@ -9246,7 +9497,7 @@
 ;; the network.
 (new-network :six t :mute (list :dhcp) :files (files) :names6 (list (cons "six.test" 2)))
 (let ((clara.net:*patience* 300) (clara.net:*again* 60))
-  (check (format nil "net: no DHCP server says which address this machine has on its network: this machine has no address of IPv4~%net: by IPv6 it is fec0::5054:ff:fe12:3456, fe80::2 is the way out, fec0::3 knows names~%")
+  (check (format nil "net: no DHCP server says which address this machine has on its network: this machine has no address of IPv4~%net: by IPv6 it is fec0::5054:ff:fe12:3456, fe80::2 is the way out~%")
          (up-with-routers))
   (let ((asked (network-saw *network* :dhcp)))
     (check '(("fec0::5054:ff:fe12:3456" "fe80::5054:ff:fe12:3456") "fec0::5054:ff:fe12:3456" "fec0::2")

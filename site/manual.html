@@ -701,7 +701,7 @@ home:     there is no window manager to open a window with: (clara.windows:start
 "52:54:00:12:34:56"
 &gt; (clara.net:address)
 net: this machine is 10.0.2.15 on its network, 10.0.2.2 is the way out, 10.0.2.3 knows names
-net: by IPv6 it is fec0::5054:ff:fe12:3456, fe80::2 is the way out, fec0::3 knows names
+net: by IPv6 it is fec0::5054:ff:fe12:3456, fe80::2 is the way out
 "10.0.2.15"</pre>
     <p><code>station</code> is the card's own address on the wire, which it has from the start. The machine's address on the network is another matter: it asks the network for one (DHCP) the first time that something wants the network, and says what it was told. A machine that fetches nothing sends nothing. The second line is its address of the other kind, <a href="#ipv6">IPv6</a>, on a network that has a router for it.</p>
     <p>Under QEMU the network is one that QEMU makes up for the machine. The machine is 10.0.2.15 on it; 10.0.2.2 is the computer that QEMU runs on; and whatever that computer reaches, the machine reaches through it.</p>

@@ -2111,6 +2111,68 @@ M17c, IPv6, what it left:
 - The boots that fetch need the computer that runs them to have IPv6 at
   all, at least to itself (::1): the test's web server listens there for
   what the machine sends to fec0::2.
+- The line that the machine says about IPv6 names its address and the
+  way out, and not who knows names, though it has that from the router
+  too. Under QEMU the router names somebody only when the computer that
+  QEMU runs on has a name server of IPv6 itself, so with it the line was
+  one thing on the Mac and another in the Ubuntu container, and would
+  have been another on the Mac from one network to the next. The
+  container found it before CI did: every boot of `make test` was run
+  there before the first push.
+
+M17a to M17c, the three together, what checking them found:
+
+- What was broken on purpose: 134 mistakes in lisp/net.lisp and
+  lisp/tls.lisp, one at a time, each run through the host tests in a copy
+  of the tree. Eighteen got through the first time, and each is a test
+  now, or made one stricter: a name server that cannot say, after which
+  the next has to be asked at once and not a second later; the answer to
+  an earlier ping, which is no answer to this one; a server that says
+  that the machine may not keep its address, which has to count before
+  the time runs out by itself; the word that bytes have arrived which
+  were never sent; a beginning that is said again every second and not
+  after twice as long; the word that a machine cannot be reached, about
+  a packet that another machine sent; a name server that is silent about
+  addresses of IPv6, which must not cost the address of IPv4; a
+  connection that both sides have ended, which has to be forgotten then
+  and not when patience is over; threads that `stop-serving` has to
+  stop, and not leave to their own patience; a side that says how long
+  a piece it takes, to a machine that had not begun the connection; a
+  function that goes on writing to a side that has given up; a router's
+  word from an address that is not on this wire; a message of ICMPv6's
+  whose checksum is wrong, and a packet of UDP's over IPv6 that has
+  none; two ways of writing an address with one colon too many; and, two
+  of them, what had come early and waits behind a gap while the machine
+  makes room in front of it, which needed a network that loses pieces on
+  their way to the machine before it showed. Two more were planted after
+  that and change nothing that a test can see: whether a thread other
+  than the card's goes by the card's note of where the packet came from
+  that it is looking at, now that the note is read once (below); and
+  the order in which a machine that begins to speak IPv6 writes down
+  that it asked the routers and that it has an address, which the
+  card's thread could read in between, a thousandth of a second wide.
+- The network that the tests make up threw away what came early, which
+  no machine does: so every piece after a lost one had to be sent again,
+  the machine's quick way of sending a lost piece again had nothing to
+  be quick for, and a lost piece cost a second. It keeps what comes
+  early now, as the machine itself does, and a lost piece costs a tenth
+  of that; two tests hold the machine to it.
+- A fault that a test found, one run in several, and that was in the
+  network of M15d as well: whoever sends a packet looked whether the
+  card's thread had a note of where an answer to this address goes,
+  read the note a second time to compare, and a third time to take the
+  card from it, and by then the card's thread could have taken the note
+  away. The packet then went to a card's address that was none, which is
+  an error and no packet. It showed when a file had moved: the answer
+  that says so and the second connection are to the same address at the
+  same moment. The note is read once now, and by the card's thread only.
+- One run of the whole of `make test` in the container stood still in
+  the boot that fetches, while eight runs of the host tests had the Mac
+  to themselves; the same boot alone, and the whole of it again on a
+  quiet computer, passed. What it was is not known: when CI shows it,
+  the serial log of that boot is in the run's artifact.
+
+M15e, shutting down, what it left:
 
 M15e, shutting down, what it left:
 
