@@ -726,6 +726,30 @@ Infrastructure, done:
   And a build no longer goes wrong when its sources go back to what they
   were at an earlier build (below).
 
+- **MAKE-STRING** (2026-11-20, version 0.0.32). `(make-string length
+  :initial-element character)` makes a new string of that many
+  characters, which `(setf (char string index) character)` then changes a
+  place at a time. Until now a string of a length had to be written by a
+  loop into a string stream, or put together with CONCATENATE and cut
+  with SUBSEQ, as the editor does for its blanks. It is one object of the
+  size that it is to have, made by a function in C, `%make-string`, under
+  a definition in lisp/boot.lisp, the way MAKE-ARRAY stands on
+  `%make-vector`. With no `:initial-element` every place holds the
+  character of code 0, which is what SBCL fills a string with, so that a
+  form gives the same string on the machine and under the host tests.
+  `:element-type` is refused: there is one kind of character. The
+  evaluator's self-test has five texts for it, which every boot from the
+  files also compiles and translates, and the manual shows it at the
+  prompt, where `make test` types it. Mistakes that were planted, one at
+  a time, and that a boot noticed by a text that gave another answer:
+  the last place left as it was, every place filled with a letter
+  whatever was asked for, anything taken for a character, no limit to
+  the length, a function in C of one argument, a string of spaces when
+  nothing is said, and the name left out of what boot.lisp exports.
+  Without the look at whether the heap has the room, the machine ran out
+  of memory at the text that asks for four thousand million characters,
+  which is a panic.
+
 Infrastructure, for sessions with budget left over:
 
 - Read the UART base from ACPI (SPCR or DBG2) instead of assuming
@@ -2740,11 +2764,15 @@ No milestone yet, to be picked up when they start to matter:
   rest). What is simply not there: hash tables, which DESIGN.md counts in
   the first subset; `(defun (setf f) ...)`, `macro-function`,
   `symbol-macrolet`, `progv`; `typep`, `typecase`, `check-type`; `elt`,
-  `coerce`, `destructuring-bind`, and the functions on strings beyond
-  `string=`, `string-equal`, `string-lessp`, `string-upcase`,
-  `string-downcase` and `subseq`; those two and `char-upcase` and
+  `coerce`, and the functions on strings beyond `make-string`,
+  `string=`, `string-equal`, `string-lessp`, `subseq`, `string-upcase`
+  and `string-downcase`; those two and `char-upcase` and
   `char-downcase` know the letters of ASCII, and take no `:start` and
-  `:end`.
+  `:end`. MAKE-STRING takes `:initial-element` and
+  refuses `:element-type`, and MAKE-ARRAY a length and
+  `:initial-element`; what is wrong with an argument of either is said
+  under the name of its function in C, `%MAKE-STRING` and `%MAKE-VECTOR`,
+  and a length that is no length is called an index there.
   FORMAT knows `~A ~S ~D ~%` and `~~`. The functions on sequences take
   lists only, SUBSEQ strings as well, and of their keyword arguments
   `:test`, with `:key` for MEMBER and ASSOC and `:initial-value` for

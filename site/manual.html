@@ -279,6 +279,8 @@ error: 7 divided by 2 is not an integer, and there are no ratios yet
 "one and \"two\" make 3"
 &gt; (concatenate 'string "clara" "." "image")
 "clara.image"
+&gt; (let ((line (make-string 5 :initial-element #\-))) (setf (char line 2) #\+) line)
+"--+--"
 &gt; (list (char "Clara" 0) (char-code #\C) (code-char 955) (length "four"))
 (#\C 67 #\λ 4)
 &gt; (sort (list "pci" "Boot" "console" "FAT") #'string-lessp)
@@ -291,7 +293,7 @@ error: 7 divided by 2 is not an integer, and there are no ratios yet
 (1 2 (3 4 5 6))
 &gt; (destructuring-bind (name (x y) &amp;key (colour 'red)) '(dot (3 4)) (list name x y colour))
 (DOT 3 4 RED)</pre>
-    <p>A number is an integer of 63 bits, between -4611686018427387904 and 4611686018427387903. A result outside that is an error and not a wrong number, and so is a division that does not come out even: there are no larger integers, no fractions and no decimal numbers yet. A character is a Unicode code point, and a string holds any of them. <code>destructuring-bind</code> takes a list apart into variables, by a list of parameters like a macro's: lists within the list, and <code>&amp;optional</code>, <code>&amp;rest</code> and <code>&amp;key</code>.</p>
+    <p>A number is an integer of 63 bits, between -4611686018427387904 and 4611686018427387903. A result outside that is an error and not a wrong number, and so is a division that does not come out even: there are no larger integers, no fractions and no decimal numbers yet. A character is a Unicode code point, and a string holds any of them. <code>make-string</code> makes a new string of a length, with the character that <code>:initial-element</code> names in every place, or the character of code 0 when none is named, and <code>(setf (char string index) character)</code> changes one place of a string. <code>destructuring-bind</code> takes a list apart into variables, by a list of parameters like a macro's: lists within the list, and <code>&amp;optional</code>, <code>&amp;rest</code> and <code>&amp;key</code>.</p>
 
     <h3 id="structures">Structures and packages</h3>
 <pre class="session">&gt; (defstruct point x (y 0))
@@ -339,6 +341,7 @@ error: the stack is full: the forms are nested too deep, or a function calls its
       <li><code>loop</code> is the plain one, a body that is repeated until a <code>return</code>. Its keywords, <code>for</code> and <code>collect</code> and the rest, are not there. <code>do</code>, <code>dolist</code> and <code>dotimes</code> are.</li>
       <li><code>format</code> knows <code>~A</code>, <code>~S</code>, <code>~D</code>, <code>~%</code> and <code>~~</code>.</li>
       <li>The functions on sequences, <code>mapcar</code>, <code>find</code>, <code>remove-if</code>, <code>sort</code> and the others, take lists. <code>length</code>, <code>subseq</code> and <code>concatenate</code> take strings as well. Of their keyword arguments there is <code>:test</code>, with <code>:key</code> for <code>member</code>, <code>assoc</code> and <code>sort</code>, and <code>:initial-value</code> for <code>reduce</code>.</li>
+      <li><code>make-string</code> takes <code>:initial-element</code> and not <code>:element-type</code>: there is one kind of character, and one kind of string.</li>
       <li><code>defstruct</code> takes a name and slots, and none of its options.</li>
       <li>Conditions are handled by <code>handler-case</code>. There is no <code>handler-bind</code>, no restart and no debugger.</li>
       <li>There are no hash tables, no classes and generic functions, and no <code>typep</code>.</li>
@@ -1314,7 +1317,7 @@ error: nothing is mapped at #x0</pre>
     <p class="names"><code>cons</code> <code>car</code> <code>cdr</code> <code>caar</code> <code>cadr</code> <code>cdar</code> <code>cddr</code> <code>caddr</code> <code>cdddr</code> <code>cadddr</code> <code>first</code> <code>second</code> <code>third</code> <code>fourth</code> <code>rest</code> <code>last</code> <code>nth</code> <code>nthcdr</code> <code>list</code> <code>list*</code> <code>append</code> <code>reverse</code> <code>nreverse</code> <code>copy-list</code> <code>length</code> <code>endp</code> <code>null</code> <code>consp</code> <code>atom</code> <code>listp</code> <code>rplaca</code> <code>rplacd</code> <code>member</code> <code>assoc</code> <code>getf</code> <code>mapcar</code> <code>mapc</code> <code>mapcan</code> <code>reduce</code> <code>remove</code> <code>remove-if</code> <code>remove-if-not</code> <code>find</code> <code>find-if</code> <code>position</code> <code>every</code> <code>some</code> <code>sort</code> <code>eq</code> <code>eql</code> <code>equal</code></p>
 
     <h3>Characters, strings and vectors</h3>
-    <p class="names"><code>char</code> <code>schar</code> <code>char-code</code> <code>code-char</code> <code>char=</code> <code>char&lt;</code> <code>char-upcase</code> <code>char-downcase</code> <code>char-code-limit</code> <code>characterp</code> <code>string</code> <code>string=</code> <code>string-equal</code> <code>string-lessp</code> <code>string-upcase</code> <code>string-downcase</code> <code>stringp</code> <code>concatenate</code> <code>subseq</code> <code>vector</code> <code>make-array</code> <code>aref</code> <code>svref</code> <code>vectorp</code></p>
+    <p class="names"><code>char</code> <code>schar</code> <code>char-code</code> <code>code-char</code> <code>char=</code> <code>char&lt;</code> <code>char-upcase</code> <code>char-downcase</code> <code>char-code-limit</code> <code>characterp</code> <code>string</code> <code>string=</code> <code>string-equal</code> <code>string-lessp</code> <code>string-upcase</code> <code>string-downcase</code> <code>stringp</code> <code>make-string</code> <code>concatenate</code> <code>subseq</code> <code>vector</code> <code>make-array</code> <code>aref</code> <code>svref</code> <code>vectorp</code></p>
 
     <h3>Symbols and packages</h3>
     <p class="names"><code>t</code> <code>nil</code> <code>symbol-name</code> <code>symbol-package</code> <code>symbol-value</code> <code>symbol-plist</code> <code>get</code> <code>set</code> <code>boundp</code> <code>symbolp</code> <code>keywordp</code> <code>make-symbol</code> <code>gensym</code> <code>*gensym-counter*</code> <code>intern</code> <code>find-symbol</code> <code>export</code> <code>find-package</code> <code>package-name</code> <code>packagep</code> <code>make-package</code> <code>delete-package</code> <code>list-all-packages</code> <code>do-symbols</code> <code>in-package</code> <code>*package*</code></p>

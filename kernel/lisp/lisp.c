@@ -945,6 +945,21 @@ static const struct {
       "(\"HELLO, WORLD!\" \"hello\" #\\A #\\a \"ABC\" \"q\" \"CAF\xc3\xa9\")" },
     { "(mapcar #'string-upcase (list \"Hello\" \"world!\"))", "(\"HELLO\" \"WORLD!\")" },
     { "(string-upcase 5)", "error: STRING-UPCASE wants a string, a symbol or a character, and 5 is not one" },
+    /* a string of so many characters, all the same: the character of code 0 when none is named */
+    { "(list (make-string 5 :initial-element #\\a) (make-string 0) (length (make-string 3))"
+      " (char-code (char (make-string 2) 1)) (make-string 2 :initial-element #\\\xce\xbb))",
+      "(\"aaaaa\" \"\" 3 0 \"\xce\xbb\xce\xbb\")" },
+    { "(let ((s (make-string 2 :initial-element #\\-)) (r (make-string 2 :initial-element #\\-)))"
+      " (setf (char s 0) #\\x) (list s r))",
+      "(\"x-\" \"--\")" },
+    { "(make-string 2 :initial-element 5)", "error: %MAKE-STRING wants a character, and 5 is not one" },
+    { "(list (handler-case (make-string -1) (error (c) (princ-to-string c)))"
+      " (handler-case (make-string 4294967296) (error () 'refused))"
+      " (handler-case (make-string 4000000000) (storage-condition (c) (princ-to-string c))))",
+      "(\"%MAKE-STRING wants an index that is inside what it is given, and -1 is not one\" REFUSED"
+      " \"the heap is full: there is no room for an object that large\")" },
+    { "(make-string 2 :element-type 'character)",
+      "error: #<FUNCTION MAKE-STRING> does not take the keyword argument :ELEMENT-TYPE" },
     /* what GENSYM counts with is a variable */
     { "(let ((*gensym-counter* 41)) (list (symbol-name (gensym)) (symbol-name (gensym)) *gensym-counter*))",
       "(\"G41\" \"G42\" 43)" },
