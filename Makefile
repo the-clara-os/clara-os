@@ -192,7 +192,7 @@ host-test:
 # for every collection to go through. tools/stress.txt
 # then has the collector do the same for a few forms at the prompt, one of
 # them typed on the keyboard. Where AArch64 is emulated, on CI, that boot
-# takes minutes, so it is given ten. A world that was saved is compiled
+# takes minutes, so it is given fifteen. A world that was saved is compiled
 # through and through, and the second boot of each machine has to say so:
 # none of its functions is left for the evaluator to walk, and the machine
 # runs the three that the first session compiled for it, and no other: the
@@ -243,7 +243,7 @@ test: all host-test release-test $(BUILD)/system-other/stamp $(BUILD)/system-bro
 	NAME=manual-again DISK=$(BUILD)/boot-manual.img WORK=$(BUILD)/work-manual.img SESSION=$(BUILD)/manual-again.txt \
 		EXPECT='^lisp: the heap is an image;;^lisp:   of the functions .* and 0 are walked' \
 		tools/boottest.sh aarch64 -machine gic-version=3
-	NAME=aarch64-stress SESSION=tools/stress.txt TIMEOUT=600 DISK=$(BUILD)/boot-aarch64.img SPOIL=1 \
+	NAME=aarch64-stress SESSION=tools/stress.txt TIMEOUT=900 DISK=$(BUILD)/boot-aarch64.img SPOIL=1 \
 		EXPECT='^lisp: clara.image is not resumed: it is not what was saved;;^lisp: a collection at every safe point: boot.lisp once more in [0-9]\{4,\}, [0-9]* texts once more in [0-9]\{5,\};;^lisp: a collection at the safe points of compiled code, [0-9]* to a text: [0-9]* texts once more in [0-9]\{4,\};;^lisp: a collection at the safe points of code for the processor, [0-9]* to a text: [0-9]* texts in [0-9]\{3,\}' \
 		tools/boottest.sh aarch64 -machine gic-version=3
 
@@ -276,13 +276,17 @@ release: all
 # public half of that key is the one to go by, it has to lay the build out
 # as a release that names this system. Left to read the half that the
 # system has, it has to refuse the key for not being that one, and to lay
-# nothing out. `make test` begins with it.
+# nothing out. `make test` begins with it. The make that it calls has
+# another name here than the one that make knows its own by: a line with
+# that name in it is run even when make was asked to run nothing and to
+# say what it would (-n), and what these lines look at is not there then.
+AGAIN = $(MAKE) --no-print-directory
 release-test: all
 	rm -rf $(BUILD)/try-key $(BUILD)/published $(BUILD)/refused
 	python3 -I tools/release.py key $(BUILD)/try-key > $(BUILD)/try-key.public
-	$(MAKE) --no-print-directory release KEY=$(BUILD)/try-key PUBLIC=$$(cat $(BUILD)/try-key.public) RELEASES=$(BUILD)/published
+	$(AGAIN) release KEY=$(BUILD)/try-key PUBLIC=$$(cat $(BUILD)/try-key.public) RELEASES=$(BUILD)/published
 	[ "$$(cat $(BUILD)/published/latest)" = "$(SYSTEM)" ]
-	if $(MAKE) --no-print-directory release KEY=$(BUILD)/try-key RELEASES=$(BUILD)/refused > $(BUILD)/release-refused.log 2>&1 \
+	if $(AGAIN) release KEY=$(BUILD)/try-key RELEASES=$(BUILD)/refused > $(BUILD)/release-refused.log 2>&1 \
 		|| ! grep -q "and not \"$(PUBLIC)\", which is the one to hold it against" $(BUILD)/release-refused.log \
 		|| [ -e $(BUILD)/refused ]; then \
 		cat $(BUILD)/release-refused.log; \

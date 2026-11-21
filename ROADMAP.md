@@ -2191,6 +2191,20 @@ ClaraOS, published, what it left:
   word for what the tool refuses anyway. The workflow file itself is
   held against nothing: a step that is left out of it is not noticed
   before a merge.
+- What it cost CI, on its first green run: 17m09s for the job, the boot
+  that fetches 54 s, and the stress boot 431 s of the 600 that it had.
+  Publishing added nothing to that boot: the counts of its collections
+  are within a hundredth of those of the run before, which was a commit
+  of words alone and took 327 s, 14m39s for the job; and the first green
+  run of M15f, earlier that evening, took 231 s, on a machine that was
+  plainly a faster one. So the same work takes between 231 s and 431 s
+  there, by the machine that a run is given, and what M15f's files cost
+  that boot is now known: on a machine like the ones before it, 431 s
+  where M15d's took 382. A machine a third slower than this run's would
+  have run into the limit with nothing wrong. The stress boot has 900 s
+  now, and the job 30 minutes where it had 25. That buys time and
+  nothing else: the session is still the thing to make cheaper before
+  more goes into the world.
 - UTM: not tried, as before.
 
 No milestone yet, to be picked up when they start to matter:
