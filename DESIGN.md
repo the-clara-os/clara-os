@@ -1840,6 +1840,46 @@ architectures (kernel/vm.c).
   not put into the system by the way; ROADMAP.md has what the other half
   would take.
 
+## IPv6 (decided in M17c, 2026-11-21)
+
+- An address is a number when it is one of IPv4's and a list of eight
+  numbers of sixteen bits when it is one of IPv6's. The language has no
+  number of 128 bits, and a list is what it compares (EQUAL), prints and
+  takes apart without help. Everything above the packets takes an
+  address as it comes: UDP, TCP, the name servers, HTTP, TLS and the
+  ports that take connections are written once, and only what puts a
+  packet together or takes one apart asks which kind it has.
+- The machine speaks IPv6 unless it is told not to (`clara.net:*ipv6*`).
+  That costs a network that has none of it one question to the routers,
+  when something first wants the network, and up to a second of waiting
+  for an answer that does not come. It was that or a machine that has to
+  be told which networks have routers.
+- It makes its addresses itself (RFC 4862): the one that goes no further
+  than its own network, and one on each network that a router names for
+  that, each with its card's address as the second half. It does not ask
+  first whether another machine has the same address, and it makes no
+  address that hides the card; ROADMAP.md says what that costs.
+- What neighbours and routers tell each other is believed only when
+  nobody handed it on, which the number 255 says that a packet has left
+  of the times it may be handed on: that is all that keeps a machine
+  elsewhere from naming itself this network's router (RFC 4861).
+- Which address of a name comes first is one rule: IPv6 when the
+  machine's own address of that kind is one of the Internet's, IPv4
+  otherwise. Under QEMU the machine's addresses of IPv6 mean something
+  on a network that QEMU makes up, and whether the Internet is reached
+  through them depends on the computer that QEMU runs on; the rule keeps
+  a machine there on the road that it has always taken. When nothing
+  takes a connection at the first address, the next is tried.
+- A network with IPv6 alone is good enough: a DHCP server that does not
+  answer is said once, and is not asked again for a minute.
+- The network that the tests make up serves IPv6 without a second web
+  server, name server or caller. What the machine sends by IPv6 is
+  turned into the same thing over IPv4 before the code that knows only
+  that looks at it, and what that code sends back is turned the other
+  way, with the checksums put right for the other addresses both times.
+  What only IPv6 has, a router's word, the neighbours' questions and
+  ICMPv6, is written there as itself.
+
 ## Shutting down (decided in M15e, 2026-11-20)
 
 - Shutting down is something the system does, and not something that is

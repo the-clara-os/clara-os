@@ -9,6 +9,9 @@
 ;;;;   ARP         which card has an address (RFC 826)
 ;;;;   IPv4        packets from one address to another, whole ones only (RFC 791)
 ;;;;   ICMP        what machines say about packets: that one did not arrive, and "are you there?" (RFC 792)
+;;;;   IPv6        the same packets with addresses of 128 bits (RFC 8200), and with them ICMPv6 (RFC 4443),
+;;;;               which is also how a machine finds its neighbours and its routers, and learns from the
+;;;;               routers which addresses it has (RFC 4861, RFC 4862)
 ;;;;   UDP         one packet and no promise (RFC 768), for the two below
 ;;;;   DHCP        asks the network which address this machine has, and for how long (RFC 2131)
 ;;;;   DNS         asks which address a name has (RFC 1035)
@@ -42,6 +45,12 @@
 ;;;; network, and not as it starts: a machine that fetches nothing sends
 ;;;; nothing.
 ;;;;
+;;;; An address is a number when it is one of IPv4's, and a list of eight
+;;;; numbers of sixteen bits when it is one of IPv6's: the language has no
+;;;; number of 128 bits. Whatever compares two addresses does it with
+;;;; EQUAL, and the protocols above the packets do not care which kind
+;;;; they are handed.
+;;;;
 ;;;; A connection is a stream to whoever wants one: lines are read from it
 ;;;; and text is written to it. CONNECT opens one to another machine. SERVE
 ;;;; has the machine take the connections that others open to one of its
@@ -52,9 +61,9 @@
 
 (defpackage "CLARA.NET"
   (:use "COMMON-LISP")
-  (:export "START" "UP" "ADDRESS" "STATION" "RESOLVE" "PING" "FETCH" "FETCH-TEXT"
+  (:export "START" "UP" "ADDRESS" "ADDRESSES" "STATION" "RESOLVE" "PING" "FETCH" "FETCH-TEXT"
            "CONNECT" "WITH-CONNECTION" "SERVE" "STOP-SERVING" "SERVING"
-           "*PATIENCE*" "*AGAIN*" "*NAME-SERVER*" "*NAME-PORT*" "*SECURE*"))
+           "*PATIENCE*" "*AGAIN*" "*NAME-SERVER*" "*NAME-PORT*" "*IPV6*" "*SECURE*"))
 (in-package "CLARA.NET")
 
 (defstruct card
@@ -72,6 +81,15 @@
   server lease leased   ; who gave the machine its address, for how many milliseconds, and when
   question offer given  ; an exchange with a DHCP server that is under way: its number, what was offered, what was given
   renewed               ; when the server was last asked whether the machine may keep its address
+  tried                 ; when no DHCP server answered, the last time
+  addresses6            ; ((address . until) ...): the addresses of IPv6 that the machine has, the one that goes no
+                        ; further than its own network first, which is its own for good (NIL); the others for a time
+  routers6              ; ((address . until) ...): the ways out for IPv6, by what the routers said of themselves
+  prefixes6             ; ((numbers . until) ...): which addresses are on this network: each by its first four numbers
+  names6                ; who knows names, by addresses of IPv6
+  asked6 times6         ; when the routers were last asked to say what the network is, and how many times they were
+  heard6                ; a router has said so
+  said6                 ; and it was said what the machine learned from that
   neighbours            ; ((address . station) ...): who has which address on this network
   answering             ; (address . station): who sent the packet that is being looked at, and from which card
   packet                ; (place . bytes): where that packet begins, and how many bytes its head is and eight more
@@ -149,6 +167,8 @@
 ;; connection, which that thread may be waiting for.
 (defvar *waits* t)
 (defvar *out-room* 65536)    ; how many bytes a connection keeps of what the other side has not said that it has
+(defvar *ipv6* t)            ; does the machine speak IPv6 at all? NIL, before something first wants the network, and it does not
+(defvar *router-wait* 1000)  ; how many milliseconds the routers of the network are given to say what the network is
 (defvar *doors* nil)         ; the ports at which connections are taken: they are the world's, and outlast a card
 (defvar *doors-lock* (clara:make-lock "doors"))
 
@@ -193,10 +213,30 @@
       (return sum))
     (setq sum (+ (logand sum #xffff) (ash sum -16)))))
 
-;; What UDP and TCP add to their checksums of the packet around them: both
-;; addresses, the protocol, and how long their own part is.
+;; An address of IPv6 in memory, sixteen bytes, as its eight numbers; and
+;; the other way.
+(defun sixteen (at)
+  (let ((address nil))
+    (dotimes (i 8)
+      (setq address (cons (two (+ at (* 2 (- 7 i)))) address)))
+    address))
+
+(defun put-sixteen (at address)
+  (dolist (number address)
+    (put-two at number)
+    (setq at (+ at 2))))
+
+;; What an address adds to a checksum: its numbers of sixteen bits.
+(defun address-sum (address)
+  (if (consp address)
+      (reduce #'+ address)
+      (+ (ash address -16) (logand address #xffff))))
+
+;; What UDP and TCP add to their checksums of the packet around them, and
+;; ICMP over IPv6: both addresses, the protocol, and how long their own
+;; part is.
 (defun around (from to protocol bytes)
-  (+ (ash from -16) (logand from #xffff) (ash to -16) (logand to #xffff) protocol bytes))
+  (+ (address-sum from) (address-sum to) protocol bytes))
 
 (defun checksum (sum)
   (logxor #xffff (fold sum)))
@@ -221,9 +261,51 @@
 
 ;;; Addresses as text
 
+;; A number in base sixteen, in small letters.
+(defun hex-text (number)
+  (let ((digits "0123456789abcdef") (text ""))
+    (loop
+      (setq text (concatenate 'string (subseq digits (logand number 15) (1+ (logand number 15))) text)
+            number (ash number -4))
+      (when (= number 0)
+        (return text)))))
+
+;; An address of IPv6 as it is written (RFC 5952): its eight numbers in
+;; base sixteen with colons between them, and two colons in place of the
+;; longest run of numbers that are zero, the first such run when there are
+;; two, and none for a single zero.
+(defun six-text (address)
+  (let ((best nil) (longest 0) (start 0) (run 0) (i 0) (text ""))
+    (dolist (number address)
+      (cond ((= number 0)
+             (when (= run 0)
+               (setq start i))
+             (setq run (1+ run))
+             (when (> run longest)
+               (setq best start
+                     longest run)))
+            (t
+             (setq run 0)))
+      (setq i (1+ i)))
+    (when (< longest 2)
+      (setq best nil))
+    (setq i 0)
+    (dolist (number address)
+      (cond ((and best (= i best))
+             (setq text (concatenate 'string text "::")))
+            ((and best (< best i (+ best longest))))
+            (t
+             (setq text (concatenate 'string text
+                                     (if (or (= i 0) (char= (char text (1- (length text))) #\:)) "" ":")
+                                     (hex-text number)))))
+      (setq i (1+ i)))
+    text))
+
 (defun address-text (address)
-  (format nil "~D.~D.~D.~D" (logand (ash address -24) 255) (logand (ash address -16) 255)
-          (logand (ash address -8) 255) (logand address 255)))
+  (if (consp address)
+      (six-text address)
+      (format nil "~D.~D.~D.~D" (logand (ash address -24) 255) (logand (ash address -16) 255)
+              (logand (ash address -8) 255) (logand address 255))))
 
 (defun digit (character)
   (let ((code (char-code character)))
@@ -248,15 +330,63 @@
               start (1+ i))))
     (reverse (cons (subseq text start) found))))
 
-;; The address that "10.0.2.2" is, or NIL for a text that is none.
+;; The number that up to four digits of base sixteen are, or NIL.
+(defun hex-number (text)
+  (let ((number 0))
+    (and (< 0 (length text) 5)
+         (dotimes (i (length text) number)
+           (let ((digit (sixteenth (char-code (char text i)))))
+             (unless digit
+               (return nil))
+             (setq number (+ (* 16 number) digit)))))))
+
+;; The address of IPv6 that "fec0::2" is, or NIL for a text that is none:
+;; numbers in base sixteen with colons between them, eight of them, or
+;; fewer and two colons once, which stand for the zeroes that are missing.
+(defun text-six (text)
+  (let ((parts (pieces text #\:)) (gaps 0) (before nil) (behind nil))
+    (when (< (length parts) 3)
+      (return-from text-six nil))
+    ;; two colons at the beginning or at the end leave one empty part more than they mean, and one colon
+    ;; there is no address
+    (when (string= (car parts) "")
+      (unless (string= (cadr parts) "")
+        (return-from text-six nil))
+      (setq parts (cdr parts)))
+    (let ((back (reverse parts)))
+      (when (and (cdr back) (string= (car back) ""))
+        (unless (string= (cadr back) "")
+          (return-from text-six nil))
+        (setq parts (reverse (cdr back)))))
+    (dolist (part parts)
+      (if (string= part "")
+          (setq gaps (1+ gaps))
+          (let ((number (hex-number part)))
+            (unless number
+              (return-from text-six nil))
+            (if (= gaps 0)
+                (setq before (cons number before))
+                (setq behind (cons number behind))))))
+    (let ((numbers (+ (length before) (length behind))))
+      (cond ((= gaps 0)
+             (and (= numbers 8) (reverse before)))
+            ((and (= gaps 1) (< numbers 8))
+             (let ((address (reverse behind)))
+               (dotimes (i (- 8 numbers))
+                 (setq address (cons 0 address)))
+               (append (reverse before) address)))))))
+
+;; The address that "10.0.2.2" is, or "fec0::2", or NIL for a text that is
+;; neither.
 (defun text-address (text)
   (let ((parts (pieces text #\.)) (address 0))
-    (and (= (length parts) 4)
-         (dolist (part parts address)
-           (let ((number (number-of part)))
-             (unless (and number (< number 256))
-               (return nil))
-             (setq address (+ (* 256 address) number)))))))
+    (if (= (length parts) 4)
+        (dolist (part parts address)
+          (let ((number (number-of part)))
+            (unless (and number (< number 256))
+              (return nil))
+            (setq address (+ (* 256 address) number))))
+        (text-six text))))
 
 (defun station-text (station)
   (let ((digits "0123456789abcdef") (text ""))
@@ -319,7 +449,7 @@
 ;;; ARP: who has an address
 
 (defun learn (card address station)
-  (let ((known (assoc address (card-neighbours card))))
+  (let ((known (assoc address (card-neighbours card) :test #'equal)))
     (if known
         (rplacd known station)
         (setf (card-neighbours card) (cons (cons address station) (card-neighbours card))))))
@@ -376,10 +506,14 @@
 ;; asked, and the answer waited for; but not by somebody who may not wait
 ;; (*WAITS*), for whom that is an error, the question having gone out.
 (defun station-of (card address)
-  (cond ((= address #xffffffff)
+  (cond ((consp address)
+         (station-of-six card address))
+        ((= address #xffffffff)
          #xffffffffffff)
-        ((and (card-answering card) (= (car (card-answering card)) address))
+        ((and (card-answering card) (equal (car (card-answering card)) address))
          (cdr (card-answering card)))
+        ((null (card-address card))
+         (error "this machine has no address of IPv4, and ~A is one" (address-text address)))
         (t
          (let* ((next (cond ((or (null (card-mask card))
                                  (= (logand address (card-mask card)) (logand (card-address card) (card-mask card))))
@@ -400,11 +534,34 @@
 
 ;;; IPv4
 
-;; Is an address this machine's own: the one that the network gave it, or
-;; one of those by which every machine means itself (127.0.0.0/8)?
+;; Is an address this machine's own: the one that the network gave it, one
+;; of those that it has of IPv6, or one by which every machine means
+;; itself (127.0.0.0/8, and ::1)?
 (defun own-p (card address)
-  (or (and (card-address card) (= address (card-address card)))
-      (= (ash address -24) 127)))
+  (if (consp address)
+      (or (assoc address (card-addresses6 card) :test #'equal)
+          (equal address '(0 0 0 0 0 0 0 1)))
+      (or (and (card-address card) (= address (card-address card)))
+          (= (ash address -24) 127))))
+
+;; The address that this machine speaks from to an address: for one of
+;; IPv4's, the one that the network gave it; for one of IPv6's, the address
+;; itself when that is the machine's own, the one that goes no further
+;; than the network when the other does not either (fe80::/10, and what
+;; is for many at once, ff00::/8), and otherwise the first that a router
+;; gave it.
+(defun source-for (card to)
+  (cond ((not (consp to))
+         (or (card-address card) 0))
+        ((own-p card to)
+         to)
+        ((or (= (logand (car to) #xffc0) #xfe80) (>= (car to) #xff00))
+         (or (car (car (card-addresses6 card)))
+             (error "this machine does not speak IPv6, and ~A is an address of it" (address-text to))))
+        (t
+         (or (car (cadr (card-addresses6 card)))
+             (error "this machine has no address of IPv6 from which ~A could be reached: no router has given it one"
+                    (address-text to))))))
 
 ;; A packet for this machine itself does not go onto the wire. FILL puts
 ;; it together in a page frame of its own, and it is left for the thread
@@ -427,7 +584,9 @@
 ;; of those twenty; and then what it carries, which FILL writes, giving how
 ;; many bytes. It is not to be taken apart on the way: nothing here puts
 ;; pieces together.
-(defun send-packet (card to protocol fill &optional (from (or (card-address card) 0)))
+(defun send-packet (card to protocol fill &optional (from (source-for card to)))
+  (when (consp to)
+    (return-from send-packet (send-packet-six card to protocol fill from)))
   (flet ((packet (at)
            (let ((bytes (+ 20 (funcall fill (+ at 20)))))
              (setf (card-count card) (+ (card-count card) 1))
@@ -475,6 +634,305 @@
           (setf (card-answering card) nil
                 (card-packet card) nil))))))
 
+;;; IPv6
+
+;; A packet of IPv6's goes to an address: forty bytes that say that it is
+;; one, how long what it carries is, which protocol that is, how many
+;; machines may hand it on, who it is from and who it is for; and what it
+;; carries, which FILL writes, giving how many bytes. It has no checksum
+;; of its own. HOPS is 255 for what a machine says to its neighbours, who
+;; know by that number that nobody handed it on.
+(defun send-packet-six (card to protocol fill from &optional (hops 64))
+  (flet ((packet (at)
+           (let ((bytes (funcall fill (+ at 40))))
+             (put-four at #x60000000)
+             (put-two (+ at 4) bytes)
+             (put-one (+ at 6) protocol)
+             (put-one (+ at 7) hops)
+             (put-sixteen (+ at 8) from)
+             (put-sixteen (+ at 24) to)
+             (+ 40 bytes))))
+    (if (own-p card to)
+        (send-inside card #'packet)
+        (send-frame card (station-of card to) #x86dd #'packet))))
+
+;; The first four numbers of an address: which network it is on, where
+;; networks are 64 bits, as the ones are that a machine makes its own
+;; address on.
+(defun network-of (address)
+  (list (first address) (second address) (third address) (fourth address)))
+
+;; The card that a packet of IPv6's for an address is handed to. One that
+;; is for many machines at once goes to a card's address that is made of
+;; its last four bytes (RFC 2464, 7). Otherwise it is the card of the
+;; address, when that is on this network, which the routers have said or
+;; the address says itself (fe80::/10), and the card of a router when it
+;; is not; and that card is found by asking the neighbours who has the
+;; address, as ARP asks.
+(defun station-of-six (card address)
+  (cond ((>= (car address) #xff00)
+         (+ (ash #x3333 32) (ash (nth 6 address) 16) (nth 7 address)))
+        ((and (card-answering card) (equal (car (card-answering card)) address))
+         (cdr (card-answering card)))
+        (t
+         (let* ((next (cond ((or (= (logand (car address) #xffc0) #xfe80)
+                                 (assoc (network-of address) (card-prefixes6 card) :test #'equal))
+                             address)
+                            ((car (car (card-routers6 card))))
+                            (t (error "~A is not on this machine's network, and no router has said that it is a way out"
+                                      (address-text address)))))
+                (known (cdr (assoc next (card-neighbours card) :test #'equal))))
+           (cond (known)
+                 (*waits*
+                  (ask-until card
+                             (lambda () (cdr (assoc next (card-neighbours card) :test #'equal)))
+                             (lambda () (neighbour-out card next))
+                             (lambda () (format nil "nobody on the network says that it has the address ~A" (address-text next)))))
+                 (t
+                  (neighbour-out card next)
+                  (error "nobody on the network has said yet that it has the address ~A" (address-text next))))))))
+
+;; A message of ICMP's over IPv6 goes out: like one over IPv4, but its
+;; checksum takes the addresses in.
+(defun control-six-out (card to kind code word fill &optional (from (source-for card to)) (hops 64))
+  (send-packet-six card to 58
+                   (lambda (at)
+                     (let ((bytes (+ 8 (funcall fill (+ at 8)))))
+                       (put-one at kind)
+                       (put-one (+ at 1) code)
+                       (put-two (+ at 2) 0)
+                       (put-four (+ at 4) word)
+                       (put-two (+ at 2) (checksum (+ (around from to 58 bytes) (clara.unsafe:internet-sum at bytes))))
+                       bytes))
+                   from hops))
+
+;; The address of many machines at once that a machine with ADDRESS
+;; listens to for the question who has it: ff02::1:ff and the last three
+;; bytes of the address (RFC 4291, 2.7.1).
+(defun asked-at (address)
+  (list #xff02 0 0 0 0 1 (+ #xff00 (logand (nth 6 address) 255)) (nth 7 address)))
+
+;; Where a card's address goes in what neighbours tell each other: a kind
+;; (1 the sender's, 2 the one that was asked for), a length of one, which
+;; counts eight bytes, and the six bytes.
+(defun put-station (at kind station)
+  (put-one at kind)
+  (put-one (+ at 1) 1)
+  (put-six (+ at 2) station)
+  8)
+
+;; The question, to whoever has ADDRESS: which card is yours (135)? With
+;; this card's address, so that the answer need not ask in turn.
+(defun neighbour-out (card address)
+  (control-six-out card (asked-at address) 135 0 0
+                   (lambda (at)
+                     (put-sixteen at address)
+                     (+ 16 (put-station (+ at 16) 1 (card-station card))))
+                   (car (car (card-addresses6 card))) 255))
+
+;; The routers are asked to say what the network is (133).
+(defun routers-out (card)
+  (setf (card-asked6 card) (now)
+        (card-times6 card) (1+ (or (card-times6 card) 0)))
+  (control-six-out card '(#xff02 0 0 0 0 0 0 2) 133 0 0
+                   (lambda (at) (put-station at 1 (card-station card)))
+                   (car (car (card-addresses6 card))) 255))
+
+;; The card's address among the things that follow a message between
+;; neighbours, each a kind, a length that counts eight bytes, and what it
+;; says: the one of KIND, or NIL.
+(defun station-among (at end kind)
+  (loop
+    (when (> (+ at 8) end)
+      (return nil))
+    (let ((length (* 8 (one (+ at 1)))))
+      (when (or (= length 0) (> (+ at length) end))
+        (return nil))
+      (when (and (= (one at) kind) (= length 8))
+        (return (six (+ at 2))))
+      (setq at (+ at length)))))
+
+;; The address that this machine has on the network whose first four
+;; numbers are given: those, and four that are made of its card's address
+;; (RFC 4291, appendix A).
+(defun address-on (card network)
+  (let ((station (card-station card)))
+    (append network
+            (list (logxor #x0200 (logand (ash station -32) #xffff))
+                  (+ (logand (ash station -16) #xff00) #xff)
+                  (+ #xfe00 (logand (ash station -16) #xff))
+                  (logand station #xffff)))))
+
+;; A list of things that hold until a time has one more, or has one for
+;; longer; one that holds for no time at all is taken off it.
+(defun hold (list thing milliseconds)
+  (let ((others (remove-if (lambda (held) (equal (car held) thing)) list)))
+    (if (> milliseconds 0)
+        (append others (list (cons thing (+ (now) milliseconds))))
+        others)))
+
+;; How many milliseconds some seconds are that a router said: four
+;; thousand million of them mean for good, and are a year here.
+(defun lasting (seconds)
+  (* 1000 (min seconds 31536000)))
+
+;; A router says what the network is (134): how long it is a way out, and
+;; then, each with its kind and its length before it, the networks whose
+;; addresses are on this wire (3), with whether a machine is to make its
+;; own address on one, and who knows names (25, RFC 8106). The machine
+;; takes an address on each network where it is to, with its card's
+;; address for the second half.
+(defun routers-in (card from at bytes)
+  (when (and (>= bytes 16) (= (logand (car from) #xffc0) #xfe80))
+    (let ((end (+ at bytes)) (option (+ at 16)))
+      (clara:with-lock-held ((card-book card))
+        (setf (card-routers6 card) (hold (card-routers6 card) from (lasting (two (+ at 6))))
+              (card-heard6 card) t)
+        (loop
+          (when (> (+ option 8) end)
+            (return))
+          (let ((kind (one option)) (length (* 8 (one (+ option 1)))))
+            (when (or (= length 0) (> (+ option length) end))
+              (return))
+            (cond ((and (= kind 3) (= length 32) (= (one (+ option 2)) 64))
+                   (let ((network (network-of (sixteen (+ option 16)))) (time (lasting (four (+ option 4))))
+                         (flags (one (+ option 3))))
+                     (unless (= (logand (car network) #xffc0) #xfe80)
+                       (when (/= 0 (logand flags #x80))
+                         (setf (card-prefixes6 card) (hold (card-prefixes6 card) network time)))
+                       (when (/= 0 (logand flags #x40))
+                         (setf (card-addresses6 card)
+                               (cons (car (card-addresses6 card))
+                                     (hold (cdr (card-addresses6 card)) (address-on card network) time)))))))
+                  ((and (= kind 25) (>= length 24))
+                   (let ((names nil))
+                     (when (> (four (+ option 4)) 0)
+                       (dotimes (i (floor (- length 8) 16))
+                         (setq names (cons (sixteen (+ option 8 (* 16 i))) names))))
+                     (setf (card-names6 card) (reverse names)))))
+            (setq option (+ option length))))))))
+
+;; A message of ICMP's over IPv6 has arrived. What neighbours and routers
+;; say (133 to 136) counts only when nobody handed it on, which the 255 in
+;; HOPS says (RFC 4861, 6.1). A machine that asks who has an address of
+;; this machine's is told, and its card is learned from the question; an
+;; answer to such a question says whose card it is. Then, as over IPv4:
+;; whether this machine is there (128), which is answered (129); the
+;; answer to that; and the word that a packet did not arrive (1) or was
+;; too long (2), for whoever sent it.
+(defun control-six-in (card from to at bytes hops)
+  (when (and (>= bytes 8) (= (fold (+ (around from to 58 bytes) (clara.unsafe:internet-sum at bytes))) #xffff))
+    (let ((kind (one at)) (code (one (+ at 1))) (near (and (= hops 255) (= (one (+ at 1)) 0))))
+      (cond ((and (= kind 135) near (>= bytes 24))
+             (let ((asked (sixteen (+ at 8))) (station (station-among (+ at 24) (+ at bytes) 1)))
+               (when (and station (not (equal from '(0 0 0 0 0 0 0 0))))
+                 (learn card from station))
+               (when (assoc asked (card-addresses6 card) :test #'equal)
+                 (let ((answer-to (if (equal from '(0 0 0 0 0 0 0 0)) '(#xff02 0 0 0 0 0 0 1) from)))
+                   (control-six-out card answer-to 136 0 (if (equal from '(0 0 0 0 0 0 0 0)) #x20000000 #x60000000)
+                                    (lambda (out)
+                                      (put-sixteen out asked)
+                                      (+ 16 (put-station (+ out 16) 2 (card-station card))))
+                                    asked 255)))))
+            ((and (= kind 136) near (>= bytes 24))
+             (let ((station (or (station-among (+ at 24) (+ at bytes) 2) (cdr (card-answering card)))))
+               (when station
+                 (learn card (sixteen (+ at 8)) station))))
+            ((and (= kind 134) near)
+             (routers-in card from at bytes))
+            ((and (= kind 128) (= code 0) (own-p card to))
+             (control-six-out card from 129 0 (four (+ at 4))
+                              (lambda (out)
+                                (clara.unsafe:copy-memory out (+ at 8) (- bytes 8))
+                                (- bytes 8))
+                              to))
+            ((and (= kind 129) (= code 0))
+             (let ((echo (assoc (two (+ at 4)) (card-echoes card))))
+               (when (and echo (null (cddr echo)) (= (two (+ at 6)) (cadr echo)))
+                 (rplacd (cdr echo) (now)))))
+            ((or (= kind 1) (= kind 2))
+             ;; what came back is the head of a packet of IPv6's that this machine sent, and what it carried
+             (let ((back (+ at 8)))
+               (when (and (>= bytes 56) (= (ash (one back) -4) 6) (own-p card (sixteen (+ back 8))))
+                 (told card from (one (+ back 6)) (sixteen (+ back 24)) (two (+ back 40)) (two (+ back 42))
+                       (four (+ back 44)) (and (= kind 2) (max 1280 (four (+ at 4))))))))))))
+
+;; A packet of IPv6's has arrived, from the wire or from this machine
+;; itself (STATION is NIL then), as one of IPv4's does. One from the wire
+;; is for an address of this machine's or for many machines of this
+;; network at once (ff02::/16), which is how neighbours are asked, and it
+;; is not from an address of this machine's. What stands between the head
+;; and what the packet carries is passed over where it says how long it
+;; is; a packet in pieces is dropped.
+(defun packet-six-in (card at bytes station)
+  (when (and (>= bytes 40) (= (ash (one at) -4) 6) (card-addresses6 card))
+    (let ((whole (+ 40 (two (+ at 4)))) (from (sixteen (+ at 8))) (to (sixteen (+ at 24)))
+          (kind (one (+ at 6))) (inside (+ at 40)))
+      (when (and (<= whole bytes)
+                 (if station
+                     (and (not (own-p card from)) (not (equal to '(0 0 0 0 0 0 0 1)))
+                          (or (own-p card to) (= (car to) #xff02)))
+                     (own-p card to)))
+        (loop
+          (unless (and (member kind '(0 43 60)) (<= (+ inside 8) (+ at whole)))
+            (return))
+          (setq kind (one inside)
+                inside (+ inside 8 (* 8 (one (+ inside 1))))))
+        (when (<= inside (+ at whole))
+          (setf (card-answering card) (cons from station)
+                (card-packet card) (cons at (min whole 48)))
+          (unwind-protect
+               (case kind
+                 (58 (control-six-in card from to inside (- (+ at whole) inside) (one (+ at 7))))
+                 (17 (datagram-in card from to inside (- (+ at whole) inside)))
+                 (6 (segment-in card from to inside (- (+ at whole) inside))))
+            (setf (card-answering card) nil
+                  (card-packet card) nil)))))))
+
+;; The machine begins to speak IPv6: it has the address that goes no
+;; further than its own network, made of its card's address, and asks the
+;; routers what the network is.
+(defun begin-six (card)
+  (setf (card-addresses6 card) (list (cons (address-on card '(#xfe80 0 0 0)) nil)))
+  (routers-out card))
+
+;; The routers are given a while to answer, since most of what the machine
+;; does with IPv6 waits on what they say.
+(defun settle-six (card)
+  (loop
+    (when (or (card-heard6 card) (>= (- (now) (card-asked6 card)) *router-wait*))
+      (return))
+    (clara:wait-event (card-heard card) 20)))
+
+;; What the machine learned from a router is said, once.
+(defun say-six (card)
+  (when (and (card-heard6 card) (not (card-said6 card)))
+    (setf (card-said6 card) t)
+    (let ((own (cadr (card-addresses6 card))) (router (car (car (card-routers6 card)))) (names (card-names6 card)))
+      (format t "net: by IPv6 it is ~A~A~A~%"
+              (address-text (car (or own (car (card-addresses6 card)))))
+              (if router (format nil ", ~A is the way out" (address-text router)) "")
+              (if names
+                  (format nil ", ~A ~A names" (listed (mapcar #'address-text names)) (if (cdr names) "know" "knows"))
+                  "")))))
+
+;; What time brings about for IPv6: routers that have not answered are
+;; asked again, three times in all and four seconds apart (RFC 4861,
+;; 6.3.7), and what a router said holds no longer than it said.
+(defun keep-six (card time)
+  (when (card-addresses6 card)
+    (when (and (not (card-heard6 card)) (< (card-times6 card) 3) (>= (- time (card-asked6 card)) (* 4 *again*)))
+      (routers-out card))
+    (flet ((holds (held)
+             (or (null (cdr held)) (> (cdr held) time))))
+      (when (or (some (lambda (held) (not (holds held))) (card-addresses6 card))
+                (some (lambda (held) (not (holds held))) (card-routers6 card))
+                (some (lambda (held) (not (holds held))) (card-prefixes6 card)))
+        (clara:with-lock-held ((card-book card))
+          (setf (card-addresses6 card) (remove-if-not #'holds (card-addresses6 card))
+                (card-routers6 card) (remove-if-not #'holds (card-routers6 card))
+                (card-prefixes6 card) (remove-if-not #'holds (card-prefixes6 card))))))))
+
 ;;; ICMP: what machines say to each other about packets
 
 ;; A message of ICMP's goes out: what kind it is, and which of that kind;
@@ -492,16 +950,19 @@
                    bytes))))
 
 ;; The sender of the packet that is being looked at is told that it was
-;; not taken, and why (CODE 3: nothing takes packets at that port), with
-;; the head of the packet and the first eight bytes behind it, by which
-;; the sender knows which packet is meant.
+;; not taken, and why (CODE 3: nothing takes packets at that port, which
+;; over IPv6 is the kind 1 and of that the kind 4), with the head of the
+;; packet and the first eight bytes behind it, by which the sender knows
+;; which packet is meant.
 (defun return-packet (card to code)
   (let ((packet (card-packet card)))
     (when packet
-      (control-out card to 3 code 0
-                   (lambda (at)
-                     (clara.unsafe:copy-memory at (car packet) (cdr packet))
-                     (cdr packet))))))
+      (flet ((back (at)
+               (clara.unsafe:copy-memory at (car packet) (cdr packet))
+               (cdr packet)))
+        (if (consp to)
+            (control-six-out card to 1 4 0 #'back)
+            (control-out card to 3 code 0 #'back))))))
 
 ;; Somebody on the way, FROM, says that a packet of this machine's did not
 ;; arrive where it was going, TO: the word came with the head of that
@@ -518,8 +979,10 @@
          (let ((connection (find-connection card to to-port port)))
            (cond ((null connection))
                  (narrow
+                  ;; what a packet has before the bytes of a connection is forty bytes over IPv4, and sixty over IPv6
                   (clara:with-lock-held ((connection-lock connection))
-                    (setf (connection-piece connection) (max 256 (min (connection-piece connection) (- narrow 40))))))
+                    (setf (connection-piece connection)
+                          (max 256 (min (connection-piece connection) (- narrow (if (consp to) 60 40)))))))
                  ((and (eq (connection-state connection) :asked) (= number (connection-first connection)))
                   (setf (connection-said connection) from
                         (connection-state connection) :unreachable)))))
@@ -527,7 +990,7 @@
          (when (and (null narrow) (assoc port (card-listeners card)))
            (clara:with-lock-held ((card-book card))
              (setf (card-closed card) (cons (list to to-port port) (card-closed card))))))
-        ((= protocol 1)
+        ((or (= protocol 1) (= protocol 58))
          (let ((echo (assoc (ash number -16) (card-echoes card))))
            (when (and echo (null narrow) (null (cddr echo)))
              (rplacd (cdr echo) (list :unreachable from)))))))
@@ -563,7 +1026,7 @@
 
 ;;; UDP
 
-(defun send-datagram (card to to-port from-port fill &optional (from (or (card-address card) 0)))
+(defun send-datagram (card to to-port from-port fill &optional (from (source-for card to)))
   (send-packet card to 17
                (lambda (at)
                  (let ((bytes (+ 8 (funcall fill (+ at 8)))))
@@ -585,7 +1048,8 @@
   (when (>= bytes 8)
     (let ((whole (two (+ at 4))))
       (when (and (<= 8 whole bytes)
-                 (or (= (two (+ at 6)) 0)
+                 ;; over IPv4 a packet may come without a checksum, and over IPv6 it may not
+                 (or (and (= (two (+ at 6)) 0) (not (consp from)))
                      (= (fold (+ (around from to 17 whole) (clara.unsafe:internet-sum at whole))) #xffff)))
         (let* ((port (two (+ at 2))) (listener (cdr (assoc port (card-listeners card)))))
           (cond ((= port 68)
@@ -797,20 +1261,48 @@
              (setf (card-renewed card) time))))))
 
 ;; The card, with an address: what everything above asks for first. The
-;; machine has its address from the first time that something asks.
+;; machine has its addresses from the first time that something asks. It
+;; asks the routers what the network is, for IPv6, and a DHCP server which
+;; address it has, for IPv4, and then gives the routers a while to have
+;; answered. A network on which no DHCP server answers is good enough when
+;; a router has given the machine an address: that is said, and the server
+;; is not asked again for a minute.
 (defun up ()
   (let ((card *card*))
     (unless card
       (error "this machine has no network card that has a driver here"))
     (clara:with-lock-held (*up-lock*)
-      (unless (card-address card)
-        (configure card)))
+      (when (and *ipv6* (null (card-addresses6 card)))
+        (begin-six card))
+      (unless (or (card-address card)
+                  (and (card-tried card) (cdr (card-addresses6 card)) (< (- (now) (card-tried card)) 60000)))
+        (handler-case (configure card)
+          (error (condition)
+            (setf (card-tried card) (now))
+            (when (card-addresses6 card)
+              (settle-six card))
+            (unless (cdr (card-addresses6 card))
+              (error "~A" condition))
+            (format t "net: ~A: this machine has no address of IPv4~%" condition))))
+      (when (card-addresses6 card)
+        (settle-six card)
+        (say-six card)))
     card))
 
-;; This machine's address, as text; NIL without a network card. And the
-;; address of its card on the wire.
+;; This machine's addresses, as texts: the one of IPv4 first, then the ones
+;; of IPv6 that a router gave it, and last the one that goes no further
+;; than its own network. NIL without a network card. And the first of
+;; them; and the address of its card on the wire.
+(defun addresses ()
+  (and *card*
+       (let ((card (up)))
+         (mapcar #'address-text
+                 (append (and (card-address card) (list (card-address card)))
+                         (mapcar #'car (cdr (card-addresses6 card)))
+                         (and (card-addresses6 card) (list (car (car (card-addresses6 card))))))))))
+
 (defun address ()
-  (and *card* (address-text (card-address (up)))))
+  (car (addresses)))
 
 (defun station ()
   (and *card* (station-text (card-station *card*))))
@@ -832,11 +1324,12 @@
                                   (lambda ()
                                     (rplaca (cdr echo) (logand (1+ (cadr echo)) #xffff))
                                     (setq sent (now))
-                                    (control-out card to 8 0 (+ (ash identifier 16) (cadr echo))
-                                                 (lambda (at)
-                                                   (dotimes (i 32)
-                                                     (put-one (+ at i) (+ 97 (mod i 23))))
-                                                   32)))
+                                    (funcall (if (consp to) #'control-six-out #'control-out)
+                                             card to (if (consp to) 128 8) 0 (+ (ash identifier 16) (cadr echo))
+                                             (lambda (at)
+                                               (dotimes (i 32)
+                                                 (put-one (+ at i) (+ 97 (mod i 23))))
+                                               32)))
                                   (lambda () (format nil "~A does not answer a ping" (address-text to))))))
            (when (consp answer)
              (error "~A says that ~A cannot be reached" (address-text (second answer)) (address-text to)))
@@ -866,9 +1359,10 @@
 ;; A question for the address of a name, written at AT: twelve bytes, of
 ;; which the first two are its number, the next two say that it is a
 ;; question and that the server is to ask further, and the rest that
-;; there is one question; then the name, and what is asked of it, its
-;; address (1) on the Internet (1). How many bytes that was.
-(defun put-question (at number name)
+;; there is one question; then the name, and what is asked of it, KIND,
+;; its address of IPv4 (1) or of IPv6 (28), on the Internet (1). How many
+;; bytes that was.
+(defun put-question (at number name kind)
   (put-two at number)
   (put-two (+ at 2) #x0100)
   (put-two (+ at 4) 1)
@@ -876,7 +1370,7 @@
   (put-two (+ at 8) 0)
   (put-two (+ at 10) 0)
   (let ((bytes (put-name (+ at 12) name)))
-    (put-two (+ at 12 bytes) 1)
+    (put-two (+ at 12 bytes) kind)
     (put-two (+ at 14 bytes) 1)
     (+ 16 bytes)))
 
@@ -899,8 +1393,9 @@
 ;; to the question NUMBER. An answer has twelve bytes of counts before the
 ;; question again and the records, each a name, a type, a class, how long
 ;; it holds, a length and that many bytes: the type 1 with four bytes is
-;; an address.
-(defun name-answer (at bytes number)
+;; an address of IPv4, and the type 28 with sixteen one of IPv6. WANTED is
+;; the type that was asked for.
+(defun name-answer (at bytes number wanted)
   (when (and (>= bytes 12) (= (two at) number) (/= 0 (logand (two (+ at 2)) #x8000)))
     (let ((failure (logand (two (+ at 2)) 15)) (end (+ at bytes)) (place (+ at 12)) (found nil))
       (cond ((= failure 3) :none)
@@ -914,18 +1409,19 @@
                (setq place (and place (past-name place end)))
                (when (and place (<= (+ place 10) end))
                  (let ((kind (two place)) (length (two (+ place 8))))
-                   (when (and (null found) (= kind 1) (= length 4) (<= (+ place 14) end))
-                     (setq found (cons (four (+ place 10)) (four (+ place 4)))))
+                   (when (and (null found) (= kind wanted) (= length (if (= wanted 28) 16 4)) (<= (+ place 10 length) end))
+                     (setq found (cons (if (= wanted 28) (sixteen (+ place 10)) (four (+ place 10))) (four (+ place 4)))))
                    (setq place (+ place 10 length)))))
              (or found :none))))))
 
 ;; Who is asked for names: the one that CLARA.NET:*NAME-SERVER* names, or
-;; the ones that the network named.
+;; the ones that the network named, the DHCP server first and the routers
+;; after it.
 (defun name-servers (card)
   (if *name-server*
       (list (or (text-address *name-server*)
                 (error "~S, in CLARA.NET:*NAME-SERVER*, is no address" *name-server*)))
-      (or (card-names card)
+      (or (append (card-names card) (card-names6 card))
           (error "the network named nobody who knows names, and CLARA.NET:*NAME-SERVER* names nobody"))))
 
 ;; The name servers are asked for a name, by UDP: one of them every second,
@@ -934,16 +1430,16 @@
 ;; taken, is asked no more, and the next is asked at once; when none is
 ;; left, that is the error. What the answer was (NAME-ANSWER); for one that
 ;; came cut short, (:cut . server).
-(defun ask-names (card servers name)
+(defun ask-names (card servers name kind)
   (let ((number (logand (fresh card) #xffff)) (port (next-port card))
         (answer nil) (out nil) (hurry nil) (begun (now)) (asked nil) (turn 0))
     (listen-at card port
                (lambda (from from-port at bytes)
-                 (when (and (member from servers) from-port (null answer))
-                   (let ((said (name-answer at bytes number)))
+                 (when (and (member from servers :test #'equal) from-port (null answer))
+                   (let ((said (name-answer at bytes number kind)))
                      (cond ((null said))
                            ((eq said :failed)
-                            (unless (assoc from out)
+                            (unless (assoc from out :test #'equal)
                               (setq out (cons (cons from :failed) out)
                                     hurry t)))
                            ((eq said :cut) (setq answer (cons :cut from)))
@@ -951,12 +1447,12 @@
     (unwind-protect
          (loop
            (dolist (closed (card-closed card))
-             (when (and (= (third closed) port) (not (assoc (car closed) out)))
+             (when (and (= (third closed) port) (not (assoc (car closed) out :test #'equal)))
                (setq out (cons (cons (car closed) :closed) out)
                      hurry t)))
            (when answer
              (return answer))
-           (let ((left (remove-if (lambda (server) (assoc server out)) servers)) (time (now)))
+           (let ((left (remove-if (lambda (server) (assoc server out :test #'equal)) servers)) (time (now)))
              (when (null left)
                (let ((whom (car (last out))))
                  (if (eq (cdr whom) :closed)
@@ -969,7 +1465,7 @@
                (setq hurry nil
                      asked time)
                (send-datagram card (nth (mod turn (length left)) left) *name-port* port
-                              (lambda (at) (put-question at number name)))
+                              (lambda (at) (put-question at number name kind)))
                (setq turn (1+ turn))))
            (clara:wait-event (card-heard card) 50))
       (listen-no-more card port))))
@@ -977,53 +1473,79 @@
 ;; The same question by TCP, to a server whose answer by UDP came cut
 ;; short (RFC 7766): the question with its length before it, in two bytes,
 ;; and the answer likewise.
-(defun ask-name-whole (card server name)
+(defun ask-name-whole (card server name kind)
   (let ((connection (begin card server *name-port* 65536 0)) (page (clara.unsafe:allocate-memory 1))
         (number (logand (fresh card) #xffff)))
     (unwind-protect
-         (let ((bytes (put-question (+ page 2) number name)))
+         (let ((bytes (put-question (+ page 2) number name kind)))
            (put-two page bytes)
            (say-bytes connection page (+ 2 bytes))
            (flet ((answered ()
                     (clara:with-lock-held ((connection-lock connection))
                       (let ((held (connection-held connection)) (memory (connection-memory connection)))
                         (and (>= held 2) (>= held (+ 2 (two memory)))
-                             (name-answer (+ memory 2) (two memory) number))))))
+                             (name-answer (+ memory 2) (two memory) number kind))))))
              (wait-for connection #'answered)
              (answered)))
       (clara.unsafe:free-memory page 1)
       (disconnect connection))))
 
-;; What is remembered of a name, while it holds; and a name's address is
-;; remembered, for as long as the answer said, and for a day at most.
+;; What is remembered of a name, while it holds; and a name's addresses
+;; are remembered, for as long as the answers said, and for a day at most.
 (defun remembered (card name)
   (let ((known (assoc name (card-known card) :test #'string-equal)))
     (and known (> (cadr known) (now)) (cddr known))))
 
-(defun remember (card name address seconds)
+(defun remember (card name addresses seconds)
   (clara:with-lock-held ((card-book card))
     (setf (card-known card)
-          (cons (list* name (+ (now) (* 1000 (min seconds 86400))) address)
+          (cons (list* name (+ (now) (* 1000 (min seconds 86400))) addresses)
                 (remove-if (lambda (known) (string-equal (car known) name)) (card-known card))))))
 
-;; The address of a name, as a number: of an address that is written out,
-;; that address, and of anything else what the network's name servers say,
-;; who are asked again for a name when what they said of it no longer
-;; holds.
+;; What the name servers say of a name, for one kind of address:
+;; (address . seconds), or NIL when the name has no address of that kind.
+(defun ask-name (card name kind)
+  (let ((answer (ask-names card (name-servers card) name kind)) (server nil))
+    (when (and (consp answer) (eq (car answer) :cut))
+      (setq server (cdr answer)
+            answer (ask-name-whole card server name kind)))
+    (cond ((eq answer :none) nil)
+          ((consp answer) answer)
+          (t (error "~A, who knows names, could not say which address ~A has" (address-text server) name)))))
+
+;; The addresses of a name, the one that is to be tried first at the
+;; front: of an address that is written out, that address, and of anything
+;; else what the name servers say, who are asked for the kinds of address
+;; that this machine has itself, and asked again when what they said no
+;; longer holds. An address of IPv6 comes first when this machine has one
+;; of the Internet's own (2000::/3), and otherwise the one of IPv4: a
+;; machine whose addresses of IPv6 are good on its own network only does
+;; better to leave it by IPv4 (RFC 6724). A name server that does not
+;; answer for the second kind does not take away what it said for the
+;; first.
+(defun addresses-of (name)
+  (let ((written (text-address name)))
+    (if written
+        (list written)
+        (or (remembered (up) name)
+            (let* ((card (up))
+                   (older (and (card-address card) (ask-name card name 1)))
+                   (newer (and (cdr (card-addresses6 card))
+                               (if older
+                                   (ignore-errors (ask-name card name 28))
+                                   (ask-name card name 28))))
+                   (found (remove nil (if (some (lambda (own) (= (logand (car (car own)) #xe000) #x2000))
+                                                (cdr (card-addresses6 card)))
+                                          (list newer older)
+                                          (list older newer)))))
+              (unless found
+                (error "there is no machine of the name ~A" name))
+              (remember card name (mapcar #'car found) (reduce #'min (mapcar #'cdr found)))
+              (mapcar #'car found))))))
+
+;; The address of a name: the first of them.
 (defun address-of (name)
-  (or (text-address name)
-      (remembered (up) name)
-      (let* ((card (up)) (answer (ask-names card (name-servers card) name)) (server nil))
-        (when (and (consp answer) (eq (car answer) :cut))
-          (setq server (cdr answer)
-                answer (ask-name-whole card server name)))
-        (cond ((eq answer :none)
-               (error "there is no machine of the name ~A" name))
-              ((and (consp answer) (integerp (car answer)))
-               (remember card name (car answer) (cdr answer))
-               (car answer))
-              (t
-               (error "~A, who knows names, could not say which address ~A has" (address-text server) name))))))
+  (car (addresses-of name)))
 
 ;; The same, as text.
 (defun resolve (name)
@@ -1058,7 +1580,7 @@
 
 (defun find-connection (card to to-port port)
   (find-if (lambda (connection)
-             (and (= (connection-to connection) to) (= (connection-to-port connection) to-port)
+             (and (equal (connection-to connection) to) (= (connection-to-port connection) to-port)
                   (= (connection-port connection) port)))
            (card-connections card)))
 
@@ -1067,8 +1589,9 @@
 ;; what it is about (1 the end, 2 the beginning, 4 giving up, 8 hand it on,
 ;; 16 the number of what has arrived counts), how many more bytes may come,
 ;; and a checksum of all of it with the addresses; four bytes more at the
-;; beginning of a connection, which say how long a segment may be; and
-;; BYTES bytes of what the connection carries, from DATA.
+;; beginning of a connection, which say how long a segment may be, which
+;; is what a frame holds beside the heads of the packet and the segment;
+;; and BYTES bytes of what the connection carries, from DATA.
 (defun segment-out (card from to from-port to-port number arrived flags window &optional data (bytes 0))
   (send-packet card to 6
                (lambda (at)
@@ -1085,7 +1608,7 @@
                    (when (= header 24)
                      (put-one (+ at 20) 2)
                      (put-one (+ at 21) 4)
-                     (put-two (+ at 22) 1460))
+                     (put-two (+ at 22) (if (consp to) 1440 1460)))
                    (when (> bytes 0)
                      (clara.unsafe:copy-memory (+ at header) data bytes))
                    (put-two (+ at 16) (checksum (+ (around from to 6 whole) (clara.unsafe:internet-sum at whole))))
@@ -1380,7 +1903,9 @@
              (setf (connection-expected connection) (wrap (1+ number))
                    (connection-heard connection) arrived
                    (connection-theirs connection) theirs
-                   (connection-piece connection) (max 64 (min (connection-piece connection) (or longest 536)))
+                   ;; a side that does not say how long a piece it takes is sent what every network carries
+                   (connection-piece connection) (max 64 (min (connection-piece connection)
+                                                              (or longest (if (consp (connection-to connection)) 1220 536))))
                    (connection-state connection) :open)
              (acknowledge connection)))
           ((eq state :open)
@@ -1445,9 +1970,9 @@
 ;; and said again after a second, after two more, after four more, until
 ;; the other side has answered it.
 (defun begin (card to to-port limit &optional (more 65536))
-  (let* ((first (fresh card)) (from (or (card-address card) 0)) (time (now))
+  (let* ((first (fresh card)) (from (source-for card to)) (time (now))
          (connection (make-connection :card card :from from :to to :to-port to-port :port (next-port card)
-                                      :state :asked :first first :heard first
+                                      :state :asked :first first :heard first :piece (if (consp to) 1380 1400)
                                       :memory (clara.unsafe:allocate-memory 16) :room 65536
                                       :limit (+ limit more) :allowed limit
                                       :lock (clara:make-lock "connection")
@@ -1469,6 +1994,20 @@
            connection)
       (unless open
         (disconnect connection)))))
+
+;; A connection to a port of the machine NAME: each of its addresses is
+;; tried in turn, and the first that takes the connection has it. When
+;; none does, the error is the one of the last.
+(defun reach (card name port limit more)
+  (let ((addresses (addresses-of name)))
+    (loop
+      (let ((address (car addresses)))
+        (setq addresses (cdr addresses))
+        (if addresses
+            (let ((connection (ignore-errors (begin card address port limit more))))
+              (when connection
+                (return connection)))
+            (return (begin card address port limit more)))))))
 
 ;; BYTES bytes of memory go over a connection: they are put behind what it
 ;; still has to send, as far as there is room for them, and the rest when
@@ -1722,7 +2261,7 @@
 (defun connect (name port)
   (check-port port)
   (let ((card (up)))
-    (connection-stream (begin card (address-of name) port 65536 0))))
+    (connection-stream (reach card name port 65536 0))))
 
 ;; The same, for as long as BODY takes: the stream is closed whichever way
 ;; control leaves it.
@@ -1802,7 +2341,8 @@
              (connection (make-connection :card card :from to :to from :to-port from-port :port to-port
                                           :state :answered :door door :first first :heard first
                                           :expected (wrap (1+ number)) :theirs theirs
-                                          :piece (max 64 (min 1400 (or longest 536)))
+                                          :piece (max 64 (min (if (consp from) 1380 1400)
+                                                              (or longest (if (consp from) 1220 536))))
                                           :memory (clara.unsafe:allocate-memory 16) :room 65536
                                           :limit 65536 :allowed 65536
                                           :lock (clara:make-lock "connection")
@@ -1836,23 +2376,34 @@
 
 ;; "http://host:port/path", taken apart: the host, the port, the path,
 ;; which is / when there is none, and whether it began with https://. The
-;; port is 80 when none is written, and 443 for https://.
+;; port is 80 when none is written, and 443 for https://. An address of
+;; IPv6 has colons of its own, and stands between brackets where a host is
+;; written: "http://[fec0::2]:8000/" (RFC 3986, 3.2.2). The host is given
+;; without them.
 (defun parse-address (text)
   (let* ((secure (secure-address-p text))
          (begin (cond (secure 8)
                       ((and (> (length text) 7) (string-equal (subseq text 0 7) "http://")) 7)
                       (t (error "~A is no address that begins with http:// or https://" text))))
-         (slash (length text)) (colon nil))
+         (slash (length text)) (colon nil) (open nil) (close nil))
     (dotimes (i (- (length text) begin))
       (let ((character (char text (+ begin i))))
-        (cond ((and (char= character #\/) (= slash (length text)))
+        (cond ((/= slash (length text)))
+              ((char= character #\/)
                (setq slash (+ begin i)))
-              ((and (char= character #\:) (= slash (length text)) (null colon))
+              ((and (char= character #\[) (= i 0))
+               (setq open (+ begin i)))
+              ((and (char= character #\]) open (null close))
+               (setq close (+ begin i)))
+              ((and (char= character #\:) (null colon) (or (null open) close))
                (setq colon (+ begin i))))))
-    (let ((host (subseq text begin (or colon slash)))
+    (let ((host (if open
+                    (and close (= (1+ close) (or colon slash)) (text-six (subseq text (1+ open) close))
+                         (subseq text (1+ open) close))
+                    (subseq text begin (or colon slash))))
           (port (if colon (number-of (subseq text (1+ colon) slash)) (if secure 443 80)))
           (path (if (= slash (length text)) "/" (subseq text slash))))
-      (unless (and (> (length host) 0) port (< 0 port 65536))
+      (unless (and host (> (length host) 0) port (< 0 port 65536))
         (error "~A names no machine, or no port of one" text))
       (values host port path secure))))
 
@@ -1953,8 +2504,9 @@
         (let* ((card (up))
                ;; A connection that is kept closed carries more than the file: a greeting of some
                ;; thousand bytes, and twenty-two bytes around every piece that the other side closes.
-               (connection (begin card (address-of host) port limit (if secure (+ 131072 (floor limit 8)) 65536)))
-               (named (concatenate 'string host (if (= port (if secure 443 80)) "" (format nil ":~D" port))))
+               (connection (reach card host port limit (if secure (+ 131072 (floor limit 8)) 65536)))
+               (named (concatenate 'string (if (text-six host) (concatenate 'string "[" host "]") host)
+                                   (if (= port (if secure 443 80)) "" (format nil ":~D" port))))
                (kept nil) (moved nil))
           (unwind-protect
                (progn
@@ -2046,13 +2598,14 @@
 
 ;;; What arrives, and what time brings about
 
-;; A frame has arrived: by its kind it is ARP's or IPv4's, and anything
-;; else is nobody's here.
+;; A frame has arrived: by its kind it is ARP's, IPv4's or IPv6's, and
+;; anything else is nobody's here.
 (defun frame-in (card at bytes)
   (when (>= bytes 14)
     (case (two (+ at 12))
       (#x0806 (arp-in card (+ at 14) (- bytes 14)))
-      (#x0800 (packet-in card (+ at 14) (- bytes 14) (six (+ at 6)))))))
+      (#x0800 (packet-in card (+ at 14) (- bytes 14) (six (+ at 6))))
+      (#x86dd (packet-six-in card (+ at 14) (- bytes 14) (six (+ at 6)))))))
 
 ;; What is done because time has passed, and not because something
 ;; arrived: the machine's address is asked for again before it runs out,
@@ -2062,7 +2615,9 @@
 ;; (CARD-TROUBLE).
 (defun tend (card)
   (let ((time (now)))
-    (handler-case (keep-address card time)
+    (handler-case (progn
+                    (keep-address card time)
+                    (keep-six card time))
       (error (condition)
         (setf (card-trouble card) (princ-to-string condition))))
     (dolist (connection (card-connections card))
@@ -2104,7 +2659,9 @@
               (return))
             (setq any t)
             (unwind-protect
-                 (handler-case (packet-in card (car packet) (cdr packet) nil)
+                 (handler-case (if (= (ash (one (car packet)) -4) 6)
+                                   (packet-six-in card (car packet) (cdr packet) nil)
+                                   (packet-in card (car packet) (cdr packet) nil))
                    (error ()
                      (setf (card-dropped card) (1+ (card-dropped card)))))
               (clara.unsafe:free-memory (car packet) 1))))

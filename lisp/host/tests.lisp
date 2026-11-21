@@ -6683,7 +6683,56 @@
   (seen 0)                      ; how many such segments have come,
   (longest-seen 0)              ; and how many bytes the longest of them carried
   calls                         ; the connections that machines of the network have opened to the machine
+  six                           ; it speaks IPv6: a router says what the network is, and its machines have addresses of it
+  (prefix (list #xfec0 0 0 0))  ; the first four numbers of those addresses
+  (router-time 1800)            ; for how many seconds its router says that it is a way out
+  (prefix-time 86400)           ; for how many the addresses hold that are made on the network,
+  (prefix-flags #xc0)           ; and whether they are on this wire (#x80) and a machine is to make its own (#x40)
+  (six-names t)                 ; the router says who knows names
+  (names6 (list (cons "releases.test" 2))) ; the names that have an address of IPv6, each with the last number of it
+  six-closed                    ; its machines take no connection that comes by IPv6
   connections)
+
+;; Addresses of IPv6 are lists of eight numbers here, as they are in the
+;; machine. A packet for the machine goes by IPv6 while *SIX* says between
+;; which two addresses, the machine's first: whatever the network sends
+;; then is made for IPv4, by the code that knows only that, and turned
+;; into the same thing over IPv6 on its way out. And what the machine
+;; sends by IPv6 is turned into the same thing over IPv4 before that code
+;; looks at it. So the network's web server, its name servers and its
+;; callers serve both, and each is written once.
+(defvar *six* nil)
+(defvar *six-packet* nil)      ; the packet of IPv6's from the machine that is being looked at, for whoever sends its beginning back
+(defvar *router6* (list #xfe80 0 0 0 0 0 0 2))
+
+(defun six-at (bytes offset)
+  (loop for i below 8 collect (be bytes (+ offset (* 2 i)) 2)))
+
+(defun six-bytes (address)
+  (loop for number in address append (number-bytes number 2)))
+
+(defun six-sum (address)
+  (reduce #'+ address))
+
+(defun four-sum (address)
+  (+ (ash address -16) (logand address #xffff)))
+
+;; The checksum at OFFSET of some bytes was worked out with addresses that
+;; add up to OLD: it becomes the one for addresses that add up to NEW.
+(defun re-sum (bytes offset old new)
+  (flet ((fold (sum)
+           (loop while (> sum #xffff)
+                 do (setq sum (+ (logand sum #xffff) (ash sum -16))))
+           sum))
+    (setf (be bytes offset 2)
+          (logxor #xffff (fold (+ (logxor #xffff (be bytes offset 2)) (logxor #xffff (fold old)) (fold new)))))))
+
+;; The address of IPv6 that the machine makes for itself on a network, the
+;; one that goes no further than the wire when no network is named.
+(defun machine-six (&optional (prefix (list #xfe80 0 0 0)))
+  (append prefix (list #x5054 #x00ff #xfe12 #x3456)))
+
+(defvar *network* nil)
 
 ;; A connection that a machine of the network opens to a port of the
 ;; machine's: it begins, says what it has to say, takes what the machine
@@ -6711,6 +6760,7 @@
   (lose-answers 0)              ; how many of those answers it does not hear
   half                          ; it begins, and does not go on when the machine answers
   mute                          ; it says nothing to what the machine sends
+  six                           ; the two addresses of IPv6 that it is between, the machine's first, when it is to go by IPv6
   lose                          ; which of the machine's segments with bytes in them it does not hear: by their count, from 0
   (pieces 0))                   ; how many such segments have come
 
@@ -6722,7 +6772,7 @@
 ;; A segment of a call's, for the machine.
 (defun call-segment (call number flags data)
   (let* ((network (call-network call)) (from (call-address call)) (to (network-lease network))
-         (*from-station* (call-station call))
+         (*from-station* (call-station call)) (*six* (call-six call))
          (says (and (logbitp 1 flags) (call-longest call)))
          (segment (bytes-of (number-bytes (call-from-port call) 2) (number-bytes (call-port call) 2)
                             (number-bytes (ldb (byte 32 0) number) 4) (number-bytes (or (call-theirs call) 0) 4)
@@ -6776,7 +6826,7 @@
            (setf (call-state call) (if (eq (call-state call) :asked) :refused :reset)))
           ((eq (call-state call) :asked)
            (when (and (= (logand flags #x12) #x12) (= arrived (ldb (byte 32 0) (1+ (call-first call)))))
-             (unless (and (= header 24) (= (aref frame (+ at 20)) 2) (= (be frame (+ at 22) 2) 1460))
+             (unless (and (= header 24) (= (aref frame (+ at 20)) 2) (= (be frame (+ at 22) 2) (if (call-six call) 1440 1460)))
                (failed "the machine answers the beginning of a connection without saying how long a segment may be"))
              (push number (call-answers call))
              (cond ((plusp (call-lose-answers call))
@@ -6818,6 +6868,9 @@
   (let ((call (apply #'make-call :network *network* :port port :from-port (+ 40000 (incf *calls*)) options)))
     (when (stringp (call-say call))
       (setf (call-say call) (octets (call-say call))))
+    ;; by IPv6 it is the router's machine that calls, at the address that the machine made on the network
+    (when (eq (call-six call) t)
+      (setf (call-six call) (cons (machine-six (network-prefix *network*)) (network-six-address *network* 2))))
     (sb-thread:with-mutex ((network-lock *network*))
       (push call (network-calls *network*)))
     (sb-thread:signal-semaphore (network-wake *network*))
@@ -6836,6 +6889,7 @@
   ended (moment 0) (same 0) (window 65535)
   again                         ; the piece that was sent a second time because the machine said three times that it lacks it
   secure                        ; what the network keeps of a connection that is kept closed
+  six                           ; the two addresses of IPv6 that it is between, the machine's first, when it came by IPv6
   more                          ; more is to come after what there is of the answer: it is not said to be over
   dropped spoiled swapped held)
 
@@ -6875,8 +6929,15 @@
   (let* ((inside (apply #'bytes-of parts))
          (header (bytes-of (list #x45 0) (number-bytes (+ 20 (length inside)) 2) (list 0 0 #x40 0 64 protocol 0 0)
                            (number-bytes from 4) (number-bytes to 4))))
-    (setf (be header 10 2) (logxor #xffff (wire-sum header 0 20)))
-    (frame-to-machine network #x0800 header inside)))
+    (cond (*six*
+           ;; by IPv6: the checksum of what the packet carries takes the other addresses in
+           (when (member protocol '(6 17))
+             (re-sum inside (if (= protocol 6) 16 6) (+ (four-sum from) (four-sum to)) (+ (six-sum (cdr *six*)) (six-sum (car *six*)))))
+           (frame-to-machine network #x86dd (list #x60 0 0 0) (number-bytes (length inside) 2) (list protocol 64)
+                             (six-bytes (cdr *six*)) (six-bytes (car *six*)) inside))
+          (t
+           (setf (be header 10 2) (logxor #xffff (wire-sum header 0 20)))
+           (frame-to-machine network #x0800 header inside)))))
 
 (defun datagram-to-machine (network from to from-port to-port &rest parts)
   (let* ((inside (apply #'bytes-of parts))
@@ -6890,9 +6951,143 @@
 ;; checksum, the four bytes that the kind has its own use for, and what
 ;; it carries.
 (defun control-to-machine (network from to kind code word &rest parts)
+  (if *six*
+      ;; The same word over IPv6, where it has other numbers, and comes with the beginning of the packet of
+      ;; IPv6's that the machine sent: that a machine cannot be reached (1 and 3), that nothing takes
+      ;; packets at a port (1 and 4), that a packet was too long (2).
+      (let ((back (subseq *six-packet* 0 (min (length *six-packet*) 48))) (router (network-six-address network 2)))
+        (cond ((and (= kind 3) (= code 4)) (control-six-to-machine network router (car *six*) 2 0 word 64 back))
+              ((and (= kind 3) (= code 3)) (control-six-to-machine network (cdr *six*) (car *six*) 1 4 0 64 back))
+              ((= kind 3) (control-six-to-machine network router (car *six*) 1 3 0 64 back))
+              (t (failed "the made-up network has no word over IPv6 for the kind ~D of ICMP's" kind))))
+      (let ((message (apply #'bytes-of (list kind code 0 0) (number-bytes word 4) parts)))
+        (setf (be message 2 2) (logxor #xffff (wire-sum message 0 (length message))))
+        (packet-to-machine network from to 1 message))))
+
+;; A message of ICMP's over IPv6 for the machine, whose checksum takes the
+;; addresses in.
+(defun control-six-to-machine (network from to kind code word hops &rest parts)
   (let ((message (apply #'bytes-of (list kind code 0 0) (number-bytes word 4) parts)))
-    (setf (be message 2 2) (logxor #xffff (wire-sum message 0 (length message))))
-    (packet-to-machine network from to 1 message)))
+    (setf (be message 2 2)
+          (logxor #xffff (wire-sum message 0 (length message) (+ (six-sum from) (six-sum to) 58 (length message)))))
+    (frame-to-machine network #x86dd (list #x60 0 0 0) (number-bytes (length message) 2) (list 58 hops)
+                      (six-bytes from) (six-bytes to) message)))
+
+;; An address of the network's own, by its last number.
+(defun network-six-address (network last)
+  (append (network-prefix network) (list 0 0 0 last)))
+
+;; Who of the network has an address of IPv6: the card, and the address of
+;; IPv4 that the rest of the network's code knows the machine by. The
+;; router is fe80::2 and the 2 of its network, the one who knows names the
+;; 3, and a machine of the network has the last number of its address of
+;; IPv4. Nothing, for an address that nobody here has.
+(defun six-owner (network address)
+  (cond ((equal address *router6*)
+         (values (network-station network) (network-address network)))
+        ((and (equal (subseq address 0 4) (network-prefix network)) (equal (subseq address 4 7) '(0 0 0)))
+         (let ((host (find (nth 7 address) (network-hosts network) :key (lambda (host) (logand (car host) 255)))))
+           (cond ((member (nth 7 address) '(2 3)) (values (network-station network) (network-address network)))
+                 (host (values (cdr host) (car host))))))))
+
+;; The router says what the network is: that it is a way out, and for how
+;; long; the network whose addresses are on this wire, on which a machine
+;; is to make its own; who knows names; and its own card.
+(defun router-says (network)
+  (control-six-to-machine
+   network *router6* (machine-six) 134 0 (+ (ash 64 24) (network-router-time network)) 255
+   (number-bytes 0 8)
+   (list 3 4 64 (network-prefix-flags network)) (number-bytes (network-prefix-time network) 4)
+   (number-bytes (network-prefix-time network) 4) (number-bytes 0 4) (six-bytes (network-six-address network 0))
+   (and (network-six-names network) (list 25 3 0 0)) (and (network-six-names network) (number-bytes 1800 4))
+   (and (network-six-names network) (six-bytes (network-six-address network 3)))
+   (list 1 1) (number-bytes (network-station network) 6)))
+
+;; A message of ICMP's over IPv6 from the machine. What it asks its
+;; neighbours and the routers has to be asked as they ask each other: by
+;; nobody who handed it on (255), with its own card named, and of the
+;; address that the question is for. Whoever has the address answers, the
+;; router says what the network is, a machine that is asked whether it is
+;; there says so; and what the machine says itself is put down.
+(defun network-heard-control-six (network frame from to hops inside)
+  (let ((kind (aref inside 0)) (code (aref inside 1)))
+    (cond ((= kind 133)
+           (unless (and (= hops 255) (= code 0) (equal to '(#xff02 0 0 0 0 0 0 2)) (equal from (machine-six))
+                        (>= (length inside) 16) (= (aref inside 8) 1) (= (aref inside 9) 1)
+                        (= (be inside 10 6) (network-machine network)))
+             (failed "the machine asks the routers what the network is in a way that is not theirs"))
+           (network-note network :routers-asked)
+           (when (and (network-six network) (not (member :routers (network-mute network))))
+             (router-says network)))
+          ((= kind 135)
+           (let ((target (six-at inside 8)))
+             (unless (and (= hops 255) (= code 0) (>= (length inside) 32)
+                          (equal to (list #xff02 0 0 0 0 1 (+ #xff00 (logand (nth 6 target) 255)) (nth 7 target)))
+                          (= (aref inside 24) 1) (= (aref inside 25) 1) (= (be inside 26 6) (network-machine network)))
+               (failed "the machine asks who has an address of IPv6 in a way that neighbours do not"))
+             (network-note network :who-has6 target)
+             (let ((card (six-owner network target)))
+               (when (and card (network-six network) (not (member :neighbours (network-mute network))))
+                 (let ((*from-station* card))
+                   (control-six-to-machine network target from 136 0 #x60000000 255
+                                           (six-bytes target) (list 2 1) (number-bytes card 6)))))))
+          ((= kind 136)
+           (unless (and (= hops 255) (= code 0) (>= (length inside) 32))
+             (failed "the machine says that it has an address of IPv6 in a way that neighbours do not"))
+           (network-note network :i-have6 (six-at inside 8) (be inside 4 4) (be inside 26 6)))
+          ((= kind 128)
+           (network-note network :ping6 to (be inside 6 2))
+           (cond ((or (member :ping (network-mute network)) (not (network-six network))))
+                 ((network-unreachable network)
+                  (control-six-to-machine network (network-six-address network 2) from 1 3 0 64
+                                          (subseq frame 14 (min (length frame) 62))))
+                 (t
+                  (let ((*from-station* (six-owner network to)))
+                    (control-six-to-machine network to from 129 0 (be inside 4 4) 64 (subseq inside 8))))))
+          ((= kind 129)
+           (network-note network :pong6 (coerce (subseq inside 4) 'list)))
+          ((= kind 1)
+           (network-note network :not-taken6 code (coerce (subseq inside 8) 'list)))
+          (t
+           (failed "the machine sent a message of ICMP's over IPv6 of the kind ~D" kind)))))
+
+;; A packet of IPv6's from the machine. It has to be from an address that
+;; the machine has, with a checksum that is right, and it has to have
+;; gone to the right card: the one of the address, the router's for an
+;; address that is not on the network, and for many machines at once the
+;; card's address that is made of the last bytes of theirs. What it
+;; carries for UDP and TCP is handed on as the same thing over IPv4.
+(defun network-heard-six (network frame)
+  (let* ((payload (be frame 18 2)) (kind (aref frame 20)) (hops (aref frame 21)) (from (six-at frame 22)) (to (six-at frame 38))
+         (station (be frame 0 6)) (inside (subseq frame 54 (min (length frame) (+ 54 payload)))))
+    (unless (and (= (ash (aref frame 14) -4) 6) (<= (+ 54 payload) (length frame)) (plusp hops)
+                 (member from (list (machine-six) (machine-six (network-prefix network))) :test #'equal))
+      (failed "the machine sent a packet that is not one of IPv6's from an address of its own: from ~S" from))
+    (unless (= (wire-sum inside 0 payload (+ (six-sum from) (six-sum to) kind payload)) #xffff)
+      (failed "the machine sent something over IPv6 whose checksum is wrong"))
+    (unless (= station (if (>= (car to) #xff00)
+                           (+ (ash #x3333 32) (ash (nth 6 to) 16) (nth 7 to))
+                           (or (six-owner network to) (network-station network))))
+      (failed "the machine sent a packet for ~S to the card ~X" to station))
+    (network-note network :six kind to)
+    (cond ((= kind 58)
+           (network-heard-control-six network frame from to hops inside))
+          ((not (network-six network)))
+          ((member kind '(6 17))
+           (multiple-value-bind (card alias) (six-owner network to)
+             (declare (ignore card))
+             (let* ((from4 (network-lease network)) (to4 (or alias #xc0a80707))
+                    (header (bytes-of (list #x45 0) (number-bytes (+ 20 payload) 2) (list 0 0 #x40 0 hops kind 0 0)
+                                      (number-bytes from4 4) (number-bytes to4 4)))
+                    (*six* (cons from to)) (*six-packet* (subseq frame 14 (+ 54 payload))))
+               (re-sum inside (if (= kind 6) 16 6) (+ (six-sum from) (six-sum to)) (+ (four-sum from4) (four-sum to4)))
+               (setf (be header 10 2) (logxor #xffff (wire-sum header 0 20)))
+               (let ((shaped (bytes-of (subseq frame 0 12) (list 8 0) header inside)))
+                 (if (= kind 17)
+                     (network-heard-datagram network shaped)
+                     (network-heard-segment network shaped))))))
+          (t
+           (failed "the machine sent a packet of IPv6's of the protocol ~D" kind)))))
 
 ;; A segment for the machine, with a byte of what it carries changed after
 ;; the checksum was worked out when SPOILED says so. One that begins a
@@ -6902,7 +7097,7 @@
   (when (plusp (length data))
     (incf (network-pieces network)))
   (let* ((from (or (served-address connection) (network-address network))) (to (network-lease network))
-         (*from-station* (served-station connection))
+         (*from-station* (served-station connection)) (*six* (served-six connection))
          (says (and (logbitp 1 flags) (network-longest network)))
          (segment (bytes-of (number-bytes (served-to-port connection) 2) (number-bytes (served-port connection) 2)
                             (number-bytes (ldb (byte 32 0) number) 4) (number-bytes (served-theirs connection) 4)
@@ -7023,11 +7218,22 @@
 ;; test wants that; that it cannot say; that there is no such name; or,
 ;; when CUT says so, nothing but the word that the answer was too long.
 (defun network-name-answer (network number question name &optional cut)
-  (let ((address (cdr (assoc name (network-names network) :test #'string-equal))))
+  (let ((address (cdr (assoc name (network-names network) :test #'string-equal)))
+        (last (cdr (assoc name (network-names6 network) :test #'string-equal)))
+        (kind (be question (- (length question) 4) 2)))
     (cond (cut
            (bytes-of (number-bytes number 2) (list #x83 #x80 0 1 0 0 0 0 0 0) question))
           ((network-names-fail network)
            (bytes-of (number-bytes number 2) (list #x81 #x82 0 1 0 0 0 0 0 0) question))
+          ((and (= kind 28) last (network-six network))
+           (bytes-of (number-bytes number 2) (list #x81 #x80 0 1 0 1 0 0 0 0) question
+                     (list #xc0 #x0c 0 28 0 1) (number-bytes (network-ttl network) 4) (list 0 16)
+                     (six-bytes (network-six-address network last))))
+          ((or (= kind 28) (and (null address) last (network-six network)))
+           ;; the name is there, and has no address of the kind that was asked for
+           (if (or address last)
+               (bytes-of (number-bytes number 2) (list #x81 #x80 0 1 0 0 0 0 0 0) question)
+               (bytes-of (number-bytes number 2) (list #x81 #x83 0 1 0 0 0 0 0 0) question)))
           (address
            (bytes-of (number-bytes number 2)
                      (list #x81 #x80 0 1 0 (if (network-another-record network) 2 1) 0 0 0 0) question
@@ -7045,7 +7251,7 @@
     (let ((message (subseq bytes 2 (+ 2 (be bytes 0 2)))))
       (multiple-value-bind (name place) (name-in message 12)
         (unless (and (= (be message 2 2) #x0100) (= (be message 4 2) 1)
-                     (= (be message (1+ place) 2) 1) (= (be message (+ place 3) 2) 1) (= (length message) (+ place 5)))
+                     (member (be message (1+ place) 2) '(1 28)) (= (be message (+ place 3) 2) 1) (= (length message) (+ place 5)))
           (failed "the machine asks for the address of a name by TCP in a way that is not DNS's"))
         (network-note network :name-whole name)
         (let ((answer (network-name-answer network (be message 0 2) (subseq message 12 (+ place 5)) name)))
@@ -7070,7 +7276,7 @@
            (setf (network-connections network) (remove connection (network-connections network))))
           ((and (logbitp 1 flags) (not (logbitp 4 flags)))
            (network-note network :connect to-port)
-           (unless (and (= header 24) (= (aref frame (+ at 20)) 2) (= (be frame (+ at 22) 2) 1460))
+           (unless (and (= header 24) (= (aref frame (+ at 20)) 2) (= (be frame (+ at 22) 2) (if *six* 1440 1460)))
              (failed "the machine begins a connection without saying how long a segment may be"))
            (cond ((member :connections (network-mute network)))
                  ((network-unreachable network)
@@ -7081,15 +7287,15 @@
                     (when (eq (network-unreachable network) :forged)
                       (setf (be quoted 24 4) (ldb (byte 32 0) (+ 77 (be quoted 24 4)))))
                     (control-to-machine network (network-address network) (be frame 26 4) 3 1 0 quoted)))
-                 ((network-refuse network)
+                 ((or (network-refuse network) (and *six* (network-six-closed network)))
                   (segment-to-machine network (make-served :port port :to-port to-port :theirs (ldb (byte 32 0) (1+ number))
-                                                           :address (be frame 30 4) :station (be frame 0 6))
+                                                           :address (be frame 30 4) :station (be frame 0 6) :six *six*)
                                       0 #x14 nil))
                  (t
                   (unless connection
                     (setq connection (make-served :port port :to-port to-port :state :opening
                                                   :theirs (ldb (byte 32 0) (1+ number)) :first (network-first network)
-                                                  :address (be frame 30 4) :station (be frame 0 6)))
+                                                  :address (be frame 30 4) :station (be frame 0 6) :six *six*))
                     (push connection (network-connections network)))
                   (when (network-false-start network)
                     ;; something that is no answer to the beginning: it says that it has bytes that nobody sent
@@ -7246,9 +7452,10 @@
              (let ((question (subseq frame (+ inside 12) (+ place 5)))
                    (number (be frame inside 2)))
                (unless (and (= (be frame (+ inside 2) 2) #x0100) (= (be frame (+ inside 4) 2) 1)
-                            (= (be frame (1+ place) 2) 1) (= (be frame (+ place 3) 2) 1))
+                            (member (be frame (1+ place) 2) '(1 28)) (= (be frame (+ place 3) 2) 1))
                  (failed "the machine asks for the address of a name in a way that is not DNS's"))
                (network-note network :name name to-port)
+               (network-note network :name-kind (be frame (1+ place) 2) name)
                (network-note network :name-asked-of to)
                (unless (member :names (network-mute network))
                  (progn
@@ -7304,10 +7511,12 @@
          ;; where what the frame carries ends, after which there is only what makes it sixty bytes long
          (end (cond ((= kind #x0806) 42)
                     ((= kind #x0800) (+ 14 (be frame 16 2)))
+                    ((= kind #x86dd) (+ 54 (be frame 18 2)))
                     (t (length frame)))))
     (unless (= (be frame 6 6) (network-machine network))
       (failed "the machine sent a frame that does not say that it is from its card"))
-    (unless (or (= to #xffffffffffff) (= to (network-station network)) (rassoc to (network-hosts network)))
+    (unless (or (= to #xffffffffffff) (= to (network-station network)) (rassoc to (network-hosts network))
+                (and (= kind #x86dd) (= (ash to -32) #x3333)))
       (failed "the machine sent a frame to a card that is not on its network: ~X" to))
     (when (find-if #'plusp frame :start (min end (length frame)))
       (failed "the machine sent a frame with something after what it carries, where there should be nothing"))
@@ -7335,6 +7544,8 @@
              (17 (network-heard-datagram network frame))
              (6 (network-heard-segment network frame))
              (t (failed "the machine sent a packet of the protocol ~D" (aref frame 23)))))
+          ((= kind #x86dd)
+           (network-heard-six network frame))
           (t (failed "the machine sent a frame of the kind ~X" kind)))))
 
 ;; The network's own thread: it takes what the machine has sent, and sends
@@ -7499,7 +7710,12 @@
                 (and (or names addresses)
                      (der 48 (der 6 '(#x55 #x1d #x11))
                           (der 4 (apply #'der 48 (append (mapcar (lambda (name) (der #x82 (octets name))) names)
-                                                         (mapcar (lambda (address) (der #x87 (number-bytes address 4))) addresses))))))
+                                                         ;; an address of IPv6 is a list of its eight numbers
+                                                         (mapcar (lambda (address)
+                                                                   (der #x87 (if (listp address)
+                                                                                 (loop for number in address append (number-bytes number 2))
+                                                                                 (number-bytes address 4))))
+                                                                 addresses))))))
                 (and purposes-p
                      (der 48 (der 6 '(#x55 #x1d #x25)) (der 4 (apply #'der 48 (mapcar (lambda (purpose) (der 6 purpose)) purposes)))))
                 (and must (der 48 (der 6 '(#x2a 3 4 5)) (der 1 '(255)) (der 4 (der 5))))))
@@ -7961,6 +8177,10 @@
 ;; machine gives it ten: nothing on this network takes longer than a
 ;; fraction of one, and a test that waits in vain should not wait long.
 (setq clara.net:*patience* 3000)
+;; And the routers of a network are given no time at all to say what the
+;; network is: most of the networks here have none, and a test that wants
+;; to hear one says how long it waits.
+(setq clara.net::*router-wait* 0)
 
 ;; Numbers in memory, the highest byte first, and the sums that the
 ;; protocols make of them: the example of RFC 1071 is the sum ddf2, of
@@ -8279,7 +8499,9 @@
   (dotimes (i 8)
     (stray))
   (check t (eventually (lambda () (plusp (clara.net::card-dropped clara.net::*card*)))))
-  (check '(t 6) (list (clara:thread-alive-p (clara.net::card-thread clara.net::*card*)) (network-saw *network* :given-up))))
+  ;; (the card has eight pages to put frames together in, and three hold what the machine sent to come onto
+  ;; the network: its question to the routers and its two to the DHCP server)
+  (check '(t 5) (list (clara:thread-alive-p (clara.net::card-thread clara.net::*card*)) (network-saw *network* :given-up))))
 
 ;; A machine that is on the machine's own network is spoken to itself,
 ;; and one that is not, by the way out: each frame goes to the card of the
@@ -8514,9 +8736,15 @@
 ;; taken. T when what was taken there is what was sent; and the page
 ;; frames that are in use afterwards are the ones that were before.
 (defun sent-whole (bytes &rest options)
-  (apply #'new-network options)
-  (said-by #'clara.net:up)
-  (let* ((before (clara.host:allocated-pages)) (connection (clara.net::begin clara.net::*card* #x0a000202 9 0))
+  (let ((to (getf options :to #x0a000202)))
+    (remf options :to)
+    (apply #'new-network options)
+    (let ((clara.net::*router-wait* (if (getf options :six) 2000 0)))
+      (said-by #'clara.net:up))
+    (sent-whole-to to bytes)))
+
+(defun sent-whole-to (to bytes)
+  (let* ((before (clara.host:allocated-pages)) (connection (clara.net::begin clara.net::*card* to 9 0))
          (pages (ceiling bytes 4096)) (memory (clara.unsafe:allocate-memory pages)))
     (unwind-protect
          (progn
@@ -8801,6 +9029,235 @@
     (check t (done-p call))
     (check (format nil "AS BEFORE~%") (call-text call)))
   (clara.net:stop-serving 7))
+
+;;; IPv6: addresses of 128 bits, which are lists of eight numbers here; a
+;;; machine that makes its own from what the router of its network says,
+;;; finds its neighbours, and does over IPv6 what it does over IPv4.
+
+;; Addresses as they are written, and what is written as an address.
+(check '("::" "::1" "fe80::1" "fec0::5054:ff:fe12:3456" "2001:db8::1:0:0:1" "1:2:3:4:5:6:7:8" "1::" "1:0:1::" "0:1::1"
+         "1:0:2:3:4:5:6:7" "ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff")
+       (mapcar #'clara.net::address-text
+               '((0 0 0 0 0 0 0 0) (0 0 0 0 0 0 0 1) (#xfe80 0 0 0 0 0 0 1) (#xfec0 0 0 0 #x5054 #xff #xfe12 #x3456)
+                 (#x2001 #xdb8 0 0 1 0 0 1) (1 2 3 4 5 6 7 8) (1 0 0 0 0 0 0 0) (1 0 1 0 0 0 0 0) (0 1 0 0 0 0 0 1)
+                 (1 0 2 3 4 5 6 7) (#xffff #xffff #xffff #xffff #xffff #xffff #xffff #xffff))))
+(check '((0 0 0 0 0 0 0 0) (0 0 0 0 0 0 0 1) (#xfe80 0 0 0 0 0 0 1) (#xfec0 0 0 0 #x5054 #xff #xfe12 #x3456) (1 2 3 4 5 6 7 8)
+         (1 0 0 0 0 0 0 0) (1 2 3 4 5 6 7 0) (0 2 3 4 5 6 7 8) (#x2001 #xdb8 0 0 1 0 0 1) #x0a000202)
+       (mapcar #'clara.net::text-address
+               '("::" "::1" "fe80::1" "FEC0::5054:FF:fe12:3456" "1:2:3:4:5:6:7:8" "1::" "1:2:3:4:5:6:7::" "::2:3:4:5:6:7:8"
+                 "2001:db8:0:0:1::1" "10.0.2.2")))
+(check '(nil nil nil nil nil nil nil nil nil nil nil nil)
+       (mapcar #'clara.net::text-address
+               '(":1:2:3:4:5:6:7" "1:2:3:4:5:6:7:" "1::2::3" "1:2:3:4:5:6:7:8:9" "12345::" "g::" ":::" "1:2" "" ":" "1:2:3:4:5:6:7"
+                 "::ffff:10.0.2.2")))
+;; In the address of something on a web server, an address of IPv6 stands between brackets.
+(check '(("fec0::2" 80 "/" nil) ("::1" 8443 "/x" t) ("fec0::2" 8000 "/a:b" nil))
+       (mapcar (lambda (address) (multiple-value-list (clara.net::parse-address address)))
+               '("http://[fec0::2]/" "https://[::1]:8443/x" "http://[fec0::2]:8000/a:b")))
+(check '("http://[fec0::2/ names no machine, or no port of one" "http://[fec0::2]x/ names no machine, or no port of one"
+         "http://[zz]/ names no machine, or no port of one" "http://[]/ names no machine, or no port of one"
+         "http://fec0::2/ names no machine, or no port of one")
+       (mapcar (lambda (address) (condition-text (lambda () (clara.net::parse-address address))))
+               '("http://[fec0::2/" "http://[fec0::2]x/" "http://[zz]/" "http://[]/" "http://fec0::2/")))
+
+;; A machine that comes onto a network with a router asks the routers
+;; what the network is, once, and makes its addresses: the one that goes
+;; no further than the wire, of its card's address, and one on the
+;; network that the router names. It says what it learned.
+(defun up-with-routers ()
+  (let ((clara.net::*router-wait* 2000))
+    (said-by #'clara.net:up)))
+
+(new-network :six t :files (files))
+(check (format nil "net: this machine is 10.0.2.15 on its network, 10.0.2.2 is the way out, 10.0.2.2 and 8.8.8.8 know names~%net: by IPv6 it is fec0::5054:ff:fe12:3456, fe80::2 is the way out, fec0::3 knows names~%")
+       (up-with-routers))
+(check '(("10.0.2.15" "fec0::5054:ff:fe12:3456" "fe80::5054:ff:fe12:3456") "10.0.2.15" 1 "")
+       (list (clara.net:addresses) (clara.net:address) (network-saw *network* :routers-asked) (up-with-routers)))
+;; Is a machine there? The router, by both its addresses, a machine of the network, one beyond it, which is
+;; asked by way of the router, and the machine itself. Who has an address is asked of the neighbours, once.
+(check '(t t t t t t)
+       (mapcar (lambda (name) (<= 0 (clara.net:ping name) 3000))
+               '("fec0::2" "fe80::2" "fec0::9" "2001:db8::7" "::1" "fec0::5054:ff:fe12:3456")))
+(check '((:ping6 (#xfec0 0 0 0 0 0 0 2) 1) (:ping6 (#xfe80 0 0 0 0 0 0 2) 1) (:ping6 (#xfec0 0 0 0 0 0 0 9) 1)
+         (:ping6 (#x2001 #xdb8 0 0 0 0 0 7) 1))
+       (reverse (remove :ping6 (network-heard *network*) :key #'car :test-not #'eq)))
+(check '((#xfec0 0 0 0 0 0 0 2) (#xfe80 0 0 0 0 0 0 2) (#xfec0 0 0 0 0 0 0 9))
+       (reverse (mapcar #'second (remove :who-has6 (network-heard *network*) :key #'car :test-not #'eq))))
+(let ((clara.net:*patience* 250) (clara.net:*again* 60))
+  (check "nobody on the network says that it has the address fec0::77" (condition-text (lambda () (clara.net:ping "fec0::77"))))
+  (setf (network-mute *network*) (list :ping))
+  (check "fec0::2 does not answer a ping" (condition-text (lambda () (clara.net:ping "fec0::2"))))
+  (setf (network-mute *network*) nil))
+(setf (network-unreachable *network*) t)
+(check "fec0::2 says that 2001:db8::7 cannot be reached" (condition-text (lambda () (clara.net:ping "2001:db8::7"))))
+(check '(:error "fec0::2 says that 2001:db8::7 cannot be reached") (fetched "http://[2001:db8::7]/hello.txt"))
+(setf (network-unreachable *network*) nil)
+;; The machine tells a neighbour that asks who has an address of its own, with its card, and learns the
+;; card of whoever asked; a question for another address, and one that somebody handed on, it does not answer.
+(flet ((ask (target &optional (hops 255))
+         (let ((*from-station* #x525500000009))
+           (control-six-to-machine *network* '(#xfec0 0 0 0 0 0 0 9)
+                                   (list #xff02 0 0 0 0 1 (+ #xff00 (logand (nth 6 target) 255)) (nth 7 target))
+                                   135 0 0 hops (six-bytes target) (list 1 1) (number-bytes #x525500000009 6)))))
+  (setf (clara.net::card-neighbours clara.net::*card*) nil)
+  (ask (machine-six '(#xfec0 0 0 0)))
+  (check t (and (eventually (lambda () (plusp (network-saw *network* :i-have6)))) t))
+  (check (list :i-have6 (machine-six '(#xfec0 0 0 0)) #x60000000 #x525400123456) (find :i-have6 (network-heard *network*) :key #'car))
+  (check #x525500000009 (cdr (assoc '(#xfec0 0 0 0 0 0 0 9) (clara.net::card-neighbours clara.net::*card*) :test #'equal)))
+  (ask (machine-six))
+  (check t (eventually (lambda () (= 2 (network-saw *network* :i-have6)))))
+  (ask '(#xfec0 0 0 0 0 0 0 #x77))
+  (ask (machine-six '(#xfec0 0 0 0)) 64)
+  (sleep 0.1)
+  (check 2 (network-saw *network* :i-have6)))
+;; It says that it is there when it is asked, and not when many are asked at once; and to a packet of
+;; UDP's for a port where nobody listens it says that it was not taken, with the beginning of the packet.
+(control-six-to-machine *network* '(#xfec0 0 0 0 0 0 0 2) (machine-six '(#xfec0 0 0 0)) 128 0 #xbeef0007 64 (list 1 2 3 4 5))
+(check t (and (eventually (lambda () (plusp (network-saw *network* :pong6)))) t))
+(check '(:pong6 (#xbe #xef 0 7 1 2 3 4 5)) (find :pong6 (network-heard *network*) :key #'car))
+(control-six-to-machine *network* '(#xfec0 0 0 0 0 0 0 2) '(#xff02 0 0 0 0 0 0 1) 128 0 #xbeef0008 64 (list 1 2 3))
+(let ((*six* (cons (machine-six '(#xfec0 0 0 0)) '(#xfec0 0 0 0 0 0 0 2))))
+  (datagram-to-machine *network* #x0a000202 #x0a00020f 4000 9 (list 104 105)))
+(check t (and (eventually (lambda () (plusp (network-saw *network* :not-taken6)))) t))
+(let ((word (find :not-taken6 (network-heard *network*) :key #'car)))
+  (check '(4 48 #x60 17 (#x0f #xa0 0 9))
+         (list (second word) (length (third word)) (first (third word)) (nth 6 (third word)) (subseq (third word) 40 44))))
+(check '(1 nil) (list (network-saw *network* :pong6) (clara.net::card-trouble clara.net::*card*)))
+;; Names. The machine has addresses of both kinds, so it asks for both kinds of a name's, and goes by the
+;; one of IPv4 first, since its own of IPv6 are good on its network only. A name that has an address of
+;; IPv6 alone is reached by that; a name server is asked by IPv6 when that is its address.
+(setf (network-names6 *network*) (list (cons "releases.test" 2) (cons "six.test" 2)))
+(check '("10.0.2.2" (#x0a000202 (#xfec0 0 0 0 0 0 0 2)) "fec0::2" "there is no machine of the name nowhere.test")
+       (list (clara.net:resolve "releases.test") (clara.net::addresses-of "releases.test") (clara.net:resolve "six.test")
+             (condition-text (lambda () (clara.net:resolve "nowhere.test")))))
+(check '((:name-kind 1 "releases.test") (:name-kind 28 "releases.test") (:name-kind 1 "six.test") (:name-kind 28 "six.test")
+         (:name-kind 1 "nowhere.test") (:name-kind 28 "nowhere.test"))
+       (reverse (remove :name-kind (network-heard *network*) :key #'car :test-not #'eq)))
+(let ((clara.net:*name-server* "fec0::3") (asked (network-saw *network* :six)))
+  (setf (network-names *network*) (list (cons "by.six.test" #x0a000207)))
+  (check '("10.0.2.7" t) (list (clara.net:resolve "by.six.test") (> (network-saw *network* :six) asked))))
+;; A file from a web server that is reached by IPv6: by a name, and by the address itself.
+(let ((six (count '(:six 6 (#xfec0 0 0 0 0 0 0 2)) (network-heard *network*) :test #'equal)))
+  (check '("hello from the made-up network" "hello from the made-up network" t)
+         (list (fetched "http://six.test/hello.txt") (fetched "http://[fec0::2]:8080/hello.txt") (equal *long* (fetched "http://[fec0::2]/long"))))
+  (check t (> (count '(:six 6 (#xfec0 0 0 0 0 0 0 2)) (network-heard *network*) :test #'equal) (+ six 100))))
+;; The machine takes connections that come by IPv6, and reaches itself by it.
+(let ((pages (clara.host:allocated-pages)))
+  (clara.net:serve 7 'shout)
+  (let ((call (call-machine 7 :six t :say (format nil "by the longer addresses~%") :end t)))
+    (check t (done-p call))
+    (check (format nil "BY THE LONGER ADDRESSES~%") (call-text call)))
+  (check '("TO MYSELF" "AND AGAIN")
+         (list (clara.net:with-connection (stream "::1" 7) (write-line "to myself" stream) (read-line stream))
+               (clara.net:with-connection (stream "fec0::5054:ff:fe12:3456" 7) (write-line "and again" stream) (read-line stream))))
+  (clara.net:stop-serving 7)
+  (check '(t nil) (list (settled pages) (clara.net::card-trouble clara.net::*card*))))
+;; What comes from the wire for ::1, or from an address of the machine's own, is nobody's.
+(let ((given-up (network-saw *network* :given-up)))
+  (dolist (pair (list (cons '(0 0 0 0 0 0 0 1) '(#xfec0 0 0 0 0 0 0 2)) (cons (machine-six '(#xfec0 0 0 0)) (machine-six '(#xfec0 0 0 0)))))
+    (let ((*six* pair)
+          (segment (bytes-of (list 0 80 #xc0 #x01) (number-bytes 1000 4) (number-bytes 2000 4) (list #x50 #x10 #xff #xff 0 0 0 0))))
+      (setf (be segment 16 2) (logxor #xffff (wire-sum segment 0 20 (around-sum #x0a000202 #x0a00020f 6 20))))
+      (packet-to-machine *network* #x0a000202 #x0a00020f 6 segment)))
+  (sleep 0.1)
+  (check given-up (network-saw *network* :given-up)))
+
+;; What the machine sends over a connection by IPv6 arrives as it does by
+;; IPv4, in pieces that leave room for the longer head; and when the way
+;; is narrower than that, the machine is told, and its pieces are shorter.
+(check '(t 1380) (list (sent-whole 200000 :six t :to '(#xfec0 0 0 0 0 0 0 2)) (network-longest-seen *network*)))
+(let ((clara.net:*again* 50))
+  (check '(t t) (list (sent-whole 60000 :six t :to '(#xfec0 0 0 0 0 0 0 2) :narrow 1300) (plusp (network-saw *network* :too-long))))
+  (check '(t t) (list (sent-whole 60000 :six t :to '(#xfec0 0 0 0 0 0 0 2) :lose-pieces '(0 5 6 20)) (<= (network-longest-seen *network*) 1380))))
+
+;; A machine whose address of IPv6 is one of the Internet's own goes by
+;; IPv6 first, and by IPv4 when nothing takes the connection there. A
+;; connection that is kept closed is the same over either.
+(new-network :six t :prefix (list #x2001 #xdb8 1 0) :files (files))
+(up-with-routers)
+(check '(("10.0.2.15" "2001:db8:1:0:5054:ff:fe12:3456" "fe80::5054:ff:fe12:3456") ((#x2001 #xdb8 1 0 0 0 0 2) #x0a000202) "2001:db8:1::2")
+       (list (clara.net:addresses) (clara.net::addresses-of "releases.test") (clara.net:resolve "releases.test")))
+(check '("hello from the made-up network" t)
+       (list (fetched "http://releases.test/hello.txt")
+             (plusp (count '(:six 6 (#x2001 #xdb8 1 0 0 0 0 2)) (network-heard *network*) :test #'equal))))
+(check '("hello from the made-up network" t)
+       (list (fetched "https://releases.test/hello.txt")
+             (and (eventually (lambda () (plusp (network-saw *network* :goodbye)))) t)))
+(new-network :six t :prefix (list #x2001 #xdb8 1 0) :files (files) :six-closed t)
+(up-with-routers)
+(check '("hello from the made-up network" t 2)
+       (list (fetched "http://releases.test/hello.txt")
+             (plusp (count '(:six 6 (#x2001 #xdb8 1 0 0 0 0 2)) (network-heard *network*) :test #'equal))
+             (network-saw *network* :connect)))
+;; A certificate can be for an address of IPv6, as it can for one of IPv4.
+(let ((own (certificate :subject "by its address" :issuer "The tests' signer in between" :key *shown-key* :signer *signer-key* :bits 384
+                        :names '("somebody.else.test") :addresses (list '(#xfec0 0 0 0 0 0 0 2)) :usage 128)))
+  (new-network :six t :files (files) :chain (list own *signer*) :key *shown-key*)
+  (up-with-routers)
+  (check '("hello from the made-up network" (:error "the certificate that fec0::9 shows is not for that name: it is for somebody.else.test"))
+         (list (fetched "https://[fec0::2]/hello.txt") (fetched "https://[fec0::9]/hello.txt"))))
+
+;; What a router says holds for as long as it says. A router that is no
+;; way out any more is none; an address is the machine's for as long as
+;; the network is said to last; and a network on which a machine is not to
+;; make its own address gives it none.
+(new-network :six t :router-time 0)
+(up-with-routers)
+(check '(("10.0.2.15" "fec0::5054:ff:fe12:3456" "fe80::5054:ff:fe12:3456")
+         "2001:db8::7 is not on this machine's network, and no router has said that it is a way out")
+       (list (clara.net:addresses) (condition-text (lambda () (clara.net:ping "2001:db8::7")))))
+(new-network :six t :prefix-time 1)
+(up-with-routers)
+(check 3 (length (clara.net:addresses)))
+(check t (eventually (lambda () (null (cdr (clara.net::card-addresses6 clara.net::*card*))))))
+(check '(("10.0.2.15" "fe80::5054:ff:fe12:3456") nil nil)
+       (list (clara.net:addresses) (clara.net::card-prefixes6 clara.net::*card*) (clara.net::card-trouble clara.net::*card*)))
+(new-network :six t :prefix-flags #x80 :six-names nil)
+(check (format nil "net: this machine is 10.0.2.15 on its network, 10.0.2.2 is the way out, 10.0.2.2 and 8.8.8.8 know names~%net: by IPv6 it is fe80::5054:ff:fe12:3456, fe80::2 is the way out~%")
+       (up-with-routers))
+(check '(("10.0.2.15" "fe80::5054:ff:fe12:3456") "10.0.2.2"
+         "this machine has no address of IPv6 from which fec0::2 could be reached: no router has given it one")
+       (list (clara.net:addresses) (clara.net:resolve "releases.test") (condition-text (lambda () (clara.net:ping "fec0::2")))))
+(check 1 (network-saw *network* :name))
+
+;; A network without a router: the machine asks three times, and has the
+;; address that goes no further than the wire. And a machine that is told
+;; not to speak IPv6 does not ask at all.
+(new-network)
+(let ((again clara.net:*again*))
+  (setq clara.net:*again* 40)
+  (unwind-protect
+       (progn
+         (check (format nil "net: this machine is 10.0.2.15 on its network, 10.0.2.2 is the way out, 10.0.2.2 and 8.8.8.8 know names~%")
+                (said-by #'clara.net:up))
+         (check t (eventually (lambda () (= 3 (network-saw *network* :routers-asked)))))
+         (sleep 0.5)
+         (check '(3 ("10.0.2.15" "fe80::5054:ff:fe12:3456")) (list (network-saw *network* :routers-asked) (clara.net:addresses))))
+    (setq clara.net:*again* again)))
+(new-network :six t)
+(let ((clara.net:*ipv6* nil))
+  (up-with-routers)
+  (check '(("10.0.2.15") 0 "this machine does not speak IPv6, and fe80::2 is an address of it")
+         (list (clara.net:addresses) (network-saw *network* :six) (condition-text (lambda () (clara.net:ping "fe80::2"))))))
+
+;; A network on which only IPv6 is to be had: no DHCP server answers, and
+;; the machine goes by what the router gave it, having said so. It does
+;; not ask for an address of IPv4 again every time that something wants
+;; the network.
+(new-network :six t :mute (list :dhcp) :files (files) :names6 (list (cons "six.test" 2)))
+(let ((clara.net:*patience* 300) (clara.net:*again* 60))
+  (check (format nil "net: no DHCP server says which address this machine has on its network: this machine has no address of IPv4~%net: by IPv6 it is fec0::5054:ff:fe12:3456, fe80::2 is the way out, fec0::3 knows names~%")
+         (up-with-routers))
+  (let ((asked (network-saw *network* :dhcp)))
+    (check '(("fec0::5054:ff:fe12:3456" "fe80::5054:ff:fe12:3456") "fec0::5054:ff:fe12:3456" "fec0::2")
+           (list (clara.net:addresses) (clara.net:address) (clara.net:resolve "six.test")))
+    (check '("hello from the made-up network" (:error "this machine has no address of IPv4, and 10.0.2.2 is one"))
+           (list (fetched "http://six.test/hello.txt") (fetched "http://10.0.2.2/hello.txt")))
+    (check asked (network-saw *network* :dhcp))))
+;; And one on which there is neither: that is the error that it always was.
+(new-network :mute (list :dhcp))
+(let ((clara.net:*patience* 250) (clara.net:*again* 60))
+  (check "no DHCP server says which address this machine has on its network" (condition-text #'clara.net:up)))
 
 ;;; What a connection that is kept closed is made of (CLARA.UNSAFE): the
 ;;; arithmetic that the kernel has in C, here in SBCL's big numbers

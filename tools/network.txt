@@ -1,5 +1,6 @@
 > (list (clara.net:station) (clara.net:address))
 net: this machine is 10.0.2.15 on its network, 10.0.2.2 is the way out, 10.0.2.3 knows names
+net: by IPv6 it is fec0::5054:ff:fe12:3456, fe80::2 is the way out, fec0::3 knows names
 ("52:54:00:12:34:56" "10.0.2.15")
 > (setq clara.net:*name-server* "10.0.2.2" clara.net:*name-port* {{port}})
 {{port}}
@@ -9,6 +10,14 @@ COMPLAINT
 ("10.0.2.2" "10.0.2.2" "there is no machine of the name nowhere.example")
 > (list (clara.net:resolve "long.answer.test") (< -1 (clara.net:ping "releases.test") 1000) (< -1 (clara.net:ping "10.0.2.3") 1000))
 ("10.0.2.2" T T)
+> (list (clara.net:addresses) (< -1 (clara.net:ping "fec0::2") 1000) (< -1 (clara.net:ping "fe80::2") 1000) (clara.net:resolve "six.test"))
+(("10.0.2.15" "fec0::5054:ff:fe12:3456" "fe80::5054:ff:fe12:3456") T T "fec0::2")
+> (list (clara.net:fetch-text "http://six.test:{{port}}/latest") (clara.net:fetch-text "http://[fec0::2]:{{port}}/moved/latest"))
+("{{version}}-other
+" "{{version}}-other
+")
+> (complaint (lambda () (clara.net:fetch-text "http://[fec0::2]:1/latest")))
+"fec0::2 takes no connection at its port 1"
 > (defun shout (stream) (loop (let ((line (read-line stream nil))) (unless line (return)) (write-line (string-upcase line) stream))))
 SHOUT
 > (list (clara.net:serve 7007 'shout) (clara.net:serving))
@@ -20,6 +29,9 @@ SHOUT
 ((7007 1 0 NIL))
 > (clara.net:with-connection (stream "127.0.0.1" 7007) (write-line "to myself" stream) (read-line stream))
 "TO MYSELF"
+NIL
+> (clara.net:with-connection (stream "fec0::5054:ff:fe12:3456" 7007) (write-line "and by the longer address" stream) (read-line stream))
+"AND BY THE LONGER ADDRESS"
 NIL
 > (list (clara.net:stop-serving 7007) (complaint (lambda () (clara.net:connect "127.0.0.1" 7007))))
 (T "127.0.0.1 takes no connection at its port 7007")
@@ -59,6 +71,9 @@ tls: this system trusts {{roots}} certificates to say who a machine is
 ("{{version}}-other
 " "{{version}}-other
 ")
+> (list (clara.net:fetch-text "https://six.test:{{secure}}/latest") (complaint (lambda () (clara.net:fetch-text "https://[fec0::2]:{{secure}}/latest"))))
+("{{version}}-other
+" "the certificate that fec0::2 shows is not for that name: it is for releases.test")
 > (subseq (complaint (lambda () (clara.net:fetch-text "https://old.test:{{secure}}/latest"))) 0 43)
 "the certificate of old.test was good until "
 > (complaint (lambda () (clara.net:fetch-text "https://other.test:{{secure}}/latest")))
@@ -110,4 +125,5 @@ clara: starting the machine again
 ("{{version}}-other" T (ACROSS "the network") "https://claraos.org/releases/" NIL)
 > (list (clara.fat:names "/clara/") (clara.net:address))
 net: this machine is 10.0.2.15 on its network, 10.0.2.2 is the way out, 10.0.2.3 knows names
+net: by IPv6 it is fec0::5054:ff:fe12:3456, fe80::2 is the way out, fec0::3 knows names
 (("{{version}}-other/" "clara.image") "10.0.2.15")

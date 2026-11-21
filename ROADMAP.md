@@ -680,10 +680,28 @@ The network:
   run-aarch64` hands on what connects to a port of the computer. There is
   no web server: what is served this way is in the open, and the half of
   TLS that a server speaks is not written.
-- [ ] **M17c IPv6**. Addresses of 128 bits beside the ones of 32: the
-  machine makes its own from what the routers of its network say, finds
-  its neighbours, asks for the addresses of both kinds that a name has,
-  and connects, listens and pings over either.
+- [x] **M17c IPv6** (2026-11-21, version 0.0.35). Addresses of 128 bits
+  beside the ones of 32. When something first wants the network, the
+  machine makes itself an address that goes no further than its own
+  network, out of its card's address, and asks the routers what the
+  network is; from what a router answers it makes its address on that
+  network, and knows the way out, which addresses are its neighbours',
+  and who knows names. It finds a neighbour's card by asking the
+  neighbours, answers when it is asked for its own, and says and hears
+  over ICMPv6 what it does over ICMP. Above that nothing changed but the
+  addresses: a ping, a connection, a port that takes connections, a
+  question for a name and a file by HTTP or by HTTPS go over either
+  kind, `http://[fec0::2]:8000/` is how such an address is written where
+  a machine's name stands, and a certificate can be for one. A name is
+  asked for the kinds of address that the machine has itself; the
+  machine goes by IPv6 first when its own address is one of the
+  Internet's and by IPv4 otherwise, and tries the next address when
+  nothing takes the connection at the first. `(clara.net:addresses)`
+  lists what the machine has, and `clara.net:*ipv6*`, set to NIL, keeps
+  it from speaking IPv6 at all. On a network where no DHCP server answers
+  and a router does, the machine gets by with IPv6 alone. An address of
+  that kind is a list of eight numbers in the language, which has no
+  number of 128 bits.
 
 Later, in no order: outline fonts; sound; CLOS; a USB keyboard and mouse,
 which is what UTM gives a machine that is not told otherwise.
@@ -2042,6 +2060,57 @@ M17b, a machine that listens, what it left:
   takes connections again; those are the host tests'. And UTM, where the
   machine is on a network that it shares with the Mac and should be
   reached at its address: untried.
+
+M17c, IPv6, what it left:
+
+- The machine does not ask whether somebody else on the network has the
+  address that it makes for itself (RFC 4862 has it ask, and wait a
+  second for an answer): two machines whose cards have the same address
+  would both go on.
+- The second half of its addresses is its card's address, the same on
+  every network that the machine is ever on, which tells whoever sees
+  both that it is the same machine. Addresses that do not give that away
+  (RFC 8981, RFC 7217) are not made.
+- It learns what a network is from the routers' own word and from
+  nothing else. A network whose router says "ask a DHCP server for your
+  address", or for who knows names, gives the machine neither: there is
+  no DHCP for IPv6 here.
+- One router, the first that said it is a way out, and no word about a
+  better one is heard. What a neighbour said of its card is believed
+  until the machine is started again: nobody is asked whether it is
+  still so, and nothing is forgotten.
+- Packets in pieces are dropped, as over IPv4, and none are made. What
+  stands between the head of a packet and what it carries is passed
+  over when it says how long it is, and the machine puts nothing there
+  itself. It does not tell the network which addresses for many machines
+  it listens to (MLD), which a switch may want to know before it hands
+  the neighbours' questions on. How long a packet a router says the
+  network takes is not looked at: pieces of a connection are 1380 bytes
+  until somebody says that this was too long.
+- Which address of a name is tried first is one rule out of the many of
+  RFC 6724. When nothing answers at the first, the next is tried after
+  as long as patience is, ten seconds, and not at the same time.
+- A machine that comes onto a network without a router waits a second
+  for one, the first time that something wants the network, and asks
+  twice more, four seconds apart, in the background.
+- What a router says later, a new network, an end to an old one, changes
+  the machine's addresses without a word: `(clara.net:addresses)` shows
+  them.
+- Written out, an address of IPv4 inside one of IPv6 ("::ffff:10.0.2.2")
+  is not read.
+- Seen at a real kernel, under QEMU, whose network has a router: the
+  address, the way out and who knows names; pings to the router's two
+  addresses and to the machine itself; a file by HTTP and by HTTPS from
+  the computer that QEMU runs on, by a name that has only an address of
+  IPv6 and by the address between brackets; a connection of the
+  machine's own to itself. Not seen there: a connection from outside by
+  IPv6, since QEMU hands on a port by IPv4 only; an address of the
+  Internet's own, and with it IPv6 going first; a network with IPv6
+  alone; what a router said running out. Those are the host tests'. And
+  not seen at all: UTM, and any network that is not made up.
+- The boots that fetch need the computer that runs them to have IPv6 at
+  all, at least to itself (::1): the test's web server listens there for
+  what the machine sends to fec0::2.
 
 M15e, shutting down, what it left:
 

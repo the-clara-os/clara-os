@@ -742,6 +742,34 @@ Rules:
   connection of the machine's own to itself, where the function may
   still be on its way out. `with-connection` gives the values of its
   body, and READ-LINE has two.
+- IPv6 (lisp/net.lisp). An address is a number (IPv4) or a list of eight
+  numbers (IPv6): compare two with EQUAL and never with `=`, look one up
+  with `:test #'equal`, and ask `(consp address)` only where a packet is
+  put together or taken apart. `source-for` says which address the
+  machine speaks from to another, `own-p` whether an address is the
+  machine's, `station-of` which card a packet goes to, each for both
+  kinds. Whatever is added above the packets takes its addresses as they
+  come and is tried over both. What a router said is kept with the time
+  until which it holds (`hold`), and `keep-six`, from `tend`, lets go of
+  it. `up` waits `*router-wait*` for a router, a second; the host tests
+  set that to 0, since most of their networks have no router, and a test
+  that wants to hear one calls `up-with-routers`.
+- In the host tests a network speaks IPv6 when it is made with `:six t`
+  (`:prefix`, `:router-time`, `:prefix-time`, `:prefix-flags`, `:names6`,
+  `:six-closed`). Its web server, name servers and callers know only
+  IPv4: `network-heard-six` turns what the machine sends by IPv6 into the
+  same thing over IPv4 and binds `*six*`, under which
+  `packet-to-machine` sends the answer back by IPv6, and a connection
+  remembers that it came that way (`served-six`, `call-six`;
+  `call-machine port :six t`). So a new thing that the network serves is
+  written once, for IPv4, and a test only has to ask for it by an
+  address of IPv6. What only IPv6 has is in `network-heard-control-six`.
+- At a real kernel QEMU's network has a router, so every machine there
+  says two lines when it comes onto the network, and the sessions and
+  the manual show both. The test's web server listens at ::1 as well,
+  which is where QEMU hands what the machine sends to fec0::2, and its
+  name server gives a name that begins with `six.` an address of IPv6
+  and no other. A computer without IPv6 to itself cannot run those boots.
 - When the host tests end with SBCL's "unhandled condition in
   --disable-debugger mode" and a reader's error about a package that does
   not exist, somewhere far down lisp/host/tests.lisp, look for a

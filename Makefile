@@ -231,7 +231,7 @@ test: all host-test release-test $(BUILD)/system-other/stamp $(BUILD)/system-bro
 	rm -rf $(BUILD)/releases $(BUILD)/release-key $(BUILD)/certs $(BUILD)/trusted
 	python3 -I tools/release.py key $(BUILD)/release-key > $(BUILD)/release-key.public
 	python3 -I tools/release.py make $(BUILD)/system-other/esp/clara/$(VERSION)-other $(BUILD)/releases $(BUILD)/release-key
-	python3 -I tools/certs.py $(BUILD)/certs releases.test rsa.test:rsa large.test:large old.test:old
+	python3 -I tools/certs.py $(BUILD)/certs releases.test rsa.test:rsa large.test:large old.test:old six.test
 	mkdir -p $(BUILD)/trusted && cp $(BUILD)/certs/root.pem $(BUILD)/trusted/ && python3 -I tools/mkdisk.py $(BUILD)/trusted $(BUILD)/trusted.img
 	NAME=aarch64-network SERVE=$(BUILD)/releases CERTS=$(BUILD)/certs WORK=$(BUILD)/trusted.img KEY=$$(cat $(BUILD)/release-key.public) \
 		SESSION=tools/network.txt TIMEOUT=300 \

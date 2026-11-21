@@ -701,8 +701,9 @@ home:     there is no window manager to open a window with: (clara.windows:start
 "52:54:00:12:34:56"
 &gt; (clara.net:address)
 net: this machine is 10.0.2.15 on its network, 10.0.2.2 is the way out, 10.0.2.3 knows names
+net: by IPv6 it is fec0::5054:ff:fe12:3456, fe80::2 is the way out, fec0::3 knows names
 "10.0.2.15"</pre>
-    <p><code>station</code> is the card's own address on the wire, which it has from the start. The machine's address on the network is another matter: it asks the network for one (DHCP) the first time that something wants the network, and says what it was told. A machine that fetches nothing sends nothing.</p>
+    <p><code>station</code> is the card's own address on the wire, which it has from the start. The machine's address on the network is another matter: it asks the network for one (DHCP) the first time that something wants the network, and says what it was told. A machine that fetches nothing sends nothing. The second line is its address of the other kind, <a href="#ipv6">IPv6</a>, on a network that has a router for it.</p>
     <p>Under QEMU the network is one that QEMU makes up for the machine. The machine is 10.0.2.15 on it; 10.0.2.2 is the computer that QEMU runs on; and whatever that computer reaches, the machine reaches through it.</p>
     <p>The address is the machine's for a time, which the network says with it, a day under QEMU. When half of that is over the machine asks whether it may keep the address, without being told to and without a word, so a machine that runs for a week is still on its network.</p>
 
@@ -720,7 +721,7 @@ T</pre>
 &gt; (clara.net:resolve "claraos.org")
 "185.199.108.153"</code></pre>
     <ul>
-      <li><code>clara.net:fetch-text</code> gives a file that is a text, as a string. An address is <code>http://</code> or <code>https://</code>, the machine's name or its address, a port when it is not 80, or 443 for <code>https://</code>, and the file's name there.</li>
+      <li><code>clara.net:fetch-text</code> gives a file that is a text, as a string. An address is <code>http://</code> or <code>https://</code>, the machine's name or its address, a port when it is not 80, or 443 for <code>https://</code>, and the file's name there. An address of IPv6 stands between brackets: <code>http://[fec0::2]:8000/hello.txt</code>.</li>
       <li><code>clara.net:fetch</code> gives any file, as memory: three values, the address of page frames that hold it, how many bytes it is, and how many page frames those are, which are yours to give back with <code>clara.unsafe:free-memory</code>. <code>:limit</code> says how many bytes are taken at most, 16 MiB when nothing is said, and 1 MiB for a text.</li>
       <li><code>clara.net:resolve</code> gives the address of a name, as the network's name servers have it: when the network named several, the next is asked when one cannot say or says nothing. What they say of a name is remembered for as long as the answer says that it holds. <code>clara.net:*name-server*</code> names another one to ask, by its address, and <code>clara.net:*name-port*</code> the port to ask it at.</li>
       <li>What is fetched from an address that begins with <code>http://</code> comes as the other side sends it, and anybody on the way can read it and change it. That is good enough for a web server on your own computer, and for little else: <a href="#https">HTTPS</a> is the other way.</li>
@@ -772,6 +773,27 @@ T</pre>
       <tr><td><code>... ended the connection without saying that ... was whole</code></td><td>The file's length was not said, and the connection ended without the word that it was over: somebody may have cut it short.</td></tr>
       <tr><td><code>this machine has no device that makes numbers which nobody can guess</code></td><td>See above.</td></tr>
       <tr><td><code>what ... sent does not open with the key of this connection</code></td><td>Something was changed on the way.</td></tr>
+    </table>
+
+    <h3 id="ipv6">IPv6</h3>
+    <p>An address of IPv6 is eight numbers in base sixteen with colons between them, and two colons where zeroes are left out. A machine has two of them on a network whose router speaks IPv6: one that it makes for itself, which begins with fe80 and goes no further than its own network, and one on the network that the router names. It asks the routers when something first wants the network, as it asks for its other address, and both kinds are the machine's from then on.</p>
+<pre class="session">&gt; (clara.net:addresses)
+("10.0.2.15" "fec0::5054:ff:fe12:3456" "fe80::5054:ff:fe12:3456")
+&gt; (&lt; (clara.net:ping "fec0::2") 1000)
+T</pre>
+    <ul>
+      <li>Everything in this chapter goes over either kind: <code>ping</code>, <code>fetch</code>, <code>connect</code> and <code>serve</code> take such an address where they take the other, and a port that takes connections takes them by both.</li>
+      <li>A name can have addresses of both kinds, and the machine asks for the kinds that it has itself. It goes by IPv6 first when its own address of that kind is one of the Internet's, which begin with 2 or 3, and by IPv4 first otherwise; when nothing takes the connection at the first address, the next is tried. <code>clara.net:resolve</code> gives the one that comes first.</li>
+      <li>Under QEMU the machine's addresses of IPv6 are on the network that QEMU makes up: fec0::2 is the computer that QEMU runs on, and what lies beyond is reached by IPv6 only when that computer has IPv6 itself. So a machine there goes by IPv4 where it can, as it always did.</li>
+      <li><code>(setq clara.net:*ipv6* nil)</code>, before anything has wanted the network, and the machine does not speak IPv6 at all.</li>
+      <li>On a network where nothing hands out addresses of IPv4 and a router speaks IPv6, the machine says so and gets by with what the router gave it.</li>
+    </ul>
+    <p>What is not there: the machine does not ask whether another machine has made the same address; the second half of its addresses is its card's address, wherever it is; it takes its addresses from the routers' word alone, and not from a DHCP server for IPv6; and packets that were taken apart on the way are dropped.</p>
+    <table class="wrap">
+      <tr><td><code>this machine has no address of IPv6 from which ... could be reached: no router has given it one</code></td><td>The network has no router that speaks IPv6, or its router names no network to make an address on. The machine reaches its own network by IPv6, and nothing beyond.</td></tr>
+      <tr><td><code>... is not on this machine's network, and no router has said that it is a way out</code></td><td>The same, for a machine that has an address and no way out.</td></tr>
+      <tr><td><code>this machine has no address of IPv4, and ... is one</code></td><td>No DHCP server answered when the machine came onto the network, and it has IPv6 alone.</td></tr>
+      <tr><td><code>this machine does not speak IPv6, and ... is an address of it</code></td><td><code>clara.net:*ipv6*</code> was NIL when the machine came onto the network.</td></tr>
     </table>
 
     <h3 id="listen">A machine that listens</h3>
@@ -1423,7 +1445,7 @@ error: nothing is mapped at #x0</pre>
     <p class="names" data-package="CLARA.INPUT"><code>clara.input:start</code> <code>clara.input:devices</code> <code>clara.input:pointer</code> <code>clara.input:pointer-changed</code> <code>clara.input:set-pointer-limits</code> <code>clara.input:key-character</code> <code>clara.input:send-keys-to</code> <code>clara.input:send-pointer-to</code> <code>clara.input:*repeat-delay*</code> <code>clara.input:*repeat-interval*</code> <code>clara.input:+up+</code> <code>clara.input:+down+</code> <code>clara.input:+left+</code> <code>clara.input:+right+</code> <code>clara.input:+home+</code> <code>clara.input:+end+</code> <code>clara.input:+page-up+</code> <code>clara.input:+page-down+</code> <code>clara.input:+insert+</code> <code>clara.input:+f1+</code> <code>clara.input:+alt+</code></p>
     <p class="names" data-package="CLARA.DISK"><code>clara.disk:start</code> <code>clara.disk:disks</code> <code>clara.disk:disk-p</code> <code>clara.disk:disk-name</code> <code>clara.disk:disk-sectors</code> <code>clara.disk:disk-read-only</code> <code>clara.disk:read-sectors</code> <code>clara.disk:write-sectors</code> <code>clara.disk:flush</code> <code>clara.disk:*patience*</code></p>
     <p class="names" data-package="CLARA.FAT"><code>clara.fat:start</code> <code>clara.fat:volumes</code> <code>clara.fat:*volume*</code> <code>clara.fat:*image-volume*</code> <code>clara.fat:volume-p</code> <code>clara.fat:volume-disk</code> <code>clara.fat:volume-kind</code> <code>clara.fat:volume-first</code> <code>clara.fat:entries</code> <code>clara.fat:entry-p</code> <code>clara.fat:entry-name</code> <code>clara.fat:entry-short</code> <code>clara.fat:entry-directory-p</code> <code>clara.fat:entry-size</code> <code>clara.fat:names</code> <code>clara.fat:file-text</code> <code>clara.fat:read-file</code> <code>clara.fat:write-file</code> <code>clara.fat:remove-file</code> <code>clara.fat:make-directory</code> <code>clara.fat:remove-directory</code> <code>clara.fat:free-bytes</code></p>
-    <p class="names" data-package="CLARA.NET"><code>clara.net:start</code> <code>clara.net:up</code> <code>clara.net:address</code> <code>clara.net:station</code> <code>clara.net:resolve</code> <code>clara.net:ping</code> <code>clara.net:fetch</code> <code>clara.net:fetch-text</code> <code>clara.net:connect</code> <code>clara.net:with-connection</code> <code>clara.net:serve</code> <code>clara.net:stop-serving</code> <code>clara.net:serving</code> <code>clara.net:*patience*</code> <code>clara.net:*again*</code> <code>clara.net:*name-server*</code> <code>clara.net:*name-port*</code> <code>clara.net:*secure*</code></p>
+    <p class="names" data-package="CLARA.NET"><code>clara.net:start</code> <code>clara.net:up</code> <code>clara.net:address</code> <code>clara.net:addresses</code> <code>clara.net:station</code> <code>clara.net:resolve</code> <code>clara.net:ping</code> <code>clara.net:fetch</code> <code>clara.net:fetch-text</code> <code>clara.net:connect</code> <code>clara.net:with-connection</code> <code>clara.net:serve</code> <code>clara.net:stop-serving</code> <code>clara.net:serving</code> <code>clara.net:*patience*</code> <code>clara.net:*again*</code> <code>clara.net:*name-server*</code> <code>clara.net:*name-port*</code> <code>clara.net:*ipv6*</code> <code>clara.net:*secure*</code></p>
     <p class="names" data-package="CLARA.RANDOM"><code>clara.random:start</code> <code>clara.random:bytes</code> <code>clara.random:below</code> <code>clara.random:*patience*</code></p>
     <p class="names" data-package="CLARA.TLS"><code>clara.tls:start</code> <code>clara.tls:trust</code> <code>clara.tls:roots</code></p>
     <p class="names" data-package="CLARA.LISTENER"><code>clara.listener:run</code> <code>clara.listener:answer</code> <code>clara.listener:read-and-answer</code> <code>clara.listener:answer-lines</code> <code>clara.listener:*record*</code></p>
