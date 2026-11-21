@@ -659,6 +659,23 @@ PRIMITIVE(p_set_char) /* string index character */
     return argv[2];
 }
 
+PRIMITIVE(p_make_string) /* length, and the character that every place is to hold */
+{
+    uint64_t length;
+    lisp string;
+
+    if (!lisp_is_character(argv[1]))
+        return lisp_wants("a character", argv[1]);
+    if (!index_in(argv[0], 1ULL << 32, &length))
+        return NIL;
+    if (!lisp_heap_room(1 + (length + 1) / 2))
+        return no_room();
+    string = lisp_make_string(NULL, length);
+    for (uint64_t i = 0; i < length; i++)
+        lisp_as_string(string)->chars[i] = lisp_character_code(argv[1]);
+    return string;
+}
+
 PRIMITIVE(p_aref)
 {
     uint64_t i;
@@ -1630,6 +1647,7 @@ const struct lisp_primitive lisp_primitives[] = {
     { "CHAR", p_char, 2, 2 },
     { "SCHAR", p_char, 2, 2 },
     { "%SET-CHAR", p_set_char, 3, 3 },
+    { "%MAKE-STRING", p_make_string, 2, 2 },
     { "AREF", p_aref, 2, 2 },
     { "SVREF", p_aref, 2, 2 },
     { "%SET-AREF", p_set_aref, 3, 3 },

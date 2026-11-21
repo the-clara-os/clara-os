@@ -26,7 +26,7 @@
           member assoc remove-if remove-if-not remove find-if find position
           every some reduce sort getf get
           zerop plusp minusp evenp oddp abs max min expt
-          char= char< char-code-limit concatenate make-array macroexpand
+          char= char< char-code-limit concatenate make-string make-array macroexpand
           define-condition make-condition ignore-errors
           condition warning serious-condition storage-condition
           simple-condition simple-error simple-warning
@@ -416,6 +416,12 @@
   (cond ((eq type 'string) (apply #'%string-append sequences))
         ((eq type 'list) (apply #'append sequences))
         (t (error "CONCATENATE makes a STRING or a LIST, and not a ~S yet" type))))
+
+;; A new string of LENGTH characters, each of them INITIAL-ELEMENT. When
+;; nothing is said it is the character of code 0, which is what SBCL fills
+;; a string with: a program gets the same string here and there.
+(defun make-string (length &key (initial-element (code-char 0)))
+  (%make-string length initial-element))
 
 (defun make-array (length &key (initial-element 0))
   (%make-vector length initial-element))
