@@ -1866,7 +1866,13 @@ M15c, a world made again, what it left:
   --disable-debugger mode, quitting" and no line of their own, right
   after a test was edited, and passed when they were run again as they
   were, and in the two hundred runs after that, eighty of them one after
-  the other for no other reason. What it was is not known.
+  the other for no other reason. What it was is not known. (It is since
+  2026-11-21, when CI showed it again and with where it came from: under
+  SBCL, `clara:destroy-thread` looked whether the thread was running and
+  then told it to stop, and a thread that ended between the two had SBCL
+  signal that there was nobody to tell. lisp/host/clara.lisp takes that
+  for what it is now, a thread that needed no telling, and the same for
+  `clara:interrupt-thread`. ClaraOS's own threads were never in it.)
 
 M15d, upgrades over the network, what it left:
 

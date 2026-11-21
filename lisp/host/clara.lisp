@@ -135,17 +135,24 @@
     (:failed (error "the thread ~S ended with an error: ~A" thread (thread-result thread)))
     (:stopped (error "the thread ~S was stopped" thread))))
 
+;; A thread can end between the look whether it runs and the word that it
+;; is to stop, and SBCL then signals that there is nobody to tell: such a
+;; thread needed no telling.
 (defun destroy-thread (thread)
   (when (thread-alive-p thread)
-    (sb-thread:terminate-thread (thread-native thread))
-    t))
+    (handler-case (progn
+                    (sb-thread:terminate-thread (thread-native thread))
+                    t)
+      (sb-thread:interrupt-thread-error () nil))))
 
 ;; Ctrl-C, for that thread: KEYBOARD-INTERRUPT is signalled in it, wherever
 ;; it is, computing or waiting.
 (defun interrupt-thread (thread)
   (when (thread-alive-p thread)
-    (sb-thread:interrupt-thread (thread-native thread) (lambda () (error 'keyboard-interrupt)))
-    t))
+    (handler-case (progn
+                    (sb-thread:interrupt-thread (thread-native thread) (lambda () (error 'keyboard-interrupt)))
+                    t)
+      (sb-thread:interrupt-thread-error () nil))))
 
 (defun thread-yield ()
   (sb-thread:thread-yield)
