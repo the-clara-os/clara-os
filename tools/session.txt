@@ -213,6 +213,8 @@ net: this machine is 10.0.2.15 on its network, 10.0.2.2 is the way out, 10.0.2.3
 ("52:54:00:12:34:56" "10.0.2.15")
 > (list (< -1 (clara.random:below 6) 6) (< (abs (- (get-universal-time) {{now}})) 900) (length clara.net:*secure*))
 (T T 12)
+> (list (< -1 (clara.net:ping "10.0.2.2") 1000) (clara.net::card-trouble clara.net::*card*) (clara.net::card-dropped clara.net::*card*))
+(T NIL 0)
 > (let ((page (clara.unsafe:allocate-memory 1)))
     (flet ((at (place count) (let ((number 0)) (dotimes (i count number) (setq number (+ (* 256 number) (clara.unsafe:memory-8 (+ page place i))))))))
       (setf (clara.unsafe:memory-8 page) 97 (clara.unsafe:memory-8 (+ page 1)) 98 (clara.unsafe:memory-8 (+ page 2)) 99

@@ -668,7 +668,7 @@ Rules:
   has an address, does that before. Numbers on the wire have their
   highest byte first (`two`, `four`, `put-two`), and a checksum is
   `clara.unsafe:internet-sum`, folded. What arrives is handled in the
-  card's thread (`serve`), which never waits for an answer, since it is
+  card's thread (`take`), which never waits for an answer, since it is
   the one that would have to take it: it answers what is answered at
   once and goes on. Whoever waits for something does it with `ask-until`,
   which looks, asks again every second and gives up after `*patience*`.
@@ -682,6 +682,33 @@ Rules:
   option. That network must not answer every repeated acknowledgement
   with everything again: it did, and one lost piece became thirty
   thousand in a second, which looked like a fault of the machine's.
+- What a connection sends (lisp/net.lisp, "What a connection sends").
+  The bytes lie in page frames of the connection's (`out`) until the
+  other side has said that it has them, and the card's thread sends them:
+  `heard-of` when the other side says how far it has them, `tend` when
+  time has passed, both by way of `pump` and `again`. Those run with the
+  connection's lock held, because the bytes move in that memory, so
+  nothing in them may wait for the network: they bind `*waits*` to NIL,
+  under which `station-of` signals an error for an address that nobody
+  has claimed yet, having sent the question. Whoever puts bytes into a
+  connection asks for the other side's card before it takes the lock
+  (`say-bytes`). The card's thread has the global `*patience*` and
+  `*again*` and not the caller's bindings, so a connection carries the
+  ones of whoever last used it (`lend`): a new function that waits on a
+  connection lends first. What goes wrong in `tend` has nobody to be
+  told and is kept in `card-trouble`, which the tests want to be NIL
+  where they look. The lists of a card that several threads change
+  (connections, listeners, echoes, what is known) are changed with
+  `card-book` held, and nothing is called while it is.
+- In the host tests the made-up network has a port 9, where everything
+  that the machine sends is kept (`network-sunk`, `sent-whole`), and
+  options for what the machine has to bear as a sender: `:lose-pieces`,
+  `:room`, `:longest`, `:narrow`. It fails the run when the machine
+  sends more than there was room for. `:unreachable`, `:names-closed`,
+  `:cut`, `:ttl`, `:lease-time` and `:renewals` are the other side of
+  ICMP, of the name servers and of an address that is kept. A test that
+  binds `clara.net:*again*` to something small has to do so around
+  `begin`, which is where a connection takes its first wait from.
 - When the host tests end with SBCL's "unhandled condition in
   --disable-debugger mode" and a reader's error about a package that does
   not exist, somewhere far down lisp/host/tests.lisp, look for a

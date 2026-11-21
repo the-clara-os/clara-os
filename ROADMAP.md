@@ -635,9 +635,43 @@ Code for the processor:
   files. CASE compares symbols and integers with EQ, an instruction, where
   it called EQL and MEMBER, which the translator spent its time in.
 
-Later, in no order: the rest of a network, a machine that listens, IPv6;
-outline fonts; sound; CLOS; a USB keyboard and mouse, which is what
-UTM gives a machine that is not told otherwise.
+The network:
+
+- [x] **M17a the rest of a network** (2026-11-21, version 0.0.33). The
+  network of M15d was as much of one as fetching a file takes, and what
+  it left out showed as patience running out. A machine now hears what
+  others say about its packets, and says such things itself (ICMP): one
+  that is told that a machine cannot be reached has its error at once
+  and not ten seconds later; it answers when it is asked whether it is
+  there, and `(clara.net:ping "10.0.2.2")` asks another machine. The
+  address that the network gave is kept: when half the time is over for
+  which it was given, the machine asks the server whether it may keep
+  it. Every name server that the network named is asked, the next one
+  when one cannot say or says nothing, and by TCP when an answer came
+  cut short; a name is asked for again when what was said of it no
+  longer holds. And a connection sends more than a request. What is to
+  be sent waits in memory of the connection's; as much of it is on its
+  way as the other side has room for and as this side dares; a piece
+  that is lost goes out again, at once when the other side says three
+  times that it lacks it, and after a while that grows when it says
+  nothing; a piece is as long as the other side says that it takes, and
+  shorter when the way turns out to be narrower. The thread of the card
+  looks after that, and after a connection that is over, until both
+  sides have said that they are done. The numbers that a connection
+  counts its bytes from, that an answer has to have and that a question
+  is asked from are no longer worked out from the clock: they come from
+  the device that makes numbers which nobody can guess.
+- [ ] **M17b a machine that listens**. A port of the machine's at which
+  connections from other machines are taken, each handed to a function
+  with a stream to read lines from and to write to; and the same stream
+  for a connection that the machine opens itself.
+- [ ] **M17c IPv6**. Addresses of 128 bits beside the ones of 32: the
+  machine makes its own from what the routers of its network say, finds
+  its neighbours, asks for the addresses of both kinds that a name has,
+  and connects, listens and pings over either.
+
+Later, in no order: outline fonts; sound; CLOS; a USB keyboard and mouse,
+which is what UTM gives a machine that is not told otherwise.
 
 The website, <https://claraos.org>, is built from this file by
 site/build.py: the milestone list above, with its version numbers, is what
@@ -1825,22 +1859,17 @@ M15d, upgrades over the network, what it left:
   not, and this slice took the second: what it built fetches by plain
   HTTP. That stays, for a web server on one's own computer; a release is
   no longer fetched that way.
-- The network is the client's half of each protocol, and of that the part
-  that fetching needs. One card, the first. IPv4, and no IPv6. No pieces
-  of packets, in either direction. No ICMP: the machine does not answer a
-  ping, and does not understand being told that a port is closed or a
-  packet too long, so such a thing ends in patience running out. DHCP is
-  asked once: the address is kept for as long as the machine runs,
-  whatever the server said about how long it lasts. DNS asks for
-  addresses of IPv4 by UDP, and knows no other server than the first that
-  the network named, or the one in `clara.net:*name-server*`; an answer
-  that is too long for one packet is not asked for again by TCP.
-- TCP: this side opens, and never listens. What it sends is one piece,
-  again every second without growing slower, to a patience of ten
-  seconds. It has no window above 64 KiB, no selective acknowledgement
-  and no time stamps, and the number that it counts its bytes from is
-  worked out from the clock, which somebody who wants to guess it can.
-  Pieces that come early are kept, sixty-four of them at most.
+- The network was the client's half of each protocol, and of that the
+  part that fetching needs: no ICMP, an address that was asked for once
+  and kept whatever the server said about how long it lasts, one name
+  server and no TCP for an answer that is too long, a TCP that sent one
+  piece and waited, every second without growing slower, and counted its
+  bytes from a number that the clock gives away. All of that is M17a's.
+  What is still not there has its group below, under M17a: one card, the
+  first; no pieces of packets, in either direction; no window above 64
+  KiB, no selective acknowledgement and no time stamps. This side never
+  listens, which is M17b, and there is no IPv6, which is M17c. Pieces
+  that come early are kept, sixty-four of them at most.
 - HTTP: one file to a connection, which is closed after it. An answer
   that is sent in chunks is put together. Nothing is compressed, since
   nothing says that it may be. An address is followed three times when a
@@ -1912,6 +1941,46 @@ M15d, upgrades over the network, what it left:
   thousand pieces of one lost piece in a second and looked like a fault
   of the machine's. A web server sends the one piece again, once, and so
   does it now.
+
+M17a, the rest of a network, what it left:
+
+- Still not there. One card, the first that the machine has. No pieces
+  of packets: one of IPv4's that was taken apart on the way is dropped,
+  and the machine's own packets say of themselves that they are not to
+  be taken apart. Of what ICMP can say, the machine hears that a
+  packet did not arrive and that one was too long, and answers a ping;
+  that a packet went round until its time was over, and that there is a
+  better way than the one it took, it passes over. It does not answer a
+  ping that was sent to everybody.
+- A connection that is open is not ended by the word that the other
+  side cannot be reached: that is believed of one that is beginning,
+  whose number the word has to have, and anything later ends in the
+  other side's silence, after as long as patience is.
+- How fast a connection sends is found out roughly: ten pieces at first,
+  one more for every word that more has arrived, half after a piece was
+  lost, one after a silence, and never more than 64 KiB on their way.
+  There is no stretch in which it grows slowly (RFC 5681 has one), the
+  time that it waits for a word is a second that doubles, and is not
+  measured (RFC 6298), small pieces are not kept back until there are
+  more, and nothing is sent over a connection that is quiet to see
+  whether the other side is still there.
+- The server that gave the address is the only one that is asked whether
+  the machine may keep it. When that server is gone the address is lost
+  when its time is over, and the machine asks for one anew the next time
+  that something wants the network; a connection that was open then
+  goes on speaking from an address that is no longer its own, until
+  the other side's silence ends it.
+- A name is known by the first address that an answer has for it. A
+  question says nothing of how long an answer this machine takes (EDNS),
+  so an answer by UDP is 512 bytes at most, and anything longer is asked
+  for again by TCP.
+- What a real kernel was not seen to do, because QEMU's network does not
+  bring it about: hearing by UDP that a port takes no questions (QEMU
+  says nothing when the port of the host is closed, and the machine
+  waits as long as patience is), hearing that a packet was too long, and
+  asking whether it may keep its address, which QEMU gives for a day.
+  Those three are tested against the network that the host tests make
+  up, and against nothing else.
 
 M15e, shutting down, what it left:
 

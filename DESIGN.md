@@ -1712,6 +1712,83 @@ architectures (kernel/vm.c).
   M15d built for plain HTTP stays for `clara.net:fetch`, for a web server
   on one's own computer: it is no way to publish, and it is not shut off.
 
+## The rest of a network (decided in M17a, 2026-11-21)
+
+- What a connection sends is looked after by the thread of the card.
+  Until now whoever had something to say sent a piece and waited for the
+  word that it had arrived, which does for a request and for nothing
+  longer: the other side waits a while before it says that one piece
+  has arrived, in case a second follows, so a piece went out every
+  twentieth of a second at best. Now what is to be sent lies in memory
+  of the connection's until the other side has it. Whoever says
+  something puts it there, and the thread that takes what arrives sends
+  more as the other side makes room, sends again what was lost, and
+  gives up when nothing comes back. `say-bytes` still returns when all
+  of it has arrived, which is what a request wants, so HTTP and TLS are
+  as they were.
+- That thread still waits for nobody, and it now also acts when nothing
+  arrives: four times a second it looks at what time has brought about
+  (`tend`), twenty times while something is on its way. Since it cannot
+  wait to learn which card has an address, it sends that question, drops
+  what it meant to send, and comes to it again at its next turn.
+- Bytes go out with the connection's lock held, because the memory that
+  they lie in moves up when the other side says that it has some of
+  them. So nothing waits for the network with that lock: whoever puts
+  bytes there has asked who has the other side's address before, and
+  inside the lock an address that nobody has claimed is an error and not
+  a wait (`*waits*`).
+- How much is on its way at once is a rough answer to a question that
+  has careful ones (RFC 5681): ten pieces at first, one more for every
+  word that more has arrived, half after the other side has said three
+  times that it lacks a piece, one piece after a silence, and never more
+  than the other side has room for. A piece that is missing goes out
+  again as soon as the other side says so three times, and after a
+  second otherwise, then two, then four; when more than one piece was
+  lost, each word that some more has arrived sends the next that is
+  missing (RFC 6582). A side that has no room is asked with one byte
+  whether it has some again.
+- A connection ends in the background. Whoever is done with one says so
+  and goes: the word that this side is done is sent behind what is
+  still to be sent, and sent again like any piece, the other side's
+  word is taken, and then the connection is forgotten, or after as long
+  as patience is when the other side says nothing. What arrives for it
+  after its owner has gone is answered with the word that nobody takes
+  it. The patience is the owner's: a thread that looks after the
+  connections of others has its own bindings of `*patience*` and
+  `*again*`, so each connection keeps the ones of whoever last used it.
+- What other machines say about this machine's packets (ICMP) is
+  anybody's to send, and is believed as far as it can be held against
+  something that an outsider would have to guess. The word that a
+  machine cannot be reached ends a connection that is beginning, when
+  the word has that connection's number; it does not end one that is
+  open. The word that a packet was too long makes the pieces of that
+  connection shorter, which costs time and nothing else when it is a
+  lie. The word that a connection is given up (TCP's own) is taken when
+  it has the number that is expected next.
+- The numbers that tell one exchange from another, the number that a
+  connection counts its bytes from, the number of a question, the port
+  that it is asked from, are from the device that makes numbers which
+  nobody can guess, when the machine has one (lisp/random.lisp). They
+  were worked out from the clock, which somebody who wants to put a
+  word in from outside can do as well.
+- The machine keeps its address by asking the server that gave it,
+  from half the time on for which it was given. When the time is over
+  without an answer, the address is given up, and whatever wants the
+  network next asks for one as a machine does that never had one.
+- The name servers are asked in turn, a second apart, and the next at
+  once when one says that it cannot say or the word comes back that it
+  takes no questions. An answer that says of itself that it was cut
+  short is asked for again by TCP. What is known of a name is forgotten
+  when the time is over that the answer gave it.
+- The network that the tests make up learned the other side of each of
+  these: it answers a ping and says when something cannot be reached or
+  was too long, gives an address for a time and is asked for it again,
+  has two name servers that can refuse, fail or cut an answer short,
+  loses pieces that the machine sends, says how much room it has, and
+  fails the run when more arrives than that. On a real kernel QEMU's
+  network is at the other end, which brings about less of it; ROADMAP.md
+  says which three things no kernel was seen to do.
+
 ## Shutting down (decided in M15e, 2026-11-20)
 
 - Shutting down is something the system does, and not something that is

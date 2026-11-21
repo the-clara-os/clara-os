@@ -7,6 +7,8 @@ net: this machine is 10.0.2.15 on its network, 10.0.2.2 is the way out, 10.0.2.3
 COMPLAINT
 > (list (clara.net:resolve "releases.test") (clara.net:resolve "10.0.2.2") (complaint (lambda () (clara.net:resolve "nowhere.example"))))
 ("10.0.2.2" "10.0.2.2" "there is no machine of the name nowhere.example")
+> (list (clara.net:resolve "long.answer.test") (< -1 (clara.net:ping "releases.test") 1000) (< -1 (clara.net:ping "10.0.2.3") 1000))
+("10.0.2.2" T T)
 > (list (clara.net:fetch-text "http://releases.test:{{port}}/latest") (clara.net:fetch-text "http://10.0.2.2:{{port}}/moved/latest"))
 ("{{version}}-other
 " "{{version}}-other

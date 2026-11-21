@@ -33,7 +33,12 @@ or the first that there is.
 
 The name server answers on the first port, by UDP: every name that ends
 in ".test" is this computer, 10.0.2.2, and any other name is said not to
-exist. That is all of DNS that it knows.
+exist. A name that begins with "long." gets an answer that says of
+itself that it was cut short, as one does that is too long for a packet
+of UDP's, and its whole answer only by TCP, at the same port: a question
+that comes that way begins with its length, in two bytes, where a
+request of HTTP's begins with a word, and the web server tells the two
+apart by that. That is all of DNS that it knows.
 """
 import http.server
 import os
@@ -60,6 +65,28 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.send_header("Content-Length", "0")
         self.send_header("Connection", "close")
         self.end_headers()
+
+    def handle(self):
+        if not isinstance(self.connection, ssl.SSLSocket):
+            try:
+                first = self.connection.recv(2, socket.MSG_PEEK)
+            except OSError:
+                first = b""
+            if len(first) == 2 and not first.isalpha():
+                self.name_by_tcp()
+                return
+        super().handle()
+
+    def name_by_tcp(self):
+        """A question about a name, with its length before it, and the answer likewise (RFC 7766)."""
+        try:
+            length = struct.unpack(">H", self.rfile.read(2))[0]
+            said = answer(self.rfile.read(length), True)
+            if said:
+                self.wfile.write(struct.pack(">H", len(said)) + said)
+                self.wfile.flush()
+        except (OSError, struct.error):
+            pass
 
     def do_GET(self):
         self.close_connection = True
@@ -130,30 +157,39 @@ def closed(certificates):
     return first
 
 
+def answer(question, whole):
+    """What the name server says to a question for an address: a name that ends in .test is 10.0.2.2, and
+    no other name exists. One that begins with long. is too long to be said by UDP: WHOLE is whether the
+    question came by TCP. None for what is no question."""
+    if len(question) < 17:
+        return None
+    number, flags, count = struct.unpack(">HHH", question[:6])
+    at, labels = 12, []
+    while at < len(question) and question[at]:
+        labels.append(question[at + 1:at + 1 + question[at]].decode("ascii", "replace"))
+        at += 1 + question[at]
+    asked_for = question[12:at + 5]
+    name = ".".join(labels).lower()
+    sys.stderr.write("asked which address %s has%s\n" % (name, ", by TCP" if whole else ""))
+    sys.stderr.flush()
+    if not name.endswith(".test"):
+        return struct.pack(">HHHHHH", number, 0x8183, 1, 0, 0, 0) + asked_for
+    if name.startswith("long.") and not whole:
+        return struct.pack(">HHHHHH", number, 0x8380, 1, 0, 0, 0) + asked_for
+    said = struct.pack(">HHHHHH", number, 0x8180, 1, 1, 0, 0) + asked_for
+    return said + b"\xc0\x0c" + struct.pack(">HHIH", 1, 1, 60, 4) + bytes([10, 0, 2, 2])
+
+
 def names(port):
-    """Answer questions for addresses: a name that ends in .test is 10.0.2.2, and no other name exists."""
+    """Answer the questions for addresses that come by UDP."""
     asked = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     asked.bind(("127.0.0.1", port))
     while True:
         try:
             question, who = asked.recvfrom(512)
-            if len(question) < 17:
-                continue
-            number, flags, count = struct.unpack(">HHH", question[:6])
-            at, labels = 12, []
-            while at < len(question) and question[at]:
-                labels.append(question[at + 1:at + 1 + question[at]].decode("ascii", "replace"))
-                at += 1 + question[at]
-            asked_for = question[12:at + 5]
-            name = ".".join(labels).lower()
-            sys.stderr.write("asked which address %s has\n" % name)
-            sys.stderr.flush()
-            if name.endswith(".test"):
-                answer = struct.pack(">HHHHHH", number, 0x8180, 1, 1, 0, 0) + asked_for
-                answer += b"\xc0\x0c" + struct.pack(">HHIH", 1, 1, 60, 4) + bytes([10, 0, 2, 2])
-            else:
-                answer = struct.pack(">HHHHHH", number, 0x8183, 1, 0, 0, 0) + asked_for
-            asked.sendto(answer, who)
+            said = answer(question, False)
+            if said:
+                asked.sendto(said, who)
         except OSError:
             pass
 
