@@ -6,21 +6,34 @@
 #        (mon:stdio, the default, hands Ctrl-C to the kernel, which stops a
 #        computation with it; Ctrl-A X leaves QEMU. With stdio, Ctrl-C ends QEMU.)
 #        DISK=build/claraos.img (boot that raw image, and write to it, instead of
-#        build/disk-<arch>.img, the disk that tools/mkdisk.py makes of the ESP
-#        directory. That one is made again whenever the directory has something
-#        newer, a kernel or a Lisp file, and is kept until then, with whatever
-#        the kernel wrote to it: a world that was saved starts again at the next
-#        run, and is gone after the next build.)
+#        build/disk-<arch>.img, the machine's own disk. That one is made of the
+#        ESP directory the first time, by tools/mkdisk.py, and kept from then
+#        on, with whatever the kernel wrote to it: the world that was saved and
+#        every file. A newer build does not make it again. It reaches the
+#        machine as a second disk, build/upgrade-<arch>.img, which says that
+#        the system on it is to be taken at once: the system that is running
+#        takes it, starts the machine again to try it, and the old one is
+#        there until the new one has come to its prompt (lisp/system.lisp).)
+#        FRESH=1 (a new disk for the machine all the same, as if it had never
+#        run: the one that was there is kept, under another name, which is said)
 #        INPUT="-device virtio-keyboard-pci ..." (the keyboard and the pointers the
 #        machine gets; the default is a virtio keyboard, mouse and tablet, and
 #        INPUT= gives a machine with none of them)
+#        NET="-netdev user,id=net -device virtio-net-pci,netdev=net" (the network
+#        card the machine gets, and what is at the other end of it; the default
+#        is a virtio card on a network that QEMU makes up, on which the machine
+#        is 10.0.2.15, this computer is 10.0.2.2, and whatever this computer
+#        reaches is reached through it. NET= gives a machine with no card)
+#        RNG="-device virtio-rng-pci" (the device that makes numbers which nobody
+#        can guess, of the host's own making: the default. Nothing is fetched
+#        by HTTPS without one. RNG= gives a machine with none)
 #        WORK=~/clara-work.img (a second disk, the user's own: a raw image with a
-#        FAT volume, for the files that are to outlive the disk above, which is
-#        made again for every newer system. A .dmg that macOS made is such an
-#        image too, when it is a plain read/write one. Nothing here makes that
-#        file or makes it again; the kernel finds its volume after the boot
-#        volume, and the manual says how to make one and how to reach it, under
-#        "A disk of your own".)
+#        FAT volume, for files that are to be apart from the machine's disk, and
+#        to outlive it. A .dmg that macOS made is such an image too, when it is
+#        a plain read/write one. Nothing here makes that file or makes it
+#        again; the kernel finds its volume after the boot volume, and the
+#        manual says how to make one and how to reach it, under "A disk of
+#        your own".)
 #        Either disk that is still open on the Mac, in the Finder, is ejected
 #        there first, which is said: QEMU does not start with one that is.
 set -eu
@@ -31,6 +44,11 @@ share=${QEMU_SHARE:-/opt/homebrew/share/qemu}
 serial=${SERIAL:-mon:stdio}
 mem=${MEM:-512M}
 input=${INPUT--device virtio-keyboard-pci -device virtio-mouse-pci -device virtio-tablet-pci}
+net=${NET--netdev user,id=net -device virtio-net-pci,netdev=net}
+random=${RNG--device virtio-rng-pci}
+# Left to itself QEMU gives some machines a card of its own choosing, so no
+# card has to be said.
+[ -n "$net" ] || net="-nic none"
 mkdir -p build
 
 # A disk that the host has open as well is no disk for a machine: the two
@@ -102,13 +120,73 @@ firmware() {
     exit 1
 }
 
+# A disk that is put aside is kept: under the first name of its kind that
+# is not taken yet.
+aside() {
+    kept=${1%.img}-$2.img
+    n=2
+    while [ -e "$kept" ]; do
+        kept=${1%.img}-$2-$n.img
+        n=$((n + 1))
+    done
+    mv "$1" "$kept"
+}
+
+# A machine that is running from a disk has it, and a second one cannot:
+# QEMU says only that it failed to get a lock. Where the host can say who
+# has a file open, that is asked first.
+in_use() {
+    command -v lsof > /dev/null 2>&1 || return 1
+    holder=$(lsof -t -- "$1" 2> /dev/null | head -1)
+    [ -n "$holder" ] || return 1
+    case "$(ps -o comm= -p "$holder" 2> /dev/null)" in
+    *qemu*) return 0 ;;
+    *) return 1 ;;
+    esac
+}
+
 if [ -n "${DISK:-}" ]; then
     disk=$DISK
     release "$disk"
 else
     disk=build/disk-$arch.img
     release "$disk"
-    if [ ! -f "$disk" ] || [ -n "$(find "$esp" -newer "$disk" -print | head -1)" ]; then
+    if [ -f "$disk" ] && in_use "$disk"; then
+        echo "tools/run.sh: a machine is running from $disk already (process $holder), and there is one machine to a disk." >&2
+        echo "    Shut that one down first: (clara.system:shut-down) at its prompt." >&2
+        exit 1
+    fi
+    want=$(ls "$esp/clara" 2> /dev/null | head -1)
+    if [ -f "$disk" ] && [ -n "${FRESH:-}" ]; then
+        aside "$disk" before
+        echo "tools/run.sh: a new disk for this machine, as FRESH asks; the one that was there is kept as $kept" >&2
+    fi
+    if [ -f "$disk" ]; then
+        have=$(python3 -I tools/mkdisk.py --systems "$disk" | tr '\n' ' ' | sed 's/ *$//')
+        if [ -z "$have" ]; then
+            # A disk from before a system had a directory of its own: what is on it
+            # cannot take a newer system, and the kernel of this build would not
+            # find its files there.
+            aside "$disk" old
+            echo "tools/run.sh: $disk held a ClaraOS from before one could take a newer one in place (0.0.25 or older)." >&2
+            echo "    It is kept as $kept, and the machine starts from a new disk. Files that were written on" >&2
+            echo "    the old one can be carried across on this computer: both are FAT volumes, and open here." >&2
+        elif [ "$have" != "$want" ]; then
+            # Another system than the one that was built: the build goes to the
+            # machine as a second disk, which says that it is to be taken at once.
+            upgrade=build/upgrade-$arch.img
+            if [ ! -f "$upgrade" ] || [ -n "$(find "$esp" -newer "$upgrade" -print | head -1)" ]; then
+                rm -rf build/upgrade-esp
+                cp -R "$esp" build/upgrade-esp
+                : > build/upgrade-esp/clara/at-once
+                python3 -I tools/mkdisk.py build/upgrade-esp "$upgrade"
+            fi
+            echo "tools/run.sh: $disk holds ClaraOS $have, and the build is $want: the machine is given the build" >&2
+            echo "    as a second disk, takes it, and starts again by itself to try it." >&2
+            set -- "$@" -drive "if=none,id=upgrade,format=raw,readonly=on,file=$upgrade" -device virtio-blk-pci,drive=upgrade
+        fi
+    fi
+    if [ ! -f "$disk" ]; then
         python3 -I tools/mkdisk.py "$esp" "$disk"
     fi
 fi
@@ -120,8 +198,8 @@ x86_64)
     exec qemu-system-x86_64 -machine q35 -m "$mem" \
         -drive if=pflash,format=raw,readonly=on,file="$code" \
         -drive if=pflash,format=raw,file="$vars" \
-        -drive if=none,id=esp,format=raw,file="$disk" -device virtio-blk-pci,drive=esp,bootindex=0 $input \
-        -serial "$serial" -no-reboot "$@"
+        -drive if=none,id=esp,format=raw,file="$disk" -device virtio-blk-pci,drive=esp,bootindex=0 $input $net \
+        -serial "$serial" "$@" $random
     ;;
 aarch64)
     firmware "$share/edk2-aarch64-code.fd" "$share/edk2-arm-vars.fd" \
@@ -136,8 +214,8 @@ aarch64)
     exec qemu-system-aarch64 -machine virt -accel "$accel" -cpu "$cpu" -m "$mem" \
         -drive if=pflash,format=raw,readonly=on,file="$code" \
         -drive if=pflash,format=raw,file="$vars" \
-        -drive if=none,id=esp,format=raw,file="$disk" -device virtio-blk-pci,drive=esp,bootindex=0 $input \
-        -device ramfb -serial "$serial" -no-reboot "$@"
+        -drive if=none,id=esp,format=raw,file="$disk" -device virtio-blk-pci,drive=esp,bootindex=0 $input $net \
+        -device ramfb -serial "$serial" "$@" $random
     ;;
 *)
     echo "unknown arch: $arch" >&2

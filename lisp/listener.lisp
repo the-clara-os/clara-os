@@ -11,28 +11,43 @@
 ;;;; serial port, or on a keyboard. A listener in a window binds the two to
 ;;;; the window's stream, and is this one all the same (lisp/terminal.lisp).
 ;;;; Under SBCL the tests in lisp/host/ run it on strings.
+;;;;
+;;;; What was typed is gone once it has been evaluated, and what it defined
+;;;; is in the heap and nowhere else. So whoever wants to keep the text of
+;;;; what is typed is told of every form that went well (*RECORD*): that is
+;;;; how what is defined at a prompt gets written down (lisp/system.lisp).
 
 (defpackage "CLARA.LISTENER"
   (:use "COMMON-LISP")
-  (:export "RUN" "ANSWER" "READ-AND-ANSWER" "ANSWER-LINES"))
+  (:export "RUN" "ANSWER" "READ-AND-ANSWER" "ANSWER-LINES" "*RECORD*"))
 (in-package "CLARA.LISTENER")
 
 ;; What READ-FROM-STRING gives when no form is left: a cons, which is EQ to
 ;; nothing that a text can be read as.
 (defvar *nothing* (list 'nothing))
 
+;; A function that is called with every form that was typed and evaluated
+;; without an error, the text that the form was read from, and the name of
+;; the package that it was read in; or NIL, when nobody wants to know.
+(defvar *record* nil)
+
 ;; A form: evaluated, and its values printed, each on a line of its own.
 ;; An error is said and goes no further; so does a heap that is full, and
-;; Ctrl-C, which are no errors and stop a computation all the same.
+;; Ctrl-C, which are no errors and stop a computation all the same. T when
+;; the form went well.
 (defun answer (form)
-  (handler-case
-      (dolist (value (multiple-value-list (eval form)))
+  (let ((well nil))
+    (handler-case
+        (progn
+          (dolist (value (multiple-value-list (eval form)))
+            (fresh-line)
+            (prin1 value))
+          (setq well t))
+      (serious-condition (condition)
         (fresh-line)
-        (prin1 value))
-    (serious-condition (condition)
-      (fresh-line)
-      (format t "error: ~A" condition)))
-  (fresh-line))
+        (format t "error: ~A" condition)))
+    (fresh-line)
+    well))
 
 ;; The forms of a text, each answered as soon as it has been read. What is
 ;; returned is the text that is still to be read: the beginning of a form
@@ -41,18 +56,20 @@
 (defun read-and-answer (text)
   (let ((start 0))
     (loop
-      (multiple-value-bind (form position)
-          (handler-case (read-from-string text nil *nothing* :start start)
-            (end-of-file ()
-              (return (subseq text start)))
-            (reader-error (condition)
-              (fresh-line)
-              (format t "error: ~A~%" condition)
-              (return "")))
-        (when (eq form *nothing*)
-          (return ""))
-        (answer form)
-        (setq start position)))))
+      (let ((package (package-name *package*)))
+        (multiple-value-bind (form position)
+            (handler-case (read-from-string text nil *nothing* :start start)
+              (end-of-file ()
+                (return (subseq text start)))
+              (reader-error (condition)
+                (fresh-line)
+                (format t "error: ~A~%" condition)
+                (return "")))
+          (when (eq form *nothing*)
+            (return ""))
+          (when (and (answer form) *record*)
+            (funcall *record* form (subseq text start position) package))
+          (setq start position))))))
 
 ;; Read and answer until the input ends. Ctrl-C at the prompt gives up the
 ;; line and the form that it was to go on.

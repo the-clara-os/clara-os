@@ -16,7 +16,7 @@
 ;;; COMMON-LISP until it is exported, and only an external one is the
 ;;; symbol that the other packages mean by it.
 (export '(when unless and or cond case ecase otherwise return prog1 psetq
-          dolist dotimes do do* loop
+          dolist dotimes do do* loop do-symbols
           multiple-value-list multiple-value-setq nth-value
           setf defsetf incf decf push pop
           defstruct in-package defpackage make-package
@@ -151,6 +151,13 @@
                   (setq ,rest (cdr ,rest))
                   (go ,next)))))
        ,@(if result `((let ((,variable nil)) ,result))))))
+
+;; DO-SYMBOLS: the body with the variable bound in turn to every symbol
+;; that can be had by its name in a package, its own and the external ones
+;; of the packages that it uses; in the current package when none is named.
+(defmacro do-symbols ((variable &optional (package '*package*) result) &body body)
+  `(dolist (,variable (%package-symbols ,package) ,result)
+     ,@body))
 
 (defmacro dotimes ((variable count &optional result) &body body)
   (let ((limit (gensym)) (next (gensym)))
@@ -839,12 +846,15 @@
 ;;; for the text of the file of a name; one for the names of what the
 ;;; directory of a name holds, in order, a directory's with a slash at its
 ;;; end, or NIL when there is no such directory; one that makes a file of
-;;; a name out of bytes in memory; and one that deletes the file of a name.
+;;; a name out of bytes in memory; one that deletes the file of a name; and
+;;; one that makes a file like the third, on the volume that the machine
+;;; was started from whatever volume the others look on, which is where a
+;;; world is saved.
 ;;; Until then, and on a machine without a disk that has a driver, there
 ;;; are no files here, and LOAD finds the ones that the kernel read from
 ;;; the boot volume as it started.
 
-(defvar %files nil) ; the four functions, in a list, once a file system has said that it is there
+(defvar %files nil) ; the five functions, in a list, once a file system has said that it is there
 
 (defun %file-name (name)
   (unless (stringp name)
@@ -1121,10 +1131,11 @@
 ;; makes a file of a name out of bytes in memory, and DELETE deletes the
 ;; file of a name (the comment on files, further up, says more). From then
 ;; on those are what OPEN, LOAD, PROBE-FILE, DIRECTORY and DELETE-FILE ask;
-;; a file system that only reads gives the first two. Without them, there
-;; is no file system any more.
-(defun provide-files (&key text names write delete)
-  (setq cl::%files (if (and text names) (list text names write delete)))
+;; a file system that only reads gives the first two. IMAGE is what
+;; SAVE-IMAGE writes with, and is WRITE when nothing else is said. Without
+;; them, there is no file system any more.
+(defun provide-files (&key text names write delete image)
+  (setq cl::%files (if (and text names) (list text names write delete (or image write))))
   nil)
 
 ;; A compiler says that it is there: COMPILE makes a compiled function of a
@@ -1144,13 +1155,19 @@
 ;; (kernel/lisp/image.c). What is defined comes back, and what the special
 ;; variables hold outside every binding; threads do not, nor what a driver
 ;; knew of its device: the world begins again at the listener, with the
-;; drivers started afresh. NAME is where the kernel looks, on the volume
-;; that names are looked up on, which is the boot volume when its disk is
-;; the first.
+;; drivers started afresh. NAME is where the kernel looks, and the file is
+;; written on the volume that the machine was started from, wherever the
+;; names of other files are looked up at the moment.
 (defun save-image (&optional (name "/clara/clara.image"))
-  (multiple-value-bind (memory bytes pages) (clara.unsafe:heap-image)
-    (unwind-protect (cl::%store-file name memory bytes)
-      (clara.unsafe:free-memory memory pages)))
+  (let ((store (nth 4 cl::%files)))
+    (unless store
+      (error "the world cannot be saved in ~A: ~A" name
+             (if cl::%files
+                 "the file system that is here reads files, and writes none"
+                 "no disk has a file system that is known here")))
+    (multiple-value-bind (memory bytes pages) (clara.unsafe:heap-image)
+      (unwind-protect (funcall store name memory bytes)
+        (clara.unsafe:free-memory memory pages))))
   name)
 
 ;; The substrate calls this when a thread ends with a condition that

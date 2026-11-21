@@ -263,9 +263,10 @@
 (clara.windows:define-application "Listener" #'listener)
 
 ;;; The applications that come with the system, after the listener in the
-;;; launcher's list. Each is a file of its own on the boot volume, which
+;;; launcher's list. Each is a file of its own among the system's, which
 ;;; nobody loads until the application is picked: lisp/editor.lisp and
-;;; lisp/files.lisp.
+;;; lisp/files.lisp. They are installed by their bare names, which are the
+;;; system's to find wherever its files are.
 
-(clara.windows:install-application "Editor" "/clara/editor.lisp")
-(clara.windows:install-application "Files" "/clara/files.lisp")
+(clara.windows:install-application "Editor" "editor.lisp")
+(clara.windows:install-application "Files" "files.lisp")

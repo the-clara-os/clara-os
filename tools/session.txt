@@ -146,8 +146,8 @@ error: interrupted from the keyboard
 > (clara:join-thread (clara:make-thread (lambda () (car 5)) :name "faulty"))
 error in #<THREAD "faulty">: CAR wants a list, and 5 is not one
 error: the thread #<THREAD "faulty"> ended with an error: CAR wants a list, and 5 is not one
-> (defvar *spinner* (clara:make-thread (lambda () (loop)) :name "spinner"))
-*SPINNER*
+> (progn (defvar *spinner* (clara:make-thread (lambda () (loop)) :name "spinner")) 'spinning)
+SPINNING
 > (list (fact 10) (clara:thread-alive-p *spinner*))
 (3628800 T)
 > (clara:destroy-thread *spinner*)
@@ -202,21 +202,49 @@ error: interrupted from the keyboard
 ^M mouse_move 30 20
 ^M mouse_button 1
 (30 20 1)
-> (list (directory "/e*") (directory "/clara/b*.LISP") (directory "/nowhere/*"))
-(("/EFI/") ("/clara/boot.lisp") NIL)
-> (list (probe-file "/CLARA/Listener.lisp") (probe-file "/clara") (probe-file "/clara/nothing.lisp"))
-("/CLARA/listener.lisp" "/clara/" NIL)
-> (with-open-file (in "/clara/self-test.lisp") (list (read-line in) (read-line in)))
+> (list (directory "/e*") (directory "/clara/*") (directory "/clara/{{system}}/b*.LISP") (directory "/nowhere/*"))
+(("/EFI/") ("/clara/{{system}}/") ("/clara/{{system}}/boot.lisp") NIL)
+> (list (clara.system:system) (clara.system:system-file "boot.lisp") (probe-file "/clara") (probe-file "/clara/nothing.lisp"))
+("{{system}}" "/clara/{{system}}/boot.lisp" "/clara/" NIL)
+> (list (probe-file "/CLARA/{{system}}/Listener.lisp") (eq (clara.system:boot-volume) (car (clara.fat:volumes))))
+("/CLARA/{{system}}/listener.lisp" T)
+> (list (clara.net:station) (clara.net:address))
+net: this machine is 10.0.2.15 on its network, 10.0.2.2 is the way out, 10.0.2.3 knows names
+("52:54:00:12:34:56" "10.0.2.15")
+> (list (< -1 (clara.random:below 6) 6) (< (abs (- (get-universal-time) {{now}})) 900) (length clara.net:*secure*))
+(T T 12)
+> (let ((page (clara.unsafe:allocate-memory 1)))
+    (flet ((at (place count) (let ((number 0)) (dotimes (i count number) (setq number (+ (* 256 number) (clara.unsafe:memory-8 (+ page place i))))))))
+      (setf (clara.unsafe:memory-8 page) 97 (clara.unsafe:memory-8 (+ page 1)) 98 (clara.unsafe:memory-8 (+ page 2)) 99
+            (clara.unsafe:memory-8 (+ page 256)) 9 (clara.unsafe:memory-8 (+ page 320)) 4
+            (clara.unsafe:memory-8 (+ page 328)) 1 (clara.unsafe:memory-8 (+ page 329)) 241)
+      (prog1 (list (clara.unsafe:digest 256 page 3 (+ page 64)) (at 64 4)
+                   (clara.unsafe:hmac 256 page 2 page 3 (+ page 64)) (at 64 4)
+                   (clara.unsafe:aes-128-gcm-seal (+ page 128) (+ page 144) page 0 page 3 (+ page 160) (+ page 176)) (at 160 3) (at 176 4)
+                   (clara.unsafe:aes-128-gcm-open (+ page 128) (+ page 144) page 0 (+ page 160) 3 (+ page 192) (+ page 176)) (at 192 3)
+                   (clara.unsafe:aes-128-gcm-open (+ page 128) (+ page 144) page 1 (+ page 160) 3 (+ page 192) (+ page 176))
+                   (clara.unsafe:x25519 (+ page 224) (+ page 256) (+ page 288)) (at 288 4)
+                   (clara.unsafe:x25519 (+ page 224) (+ page 128) (+ page 288))
+                   (clara.unsafe:power-mod (+ page 320) 1 13 (+ page 328) 2 (+ page 336)) (at 336 2)
+                   (clara.unsafe:ecdsa 256 page page 32 page 3 page 3))
+        (clara.unsafe:free-memory page 1))))
+(32 3128432319 32 3882553867 T 6482617 1613968785 T 6382179 NIL T 803569059 NIL T 445 NIL)
+> (length (clara.tls:roots))
+tls: this system trusts {{roots}} certificates to say who a machine is
+{{roots}}
+> (with-open-file (in (clara.system:system-file "self-test.lisp")) (list (read-line in) (read-line in)))
 (";;;; self-test.lisp: a file with a mistake in it, for the evaluator's" ";;;; self-test to load")
-> (load "/clara/listener.lisp")
-T
+> (list (load (clara.system:system-file "listener.lisp")) (load "/clara/listener.lisp") (load "listener.lisp"))
+(T T T)
+> (load (clara.system:system-file "self-test.lisp"))
+error: CAR wants a list, and NOT-A-LIST is not one, in the form at line 15 of /clara/{{system}}/self-test.lisp
 > (load "/clara/self-test.lisp")
-error: CAR wants a list, and NOT-A-LIST is not one, in the form at line 15 of /clara/self-test.lisp
+error: CAR wants a list, and NOT-A-LIST is not one, in the form at line 15 of self-test.lisp
 > (load "/clara/nothing.lisp")
 error: LOAD finds no file "/clara/nothing.lisp": no disk has it, and \clara had none of that name at boot
 > (directory "/efi/boot/boot*")
 ("/efi/boot/BOOTAA64.EFI" "/efi/boot/BOOTX64.EFI")
-> (let ((entry (find-if (lambda (entry) (string= (clara.fat:entry-name entry) "boot.lisp")) (clara.fat:entries "/clara"))))
+> (let ((entry (find-if (lambda (entry) (string= (clara.fat:entry-name entry) "boot.lisp")) (clara.fat:entries "/clara/{{system}}"))))
     (list (clara.fat:entry-directory-p entry) (> (clara.fat:entry-size entry) 30000)))
 (NIL T)
 > (clara.fat:file-text "/EFI/BOOT/bootx64.efi")
@@ -486,7 +514,7 @@ OK
 *SVREF*
 > (defvar *asked* 0)
 *ASKED*
-> (defun svref (vector index) (setq *asked* (+ *asked* 1)) (aref vector index))
+> (progn (defun svref (vector index) (setq *asked* (+ *asked* 1)) (aref vector index)))
 SVREF
 > (defun first-of (vector) (svref vector 0))
 FIRST-OF

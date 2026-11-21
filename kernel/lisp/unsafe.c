@@ -515,6 +515,272 @@ LISP_PRIMITIVE(lisp_p_pci_configuration)
     return NIL;
 }
 
+/* (power-off) turns the machine off and (reset) starts it again, there
+ * and then: nothing is saved, nobody is told, and what a disk was still to
+ * write is not waited for, so whoever calls these has seen to all that
+ * (lisp/system.lisp). Neither returns, unless the machine has no way of
+ * doing it that the kernel knows, or did not go by it: then NIL.
+ * (power-button) says whether the machine's power button has been pressed
+ * since it was last asked, which is how a host asks a machine to stop; NIL
+ * as well on a machine that has none. */
+LISP_PRIMITIVE(lisp_p_power_off)
+{
+    (void)argc;
+    (void)argv;
+    arch_power_off();
+    return NIL;
+}
+
+LISP_PRIMITIVE(lisp_p_reset)
+{
+    (void)argc;
+    (void)argv;
+    arch_restart();
+    return NIL;
+}
+
+LISP_PRIMITIVE(lisp_p_power_button)
+{
+    (void)argc;
+    (void)argv;
+    return arch_power_button() > 0 ? T : NIL;
+}
+
+/* (sha-512 address bytes): the SHA-512 of that many bytes of memory, as a
+ * string of its 128 digits in base sixteen, in small letters, which is how
+ * such a sum is written down wherever it is kept. */
+LISP_PRIMITIVE(lisp_p_sha_512)
+{
+    uint64_t addr, bytes;
+    uint8_t sum[64];
+    char text[128];
+
+    (void)argc;
+    if (!number(argv[0], &addr) || !number(argv[1], &bytes) || !mapped(addr, bytes))
+        return NIL;
+    sha512((const void *)(uintptr_t)addr, bytes, sum);
+    for (unsigned i = 0; i < 64; i++) {
+        text[2 * i] = "0123456789abcdef"[sum[i] >> 4];
+        text[2 * i + 1] = "0123456789abcdef"[sum[i] & 15];
+    }
+    return lisp_string_from_utf8(text, sizeof text);
+}
+
+/* The bytes that a string of digits in base sixteen stands for, COUNT of
+ * them: 1, or 0 when the string is not twice that many such digits. */
+static int digits(lisp text, uint8_t *bytes, unsigned count)
+{
+    const struct lisp_string *s;
+
+    if (!lisp_is(text, LISP_STRING) || lisp_length(lisp_as_string(text)->header) != 2 * count)
+        return 0;
+    s = lisp_as_string(text);
+    for (unsigned i = 0; i < 2 * count; i++) {
+        uint32_t c = s->chars[i];
+        unsigned digit = c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : c >= 'A' && c <= 'F' ? c - 'A' + 10 : 16;
+
+        if (digit > 15)
+            return 0;
+        bytes[i / 2] = (uint8_t)(i % 2 ? bytes[i / 2] | digit : digit << 4);
+    }
+    return 1;
+}
+
+/* (ed25519 address bytes signature key): T when the signature is the one
+ * that the key gives those bytes of memory (kernel/ed25519.c). The
+ * signature is 128 digits in base sixteen and the key, its public half,
+ * 64; anything else is no signature and no key, and the answer is NIL. */
+LISP_PRIMITIVE(lisp_p_ed25519)
+{
+    uint64_t addr, bytes;
+    uint8_t signature[64], key[32];
+
+    (void)argc;
+    if (!number(argv[0], &addr) || !number(argv[1], &bytes) || !mapped(addr, bytes))
+        return NIL;
+    if (!digits(argv[2], signature, 64) || !digits(argv[3], key, 32))
+        return NIL;
+    return ed25519_verify(key, (const void *)(uintptr_t)addr, bytes, signature) ? T : NIL;
+}
+
+/* What a connection that is kept closed is made of, for lisp/tls.lisp:
+ * the arithmetic is the substrate's (kernel/hmac.c, aes.c, ed25519.c,
+ * bignum.c, ecdsa.c), and everything that says what it means is Lisp. All
+ * of it works on bytes of memory, by their addresses, and writes what it
+ * makes to an address that it is given.
+ *
+ * (digest bits address bytes to): the sum of that many bytes, SHA-256,
+ * SHA-384 or SHA-512 by the number of its bits, written at TO; how many
+ * bytes that is. */
+LISP_PRIMITIVE(lisp_p_digest)
+{
+    uint64_t bits, addr, bytes, to;
+    unsigned size;
+
+    (void)argc;
+    if (!number(argv[0], &bits) || !number(argv[1], &addr) || !number(argv[2], &bytes) || !number(argv[3], &to))
+        return NIL;
+    size = bits <= 512 ? digest_bytes((unsigned)bits) : 0;
+    if (!size)
+        return lisp_fail("there is no sum of ~S bits here: there are the ones of 256, of 384 and of 512", argv[0]);
+    if (!mapped(addr, bytes) || !mapped(to, size))
+        return NIL;
+    digest((unsigned)bits, (const void *)(uintptr_t)addr, bytes, (uint8_t *)(uintptr_t)to);
+    return lisp_fixnum(size);
+}
+
+/* (hmac bits key key-bytes address bytes to): the sum of those bytes that
+ * only somebody with the key can make (RFC 2104), written at TO; how many
+ * bytes that is. */
+LISP_PRIMITIVE(lisp_p_hmac)
+{
+    uint64_t bits, key, key_bytes, addr, bytes, to;
+    unsigned size;
+
+    (void)argc;
+    if (!number(argv[0], &bits) || !number(argv[1], &key) || !number(argv[2], &key_bytes) || !number(argv[3], &addr) ||
+        !number(argv[4], &bytes) || !number(argv[5], &to))
+        return NIL;
+    size = bits <= 512 ? digest_bytes((unsigned)bits) : 0;
+    if (!size)
+        return lisp_fail("there is no sum of ~S bits here: there are the ones of 256, of 384 and of 512", argv[0]);
+    if (!mapped(key, key_bytes) || !mapped(addr, bytes) || !mapped(to, size))
+        return NIL;
+    hmac((unsigned)bits, (const void *)(uintptr_t)key, key_bytes, (const void *)(uintptr_t)addr, bytes,
+         (uint8_t *)(uintptr_t)to);
+    return lisp_fixnum(size);
+}
+
+/* (aes-128-gcm-seal key nonce beside beside-bytes from bytes to tag) and
+ * (aes-128-gcm-open ...): bytes are closed with the sixteen bytes at KEY
+ * and the twelve at NONCE, or opened, from FROM to TO, which may be the
+ * same place. BESIDE are bytes that are not closed and that count for the
+ * sixteen bytes at TAG all the same. Closing writes the tag. Opening
+ * holds the bytes against it: T when it is theirs, and NIL, with nothing
+ * written, when it is not. */
+static lisp gcm(lisp *argv, int opening)
+{
+    uint64_t key, nonce, beside, beside_bytes, from, bytes, to, tag;
+
+    if (!number(argv[0], &key) || !number(argv[1], &nonce) || !number(argv[2], &beside) || !number(argv[3], &beside_bytes) ||
+        !number(argv[4], &from) || !number(argv[5], &bytes) || !number(argv[6], &to) || !number(argv[7], &tag))
+        return NIL;
+    if (bytes > 1 << 24 || beside_bytes > 1 << 24)
+        return lisp_fail("16777216 bytes at most are closed or opened at once, and not ~S", argv[bytes > 1 << 24 ? 5 : 3]);
+    if (!mapped(key, 16) || !mapped(nonce, 12) || !mapped(beside, beside_bytes) || !mapped(from, bytes) || !mapped(to, bytes) ||
+        !mapped(tag, 16))
+        return NIL;
+    return aes128_gcm(opening, (const uint8_t *)(uintptr_t)key, (const uint8_t *)(uintptr_t)nonce,
+                      (const uint8_t *)(uintptr_t)beside, beside_bytes, (const uint8_t *)(uintptr_t)from, bytes,
+                      (uint8_t *)(uintptr_t)to, (uint8_t *)(uintptr_t)tag)
+               ? T
+               : NIL;
+}
+
+LISP_PRIMITIVE(lisp_p_aes_128_gcm_seal)
+{
+    (void)argc;
+    return gcm(argv, 0);
+}
+
+LISP_PRIMITIVE(lisp_p_aes_128_gcm_open)
+{
+    (void)argc;
+    return gcm(argv, 1);
+}
+
+/* (x25519 scalar point to): the thirty-two bytes at POINT times the
+ * number in the thirty-two at SCALAR, written at TO (RFC 7748): what two
+ * sides agree on. NIL when that is all zeroes, which no honest point
+ * makes. */
+LISP_PRIMITIVE(lisp_p_x25519)
+{
+    uint64_t scalar, point, to;
+    uint8_t out[32];
+
+    (void)argc;
+    if (!number(argv[0], &scalar) || !number(argv[1], &point) || !number(argv[2], &to) || !mapped(scalar, 32) ||
+        !mapped(point, 32) || !mapped(to, 32))
+        return NIL;
+    if (!x25519(out, (const uint8_t *)(uintptr_t)scalar, (const uint8_t *)(uintptr_t)point))
+        return NIL;
+    memcpy((void *)(uintptr_t)to, out, 32);
+    return T;
+}
+
+/* (power-mod base base-bytes exponent modulus modulus-bytes to): the
+ * number at BASE to the power of EXPONENT, modulo the number at MODULUS,
+ * written at TO, as many bytes as the modulus is; the numbers are bytes
+ * with the highest first (kernel/bignum.c). This is what checking a
+ * signature of RSA's is. NIL when it is not to be had: a modulus that is
+ * even, begins with a zero or has more than 4096 bits, or a base that is
+ * not below it. */
+LISP_PRIMITIVE(lisp_p_power_mod)
+{
+    static uint8_t out[BIG_WORDS * 4];
+    uint64_t base, base_bytes, exponent, modulus, modulus_bytes, to;
+
+    (void)argc;
+    if (!number(argv[0], &base) || !number(argv[1], &base_bytes) || !number(argv[2], &exponent) || !number(argv[3], &modulus) ||
+        !number(argv[4], &modulus_bytes) || !number(argv[5], &to))
+        return NIL;
+    if (modulus_bytes > sizeof out || base_bytes > 2 * sizeof out)
+        return NIL;
+    if (!mapped(base, base_bytes) || !mapped(modulus, modulus_bytes) || !mapped(to, modulus_bytes))
+        return NIL;
+    if (!power_mod(out, (const uint8_t *)(uintptr_t)base, base_bytes, exponent, (const uint8_t *)(uintptr_t)modulus,
+                   modulus_bytes))
+        return NIL;
+    memcpy((void *)(uintptr_t)to, out, modulus_bytes);
+    return T;
+}
+
+/* (ecdsa bits key sum sum-bytes r r-bytes s s-bytes): T when the numbers
+ * at R and S are the signature that the key gives the sum, on the curve
+ * P-256 or P-384 by BITS (kernel/ecdsa.c). The key is the x and the y of
+ * its point, each as many bytes as the curve has; the numbers are bytes
+ * with the highest first. NIL for anything else, another curve among it. */
+LISP_PRIMITIVE(lisp_p_ecdsa)
+{
+    uint64_t bits, key, sum, sum_bytes, r, r_bytes, s, s_bytes;
+
+    (void)argc;
+    if (!number(argv[0], &bits) || !number(argv[1], &key) || !number(argv[2], &sum) || !number(argv[3], &sum_bytes) ||
+        !number(argv[4], &r) || !number(argv[5], &r_bytes) || !number(argv[6], &s) || !number(argv[7], &s_bytes))
+        return NIL;
+    if ((bits != 256 && bits != 384) || sum_bytes > 64 || r_bytes > 128 || s_bytes > 128)
+        return NIL;
+    if (!mapped(key, bits / 4) || !mapped(sum, sum_bytes) || !mapped(r, r_bytes) || !mapped(s, s_bytes))
+        return NIL;
+    return ecdsa_verify((unsigned)bits, (const uint8_t *)(uintptr_t)key, (const uint8_t *)(uintptr_t)sum, sum_bytes,
+                        (const uint8_t *)(uintptr_t)r, r_bytes, (const uint8_t *)(uintptr_t)s, s_bytes)
+               ? T
+               : NIL;
+}
+
+/* (internet-sum address bytes): the bytes of memory added up two at a
+ * time, the first of each two being the higher half, and a last one that
+ * is alone counting as a higher half: what the checksums of the Internet's
+ * protocols are made of (RFC 1071). The sum is not folded here, so that
+ * more can be added to it. */
+LISP_PRIMITIVE(lisp_p_internet_sum)
+{
+    uint64_t addr, bytes, total = 0;
+    const uint8_t *p;
+
+    (void)argc;
+    if (!number(argv[0], &addr) || !number(argv[1], &bytes) || !mapped(addr, bytes))
+        return NIL;
+    if (bytes > 1 << 24)
+        return lisp_fail("a checksum is of 16777216 bytes at most, and not of ~S", argv[1]);
+    p = (const uint8_t *)(uintptr_t)addr;
+    for (; bytes >= 2; bytes -= 2, p += 2)
+        total += (uint64_t)p[0] << 8 | p[1];
+    if (bytes)
+        total += (uint64_t)p[0] << 8;
+    return lisp_fixnum((int64_t)total);
+}
+
 /* (keyboard-break): Ctrl-C has been typed on a keyboard. The driver of a
  * keyboard is a thread in Lisp, and this is how it does what the serial
  * port's Ctrl-C does: it stops what the thread that reads from the console

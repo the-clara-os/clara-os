@@ -5,7 +5,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define CLARA_VERSION "0.0.24"
+#define CLARA_VERSION "0.0.31"
 
 #define PAGE_SHIFT 12
 #define PAGE_SIZE  (1ULL << PAGE_SHIFT)
@@ -39,7 +39,22 @@ struct boot_file {
     uint64_t    size;          /* in bytes */
 };
 
-/* What the boot handoff learned from the firmware before taking the machine. */
+/* system.c: what this system is called, its version and the digits of its
+ * build, which is also the name of its directory under \clara on the boot
+ * volume. A name is this long at most, the 0 at its end included. */
+#define SYSTEM_NAME 40
+extern const char clara_system[];
+
+/* The time of day as the firmware's clock had it when the machine was
+ * taken: the kernel has no driver for a clock, and counts on from there. */
+struct boot_clock {
+    int      known;            /* the firmware said something that can be a time */
+    unsigned year, month, day, hour, minute, second;
+    int      behind;           /* minutes that this is behind Greenwich's time; 0 when the firmware does not say */
+};
+
+/* What the boot handoff learned from the firmware before taking the machine,
+ * and from the boot volume about the starts before this one. */
 struct boot_info {
     struct framebuffer fb;
     void    *memory_map;       /* EFI memory map; descriptors are desc_size bytes apart */
@@ -47,7 +62,13 @@ struct boot_info {
     uint64_t desc_size;
     void    *acpi_rsdp;        /* ACPI 2.0 root pointer, or NULL */
     void    *dtb;              /* flattened device tree, or NULL */
-    struct boot_file *files;   /* in directory order, or NULL */
+    struct boot_file *files;   /* the system's own, in directory order, and the world that was saved; or NULL */
+    unsigned starts;           /* how many starts in a row, before this one, did not come to a prompt */
+    uint64_t token;            /* what the handoff wrote on the boot volume for this start, which says which volume that is; or 0 */
+    int      trial;            /* this system is being tried: the one before it started it, and is still there */
+    char     failed[SYSTEM_NAME]; /* the system that was tried and did not come to its prompt, or "" */
+    int      image_passed_over; /* a saved world is there and was not read, the start before this not having come to a prompt */
+    struct boot_clock clock;   /* what time the firmware said it was */
 };
 
 /* boot.c: the stack kmain starts on. It is part of the kernel image, and its
@@ -130,6 +151,8 @@ void fault_stack_selftest(void); /* the running thread's stack overflows, and th
 #define TIMER_HZ 100
 void     timer_tick(void);     /* called from the architecture's timer interrupt */
 uint64_t timer_ticks(void);    /* since the timer was started */
+void     timer_set_clock(const struct boot_clock *clock); /* what time it was at some moment, from which the ticks count on */
+uint64_t timer_clock(void);    /* seconds since 1970 began in Greenwich; 0 when nobody said what time it is */
 void     timer_selftest(void);
 
 /* thread.c: threads, taking turns on the processor, and locks between them */
@@ -166,6 +189,89 @@ void thread_selftest(void);
 void lock_acquire(struct lock *l);   /* waits its turn; never in an interrupt handler */
 void lock_release(struct lock *l);
 
+/* sha512.c: the sixty-four bytes that stand for any number of bytes (FIPS 180-4) */
+struct sha512_state {
+    uint64_t h[8], bytes; /* the sum so far, and of how many bytes */
+    uint8_t rest[128];    /* what has not filled a block yet, */
+    unsigned held;        /* and how much that is */
+};
+void sha512(const void *data, uint64_t bytes, uint8_t sum[64]);
+void sha512_begin(struct sha512_state *state);
+void sha512_add(struct sha512_state *state, const void *data, uint64_t bytes);
+void sha512_end(struct sha512_state *state, uint8_t sum[64]);
+void sha512_selftest(void);
+
+void sha384_begin(struct sha512_state *state); /* another beginning, of which the first 48 bytes of the end are kept */
+
+/* sha256.c: the thirty-two bytes that stand for any number of bytes */
+struct sha256_state {
+    uint32_t h[8];
+    uint64_t bytes;
+    uint8_t  rest[64];
+    unsigned held;
+};
+void sha256(const void *data, uint64_t bytes, uint8_t sum[32]);
+void sha256_begin(struct sha256_state *state);
+void sha256_add(struct sha256_state *state, const void *data, uint64_t bytes);
+void sha256_end(struct sha256_state *state, uint8_t sum[32]);
+void sha256_selftest(void);
+
+/* hmac.c: the sums by their number of bits, 256, 384 or 512, and the sum that takes a key (RFC 2104) */
+struct digest_state {
+    unsigned bits;
+    union {
+        struct sha256_state small;
+        struct sha512_state large;
+    } of;
+};
+unsigned digest_bytes(unsigned bits);
+void digest_begin(struct digest_state *state, unsigned bits);
+void digest_add(struct digest_state *state, const void *data, uint64_t bytes);
+void digest_end(struct digest_state *state, uint8_t *sum);
+void digest(unsigned bits, const void *data, uint64_t bytes, uint8_t *sum);
+void hmac(unsigned bits, const void *key, uint64_t key_bytes, const void *data, uint64_t bytes, uint8_t *sum);
+void hmac_selftest(void);
+
+/* aes.c: bytes closed and opened with a key, and a tag that says nobody changed them (NIST SP 800-38D) */
+int  aes128_gcm(int opening, const uint8_t key[16], const uint8_t nonce[12], const uint8_t *beside, uint64_t beside_bytes,
+                const uint8_t *from, uint64_t bytes, uint8_t *to, uint8_t tag[16]);
+void aes_selftest(void);
+
+/* ed25519.c: whether a signature is that of a key (RFC 8032), and what two sides agree on (RFC 7748) */
+int ed25519_verify(const uint8_t key[32], const void *message, uint64_t bytes, const uint8_t signature[64]);
+void ed25519_selftest(void);
+int  x25519(uint8_t out[32], const uint8_t scalar[32], const uint8_t point[32]);
+void x25519_selftest(void);
+
+/* bignum.c: numbers of up to 4096 bits, in pieces of 32, the lowest first, and their products modulo another */
+#define BIG_WORDS 128
+struct big_modulus {
+    unsigned words;             /* how many pieces it has */
+    uint32_t n[BIG_WORDS];      /* the modulus */
+    uint32_t square[BIG_WORDS]; /* R times R modulo it, R being one more than its pieces can hold */
+    uint32_t inverse;           /* minus one over it, modulo 2^32 */
+};
+int      big_read(uint32_t *words, unsigned count, const uint8_t *bytes, uint64_t length);
+void     big_write(uint8_t *bytes, uint64_t length, const uint32_t *words, unsigned count);
+int      big_compare(const uint32_t *a, const uint32_t *b, unsigned words);
+int      big_zero(const uint32_t *a, unsigned words);
+uint32_t big_add(uint32_t *r, const uint32_t *a, const uint32_t *b, unsigned words);
+uint32_t big_subtract(uint32_t *r, const uint32_t *a, const uint32_t *b, unsigned words);
+int      big_modulus(struct big_modulus *m, const uint8_t *bytes, uint64_t count);
+void     big_multiply(uint32_t *r, const uint32_t *a, const uint32_t *b, const struct big_modulus *m);
+void     big_enter(uint32_t *r, const uint32_t *a, const struct big_modulus *m);
+void     big_leave(uint32_t *r, const uint32_t *a, const struct big_modulus *m);
+void     big_power(uint32_t *r, const uint32_t *a, const uint32_t *exponent, unsigned exponent_words,
+                   const struct big_modulus *m);
+int      power_mod(uint8_t *out, const uint8_t *base, uint64_t base_bytes, uint64_t exponent, const uint8_t *modulus,
+                   uint64_t modulus_bytes);
+void     bignum_selftest(void);
+
+/* ecdsa.c: whether two numbers are the signature that a key gives a sum, on the curves P-256 and P-384 (FIPS 186-5) */
+int  ecdsa_verify(unsigned bits, const uint8_t *key, const uint8_t *sum, uint64_t sum_bytes, const uint8_t *r, uint64_t r_bytes,
+                  const uint8_t *s, uint64_t s_bytes);
+void ecdsa_selftest(void);
+
 /* string.c */
 void  *memset(void *dst, int c, size_t n);
 void  *memcpy(void *dst, const void *src, size_t n);
@@ -175,6 +281,7 @@ size_t strlen(const char *s);
 
 /* arch/<arch>/arch.c */
 extern const char *const arch_name;
+extern const char *const arch_kernel; /* what the firmware calls the kernel of this architecture: "BOOTX64.EFI" */
 extern const char *const arch_feature; /* what *FEATURES* calls it, as SBCL does: "X86-64", "ARM64" */
 void arch_early_init(void);   /* right after ExitBootServices: interrupts off, serial ready */
 void arch_serial_putc(char c);
@@ -191,6 +298,13 @@ int  arch_port_write(uint16_t port, unsigned size, uint32_t value);
  * its first I/O port or the address of its registers. */
 extern const char *const arch_serial_kind;
 extern const uint64_t arch_serial_base;
+
+/* arch/<arch>/power.c: turning the machine off, starting it again, and its
+ * power button, each by the way that ACPI names for this machine. */
+void arch_power_init(void);   /* find the three, and say in the boot report what there is */
+void arch_power_off(void);    /* returns when the machine has no way, or did not go by it: from a thread */
+void arch_restart(void);      /* likewise */
+int  arch_power_button(void); /* has it been pressed since this was last asked? -1 when the machine has none */
 
 /* arch/<arch>/exception.c: the processor's exceptions, in the kernel's hands,
  * and with them what a thread switch is made of (thread.c) */

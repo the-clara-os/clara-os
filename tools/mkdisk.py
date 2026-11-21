@@ -5,6 +5,7 @@ directory on it, as a raw image.
 usage: tools/mkdisk.py [--fat 12|16|32] [--table gpt|mbr|none] <directory> <image>
        tools/mkdisk.py --volume <image> <file>
        tools/mkdisk.py --spoil <image>
+       tools/mkdisk.py --systems <image>
 
 The machines of `make test` used to boot from a directory of the host's
 that QEMU shows as a disk, which cannot be written to. A kernel that saves
@@ -22,7 +23,12 @@ program that looks at a volume and knows nothing of partitions, such as
 the host's own checker of FAT volumes (tools/boottest.sh). --spoil changes
 one byte of the world that a kernel saved on such a disk
 (\\clara\\clara.image), for a boot that has to notice and start from the
-files instead.
+files instead. --systems prints the names of the systems that a disk holds,
+one to a line: the directories of \\clara that have a manifest, which is
+what makes a system whole (tools/system.py). tools/run.sh asks that of the
+disk that it keeps for a machine, to know whether the build is another
+system than the one that is there, and gets nothing for a disk from before
+a system had a directory.
 """
 import os
 import struct
@@ -36,9 +42,11 @@ FIRST = 2048  # the sector that a partition begins at, a mebibyte into the disk
 # cluster of it has, how many are kept back before its table, and how many
 # entries the directory of its root has where that is no file. What makes
 # a volume the kind it is is how many clusters it has: fewer than 4085,
-# fewer than 65525, or more.
+# fewer than 65525, or more. So the kind that may have fewest has the
+# largest: a volume has to hold a system and, twice over for a moment,
+# the world that is saved on it.
 KINDS = {
-    12: dict(sectors=24576, cluster=8, reserved=1, root=224),
+    12: dict(sectors=49152, cluster=16, reserved=1, root=224),
     16: dict(sectors=49152, cluster=4, reserved=1, root=512),
     32: dict(sectors=70000, cluster=1, reserved=32, root=0),
 }
@@ -327,7 +335,7 @@ def make(kind, table, directory, image):
                 f.write(piece)
 
 
-def volume_of(image, out):
+def first_volume(image):
     """The volume of a disk: from the first partition of its GUID partition
     table or of its table of old on, or the whole disk when it has neither."""
     with open(image, "rb") as f:
@@ -345,8 +353,94 @@ def volume_of(image, out):
             if disk[entry + 4]:
                 first = struct.unpack_from("<I", disk, entry + 8)[0]
                 break
+    return disk[first * SECTOR:]
+
+
+def volume_of(image, out):
     with open(out, "wb") as f:
-        f.write(disk[first * SECTOR:])
+        f.write(first_volume(image))
+
+
+class Reader:
+    """A FAT volume, read: enough of it to say what a directory holds."""
+
+    def __init__(self, volume):
+        self.volume = volume
+        self.each = volume[13]
+        reserved, tables, root_entries, small = struct.unpack_from("<HBHH", volume, 14)
+        table = struct.unpack_from("<H", volume, 22)[0] or struct.unpack_from("<I", volume, 36)[0]
+        sectors = small or struct.unpack_from("<I", volume, 32)[0]
+        self.table = reserved * SECTOR
+        self.root = (reserved + tables * table) * SECTOR
+        self.root_bytes = 32 * root_entries
+        self.data = self.root + (self.root_bytes + SECTOR - 1) // SECTOR * SECTOR
+        clusters = (sectors * SECTOR - self.data) // (self.each * SECTOR)
+        self.kind = 12 if clusters < 4085 else 16 if clusters < 65525 else 32
+        self.root_cluster = struct.unpack_from("<I", volume, 44)[0] if self.kind == 32 else 0
+
+    def after(self, cluster):
+        if self.kind == 12:
+            pair = struct.unpack_from("<H", self.volume, self.table + cluster + cluster // 2)[0]
+            return pair >> 4 if cluster & 1 else pair & 0xFFF
+        if self.kind == 16:
+            return struct.unpack_from("<H", self.volume, self.table + 2 * cluster)[0]
+        return struct.unpack_from("<I", self.volume, self.table + 4 * cluster)[0] & 0x0FFFFFFF
+
+    def chain(self, cluster):
+        out, last, seen = bytearray(), {12: 0xFF8, 16: 0xFFF8, 32: 0x0FFFFFF8}[self.kind], set()
+        while 2 <= cluster < last and cluster not in seen:
+            seen.add(cluster)
+            at = self.data + (cluster - 2) * self.each * SECTOR
+            out += self.volume[at: at + self.each * SECTOR]
+            cluster = self.after(cluster)
+        return bytes(out)
+
+    def entries(self, cluster=None):
+        """What a directory holds, the root's for no cluster: (name, is it a
+        directory, its first cluster) for each entry, by its long name when
+        it has one."""
+        if cluster is None:
+            data = self.chain(self.root_cluster) if self.kind == 32 else self.volume[self.root: self.root + self.root_bytes]
+        else:
+            data = self.chain(cluster)
+        found, long = [], []
+        for at in range(0, len(data) - 31, 32):
+            entry = data[at: at + 32]
+            if entry[0] == 0:
+                break
+            if entry[0] == 0xE5:
+                long = []
+            elif entry[11] & 0x3F == 0x0F:
+                long.insert(0, b"".join(entry[place: place + 2] for place in PLACES))
+            elif entry[11] & 8:
+                long = []
+            else:
+                name = b"".join(long).decode("utf-16-le", "replace").split("\0")[0]
+                if not name:
+                    base, extension = entry[0:8].decode("ascii", "replace").rstrip(), entry[8:11].decode("ascii", "replace").rstrip()
+                    name = base + ("." + extension if extension else "")
+                first = struct.unpack_from("<H", entry, 26)[0] | (struct.unpack_from("<H", entry, 20)[0] << 16 if self.kind == 32 else 0)
+                if name not in (".", ".."):
+                    found.append((name, bool(entry[11] & 16), first))
+                long = []
+        return found
+
+    def within(self, entries, name):
+        for entry in entries:
+            if entry[0].lower() == name.lower():
+                return entry
+        return None
+
+
+def systems(image):
+    """The systems that a disk holds: the directories of \\clara that have a
+    manifest."""
+    reader = Reader(first_volume(image))
+    clara = reader.within(reader.entries(), "clara")
+    if not clara or not clara[1]:
+        return []
+    return [name for name, directory, cluster in reader.entries(clara[2])
+            if directory and reader.within(reader.entries(cluster), "manifest")]
 
 
 def spoil(image):
@@ -364,7 +458,7 @@ def spoil(image):
             at = disk.find(b"CLARAIMG", at + 1)
         if at < 0:
             sys.exit("tools/mkdisk.py: %s holds no world that a kernel saved" % image)
-        at += 100  # among the first of the words that its checksum is of
+        at += 200  # among the first of the words that its checksum is of
         f.seek(at)
         f.write(bytes([disk[at] ^ 0xFF]))
 
@@ -381,6 +475,8 @@ def main(arguments):
             return spoil(arguments.pop(0))
         elif argument == "--volume" and len(arguments) == 2:
             return volume_of(arguments[0], arguments[1])
+        elif argument == "--systems" and len(arguments) == 1:
+            return print("\n".join(systems(arguments[0])))
         else:
             rest.append(argument)
     if kind not in KINDS or table not in ("gpt", "mbr", "none") or len(rest) != 2:

@@ -940,6 +940,33 @@ PRIMITIVE(p_list_all_packages)
     return list;
 }
 
+/* The symbols of a table (symbol.c) in front of a list. */
+static lisp with_symbols(lisp table, lisp list)
+{
+    const struct lisp_vector *v = lisp_as_vector(table);
+    uint64_t slots = lisp_length(v->header) - 1;
+
+    for (uint64_t i = 1; i <= slots; i++)
+        if (v->items[i])
+            list = lisp_cons(v->items[i], list);
+    return list;
+}
+
+/* Every symbol that can be had by its name in a package: the package's
+ * own, and the external ones of the packages that it uses. In a list of
+ * the caller's own, which is what DO-SYMBOLS goes through. */
+PRIMITIVE(p_package_symbols)
+{
+    lisp package = package_of(argv[0]), list = NIL;
+
+    if (!package)
+        return NIL;
+    for (lisp uses = lisp_as_package(package)->uses; uses != NIL; uses = lisp_as_cons(uses)->cdr)
+        list = with_symbols(lisp_as_package(lisp_as_cons(uses)->car)->external, list);
+    list = with_symbols(lisp_as_package(package)->external, list);
+    return with_symbols(lisp_as_package(package)->internal, list);
+}
+
 PRIMITIVE(p_export) /* a symbol or a list of them, and the package */
 {
     lisp package = argc > 1 ? package_of(argv[1]) : lisp_current_package(), symbols = argv[0];
@@ -1511,6 +1538,20 @@ PRIMITIVE(p_get_internal_real_time)
     return lisp_fixnum((int64_t)timer_ticks());
 }
 
+/* (get-universal-time): how many seconds have gone by since 1900 began in
+ * Greenwich, which is how Common Lisp counts the time of day: what the
+ * firmware's clock said when the machine was started, and the ticks
+ * since. An error on a machine whose firmware said nothing. */
+PRIMITIVE(p_get_universal_time)
+{
+    uint64_t now = timer_clock();
+
+    (void)argv;
+    if (!now)
+        return lisp_fail("this machine does not know what time it is: its firmware did not say");
+    return lisp_fixnum((int64_t)(now + 2208988800ULL));
+}
+
 /* What this Lisp is, and which: the system's name and the kernel's version. */
 PRIMITIVE(p_lisp_implementation_type)
 {
@@ -1610,6 +1651,7 @@ const struct lisp_primitive lisp_primitives[] = {
     { "PACKAGE-NAME", p_package_name, 1, 1 },
     { "DELETE-PACKAGE", p_delete_package, 1, 1 },
     { "LIST-ALL-PACKAGES", p_list_all_packages, 0, 0 },
+    { "%PACKAGE-SYMBOLS", p_package_symbols, 1, 1 },
     { "%MAKE-PACKAGE", p_make_package, 3, 3 },
     { "INTERN", p_intern, 1, 2 },
     { "FIND-SYMBOL", p_find_symbol, 1, 2 },
@@ -1665,6 +1707,7 @@ const struct lisp_primitive lisp_primitives[] = {
     { "CLARA:WAIT-EVENT", lisp_p_wait_event, 1, 2 },
     { "CLARA:VARIABLE-KIND", lisp_p_variable_kind, 1, 1 },
     { "GET-INTERNAL-REAL-TIME", p_get_internal_real_time, 0, 0 },
+    { "GET-UNIVERSAL-TIME", p_get_universal_time, 0, 0 },
     { "LISP-IMPLEMENTATION-TYPE", p_lisp_implementation_type, 0, 0 },
     { "LISP-IMPLEMENTATION-VERSION", p_lisp_implementation_version, 0, 0 },
     /* what only a driver should touch (unsafe.c) */
@@ -1694,6 +1737,20 @@ const struct lisp_primitive lisp_primitives[] = {
     { "CLARA.UNSAFE:MAP-MEMORY", lisp_p_map_memory, 2, 2 },
     { "CLARA.UNSAFE:PCI-CONFIGURATION", lisp_p_pci_configuration, 0, 0 },
     { "CLARA.UNSAFE:KEYBOARD-BREAK", lisp_p_keyboard_break, 0, 0 },
+    { "CLARA.UNSAFE:SHA-512", lisp_p_sha_512, 2, 2 },
+    { "CLARA.UNSAFE:ED25519", lisp_p_ed25519, 4, 4 },
+    { "CLARA.UNSAFE:INTERNET-SUM", lisp_p_internet_sum, 2, 2 },
+    { "CLARA.UNSAFE:DIGEST", lisp_p_digest, 4, 4 },
+    { "CLARA.UNSAFE:HMAC", lisp_p_hmac, 6, 6 },
+    { "CLARA.UNSAFE:AES-128-GCM-SEAL", lisp_p_aes_128_gcm_seal, 8, 8 },
+    { "CLARA.UNSAFE:AES-128-GCM-OPEN", lisp_p_aes_128_gcm_open, 8, 8 },
+    { "CLARA.UNSAFE:X25519", lisp_p_x25519, 3, 3 },
+    { "CLARA.UNSAFE:POWER-MOD", lisp_p_power_mod, 6, 6 },
+    { "CLARA.UNSAFE:ECDSA", lisp_p_ecdsa, 8, 8 },
+    { "CLARA.UNSAFE:START-STATE", lisp_p_start_state, 0, 0 },
+    { "CLARA.UNSAFE:POWER-OFF", lisp_p_power_off, 0, 0 },
+    { "CLARA.UNSAFE:RESET", lisp_p_reset, 0, 0 },
+    { "CLARA.UNSAFE:POWER-BUTTON", lisp_p_power_button, 0, 0 },
     { "CLARA.UNSAFE:MEMORY-STRING", lisp_p_memory_string, 2, 2 },
     { "CLARA.UNSAFE:STRING-BYTES", lisp_p_string_bytes, 1, 1 },
     { "CLARA.UNSAFE:STRING-MEMORY", lisp_p_string_memory, 2, 2 },

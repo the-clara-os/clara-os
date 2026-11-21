@@ -26,6 +26,12 @@
 3
 > (list *jobs* *from-a-file* (clara:thread-alive-p *spinner*))
 (6 "written by ClaraOS" NIL)
+> (list (clara.net:address) (clara.net:resolve "10.0.2.2"))
+net: this machine is 10.0.2.15 on its network, 10.0.2.2 is the way out, 10.0.2.3 knows names
+("10.0.2.15" "10.0.2.2")
+> (list (length (clara.tls:roots)) (< -1 (clara.random:below 6) 6) (< (abs (- (get-universal-time) {{now}})) 900))
+tls: this system trusts {{roots}} certificates to say who a machine is
+({{roots}} T T)
 > (clara:join-thread *spinner*)
 error: the thread #<THREAD "spinner"> was stopped
 > (list (clara:thread-alive-p *waiter*) (clara:destroy-thread *waiter*) (clara:with-lock-held (*held*) 'free))

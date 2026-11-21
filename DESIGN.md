@@ -46,8 +46,8 @@ manager, and the applications are Lisp programs loaded into that world.
 - **The image is the system.** Booting means taking a saved heap image for
   the heap and starting the world that is in it, with the window manager
   running when the world was saved with it running ("Images" and
-  "Windows", below). The boot handoff reads every
-  file in the ESP's `\clara` directory through the UEFI file protocol
+  "Windows", below). The boot handoff reads the files of the system's own
+  directory under the ESP's `\clara` through the UEFI file protocol
   before ExitBootServices, so no disk driver is needed to start: the image
   when there is one, and the Lisp sources that the build puts there from
   lisp/, which a machine without an image makes its world from.
@@ -673,21 +673,28 @@ architectures (kernel/vm.c).
   runs is that thread's view: so for as long as the heap is copied the
   bindings of the thread that saves are undone, as they are whenever a
   thread makes way for another.
-- An image outlives the kernel that saved it. A function in C is in the
-  heap as its place in a table, and a kernel with other rows in its
-  tables gives each such function its place again by its name; what the
-  newer kernel has more of is added to the world. What an older world
-  has in Lisp stays as it was saved: a newer boot.lisp is loaded into it
-  by whoever wants it.
+- A world is started by the system that saved it, and by no other (since
+  M15a; until then an image outlived the kernel that saved it). A world
+  holds the system's own Lisp as it was when the world was made: the
+  console, the file system, the window manager. A newer kernel that went
+  on in it would run under the older system's Lisp, with whatever the two
+  no longer agree on, and nobody would have asked for that. So an image
+  has its system's name in it, and a kernel of another system makes a
+  world of its own files (Upgrades, below). A function in C is still in
+  the heap as its place in a table and found again by its name, which is
+  what lets a row be put anywhere in a table without a new format.
 - An image is refused, with the reason in the boot report, and the world
   is made from the files as on a machine without one: when the file is
   not whole, by its length or by its checksum, which is taken of the heap
   where it lies after the copy; when it was saved on the other
   architecture, since what is defined in a world depends on the machine;
   when its objects are not laid out as this kernel has them, which is a
-  number in image.c that a change to lisp.h has to raise; and when it has
-  a function in C that this kernel has not. The files are read at every
-  boot for that reason, and stay in memory as before.
+  number in image.c that a change to lisp.h has to raise; when it has
+  a function in C that this kernel has not; and when another system saved
+  it. The files are read at every boot for that reason, and stay in
+  memory as before. An image that was started and did not come to its
+  prompt is not started a second time: the handoff does not read it
+  (Upgrades, below).
 - A world that came as an image is not tested by the kernel. The tests
   of the reader, the collector and the evaluator are for a world that
   this boot has made, and somebody else's world is not the place to try
@@ -1297,6 +1304,495 @@ architectures (kernel/vm.c).
   what is left is the making of a million conses and their collection,
   which the translation does not touch. The code of `fib` is 560 bytes on
   AArch64 and 660 on x86-64, where it was 732 and 828.
+
+## Upgrades (decided in M15a, 2026-11-20)
+
+- A system is one build: two kernels and the Lisp files that they were
+  built with. It has a name, its version and eight digits worked out from
+  every source that goes into it (tools/system.py), so the same sources
+  are the same system wherever they are built and any change is another.
+  The version alone would not do: a version is one number for many builds,
+  and what has to be told apart is builds.
+- On a disk a system is a directory, `\clara\<name>`: its Lisp files, a
+  copy of its two kernels, and a manifest that lists them all, each with
+  its length and its SHA-512. The kernel has its system's name in it and
+  reads the files of that directory and no others (kernel/boot.c). So two
+  systems lie side by side on one volume without either seeing the
+  other's files, which is the whole of what makes an upgrade safe: a
+  kernel is never started with Lisp that it was not built with. The world
+  that was saved, `\clara\clara.image`, is outside those directories and
+  has its system's name inside it.
+- An upgrade is done by the system that is running (lisp/system.lisp). It
+  takes the directory of another system from another disk, any disk that
+  ClaraOS starts from being such a disk, holds every file against the
+  manifest as it comes, and writes the manifest last, which is what says
+  that a system is whole. Nothing else on the volume is written to. A
+  machine that stops at any moment of that starts as it did before.
+- The newer system is tried before it takes the old one's place. The
+  upgrade ends by writing one line into `\clara\next`, "try" and the
+  system's name, and starting the machine again. The firmware starts the
+  kernel that it always started, the old one, whose handoff reads the
+  line, writes "tried" in its place, and has the firmware load and start
+  the new system's kernel from its directory, in place of itself. When
+  that system has come to its prompt it puts its kernels where the
+  firmware looks for them, each in the one step that writing a file over
+  another is, takes the line away, and then the old system's directory.
+  When it does not come to its prompt, the machine is started again by
+  whoever is there, the old kernel reads "tried", and goes on as itself,
+  in the world that it saved before the upgrade: the old system was never
+  touched. So the kernel that the firmware starts is always one that has
+  come to its prompt on this machine, until a newer one has.
+- There is still no boot loader. What chooses between two systems is the
+  first few hundred lines of the kernel that is in place, while the
+  firmware's services are there, and it chooses once, on a line that the
+  system itself wrote.
+- Every start is counted before it is known how it goes. The handoff
+  writes `\clara\starts`, through the firmware's file system, with how
+  many starts in a row have not come to a prompt, and the world deletes
+  the file when it has come to its prompt. A start that finds the file
+  knows that the one before it did not get there, and is more careful:
+  the saved world is passed over, and a new one made from the files. That
+  is the key that was missing since M10, for a world that was saved in a
+  state which does not start; it needs nobody at the keyboard at the right
+  moment, only that the machine be started once more. It has to be the
+  firmware that writes, since the point is that it holds when no Lisp
+  runs.
+- The same file says which volume the machine was started from. The
+  handoff puts a number into it that no other start was given, the kernel
+  knows the number, and the volume that has it is the system's own,
+  wherever its disk is on the bus. Until this, the first volume on the bus
+  was taken for it, and a second disk in front of it was mistaken for the
+  system's.
+- The manifest is a text that a later system may add to: a reader passes
+  over every line that it does not know. The upgrade of one version reads
+  the manifest of the next, so its form cannot be changed, only extended.
+- `make run-*` goes the same way, which is what keeps the mechanism
+  honest. The machine's disk is made once and kept. When the build is
+  another system than the one on it, tools/run.sh gives the machine the
+  build as a second disk with a file on it that says "at once", and the
+  system takes it as it starts and starts again by itself. A system that
+  was tried that way and failed is not taken a second time unasked.
+- What does not come across is the world. The newer system does not start
+  the older one's image (Images, above), and makes a world of its own.
+  What was defined at a prompt comes across as text (Work kept as text,
+  below), and what the variables had come to, as far as that is text (A
+  world made again, below).
+- Upgrades are tested by doing them. The build makes two more systems of
+  the same sources under other names, one of which has a boot.lisp that
+  is no Lisp. A machine of each kind of processor takes the good one and
+  has to come up as it, by way of the old kernel, with the files that
+  were written before; a machine that takes the bad one has to be the old
+  system again after it is reset; and a world that is saved standing still
+  before its prompt has to be passed over at the next start. Under SBCL
+  the same procedures run on volumes that the tests make up and look at
+  afterwards without the file system.
+
+## Work kept as text (decided in M15b, 2026-11-20)
+
+- A world is kept two ways. The image is the heap, quick to start and
+  good for the system that saved it and no other. The text is what was
+  typed, which every system reads. So what a user defines is written down
+  as text as it is defined, without anybody asking, and a world that is
+  made from the files is given that text.
+- It lives in `/home`, on the volume that the machine was started from.
+  The directory is the user's: no system writes there but for one file,
+  no upgrade touches it, and a system makes it at its first start, so
+  neither `make image` nor tools/mkdisk.py knows of it. It is on the boot
+  volume, and not on a disk of the user's own, because a machine may have
+  no second disk, and because the text has to be where the system that
+  reads it is: an upgrade in place leaves both where they are.
+- Two files there. `init.lisp` is the user's to write, for whatever a new
+  world should begin with. `defined.lisp` is written by the listeners
+  (`clara.listener:*record*`, `clara.system::record`): a form that was
+  typed at a prompt, at the top and not inside another, that was
+  evaluated without an error, and that defines something. The file is
+  plain Lisp, and the user's to read and to change.
+- What "defines something" means is decided by the form's first word,
+  since nothing short of evaluating a form says what it does: a word that
+  begins with DEFINE-, whatever it names, as the window manager's
+  DEFINE-APPLICATION, which is a function; a word that begins with DEF
+  and is one of the language's own or a macro, which is what a defining
+  form is called, the user's own among them; and LOAD, since what a file
+  defined is in none of the forms that were typed. A function whose name
+  happens to begin with the three letters, DEFAULT-SIZE, is called and
+  not written down.
+- What takes a definition back is not written down, with one exception:
+  the window manager's two functions that take an application or a
+  command out of the launcher's list take the form that put it there out
+  of the file. Without that, an application that was tried and removed
+  was there again in the next world, which nobody would have expected of
+  a function called remove. DELETE-PACKAGE and whatever else undoes a
+  definition are left to the user and the editor: the file is theirs.
+- A form is kept as it was typed, comments and all, and not as the
+  printer would write it: the text is for a person to read. A form that
+  defines a name again takes the place of the earlier one, so the file
+  holds each definition once, where it was first made, and does not grow
+  with every correction. Which name a form defines is its first two
+  words, in the package that it was read in; a line `(cl:in-package ...)`
+  stands wherever the package changes.
+- A world that was made from the files loads `init.lisp` and then
+  `defined.lisp`, a form at a time. A form that fails is said, with the
+  reason, and passed over, and the rest goes on: the forms were written
+  under another system, and one that this system does not understand must
+  not keep a world from being made. When the form that fails is the one
+  that says which package the next ones are read in, those are passed
+  over with it: read in another package they would define other names.
+- Nothing in the text may keep a machine from its prompt. Each file is
+  loaded by a thread that is given a minute (`*patience*`) and is stopped
+  after it. A LOAD of one of the two files from one of them is refused,
+  since the file would load itself without end. And after two starts in a
+  row that did not come to a prompt the text is not loaded at all: the
+  first such start costs the image (Upgrades, above), the second the
+  text, and the third is the system's files alone.
+- A world is saved on the volume that the machine was started from,
+  wherever names are looked up at the moment (`clara.fat:*image-volume*`):
+  a machine looks for an image there and nowhere else. Until this, a
+  world saved while `clara.fat:*volume*` named another disk was an error,
+  or a file that no start found.
+- What is not text is not kept by this: the value that a variable came to
+  after it was defined, an object that was built by hand, whatever a form
+  did that was no definition. The next section is about those.
+
+## A world made again (decided in M15c, 2026-11-20)
+
+- A world is two things on the disk, the image and the text, and the two
+  are kept in step. A world knows which text it has: each of the two
+  files as it last loaded or wrote it. A start in a saved world holds the
+  files against that and loads the forms that the world does not have:
+  what was defined after the world was saved, on a machine that then
+  stopped without saving, and what somebody wrote into a file since. So a
+  machine that has its plug pulled loses no definition, with an image or
+  without one. A form that the world has is not evaluated a second time.
+- After an upgrade the world is made again, and saved without anybody
+  asking. The newer system makes a world of its own files, loads the text
+  into it, and saves it, since the world on the disk is the old system's
+  and of no use to it. The next start is then as quick as before the
+  upgrade.
+- What the text does not have is known to the world that is leaving and to
+  nobody else. So that world leaves an account of itself for the system
+  that is to be tried, as its last act before the machine starts again
+  (`carry`, from the shutdown): which functions and variables there are in
+  the packages that are the user's, and of the variables the values that
+  can be written as text and read back the same, numbers, characters,
+  strings, symbols and lists of those. The system that comes gives the
+  variables those values, after the text has defined them, and says what
+  it found: which variables have the values that they had come to, which
+  held something that is no text, a function, a lock, a window, and are
+  as their forms make them, and which names of the old world are not
+  defined in the new one at all. That is the whole of "what did not come
+  across", by name, and it is kept in the world and said again when it is
+  asked for (`clara.system:report`).
+- The account is a text of the same kind as the manifest: forms of
+  keywords and strings, one to a line, of which a reader passes over the
+  ones it does not know. It is written by one system and read by the
+  next, so its form is only ever added to. It is for one start, the trial
+  of the system that it names, and is deleted by any other.
+- What is the user's is what is in COMMON-LISP-USER and in the packages
+  that were made after the world was, apart from the ones called CLARA,
+  which the launcher makes when it loads an application of the system's.
+  A value is carried when it reads back as an equal value, which is tried
+  before it is written; nothing is said to be text on trust.
+- No converter from one layout of the heap to the next was written, and
+  none is needed: the old system knows its own objects and writes text,
+  and the new one reads text. What cannot be text is named and left
+  behind.
+- The window manager is started in the new world when it was running in
+  the old one, before the text is loaded, so that a form of the text which
+  opens a window finds a screen to open it on.
+- A saved world that does not come to its prompt is replaced, the second
+  time. The first time the handoff passes it over, a world is made of the
+  files and the text in its place, the saved one is kept and the next
+  start tries it again: one start that did not come to a prompt may have
+  been anything, a machine that was switched off as it started. A note of
+  which world it was stays on the disk. When the same world is passed over
+  again, it is the world that is at fault, and the one that was made
+  takes its place. A saved world that comes to its prompt takes the note
+  away.
+- After two starts in a row that did not come to a prompt, the world is
+  the system's alone and follows no text: nothing of `/home` is loaded
+  into it by itself, then or at a later start, until the user has put the
+  files right and asks (`clara.system:load-home`).
+
+## The network, and a system fetched over it (decided in M15d, 2026-11-20)
+
+- There is a network because a newer ClaraOS should be fetched and not
+  carried, and there is as much of it as that takes (lisp/net.lisp): a
+  machine that asks and does not serve, over IPv4, with one card. The
+  driver is for virtio's network card, on lisp/virtio.lisp like the disk's;
+  above it are ARP, IPv4 without pieces, UDP for DHCP and DNS, TCP, and
+  HTTP as far as fetching a file goes.
+- A frame is put together and taken apart where the card reads and writes
+  it, in page frames, a byte at a time, since the wire has its numbers the
+  other way round from the processor. One thread takes what arrives, hands
+  it up through the protocols and answers what is answered at once.
+  Whoever waits for something is told to look, looks, and asks again every
+  second until an answer comes or patience ends: nothing waits for one
+  particular packet. The sums that the protocols make of every byte are
+  added up in C (`clara.unsafe:internet-sum`), which is a loop and nothing
+  more.
+- The machine asks which address it has when something first wants the
+  network, and not as it starts. A machine that fetches nothing sends
+  nothing, and a boot is no slower for having a card.
+- TCP is the client's half. What arrives goes into one stretch of page
+  frames that grows, each piece where it belongs: a piece that comes
+  before the one that is missing is kept for when the gap is filled, so a
+  lost piece costs the other side one piece and not everything after it.
+  Every piece is answered with how far the bytes have come without a gap,
+  which is how the other side learns what to send again. What this side
+  sends is one request of a few hundred bytes, so it has no need of the
+  rules by which a sender finds out how fast it may send.
+- There is no encryption, and what replaces it is a signature. TLS would
+  be the largest thing in the system: an exchange of keys, ciphers,
+  certificates and their chain to a root, the time of day to hold them
+  against, which the machine does not know, and arithmetic on numbers of
+  thousands of bits. What an upgrade needs is less than what TLS gives:
+  not that nobody reads a system which is published for everybody, but
+  that what arrives is what was published. So a release is signed, and
+  the road is not trusted at all. That is as far as M15d went, and it was
+  not far enough: Julio's word on it (2026-11-20) was that ClaraOS is not
+  published over plain HTTP ("we don't do that here"). M15f is the
+  answer: TLS, under the signature, which stays. A release is fetched by
+  HTTPS and from no other kind of address (below).
+- A release is a system as a disk holds it, a directory with its files
+  and its manifest, on a web server, and beside the manifest a signature
+  of it (tools/release.py): Ed25519, whose check is five hundred lines of
+  C that need nothing but SHA-512, which the kernel has (kernel/ed25519.c,
+  `clara.unsafe:ed25519`). The manifest has the sum of every file, so the
+  one signature covers all of them. The system that fetches holds the
+  manifest against the signature with the public half of the key, which
+  is in the system (`clara.system:*release-key*`), and every file against
+  the manifest as it arrives, exactly as it does with a system from a
+  disk: taking a system is one function, which is given a way of reading
+  a file by its name (`take`).
+- Which release is the newest is said by a file that is not signed. That
+  is enough: whoever changes it can name another release that was really
+  published, and no more, since any release is held against its
+  signature and its manifest names its system. A system that is no newer
+  than the one that runs is not taken unless somebody asks for it by
+  saying so (`:any t`), so nobody can send a machine back to an older
+  ClaraOS by changing that file. Withholding everything is what remains,
+  and nothing protects from that.
+- A system without a key takes nothing over the network, and a system
+  that knows of no place where ClaraOS is published looks nowhere: both
+  are variables, which were empty until there was a key and a place.
+  Since 0.0.31 the system has both (below).
+- Signatures are checked here and never made. The secret half of the key
+  is with whoever publishes, in no repository and on no machine that runs
+  ClaraOS.
+- The network is tested against a network. Under SBCL the tests make one
+  up at the other end of a made-up card's wire: it answers for ARP, DHCP
+  and DNS, serves files over a TCP of its own, holds every frame that the
+  machine sends against checksums that it works out another way, and
+  loses, spoils and mixes up what it sends when a test says so. On a real
+  kernel, QEMU's own network is at the other end, and a web server and a
+  name server on the host (tools/serve.py), from which a machine fetches a
+  signed release of another system and has to come up as it. The check
+  of signatures is held against the examples of RFC 8032 at every boot.
+
+## Where ClaraOS is published (decided 2026-11-20)
+
+- The place is the website: `https://claraos.org/releases/`, which was
+  Julio's choice. It answers HTTPS as it is, so nothing had to be set up
+  or switched off for it, and a deployment was there already. The system
+  has the address in it (`clara.system:*releases*`), and the public half
+  of the key that what is published there is signed with
+  (`clara.system:*release-key*`): the two came in one change, since a
+  system with a place and no key would ask and then take nothing.
+- A machine asks there when it is told to upgrade and no other disk of
+  it holds a system, and at no other time: nothing looks for a newer
+  ClaraOS by itself. It says where it looks before it does. That is the
+  one address which a machine asks without somebody having typed it.
+- A system without a key asks for nothing. The key is looked for before
+  the network is: whatever came could be held against nothing.
+- What is published is the system of main's newest commit. Pages puts a
+  whole site in the place of the one before, so every deployment has to
+  carry the release, and the website's workflow builds it, each time,
+  from the commit that it publishes the pages of
+  (.github/workflows/site.yml). There is one release there, the newest,
+  and no history of them: a machine only ever asks for the newest.
+- The secret half of the key is a secret of the environment that the
+  site is deployed from, which takes deployments from main and from no
+  other branch. So what can be signed is what was merged, and a pull
+  request cannot read the key, whatever it changes in the workflow. The
+  price is that the publishing cannot be tried before a merge. What can
+  be tried is everything but the secret: the laying out and the signing
+  are `make release`, which `make test` runs with a key that it makes
+  (`make release-test`).
+- `make release` lays nothing out with a key whose public half is not the
+  one in the source, and holds what it did lay out against that half,
+  with the check that a machine makes, before anything is uploaded. A
+  secret that holds another key therefore publishes nothing: the job
+  fails, and the site that is there stays, with its release.
+  The same for a secret that is missing, since a site without a release
+  would take away the one that machines are told to look for.
+- No test asks the place. What is tested is a system that knows of none,
+  or of one on this computer: the tests are to say the same thing with
+  the Internet and without it, and the website is not theirs to load.
+
+## A connection that is kept closed (decided in M15f, 2026-11-20)
+
+- HTTPS is there because plain HTTP is not how a system is published, or
+  how anything else is fetched that matters: what a machine asks for is
+  nobody's to read on the way, and which release is the newest is said by
+  a file that nobody signed. TLS closes both (lisp/tls.lisp). The
+  signature of a release stays under it: the connection says that this is
+  the web server that was asked, and the signature that the release is
+  its publisher's, whoever serves it.
+- TLS 1.3, and nothing older (RFC 8446). A version that was made after
+  twenty years of mending the ones before is the one to write once: one
+  round of greeting, no ciphers that are known to be weak to refuse, and
+  every server that matters speaks it. Of what it allows, one of each:
+  X25519 for the exchange of keys, AES-128 in Galois/Counter Mode for the
+  records, SHA-256 under the keys. The cipher is the one that every TLS
+  1.3 has to have, so no server is left out for it; the exchange is one
+  that a server should have and nearly every one has, and a server that
+  has not is told so.
+- The arithmetic is the substrate's and everything else is Lisp, as with
+  SHA-512 and Ed25519: sums, HMAC, AES in its mode, X25519, a number to a
+  power, and the signatures of the two curves P-256 and P-384 are C
+  (kernel/sha256.c, hmac.c, aes.c, ed25519.c, bignum.c, ecdsa.c), each
+  held against the examples of its standard at every boot, and each a
+  function of CLARA.UNSAFE on bytes of memory. What the bytes mean is
+  Lisp: the pieces of a certificate, the greeting, the records, and the
+  two ways in which RSA pads a signature. It is written here and not
+  taken from a library, like everything else in the system. What stands
+  in for the review that a library has had: the examples of the
+  standards; the same arithmetic a second time, in SBCL's big numbers,
+  which the host tests hold against the same examples; a third time in
+  Python, against which the C was run on two thousand numbers made at
+  random, once; a web server of OpenSSL's at the other end in the boot
+  test; and the certificates of Mozilla's list, which are a hundred
+  signatures that nobody here made.
+- Nothing in the checking of a signature is a secret, so none of it takes
+  care to take the same time whatever the numbers are. What is a secret
+  is this side's number in the exchange of keys, and the keys: X25519 does
+  the same work for every number, and the multiplication of the mode's
+  tag has no branch. AES is written with its table, so its time depends a
+  little on the key, which somebody who shared the processor's cache
+  could measure: nobody does, since the machine runs one world.
+- Who the other side is: a certificate for the name that was asked for,
+  good today, signed by somebody whose certificate is good today and who
+  may sign, and so on up to a certificate that the system trusts (RFC
+  5280, as far as the web uses it). The ones that it trusts are Mozilla's
+  list, as curl publishes it, a file of the system (lisp/roots.pem): the
+  same authorities that a browser believes, and no list of this system's
+  own making, which nobody would keep up. The list is the system's, so an
+  upgrade is what renews it. The user can add to it (`clara.tls:trust`),
+  for a server of their own. What a certificate says that has to be
+  understood and is not understood here makes it one that is not taken.
+  Whether a certificate was taken back since it was signed is not asked.
+- A certificate is good from one day to another, so the system has to
+  know the day. It asks the firmware's clock once, in the handoff, and
+  counts on from there with its own ticks: there is no driver for a clock
+  (`get-universal-time`). A machine whose clock is wrong takes no
+  certificate, and the error says what the clock says.
+- The keys of a connection are made of numbers that nobody can guess, and
+  a machine that computes has none of its own. They come from virtio's
+  device for that, which hands on the host's (lisp/random.lisp), and are
+  used as they come: nothing is kept of them and nothing is made of them
+  by a rule, since a world that is saved and comes back twice would make
+  the same numbers twice. A machine without the device fetches nothing by
+  HTTPS, and says why.
+- What arrives is opened where it lies, in the memory of the connection,
+  and what the other side said is moved to the beginning of that memory
+  as it is opened: always behind the place that the next record is read
+  from, since a record is longer than what it carries. So HTTP finds its
+  answer where it always did, and the file that is fetched is in the same
+  page frames at the end. lisp/net.lisp knows of TLS only that there are
+  six functions for it, which lisp/tls.lisp hands over when it is loaded
+  (`clara.net:*secure*`).
+- A file whose length nobody said is over when the connection is. On a
+  connection that is kept closed the other side has to say that it is
+  done, in a record like any other; an end without that word is an end
+  that somebody on the way may have made, and the file is not taken. That
+  is what TLS says, and stricter than most programs are.
+- A machine goes from an address that is not kept closed to one that is,
+  when a web server sends it there, and never the other way.
+- A release is fetched by HTTPS only (`clara.system:upgrade :from`). What
+  M15d built for plain HTTP stays for `clara.net:fetch`, for a web server
+  on one's own computer: it is no way to publish, and it is not shut off.
+
+## Shutting down (decided in M15e, 2026-11-20)
+
+- Shutting down is something the system does, and not something that is
+  done to it. Until this milestone a machine was stopped from outside,
+  which is the plug pulled: nothing was told, and the world as it had
+  become since it was last saved was gone. Now the machine is asked: at a
+  prompt, by the launcher's list, or by its power button, which is what a
+  host presses when it wants a machine to stop. The three come to one
+  procedure (lisp/system.lisp), and starting again is the same procedure
+  with another last step.
+- The procedure is Lisp, and the substrate's part is two functions and a
+  question: turn the machine off, start it again, has the button been
+  pressed. Each goes by what ACPI's table of fixed hardware says of the
+  machine. On AArch64 that is PSCI, a call to whatever runs above the
+  kernel, by the instruction that the table names. On x86_64 it is a few
+  I/O ports: the sleep state S5 written to the PM1 control register, the
+  reset register, and where there is none the keyboard controller's line
+  to the processor's reset pin.
+- The firmware has a runtime service for both, ResetSystem, the same on
+  both architectures, and the kernel does not call it. A runtime service
+  is the firmware's code, run by the kernel in the kernel's address space,
+  and the address space has one rule about code: the only memory that can
+  be run is the kernel's own image and what the Lisp world made for the
+  processor. Mapping what the firmware left behind so that it can be run,
+  and its data so that it can be written, on the word of a memory map from
+  before the handoff, gives that up for the sake of two calls. A call to a
+  higher level and a write to a port need nothing of the kind.
+- Two facts are in the DSDT and nowhere else: the type of the sleep state
+  that is "off", and where the registers of the generic event device are,
+  which is what has the power button on a machine without a PC's fixed
+  hardware. The DSDT is AML, a bytecode, and there is no interpreter for
+  it here (Devices, above). Both facts are written in it as a name with a
+  constant behind it, so the table is searched for those bytes
+  (kernel/acpi.c). A firmware that says them another way is not
+  understood; the boot report then says that the machine has no way of
+  being turned off, or no button, and it is stopped from outside as
+  before.
+- The power button is looked at and not waited for. On both machines it
+  would raise an interrupt, and on both the interrupt comes by a line,
+  whose number is in the DSDT's bytecode: the same reason for which no
+  device here interrupts by a line. A thread asks the substrate four times
+  a second, which costs a read of one register.
+- Before anything is done, the windows are asked. A window can be given a
+  function that says what its program holds that would be lost if the
+  window went, in a few words, and the editor's says so when its text is
+  not saved. While any window answers, the machine is not shut down: that
+  window comes to the top and whoever asked is told which it is. Asking
+  with `:force t` asks nobody. This is the whole of what an application is
+  told: it is not asked to close, and a program without a window is not
+  asked at all.
+- The world is saved, unless the shutdown is told not to: the next start
+  then goes on in the world that was left. It is saved while the window
+  manager still runs, so that the machine starts in it again; then the
+  window manager is stopped, which stops the applications; then every disk
+  is asked to put what it was given where it lasts, by the request that
+  virtio has for that, when the disk says that it holds anything back; and
+  then the substrate is told. A world that cannot be saved stops the
+  procedure before anything else is done, with the reason, so that
+  something can be done about it. A machine without a disk has nowhere to
+  save a world and goes all the same.
+- A thread of its own does all of that. The thread that asked may be an
+  application's, the listener's in a window, and stopping the window
+  manager stops it halfway. Whoever asked waits for that thread, and hears
+  from the procedure again only if the machine is still there: when a
+  world could not be saved, or when the substrate has no way of turning
+  this machine off, which is then said, with the world saved and the
+  machine left for the host to stop.
+- Ctrl-D at the first prompt is what it was: the session ends, the kernel
+  says that it has nothing more to do, and the machine stands still. It
+  saves nothing and turns nothing off. The boot tests end their sessions
+  that way and then look at the screen of a machine that is still there.
+- Shutting down is tested twice. Under SBCL the machine that the tests
+  make up takes note of what it is told and stays on, as a machine does
+  that cannot be turned off from inside, and the tests look at the order
+  of things up to there, through a disk that says at each request whether
+  the window manager still runs. And by booting: each kind of processor
+  starts once more from the disk that its first session left, is asked to
+  shut down while an editor holds a text that is not saved, is told to
+  start again and has to come up in the world that it saved on the way,
+  and has its power button pressed, after which it has to save once more
+  and be gone by itself, with its volume in order.
 
 ## Conventions
 

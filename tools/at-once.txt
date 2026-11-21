@@ -1,0 +1,10 @@
+> (list (clara.system:system) (getf (clara.unsafe:start-state) :trial) (getf (clara.unsafe:start-state) :starts) (getf (clara.unsafe:start-state) :resumed))
+("{{version}}-other" T 0 NIL)
+> (list (clara.fat:names "/clara/") (length (clara.fat:volumes)) (eq (clara.system:boot-volume) (first (clara.fat:volumes))))
+(("{{version}}-other/" "clara.image") 2 T)
+> (setq clara.system:*releases* nil)
+NIL
+> (clara.system:upgrade)
+error: no other disk of this machine holds a ClaraOS other than this one, {{version}}-other
+> (with-open-file (in "/EFI/BOOT/BOOTAA64.EFI" :if-does-not-exist nil) (and in t))
+error: the file /EFI/BOOT/BOOTAA64.EFI is not text: what it holds is not UTF-8

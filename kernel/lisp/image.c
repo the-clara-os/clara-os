@@ -28,15 +28,16 @@
  * copied, the bindings of the thread that saves are undone, as they are
  * when a thread makes way for another.
  *
- * An image can outlive the kernel that saved it. A function in C is in
- * the heap as its place in a table, and the tables of another kernel are
- * other tables: so each such function is given its place again by its
- * name, which is what stays (lisp_function_rebind). What a newer kernel
- * has more of is added to the world. An image is refused, and the world
- * made from the files as if there had been none, when it is not whole,
- * when it was saved on the other architecture, when its objects are not
- * laid out as this kernel has them, or when it has a function in C that
- * this kernel has not. */
+ * A function in C is in the heap as its place in a table, and each such
+ * function is given its place again by its name when a world comes back
+ * (lisp_function_rebind), so a row can stand anywhere in a table. An image
+ * is refused, and the world made from the files as if there had been
+ * none, when it is not whole, when it was saved on the other
+ * architecture, when its objects are not laid out as this kernel has
+ * them, when it has a function in C that this kernel has not, or when
+ * another system saved it: a world holds the system's own Lisp as it was
+ * when the world was made, and a newer system starts in a world of its
+ * own making (DESIGN.md, Upgrades). */
 #include "lisp.h"
 
 /* What the objects of an image are in memory: the tags and the types of
@@ -47,13 +48,14 @@
  * struct lisp_machine, what the functions that it names there take and
  * give, and the numbers of machine.h. A change to any of them is a new
  * number here, and no older image is taken after it. */
-#define FORMAT 5
+#define FORMAT 6
 
 struct image {
     char     magic[8];    /* "CLARAIMG" */
     uint64_t format;      /* FORMAT, as the kernel had it that saved this */
     char     machine[16]; /* arch_feature: what is defined in a world depends on the machine, by #+ and #- */
     char     version[16]; /* CLARA_VERSION of that kernel, for the boot report */
+    char     system[SYSTEM_NAME]; /* and the name of its system: a world is started by the system that saved it */
     uint64_t base;        /* VM_HEAP_BASE: where the heap of the image begins */
     uint64_t roots;       /* how many bytes of lisp_roots follow these words, */
     uint64_t heap;        /* how many of the heap follow those, */
@@ -126,6 +128,7 @@ LISP_PRIMITIVE(lisp_p_heap_image)
     image->format = FORMAT;
     put_name(image->machine, arch_feature);
     put_name(image->version, CLARA_VERSION);
+    memcpy(image->system, clara_system, strlen(clara_system) < SYSTEM_NAME ? strlen(clara_system) : SYSTEM_NAME - 1);
     image->base = VM_HEAP_BASE;
     image->roots = sizeof *roots;
     image->heap = heap.size;
@@ -229,6 +232,17 @@ int lisp_image_load(const struct boot_file *file)
     if (image->format != FORMAT || image->base != VM_HEAP_BASE || image->roots != sizeof *roots) {
         kprintf("lisp: %s is not resumed: ClaraOS %s saved it, with objects that are not laid out as they are here\n",
                 file->name, version);
+        return 0;
+    }
+    /* A world holds the system's own Lisp as it was when the world was made. A newer system would
+     * start in the older one's, so it does not: it makes a world of its files, and what the user
+     * keeps as text is loaded into that (lisp/system.lisp). */
+    if (image->system[SYSTEM_NAME - 1] || strlen(image->system) != strlen(clara_system) ||
+        memcmp(image->system, clara_system, strlen(clara_system))) {
+        char system[SYSTEM_NAME] = { 0 };
+
+        memcpy(system, image->system, SYSTEM_NAME - 1);
+        kprintf("lisp: %s is not resumed: the system %s saved it, and this is %s\n", file->name, system, clara_system);
         return 0;
     }
     if (strlen(machine) != strlen(arch_feature) || memcmp(machine, arch_feature, strlen(arch_feature))) {

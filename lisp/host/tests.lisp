@@ -51,6 +51,11 @@
      (handler-case (progn ,form (failed "~S did not signal ~S" ',form ',type))
        (,type () nil))))
 
+;; What the error says that FUNCTION ends in, or NIL when it ends in none.
+(defun condition-text (function)
+  (handler-case (progn (funcall function) nil)
+    (error (condition) (princ-to-string condition))))
+
 ;;; The sources: each has to load, and without a warning.
 
 (defun load-source (name)
@@ -73,12 +78,31 @@
 (load-source "lisp/input.lisp")
 (load-source "lisp/disk.lisp")
 (load-source "lisp/fat.lisp")
+(load-source "lisp/random.lisp")
+(load-source "lisp/net.lisp")
 (load-source "lisp/listener.lisp")
 (load-source "lisp/windows.lisp")
 (load-source "lisp/terminal.lisp")
+(load-source "lisp/system.lisp")
+(load-source "lisp/tls.lisp")
 (load-source "lisp/editor.lisp")               ; the two that the kernel leaves on the volume for the launcher to load
 (load-source "lisp/files.lisp")
 (defvar *defined-applications* clara.windows::*applications*) ; what the files defined, for the tests to put back
+(defvar *defined-commands* clara.windows::*commands*)
+
+;; What this system knows of where ClaraOS is published, and the key that
+;; it holds a release against: an address that begins with https:// and
+;; ends with a /, and the 64 digits of a key. The tests are then run by a
+;; system that knows of neither, as one is that somebody builds for a
+;; place of their own, and each says where it looks and with which key:
+;; what is tested here asks nothing of the place that the system names.
+(check '(t #\/ 64 t)
+       (list (and (clara.net::secure-address-p clara.system:*releases*) t)
+             (char clara.system:*releases* (1- (length clara.system:*releases*)))
+             (length clara.system:*release-key*)
+             (and (every (lambda (digit) (digit-char-p digit 16)) clara.system:*release-key*) t)))
+(setq clara.system:*releases* nil
+      clara.system:*release-key* nil)
 
 ;;; Names. boot.lisp is the part of Common Lisp that ClaraOS has in Lisp,
 ;;; and SBCL has all of it already, so it is read here as text. What it
@@ -1757,7 +1781,14 @@
   delay                    ; how many seconds it takes over a request, when it takes any,
   mute                     ; that it has no message to send when it is done,
   watch                    ; a function that a test has it call at every request,
-  requests)                ; and the requests it was given, the last first: (type sector count)
+  requests                 ; and the requests it was given, the last first: (type sector count)
+  station                  ; of a network card: the six bytes of its address on the wire,
+  wire                     ; a function that is given every frame it sends, as a vector of bytes,
+  (hold 0)                 ; how many frames it keeps the pages of before it says that they are sent,
+  flying                   ; and the ones it is keeping: (first-descriptor address)
+  numbers                  ; of a device that makes numbers which nobody can guess: a function that gives the next one,
+  few                      ; how many bytes it fills at most of what it is given,
+  (asked 0))               ; and how often it was asked
 
 (defun answer (vdev)
   (case (vdev-select vdev)
@@ -1810,7 +1841,9 @@
 ;; A disk serves what is in its first queue. A request is three buffers or
 ;; more: 16 bytes for the device to read, the type in the first four and
 ;; the sector in the last eight; the memory of the sectors, for the device
-;; to write when it is a read; and a byte for its answer.
+;; to write when it is a read; and a byte for its answer. A request of the
+;; type 4 is to put what the disk holds where it lasts: no sectors and no
+;; memory, and only from a driver that asked whether the disk knows it.
 (defun serve-disk (vdev)
   (let ((vq (aref (vdev-queues vdev) 0)) (disk (vdev-disk vdev)))
     (loop
@@ -1826,11 +1859,15 @@
                (bytes (reduce #'+ (mapcar #'second data)))
                (at (* 512 sector))
                (went (vdev-answer vdev)))
-          (unless (and (>= (length buffers) 3) (= (second header) 16) (not (logbitp 1 (third header)))
+          (unless (and (= (second header) 16) (not (logbitp 1 (third header)))
                        (= (second answer) 1) (logbitp 1 (third answer))
-                       (plusp bytes) (zerop (mod bytes 512))
-                       (every (lambda (buffer) (eq (logbitp 1 (third buffer)) (= type 0))) data))
+                       (if (= type 4)
+                           (and (= (length buffers) 2) (= sector 0))
+                           (and (>= (length buffers) 3) (plusp bytes) (zerop (mod bytes 512))
+                                (every (lambda (buffer) (eq (logbitp 1 (third buffer)) (= type 0))) data))))
             (failed "the driver gave the disk a request that is not one: ~S" buffers))
+          (when (and (= type 4) (not (logbitp 9 (first (vdev-wanted vdev)))))
+            (failed "the driver asked a disk to flush that it had not asked whether it can"))
           (dolist (buffer data)
             (let ((first (floor (clara.host::memory-index (first buffer) (second buffer)) 4096)))
               (when (find 0 clara.host::*pages* :start first :end (+ first (ceiling (second buffer) 4096)))
@@ -1842,6 +1879,7 @@
           (cond ((/= went 0))
                 ((or (> (+ at bytes) (length disk)) (and (= type 1) (vdev-read-only vdev)))
                  (setq went 1))
+                ((= type 4))
                 ((> type 1)
                  (setq went 2))
                 (t
@@ -1866,6 +1904,11 @@
     (cond ((and (>= offset #x2000) (vdev-disk vdev))
            ;; A disk's own registers begin with how many sectors it has, in 64 bits.
            (ldb (byte (* 8 size) (* 8 (- offset #x2000))) (floor (length (vdev-disk vdev)) 512)))
+          ((and (>= offset #x2000) (vdev-station vdev))
+           ;; A network card's begin with its address on the wire, six bytes.
+           (let ((value 0))
+             (dotimes (i size value)
+               (setq value (logior value (ash (or (nth (+ (- offset #x2000) i) (vdev-station vdev)) 0) (* 8 i)))))))
           ((>= offset #x2000)
            (let ((at (- offset #x2000)) (answer (answer vdev)))
              (case at
@@ -1901,15 +1944,28 @@
            (push (if (= offset (+ #x3000 (* 4 value))) value :at-the-wrong-register) (vdev-notified vdev))
            (when (and (= value 0) (vdev-disk vdev))
              (serve-disk vdev))
+           (when (and (= value 0) (vdev-numbers vdev))
+             (serve-numbers vdev))
            (when (= value 1)
              (let ((vq (aref (vdev-queues vdev) 1)))
                (loop
                  (let ((first (next-available vq)))
                    (unless first
                      (return))
-                   (complete vdev vq first
-                             (reduce #'+ (mapcar (lambda (buffer) (if (logbitp 1 (third buffer)) (second buffer) 0))
-                                                 (chain vq first)))))))))
+                   (cond ((vdev-station vdev)
+                          ;; A card has the pages of a frame until it says that the frame is sent, which
+                          ;; it may say late: the driver must not have written into them again by then.
+                          (let ((address (first (car (chain vq first)))))
+                            (when (find address (vdev-flying vdev) :key #'second)
+                              (failed "the driver gave the network card a page to send from that the card still has"))
+                            (send-on-wire vdev (chain vq first))
+                            (setf (vdev-flying vdev) (append (vdev-flying vdev) (list (list first address))))
+                            (loop while (> (length (vdev-flying vdev)) (vdev-hold vdev))
+                                  do (complete vdev vq (first (pop (vdev-flying vdev))) 0))))
+                         (t
+                          (complete vdev vq first
+                                    (reduce #'+ (mapcar (lambda (buffer) (if (logbitp 1 (third buffer)) (second buffer) 0))
+                                                        (chain vq first)))))))))))
           ((>= offset #x2000)
            (case (- offset #x2000)
              (0 (setf (vdev-select vdev) value))
@@ -1941,6 +1997,31 @@
              (#x2c (setf (ldb (byte 32 32) (vq-available vq)) value))
              (#x30 (setf (ldb (byte 32 0) (vq-used vq)) value))
              (#x34 (setf (ldb (byte 32 32) (vq-used vq)) value)))))))
+
+;; What a network card was given to send: the bytes of the buffers of a
+;; chain, which the card only reads, without the twelve bytes that virtio
+;; has before a frame, which have to be zero from a driver that asked the
+;; card to work nothing out for it. The frame goes to whatever is at the
+;; other end of the wire.
+(defun send-on-wire (vdev buffers)
+  (let ((bytes (make-array 0 :element-type '(unsigned-byte 8) :adjustable t :fill-pointer t)))
+    (dolist (buffer buffers)
+      (when (logbitp 1 (third buffer))
+        (failed "the driver gave the network card a buffer to write into where it sends: ~S" buffers))
+      (let ((index (clara.host::memory-index (first buffer) (second buffer))))
+        (when (find 0 clara.host::*pages* :start (floor index 4096) :end (ceiling (+ index (second buffer)) 4096))
+          (failed "the driver gave the network card ~D bytes of memory at #x~X that are not all its own"
+                  (second buffer) (first buffer)))
+        (dotimes (i (second buffer))
+          (vector-push-extend (aref clara.host::*memory* (+ index i)) bytes))))
+    (cond ((< (length bytes) 72)
+           (failed "the driver sent a frame of ~D bytes, and one is sixty at least, after twelve of virtio's" (- (length bytes) 12)))
+          ((> (length bytes) 1526)
+           (failed "the driver sent a frame of ~D bytes, which is more than the wire takes" (- (length bytes) 12)))
+          ((find-if #'plusp bytes :end 12)
+           (failed "the driver sent a frame with something in the twelve bytes before it: ~S" (subseq bytes 0 12)))
+          ((vdev-wire vdev)
+           (funcall (vdev-wire vdev) (subseq bytes 12))))))
 
 ;; A virtio device in a slot of bus 0, as QEMU makes them: its table of two
 ;; messages behind base address register 1, its other registers behind
@@ -1974,6 +2055,59 @@
                            (lambda (offset size value) (vdev-write vdev offset size value))
                            :mapped nil)
     vdev))
+
+;; A network card, with an address on the wire. Bit 5 of what it can do
+;; says that it has one.
+(defun add-net (slot station &key (offers (list 32 1)))
+  (add-virtio slot #x1041 #x020000 (make-vdev :station station :offers offers)))
+
+;; A frame arrives at a network card: into the next page that the driver
+;; gave it for that, after twelve bytes of virtio's. NIL when the driver
+;; has left it none.
+(defun arrive-on-wire (vdev frame)
+  (let* ((vq (aref (vdev-queues vdev) 0)) (first (next-available vq)))
+    (when first
+      (let ((buffer (car (chain vq first))))
+        (unless (and (>= (second buffer) (+ 12 (length frame))) (logbitp 1 (third buffer)))
+          (failed "the driver gave the network card a buffer of ~D bytes with the flags ~D for a frame of ~D"
+                  (second buffer) (third buffer) (length frame)))
+        (let ((index (clara.host::memory-index (first buffer) (+ 12 (length frame)))))
+          (fill clara.host::*memory* 0 :start index :end (+ index 12))
+          (replace clara.host::*memory* frame :start1 (+ index 12)))
+        (complete vdev vq first (+ 12 (length frame)))
+        t))))
+
+;; A device that makes numbers which nobody can guess serves what is in
+;; its queue: a buffer for it to write into, of which it fills as much as
+;; it likes, here all of it unless a test says how little.
+(defun serve-numbers (vdev)
+  (let ((vq (aref (vdev-queues vdev) 0)))
+    (loop
+      (let ((first (next-available vq)))
+        (unless first
+          (return))
+        (let* ((buffers (chain vq first)) (buffer (car buffers)))
+          (unless (and (= (length buffers) 1) (logbitp 1 (third buffer)) (<= 1 (second buffer) 4096))
+            (failed "the driver gave the device that makes numbers a request that is not one: ~S" buffers))
+          (let ((index (clara.host::memory-index (first buffer) (second buffer))))
+            (when (find 0 clara.host::*pages* :start (floor index 4096) :end (ceiling (+ index (second buffer)) 4096))
+              (failed "the driver gave the device that makes numbers memory that is not all its own"))
+            (incf (vdev-asked vdev))
+            (let ((count (min (second buffer) (or (vdev-few vdev) (second buffer)))))
+              (dotimes (i count)
+                (setf (aref clara.host::*memory* (+ index i)) (funcall (vdev-numbers vdev))))
+              (unless (vdev-silent vdev)
+                (complete vdev vq first count)))))))))
+
+;; Such a device. Its numbers here are made by a rule, so that a test that
+;; fails fails again: each is the last one times a number plus another.
+(defun add-numbers (slot &key few silent mute (offers (list 0 1)))
+  (let ((state (+ 12345 slot)))
+    (add-virtio slot #x1044 #xff0000
+                (make-vdev :numbers (lambda ()
+                                      (setq state (logand #xffffffff (+ (* state 1103515245) 12345)))
+                                      (ldb (byte 8 16) state))
+                           :few few :silent silent :mute mute :offers offers))))
 
 ;; An input device: a keyboard, a mouse or a tablet, by the events it says
 ;; it has.
@@ -2446,7 +2580,7 @@
        (pages (clara.host:allocated-pages)))
   (check (format nil "disk: 00:03.0 has 100 sectors of 512 bytes, 0 MiB~%") said)
   (check '(0 1 3 11 15) (reverse (vdev-history vdev)))
-  (check '(0 1) (vdev-wanted vdev))                       ; of all that it offers, version 1 and no more
+  (check '(512 1) (vdev-wanted vdev))                     ; of all that it offers, version 1 and the flush
   (check '(8 1 0) (list (vq-size vq) (vq-enabled vq) (vq-message vq)))
   (check '("00:03.0" 100 nil 1) (list (clara.disk:disk-name disk) (clara.disk:disk-sectors disk)
                                       (clara.disk:disk-read-only disk) (length (clara.disk:disks))))
@@ -2464,6 +2598,9 @@
                 (equalp (subseq bytes (* 96 512) (* 97 512)) (subseq (pattern 100) (* 96 512) (* 97 512)))
                 (equalp (subseq bytes (* 99 512)) (subseq (pattern 100) (* 99 512)))))
   (check '(1 97 2) (car (vdev-requests vdev)))
+  ;; What was written is put where it lasts: a request without sectors.
+  (check '(t (4 0 0)) (list (clara.disk:flush disk) (car (vdev-requests vdev))))
+  (pop (vdev-requests vdev))
   ;; Sectors that the disk does not have are refused here, and the device is not asked.
   (check-condition error (clara.disk:read-sectors disk 99 2 memory))
   (check-condition error (clara.disk:read-sectors disk 100 1 memory))
@@ -2500,11 +2637,32 @@
        (disk (car (clara.disk:disks)))
        (memory (clara.unsafe:allocate-memory 1)))
   (check (format nil "disk: 00:03.0 has 4096 sectors of 512 bytes, 2 MiB, and cannot be written~%") said)
-  (check '(32 1) (vdev-wanted vdev))
+  (check '(544 1) (vdev-wanted vdev))
   (check t (clara.disk:disk-read-only disk))
   (check-condition error (clara.disk:write-sectors disk 0 1 memory))
-  (check nil (vdev-requests vdev))
+  (check '(nil nil) (list (clara.disk:flush disk) (vdev-requests vdev))) ; nothing was written that could be held back
   (check 1 (clara.disk:read-sectors disk 4095 1 memory)))
+
+;; A disk that does not say that it knows how to flush holds nothing back,
+;; and is not asked to. One that fails at it is an error. And a disk that a
+;; variable has kept from an earlier start is not asked anything: its queue
+;; and its page frame were that start's.
+(let* ((vdevs (new-disks (list 3 (pattern 16) :offers (list #x6c54 1)) (list 4 (pattern 16))))
+       (disks (progn (said-by #'clara.disk:start) (clara.disk:disks)))
+       (memory (clara.unsafe:allocate-memory 1)))
+  (check '((0 1) nil nil) (list (vdev-wanted (first vdevs)) (clara.disk:flush (first disks)) (vdev-requests (first vdevs))))
+  (setf (vdev-answer (second vdevs)) 1)
+  (check "the disk 00:04.0 could not put what it holds where it lasts: its answer is 1"
+         (handler-case (clara.disk:flush (second disks)) (error (c) (princ-to-string c))))
+  (setf (vdev-answer (second vdevs)) 0)
+  (check t (clara.disk:flush (second disks)))
+  (new-disks (list 3 (pattern 16)))
+  (said-by #'clara.disk:start)
+  (check "the disk 00:04.0 is from an earlier start; (clara.disk:disks) has this start's"
+         (handler-case (clara.disk:read-sectors (second disks) 0 1 memory) (error (c) (princ-to-string c))))
+  (check-condition error (clara.disk:write-sectors (first disks) 0 1 memory))
+  (check-condition error (clara.disk:flush (second disks)))
+  (check 1 (clara.disk:read-sectors (car (clara.disk:disks)) 0 1 (clara.unsafe:allocate-memory 1))))
 
 ;; A disk that fails at what it is asked, one that does not know the
 ;; request, and one that never answers.
@@ -3212,8 +3370,17 @@
                     (coerce (loop for unit in (subseq units 0 end) collect (ldb (byte 8 0) unit) collect (ldb (byte 8 8) unit))
                             '(vector (unsigned-byte 8)))
                     :external-format :utf-16le))))
-             (walk (records path)
+             (walk (records path &optional own above)
                (let ((parts nil) (ended nil) (names nil) (shorts nil))
+                 ;; A directory that begins with an entry for itself has one for the directory it is in
+                 ;; after it, and each leads where it says: to its own first cluster, and to the other's,
+                 ;; or to none when that is the root.
+                 (when (and own (>= (length records) 64) (string= (short-of (subseq records 0 32)) "."))
+                   (flet ((leads (at) (+ (le records (+ at 26) 2) (if (= kind 32) (ash (le records (+ at 20) 2) 16) 0))))
+                     (unless (and (logbitp 4 (aref records 11)) (= (leads 0) own)
+                                  (string= (short-of (subseq records 32 64)) "..") (logbitp 4 (aref records 43))
+                                  (= (leads 32) above))
+                       (problem "the directory ~A does not begin with entries for itself and for the one it is in" path))))
                  (loop for at from 0 below (length records) by 32
                        for record = (subseq records at (+ at 32))
                        for first = (aref record 0)
@@ -3248,7 +3415,7 @@
                                    (push name names)
                                    (push (subseq record 0 11) shorts)
                                    (cond ((logbitp 4 what)
-                                          (walk (bytes-of (clusters-of cluster whole)) whole))
+                                          (walk (bytes-of (clusters-of cluster whole)) whole cluster (or own 0)))
                                          ((zerop size)
                                           (unless (zerop cluster)
                                             (problem "~A is empty, and begins in the cluster ~D" whole cluster))
@@ -3630,6 +3797,99 @@
                           (every (lambda (byte) (= byte (char-code (char (car file) 7)))) (cdr file))))
                     files))))
 
+;; Directories that are made: on volumes of every kind, at the root and
+;; inside another, by a name that is short and by one that is not. What is
+;; written is a volume in order, with the directory there, empty, and
+;; beginning with its two entries; a file goes into it and comes back; and
+;; it is taken away again when nothing is left in it, after which as many
+;; bytes are free as before.
+(dolist (kind '(12 16 32))
+  (let ((disk (fat-bytes (make-fat-volume kind *clean-tree* :cluster-sectors (if (= kind 32) 1 2) :information t))))
+    (start-files disk)
+    (let ((free (clara.fat:free-bytes)) (pages (clara.host:allocated-pages)))
+      (check '("/letters" "/letters/a directory with a long name" "/clara/inner/")
+             (list (clara.fat:make-directory "/letters")
+                   (clara.fat:make-directory "/letters/a directory with a long name")
+                   (clara.fat:make-directory "/clara/inner/")))
+      (check '(("a directory with a long name/") nil nil)
+             (list (clara.fat:names "/letters") (clara.fat:names "/letters/a directory with a long name")
+                   (clara.fat:names "/clara/inner")))
+      (check t (clara.fat:entry-directory-p (find "letters" (clara.fat:entries "/") :key #'clara.fat:entry-name
+                                                                                     :test #'string-equal)))
+      (put-text "/letters/a directory with a long name/first.txt" "in a directory that was made here")
+      (check "in a directory that was made here" (text-of-file "/LETTERS/A Directory With A Long Name/first.txt"))
+      (check (* 3 512 (if (= kind 32) 1 2)) (- free (clara.fat:free-bytes) (* 512 (if (= kind 32) 1 2))))
+      (multiple-value-bind (files problems) (inspect-volume disk)
+        (check nil problems)
+        (check t (equalp (octets "in a directory that was made here")
+                         (cdr (assoc "/letters/a directory with a long name/first.txt" files :test #'string=)))))
+      ;; What is there already, of either kind, is not made a second time; and a directory goes
+      ;; where there is one for it to be in.
+      (check "there is /letters already" (condition-text (lambda () (clara.fat:make-directory "/letters"))))
+      (check "there is /notes.txt already" (condition-text (lambda () (clara.fat:make-directory "/notes.txt"))))
+      (check-condition error (clara.fat:make-directory "/nowhere/inside"))
+      (check-condition error (clara.fat:make-directory "/letters/not: a name"))
+      (check-condition error (clara.fat:make-directory "/"))
+      ;; Taking one away: an empty one, and no other, and nothing that is a file.
+      (check "the directory /letters is not empty" (condition-text (lambda () (clara.fat:remove-directory "/letters"))))
+      (check "/notes.txt is a file, and not a directory"
+             (condition-text (lambda () (clara.fat:remove-directory "/notes.txt"))))
+      (check "there is no directory /nothing" (condition-text (lambda () (clara.fat:remove-directory "/nothing"))))
+      (check-condition error (clara.fat:remove-file "/letters"))
+      (clara.fat:remove-file "/letters/a directory with a long name/first.txt")
+      (check '("/letters/a directory with a long name" "/letters" "/clara/inner")
+             (list (clara.fat:remove-directory "/letters/a directory with a long name")
+                   (clara.fat:remove-directory "/letters") (clara.fat:remove-directory "/clara/inner")))
+      (check (list free pages nil) (list (clara.fat:free-bytes) (clara.host:allocated-pages)
+                                         (nth-value 1 (inspect-volume disk))))
+      (check t (equalp (inspect-volume disk) (sort (copy-list (tree-files *clean-tree*)) #'string< :key #'car))))))
+
+;; A directory of the root that is full, on the kinds whose root is no file,
+;; takes no directory more; and a volume without a cluster to spare none at all.
+(let ((disk (fat-bytes (make-fat-volume 12 '(("only.txt" "x")) :clusters 3))))
+  (start-files disk)
+  (check 1024 (clara.fat:free-bytes))             ; two of its three clusters, the last among them
+  (put-text "/one.txt" (make-string 512 :initial-element #\a))
+  (put-text "/two.txt" (make-string 512 :initial-element #\b))
+  (check 0 (clara.fat:free-bytes))
+  (check-condition error (clara.fat:make-directory "/more"))
+  (check nil (nth-value 1 (inspect-volume disk))))
+(let ((disk (fat-bytes (make-fat-volume 12 (loop for i below 224 collect (list (format nil "F~D" i) "x"))))))
+  (start-files disk)
+  (let ((free (clara.fat:free-bytes)))
+    (check "the directory of the root is full: it has 224 entries, and on a volume of this kind no more"
+           (condition-text (lambda () (clara.fat:make-directory "/MORE"))))
+    ;; The cluster that was to be the directory is nobody's again.
+    (check (list free nil) (list (clara.fat:free-bytes) (nth-value 1 (inspect-volume disk))))))
+
+;; A disk that stops while a directory is being made, at every request it
+;; could stop at: what was there is there, and the directory is whole or
+;; not there at all.
+(let ((request 0) (stopped t))
+  (loop while stopped
+        do (incf request)
+           (let* ((disk (fat-bytes (make-fat-volume 16 *clean-tree* :cluster-sectors 2 :stride 3)))
+                  (count 0))
+             (start-files disk)
+             (setf (vdev-watch *disk*)
+                   (lambda ()
+                     (when (= (incf count) request)
+                       (setf (vdev-answer *disk*) 1))))
+             (setq stopped (not (ignore-errors (clara.fat:make-directory "/clara/a directory that may not get made") t)))
+             (setf (vdev-answer *disk*) 0
+                   (vdev-watch *disk*) nil)
+             (multiple-value-bind (files problems) (inspect-volume disk)
+               (incf *checks*)
+               (unless (and (every (lambda (problem)
+                                     (or (search "are in no file, and not free" problem)
+                                         (search "the copies of the table differ" problem)))
+                                   problems)
+                            (equalp files (sort (copy-list (tree-files *clean-tree*)) #'string< :key #'car))
+                            (or stopped (null problems)))
+                 (failed "a disk that stopped at request ~D of making a directory is left out of order: ~{~A~^; ~}"
+                         request (or problems (list "its files are not what they were")))))))
+  (check t (> request 4)))
+
 ;; The image of the heap goes into a file like any other bytes, and what it
 ;; was in is given back.
 (let ((disk (fat-bytes (make-fat-volume 16 *clean-tree*)))
@@ -3668,6 +3928,23 @@
 (check (heard "> ~%error: boom 7~%> ~%1~%> ~%") (listen-to (format nil "(error \"boom ~~D\" 7)~%1~%")))
 (check (heard "> x~%\"x\"~%> ~%") (listen-to (format nil "(write-string \"x\")~%")))
 (check (heard ">   ~%the input ended in the middle of a form~%") (listen-to (format nil "(car~%")))
+;; Whoever wants to keep what was typed is told of every form that went
+;; well, with the text it was read from and the package it was read in,
+;; and of none that ended in an error or could not be read.
+(let ((told nil))
+  (let ((clara.listener:*record* (lambda (form text package)
+                                   (push (list form (string-trim '(#\Space #\Newline) text) package) told))))
+    (listen-to (format nil "(list 1~% 2) (car 5)~%(in-package \"COMMON-LISP-USER\")~%'told-in-it ) (list 3)~%"))
+    (setq *package* (find-package "CLARA.TESTS")))
+  (check (list (list '(list 1 2) (format nil "(list 1~% 2)") "CLARA.TESTS")
+               (list '(in-package "COMMON-LISP-USER") "(in-package \"COMMON-LISP-USER\")" "CLARA.TESTS")
+               (list ''cl-user::told-in-it "'told-in-it" "COMMON-LISP-USER"))
+         (reverse told)))
+(check '(t nil) (let ((well nil) (badly t))
+                  (with-output-to-string (*standard-output*)
+                    (setq well (clara.listener:answer '(+ 1 2))
+                          badly (clara.listener:answer '(car 5))))
+                  (list well badly)))
 (let ((heard (listen-to (format nil "1 ) 2~%3~%"))))    ; what cannot be read is dropped, and said
   (check t (and (search (format nil "> ~%1~%error: ") heard)
                 (search (format nil "~%> ~%3~%> ~%") heard)
@@ -3712,8 +3989,9 @@
 
 ;; A machine with a screen, what draws started on it, and the window manager
 ;; as a world has it that never ran one.
-(defun new-desk (&key (width 200) (height 140) applications (start t))
-  (clara.host:reset-machine)
+(defun new-desk (&key (width 200) (height 140) applications commands (start t) (machine t))
+  (when machine
+    (clara.host:reset-machine))
   (setq *desk-width* width
         *desk-height* height
         *pitch* (* 4 (+ width 2))
@@ -3725,6 +4003,7 @@
   (clara.input:send-keys-to nil)
   (clara.input:send-pointer-to nil)
   (setq clara.windows::*running* nil
+        clara.windows::*commands* commands
         clara.windows::*applications*
         (mapcar (lambda (application)
                   (if (consp application)
@@ -3759,12 +4038,16 @@
           ((and (>= at 112) (text-p name (- x at) (- y 2))) +ink+)
           (t +paper+))))
 
+;; The launcher's list: the applications and under them the commands, with
+;; a line across where the commands begin, when there are both.
 (defun menu-rule (x y)
-  (let* ((names (clara.windows:applications))
+  (let* ((applications (clara.windows:applications))
+         (names (append applications (clara.windows:commands)))
          (width (reduce #'max (mapcar (lambda (name) (+ 16 (* 8 (length name)))) names) :initial-value 112))
          (height (* 20 (length names))))
     (cond ((not (and clara.windows::*menu* (< -1 x width) (<= 20 y (+ 19 height)))) nil)
           ((or (= x 0) (= x (1- width)) (= y 20) (= y (+ 19 height))) +ink+)
+          ((and applications (clara.windows:commands) (= y (+ 20 (* 20 (length applications))))) +ink+)
           ((text-p (nth (floor (- y 20) 20) names) (- x 8) (- (mod (- y 20) 20) 2)) +ink+)
           (t +paper+))))
 
@@ -4056,6 +4339,77 @@
          (check nil (clara.windows:resume))))
 (check "" (with-output-to-string (*standard-output*) (check nil (clara.windows:resume)))) ; and one that was not
 
+;; Commands: under the applications in the launcher's list, with a line
+;; across where they begin. A click on one calls its function in a thread
+;; of its own, which has the command's name, and nothing waits for it.
+(defvar *commanded* nil)
+(new-desk :applications (list (cons "One" (lambda () 'done)) (cons "The second of them" (lambda () 'done))
+                              (cons "Quiet" (lambda () 'done))))
+(check '("Do it" ("Do it"))
+       (list (clara.windows:define-command "Do it" (lambda () (push (clara:thread-name (clara:current-thread)) *commanded*)))
+             (clara.windows:commands)))
+(check "Another" (clara.windows:define-command "Another" (lambda () (push 'another *commanded*))))
+(clara.windows:pointer-moved 5 5 1)
+(clara.windows:pointer-moved 5 5 0)
+(check '(t 0) (list clara.windows::*menu* (wrong-pixels)))
+(clara.windows:pointer-moved 20 85 1)          ; the fourth line: after three applications, the first command
+(clara.windows:pointer-moved 20 85 0)
+(check t (eventually (lambda () (equal *commanded* '("Do it")))))
+(check '(nil 0) (list clara.windows::*menu* (wrong-pixels)))
+(clara.windows:pointer-moved 5 5 1)
+(clara.windows:pointer-moved 5 5 0)
+(clara.windows:pointer-moved 20 119 1)         ; the last pixel of the last line
+(clara.windows:pointer-moved 20 119 0)
+(check t (eventually (lambda () (equal *commanded* '(another "Do it")))))
+(clara.windows:pointer-moved 5 5 1)
+(clara.windows:pointer-moved 5 5 0)
+(clara.windows:pointer-moved 20 120 1)         ; and under it: nothing
+(clara.windows:pointer-moved 20 120 0)
+(check '(nil (another "Do it") 0) (list clara.windows::*menu* *commanded* (wrong-pixels)))
+;; A name that is defined again, in letters of either case, keeps its place
+;; and has the new function. One that is removed is gone from the list.
+(check '("do it" ("Do it" "Another")) (list (clara.windows:define-command "do it" (lambda () (push 'again *commanded*)))
+                                            (clara.windows:commands)))
+(clara.windows:pointer-moved 5 5 1)
+(clara.windows:pointer-moved 5 5 0)
+(clara.windows:pointer-moved 20 85 1)
+(clara.windows:pointer-moved 20 85 0)
+(check t (eventually (lambda () (eq (car *commanded*) 'again))))
+(clara.windows:pointer-moved 5 5 1)            ; the list is open while a command goes: it shuts, and is right after
+(clara.windows:pointer-moved 5 5 0)
+(check '("ANOTHER" ("Do it") nil 0)
+       (list (clara.windows:remove-command "ANOTHER") (clara.windows:commands) clara.windows::*menu* (wrong-pixels)))
+(check '("none of that name" ("Do it")) (list (clara.windows:remove-command "none of that name") (clara.windows:commands)))
+(check-condition error (clara.windows:define-command 'name #'list))
+;; Commands and no application: the button opens the list all the same,
+;; and there is no line across it.
+(new-desk :commands (list (cons "Alone" (lambda () (push 'alone *commanded*)))))
+(clara.windows:pointer-moved 5 5 1)
+(clara.windows:pointer-moved 5 5 0)
+(check '(t 0) (list clara.windows::*menu* (wrong-pixels)))
+(clara.windows:pointer-moved 20 30 1)
+(clara.windows:pointer-moved 20 30 0)
+(check t (eventually (lambda () (eq (car *commanded*) 'alone))))
+(check '(nil 0) (list clara.windows::*menu* (wrong-pixels)))
+
+;; What the windows' programs have not finished: each window that was given
+;; a function for it is asked, and the ones that answer in words are
+;; listed, the topmost first. A function that fails has nothing to say.
+(let* ((says nil)
+       (quiet (clara.windows:open-window "quiet" 40 20))
+       (busy (clara.windows:open-window "busy" 40 20 :unfinished (lambda () says)))
+       (broken (clara.windows:open-window "broken" 40 20 :unfinished (lambda () (error "it cannot say"))))
+       (other (clara.windows:open-window "other" 40 20 :unfinished (lambda () "more of the same"))))
+  (check (list (cons other "more of the same")) (clara.windows:unfinished))
+  (setq says "a letter half written")
+  (check (list (cons other "more of the same") (cons busy "a letter half written")) (clara.windows:unfinished))
+  (clara.windows:raise-window busy)
+  (check (list busy other) (mapcar #'car (clara.windows:unfinished)))
+  (setq says 12)                               ; which is not words
+  (check (list other) (mapcar #'car (clara.windows:unfinished)))
+  (mapc #'clara.windows:close-window (list quiet busy broken other))
+  (check nil (clara.windows:unfinished)))
+
 ;; The console lends the screen and has it back: while the window manager
 ;; runs, what is written goes to the serial port alone.
 (new-desk :start nil)
@@ -4291,7 +4645,7 @@
 (setq clara.windows::*applications* *defined-applications*)
 ;; What lisp/terminal.lisp defined and installed when it was loaded: the two
 ;; that are files have a function here because the tests loaded the files.
-(check '(("Listener" nil) ("Editor" "/clara/editor.lisp") ("Files" "/clara/files.lisp"))
+(check '(("Listener" nil) ("Editor" "editor.lisp") ("Files" "files.lisp"))
        (mapcar (lambda (application)
                  (list (clara.windows::application-name application) (clara.windows::application-file application)))
                clara.windows::*applications*))
@@ -5173,6 +5527,3458 @@
   (clara:destroy-thread thread)               ; stopped, perhaps before it began
   (check-condition error (clara:join-thread thread))
   (check nil (clara:thread-alive-p thread)))
+;;; Shutting the machine down, and starting it again (lisp/system.lisp).
+;;; The machine of these tests does neither: it takes note of what it was
+;;; told and goes on, as a machine does that cannot be turned off from
+;;; inside. So what is looked at is the order of things up to there: what
+;;; the windows are asked, the world saved while the window manager still
+;;; runs, the window manager stopped, the disk asked to put what it holds
+;;; where it lasts, the substrate told, and what is said on the way.
+
+;; What FUNCTION writes, and what the threads write that it makes: a new
+;; thread writes where *STANDARD-OUTPUT* points outside every binding.
+(defun said-by-all (function)
+  (let ((output (sb-ext:symbol-global-value '*standard-output*)) (text (make-string-output-stream)))
+    (setf (sb-ext:symbol-global-value '*standard-output*) text)
+    ;; What SBCL has to say about a form that a test has loaded a second time is nobody's business.
+    (unwind-protect (let ((*standard-output* text))
+                      (handler-bind ((warning #'muffle-warning))
+                        (funcall function)))
+      (setf (sb-ext:symbol-global-value '*standard-output*) output))
+    (get-output-stream-string text)))
+
+(defvar *cannot-off* "clara: this machine cannot be turned off from inside: it can be switched off now")
+(defvar *cannot-again* "clara: this machine cannot be started again from inside: that is for whoever runs it")
+
+(check '("Restart" "Shut Down") (mapcar #'car *defined-commands*))
+
+;; A machine with a disk and no window manager: the world goes to the disk,
+;; the disk is told to keep it, and the machine is told to go.
+(start-files (fat-bytes (make-fat-volume 16 '(("clara" (("kept.txt" "x")))))))
+(clara.host:set-heap-image (octets "the world, as bytes"))
+(let ((asked nil) (meanwhile nil))
+  ;; One at a time: whoever asks while the world is on its way to the disk is refused.
+  (setf (vdev-watch *disk*) (lambda ()
+                              (push (first (car (vdev-requests *disk*))) asked)
+                              (unless meanwhile
+                                (setq meanwhile (condition-text #'clara.system:start-again)))))
+  (check (format nil "clara: the world is saved~%clara: turning the machine off~%~A~%" *cannot-off*)
+         (said-by-all (lambda () (clara.system:shut-down))))
+  (check "the machine is being shut down already" meanwhile)
+  (check '(:off) (clara.host:power))
+  (check '(4 t) (list (car asked) (and (member 1 asked) t)))  ; written, and then put where it lasts
+  (check "the world, as bytes" (text-of-file "/clara/clara.image"))
+  (check nil clara.system::*leaving*)
+  ;; Without saving: the world that was saved last stays as it is, and nothing is written.
+  (clara.fat:remove-file "/clara/clara.image")
+  (setq asked nil)
+  (check (format nil "clara: starting the machine again~%~A~%" *cannot-again*)
+         (said-by-all (lambda () (clara.system:start-again :save nil))))
+  (check '((:off :again) (4) nil)
+         (list (clara.host:power) asked (find "clara.image" (clara.fat:names "/clara") :test #'string-equal)))
+  ;; One at a time.
+  (setq clara.system::*leaving* :again)
+  (check "the machine is being started again already" (condition-text #'clara.system:shut-down))
+  (setq clara.system::*leaving* nil))
+
+;; A world that cannot be saved: the machine stays as it was, and says why.
+(start-files (fat-bytes (make-fat-volume 16 '(("notes.txt" "x")))))
+(check (format nil "clara: the machine is not shut down: there is no directory for a file /clara/clara.image to be in~%")
+       (said-by-all (lambda () (clara.system:shut-down))))
+(check '(nil nil) (list (clara.host:power) clara.system::*leaving*))
+(start-files (fat-bytes (make-fat-volume 16 '(("clara" (("kept.txt" "x")))))) :read-only t)
+(check t (and (search "clara: the machine is not started again: the disk 00:03.0 cannot be written"
+                      (said-by-all (lambda () (clara.system:start-again))))
+              t))
+(check nil (clara.host:power))
+
+;; A machine without a disk has nowhere to save a world, and goes all the same.
+(new-disks)
+(said-by #'clara.disk:start)
+(said-by #'clara.fat:start)
+(check (format nil "clara: there is no disk to save the world on~%clara: turning the machine off~%~A~%" *cannot-off*)
+       (said-by-all (lambda () (clara.system:shut-down))))
+(check '(:off) (clara.host:power))
+
+;; With the window manager running. A window whose program has something
+;; unfinished stops the whole thing before anything is done: it comes to
+;; the top, and whoever asked is told which it is. With FORCE nobody is
+;; asked. The world is saved while the window manager runs, so that the
+;; machine starts in it; then it is stopped, and then the disk is told.
+(start-files (fat-bytes (make-fat-volume 16 '(("clara" (("kept.txt" "x")))))))
+(new-desk :machine nil :width 300 :height 220)
+(let* ((editor (clara.editor::open-editor nil :columns 20 :rows 3))
+       (second (clara.editor::open-editor nil :columns 20 :rows 3))
+       (plain (clara.windows:open-window "plain" 40 20))
+       (seen nil))
+  (check nil (clara.windows:unfinished))
+  (keys editor "a")
+  (check '("plain" "Editor" "Editor") (titles))
+  (check (format nil "the machine is not shut down: the window \"Editor\" has text that is not saved. ~
+                      Finish that, or ask with :FORCE T, which goes on without")
+         (condition-text #'clara.system:shut-down))
+  (check (list (clara.editor::editor-window editor) plain (clara.editor::editor-window second)) (clara.windows:windows))
+  (keys second "b")
+  (check (format nil "the machine is not started again: the window \"Editor\" has text that is not saved, ~
+                      and 1 more have something too. Finish that, or ask with :FORCE T, which goes on without")
+         (condition-text #'clara.system:start-again))
+  (check '(nil t nil 0) (list (clara.host:power) (clara.windows:running-p) clara.system::*leaving* (wrong-pixels)))
+  ;; The same from the launcher's list, where there is nobody to hand an error to: it is said.
+  (check t (and (search "clara: the machine is not shut down: the window \"Editor\" has text that is not saved"
+                        (said-by-all (lambda () (clara.system::asked :off))))
+                t))
+  (setf (vdev-watch *disk*)
+        (lambda () (push (cons (first (car (vdev-requests *disk*))) (clara.windows:running-p)) seen)))
+  (check (format nil "clara: the world is saved~%clara: starting the machine again~%~A~%" *cannot-again*)
+         (said-by-all (lambda () (clara.system:start-again :force t))))
+  (check '((4) t (:again) nil)
+         (list (car seen) (every #'cdr (remove 4 seen :key #'car)) (clara.host:power) (clara.windows:running-p)))
+  (check t (and (member '(1 . t) seen :test #'equal) t))
+  (mapc #'clara.windows:close-window
+        (list (clara.editor::editor-window editor) (clara.editor::editor-window second) plain)))
+
+;; The launcher's list has the two commands that this file defined, and a
+;; click on one is the same as asking at a prompt.
+(new-disks)
+(said-by #'clara.disk:start)
+(said-by #'clara.fat:start)
+(new-desk :machine nil :commands *defined-commands*)
+(clara.windows:pointer-moved 5 5 1)
+(clara.windows:pointer-moved 5 5 0)
+(check '(t 0) (list clara.windows::*menu* (wrong-pixels)))
+(check t (and (search (format nil "clara: turning the machine off~%~A~%" *cannot-off*)
+                      (said-by-all (lambda ()
+                                     (clara.windows:pointer-moved 20 50 1)       ; the second line: Shut Down
+                                     (clara.windows:pointer-moved 20 50 0)
+                                     (eventually (lambda () (clara.host:power)))
+                                     (eventually (lambda () (null clara.system::*leaving*))))))
+              t))
+(check '((:off) nil) (list (clara.host:power) (clara.windows:running-p)))
+
+;; The power button: START has a thread look at it, four times a second,
+;; and a press is a request to shut down. A world that was saved by a
+;; shutdown was in the middle of one, and is not when it starts.
+(new-disks)
+(said-by #'clara.disk:start)
+(said-by #'clara.fat:start)
+(setq clara.windows::*running* nil
+      clara.system::*leaving* :off)
+(check (format nil "system: this is ClaraOS 0.0.0-host~%") (said-by-all #'clara.system:start))
+(check '(nil t) (list clara.system::*leaving* (clara:thread-alive-p clara.system::*watcher*)))
+(check '("power button" 2) (list (clara:thread-name clara.system::*watcher*) (length (clara:all-threads))))
+(check nil (clara.host:power))
+(check (format nil "clara: the power button was pressed~%clara: there is no disk to save the world on~%~
+                    clara: turning the machine off~%~A~%" *cannot-off*)
+       (said-by-all (lambda ()
+                      (clara.host:press-power-button)
+                      (eventually (lambda () (clara.host:power)))
+                      (eventually (lambda () (null clara.system::*leaving*))))))
+(check '(:off) (clara.host:power))
+(let ((first clara.system::*watcher*))       ; started again: one thread watches, and it is another
+  (said-by-all #'clara.system:start)
+  (check '(nil t) (list (eq first clara.system::*watcher*) (eventually (lambda () (not (clara:thread-alive-p first)))))))
+;;; A system is taken from another disk, tried, and takes the place of the
+;;; one before it (lisp/system.lisp). The disks are made up here: a volume
+;;; with a system in it, as a build lays one out, and another to take a
+;;; system from. What the kernel says of a start is what the tests say it
+;;; says, and afterwards the volume is looked at without the file system.
+
+(defvar *this-kernel* (if (member :arm64 *features*) "BOOTAA64.EFI" "BOOTX64.EFI"))
+(defvar *other-kernel* (if (member :arm64 *features*) "BOOTX64.EFI" "BOOTAA64.EFI"))
+
+;; The directory of a system, for MAKE-FAT-VOLUME: its files, each (name
+;; contents), and the manifest that lists them; with WRONG, the name of a
+;; file whose sum the manifest has wrong, and without MANIFEST, none.
+(defun system-tree (name files &key (manifest t) wrong)
+  (let ((lines (list "what a later system may say, and this one passes over" (format nil "ClaraOS system: ~A" name))))
+    (loop for (file contents) in files
+          do (push (format nil "file ~D ~A ~A" (length (octets contents))
+                           (if (equal file wrong)
+                               (make-string 128 :initial-element #\0)
+                               (clara.host:sha-512-of (octets contents)))
+                           file)
+                   lines))
+    (list name (append files (and manifest (list (list "manifest" (format nil "~{~A~%~}" (reverse lines)))))))))
+
+(defvar *old-files* (list '("boot.lisp" "(the old system)") (list *this-kernel* "the old kernel")
+                          (list *other-kernel* "the old kernel of the other processor")))
+(defvar *new-files* (list '("boot.lisp" "(the new system)") (list "long.lisp" *long-text*) '("empty.lisp" "")
+                          (list *this-kernel* "the new kernel") (list *other-kernel* "the new kernel of the other processor")))
+
+;; What a machine's own disk holds: where the firmware looks, the system
+;; that runs, the world it saved, what a start has left there, and a file
+;; of the user's.
+(defun machine-tree (&rest more)
+  `(("EFI" (("BOOT" ((,*this-kernel* "the old kernel") (,*other-kernel* "the old kernel of the other processor")))))
+    ("clara" (,(system-tree "0.0.0-host" *old-files*) ("clara.image" "the world that the old system saved") ,@more))
+    ("notes.txt" "written before any of this")))
+
+(defvar *machine-disk* nil)   ; the bytes of the disk that the machine was started from,
+(defvar *other-disk* nil)     ; and of the other one
+
+;; A machine with those two volumes, the other one first on the bus when
+;; FIRST says so, and the file system started on them.
+(defun two-disks (machine other &key (first :machine))
+  (setq *machine-disk* (fat-bytes (make-fat-volume 16 machine))
+        *other-disk* (fat-bytes (make-fat-volume 16 other)))
+  (if (eq first :machine)
+      (new-disks (list 3 *machine-disk*) (list 4 *other-disk*))
+      (new-disks (list 3 *other-disk*) (list 4 *machine-disk*)))
+  (setq clara.windows::*running* nil)
+  (said-by #'clara.disk:start)
+  (said-by #'clara.fat:start))
+
+;; What a file of a volume holds, as text, or NIL when the volume has none
+;; of that name; and whether anything on the volume is out of order.
+(defun on-disk (bytes name)
+  (let ((file (assoc name (inspect-volume bytes) :test #'string-equal)))
+    (and file (sb-ext:octets-to-string (coerce (cdr file) '(vector (unsigned-byte 8))) :external-format :utf-8))))
+
+(defun in-order-p (bytes)
+  (null (nth-value 1 (inspect-volume bytes))))
+
+;; What a manifest says, and what is none.
+(check '("0.0.1-new" ("boot.lisp" 5 "ab") ("a name with spaces.lisp" 0 "cd"))
+       (let ((ab (make-string 128 :initial-element #\a)) (cd (make-string 128 :initial-element #\c)))
+         (subst "cd" cd
+                (subst "ab" ab
+                       (clara.system::read-manifest
+                        (format nil "ClaraOS system: 0.0.1-new~%file 5 ~A boot.lisp~%signed by somebody~%~
+                                     file 0 ~A a name with spaces.lisp~%file 12 short-sum wrong.lisp~%~
+                                     file x ~A no-length.lisp~%file 3 ~A ../outside.lisp~%file 3 ~A in/side.lisp~%~
+                                     file 3 ~A .hidden~%file 7~%sums 9 ~A no-file-at-all.lisp~%"
+                                ab cd ab ab ab ab ab))
+                       :test #'equal)
+                :test #'equal)))
+(check '(nil nil nil) (list (clara.system::read-manifest "") (clara.system::read-manifest "file 5 x boot.lisp")
+                            (clara.system::read-manifest (format nil "Some other system: x~%"))))
+(check '(("a" "b" "c d e") ("a") ("" "b")) (list (clara.system::words "a b c d e" 2) (clara.system::words "a" 2)
+                                                (clara.system::words " b" 1)))
+(check '(0 1234567 nil nil nil) (mapcar #'clara.system::number-of '("0" "1234567" "" "12a" "1234567890123456")))
+
+;; The volume that the machine was started from is the one that has this
+;; start's number in /clara/starts, wherever its disk is on the bus; and a
+;; start that gets to its end takes that file away. The names of files are
+;; looked up there from then on, and the applications of the system are
+;; its files.
+(two-disks (machine-tree '("starts" "1 00000000000000aa
+")) `(("clara" (,(system-tree "0.0.1-new" *new-files*) ("starts" "1 00000000000000bb
+")))) :first :other)
+(clara.host:set-start-state :token "00000000000000aa")
+(check (format nil "system: this is ClaraOS 0.0.0-host~%") (said-by-all #'clara.system:start))
+(check '(t t "0.0.0-host" "/clara/0.0.0-host/boot.lisp" "/clara/0.0.0-host/")
+       (list (eq (clara.system:boot-volume) (second (clara.fat:volumes))) (eq clara.fat:*volume* (clara.system:boot-volume))
+             (clara.system:system) (clara.system:system-file "boot.lisp") clara.windows:*application-directory*))
+(check '(nil t) (list (on-disk *machine-disk* "/clara/starts") (and (on-disk *other-disk* "/clara/starts") t)))
+;; Without a number, or with one that no volume has, it is the first.
+(clara.host:set-start-state :token "00000000000000cc")
+(said-by-all #'clara.system:start)
+(check t (eq (clara.system:boot-volume) (first (clara.fat:volumes))))
+
+;; An upgrade: the other system's directory comes across file by file, the
+;; manifest last, and then /clara/next says that it is to be tried.
+;; Everything that was on the disk before is as it was, and what was taken
+;; for the copying is given back.
+(two-disks (machine-tree) `(("clara" (,(system-tree "0.0.1-new" *new-files*)))))
+(clara.host:set-start-state)
+(said-by-all #'clara.system:start)
+(let ((pages (clara.host:allocated-pages)) (before (inspect-volume *machine-disk*)))
+  (check (format nil "system: 0.0.1-new is on the disk, and is tried at the next start~%")
+         (said-by-all (lambda () (check "0.0.1-new" (clara.system:upgrade :start-again nil)))))
+  (check (list pages nil t) (list (clara.host:allocated-pages) (clara.host:power) (in-order-p *machine-disk*)))
+  (check (format nil "try 0.0.1-new~%") (on-disk *machine-disk* "/clara/next"))
+  (check t (loop for (name contents) in *new-files*
+                 always (equal contents (on-disk *machine-disk* (format nil "/clara/0.0.1-new/~A" name)))))
+  (check t (equal (on-disk *machine-disk* "/clara/0.0.1-new/manifest") (on-disk *other-disk* "/clara/0.0.1-new/manifest")))
+  (check t (every (lambda (file) (equalp file (assoc (car file) (inspect-volume *machine-disk*) :test #'string=))) before))
+  (check "the old kernel" (on-disk *machine-disk* (format nil "/EFI/BOOT/~A" *this-kernel*)))
+  ;; Asked a second time, what the first left is taken away and the system is taken again; and
+  ;; this time the machine is started again, which this one cannot be.
+  (check t (and (search (format nil "clara: the world is saved~%clara: starting the machine again~%")
+                        (said-by-all #'clara.system:upgrade))
+                t))
+  (check (list '(:again) t pages) (list (clara.host:power) (in-order-p *machine-disk*) (clara.host:allocated-pages)))
+  (check (format nil "try 0.0.1-new~%") (on-disk *machine-disk* "/clara/next")))
+
+;; What is not taken: a system with a file that is not what its manifest
+;; says, one without a kernel for this machine, one that is not whole, the
+;; system that runs, and anything when the disk has no room. Nothing then
+;; says that a system is to be tried, and the machine starts as it did.
+(dolist (how (list (list (system-tree "0.0.1-new" *new-files* :wrong "long.lisp")
+                         "the file /clara/0.0.1-new/long.lisp is not what the manifest of its system says it is")
+                   (list (system-tree "0.0.1-new" (remove *this-kernel* *new-files* :key #'car :test #'string=))
+                         (format nil "the system 0.0.1-new has no kernel for this machine, which would be ~A" *this-kernel*))
+                   (list (system-tree "0.0.1-new" *new-files* :manifest nil)
+                         "no other disk of this machine holds a ClaraOS other than this one, 0.0.0-host")
+                   (list (system-tree "0.0.0-host" *old-files*)
+                         "no other disk of this machine holds a ClaraOS other than this one, 0.0.0-host")
+                   (list (list "0.0.1-new" (cadr (system-tree "0.0.2-other" *new-files*)))
+                         "no other disk of this machine holds a ClaraOS other than this one, 0.0.0-host")))
+  (two-disks (machine-tree) `(("clara" (,(first how)))))
+  (said-by-all #'clara.system:start)
+  (let ((pages (clara.host:allocated-pages)))
+    (check (second how) (condition-text #'clara.system:upgrade))
+    (check (list nil nil t pages)
+           (list (on-disk *machine-disk* "/clara/next") (on-disk *machine-disk* "/clara/0.0.1-new/manifest")
+                 (in-order-p *machine-disk*) (clara.host:allocated-pages)))))
+(two-disks (machine-tree) `(("clara" (,(system-tree "0.0.1-new" *new-files*)))))
+(said-by-all #'clara.system:start)
+(check "that volume holds no ClaraOS other than this one, 0.0.0-host"
+       (condition-text (lambda () (clara.system:upgrade :from (clara.system:boot-volume)))))
+(check "0.0.1-new" (progn (said-by-all (lambda () (clara.system:upgrade :from (second (clara.fat:volumes)) :start-again nil)))
+                          (car (clara.system::system-on (second (clara.fat:volumes))))))
+(setq *machine-disk* (fat-bytes (make-fat-volume 12 (machine-tree) :clusters 40)))   ; a disk with 20 KiB to it
+(new-disks (list 3 *machine-disk*) (list 4 (fat-bytes (make-fat-volume 16 `(("clara" (,(system-tree "0.0.1-new" *new-files*))))))))
+(said-by #'clara.disk:start)
+(said-by #'clara.fat:start)
+(said-by-all #'clara.system:start)
+(check t (let ((said (condition-text #'clara.system:upgrade)))
+           (and (search "KiB free, and the system 0.0.1-new takes" said) (null (on-disk *machine-disk* "/clara/next"))
+                (in-order-p *machine-disk*))))
+;; A machine that was not started from a disk has nowhere to put a system.
+(new-disks)
+(said-by #'clara.disk:start)
+(said-by #'clara.fat:start)
+(check (format nil "system: this is ClaraOS 0.0.0-host~%") (said-by-all #'clara.system:start))
+(check '(nil nil) (list (clara.system:boot-volume) clara.windows:*application-directory*))
+(check-condition error (clara.system:upgrade))
+
+;; On trial: the system that the old kernel started in place of itself has
+;; come to its prompt, and takes the old one's place. Its kernels are where
+;; the firmware looks, /clara/next is gone, and so is the old system's
+;; directory, and the count of this start.
+(two-disks (append (machine-tree '("next" "tried 0.0.1-new
+") '("starts" "1 0000000000000001
+")) nil)
+           '(("nothing.txt" "of interest")))
+(setq *machine-disk* (fat-bytes (make-fat-volume 16 (let ((tree (machine-tree '("next" "tried 0.0.1-new
+") '("starts" "1 0000000000000001
+"))))
+                                                    (setf (second (second tree))
+                                                          (cons (system-tree "0.0.1-new" *new-files*) (second (second tree))))
+                                                    tree))))
+(new-disks (list 3 *machine-disk*))
+(said-by #'clara.disk:start)
+(said-by #'clara.fat:start)
+;; The world that it has made is saved in the place of the old system's,
+;; which is of no use to it, and it says that the old world left no
+;; account of itself.
+(clara.host:set-start-state :system "0.0.1-new" :trial t :token "0000000000000001")
+(clara.host:set-heap-image (octets "the world that the new system made"))
+(check (format nil "system: this is ClaraOS 0.0.1-new, on trial: the system before it is still in place~%~
+                    system: 0.0.1-new has come to its prompt, and is the system of this machine from here on~%~
+                    world: made anew by ClaraOS 0.0.1-new, of its files and of what /home/ holds as text~%~
+                    world: the system before this one left no account of its world: what that had beyond the text is not known~%~
+                    world: it is saved as it is now, and the next start is in it; (clara.system:report) says this again~%")
+       (said-by-all #'clara.system:start))
+(check '("the new kernel" "the new kernel of the other processor" nil nil nil "(the new system)" t)
+       (list (on-disk *machine-disk* (format nil "/EFI/BOOT/~A" *this-kernel*))
+             (on-disk *machine-disk* (format nil "/EFI/BOOT/~A" *other-kernel*))
+             (on-disk *machine-disk* "/clara/next") (on-disk *machine-disk* "/clara/starts")
+             (on-disk *machine-disk* "/clara/0.0.0-host/boot.lisp") (on-disk *machine-disk* "/clara/0.0.1-new/boot.lisp")
+             (in-order-p *machine-disk*)))
+(check '("written before any of this" "the world that the new system made")
+       (list (on-disk *machine-disk* "/notes.txt") (on-disk *machine-disk* "/clara/clara.image")))
+(check '("0.0.1-new") (clara.system::systems-here))
+
+;; A trial that did not come to its prompt: the system from before says so
+;; when it is started again, and marks the one that failed.
+(setq *machine-disk* (fat-bytes (make-fat-volume 16 (let ((tree (machine-tree '("next" "failed 0.0.1-new
+"))))
+                                                    (setf (second (second tree))
+                                                          (cons (system-tree "0.0.1-new" *new-files*) (second (second tree))))
+                                                    tree))))
+(new-disks (list 3 *machine-disk*) (list 4 (fat-bytes (make-fat-volume 16 `(("clara" (,(system-tree "0.0.1-new" *new-files*)
+                                                                                     ("at-once" ""))))))))
+(said-by #'clara.disk:start)
+(said-by #'clara.fat:start)
+(clara.host:set-start-state :failed "0.0.1-new")
+;; It is on another disk as well, to be taken at once, and is not, having failed.
+(check (format nil "system: this is ClaraOS 0.0.0-host~%~
+                    system: 0.0.1-new was tried and did not come to its prompt: this is still 0.0.0-host~%~
+                    system: 0.0.1-new, on another disk, is not taken again: it did not come to its prompt~%")
+       (said-by-all #'clara.system:start))
+(check '(nil t t "the old kernel" nil)
+       (list (on-disk *machine-disk* "/clara/next") (and (on-disk *machine-disk* "/clara/0.0.1-new/failed") t)
+             (in-order-p *machine-disk*) (on-disk *machine-disk* (format nil "/EFI/BOOT/~A" *this-kernel*))
+             (clara.host:power)))
+;; Asked for, it is taken once more: what the failure left is replaced.
+(clara.host:set-start-state)
+(said-by-all (lambda () (clara.system:upgrade :start-again nil)))
+(check (list (format nil "try 0.0.1-new~%") nil t)
+       (list (on-disk *machine-disk* "/clara/next") (on-disk *machine-disk* "/clara/0.0.1-new/failed") (in-order-p *machine-disk*)))
+
+;; A disk that says "at once": the system on it is taken as the machine
+;; starts, and the machine started again to try it, without a word from
+;; anybody. The start that does that has not come to its prompt.
+(two-disks (machine-tree '("starts" "1 0000000000000002
+")) `(("clara" (,(system-tree "0.0.1-new" *new-files*) ("at-once" "")))))
+(clara.host:set-start-state :token "0000000000000002")
+(check t (let ((said (said-by-all #'clara.system:start)))
+           (and (search (format nil "system: this is ClaraOS 0.0.0-host~%~
+                                     system: 0.0.1-new is taken from another disk, and the machine starts again to try it~%~
+                                     clara: starting the machine again~%")
+                        said)
+                t)))
+(check (list '(:again) (format nil "try 0.0.1-new~%") t)
+       (list (clara.host:power) (on-disk *machine-disk* "/clara/next") (in-order-p *machine-disk*)))
+(check (list "1 0000000000000002
+" 0) (list (on-disk *machine-disk* "/clara/starts")
+           (search "(:carried \"0.0.0-host\" \"0.0.1-new\")" (on-disk *machine-disk* "/clara/carried"))))
+;; A disk that says so and has the system that runs is left alone.
+(two-disks (machine-tree) `(("clara" (,(system-tree "0.0.0-host" *old-files*) ("at-once" "")))))
+(clara.host:set-start-state)
+(check (format nil "system: this is ClaraOS 0.0.0-host~%") (said-by-all #'clara.system:start))
+(check '(nil nil) (list (clara.host:power) (on-disk *machine-disk* "/clara/next")))
+
+;;; What the user keeps as text (lisp/system.lisp): /home on the volume
+;;; that the machine was started from, with the file that the listeners
+;;; write, each form that defines something as it was typed, and the file
+;;; that is the user's own. A world that is made from the files loads both.
+
+(defvar *order* nil)   ; what the files of the tests' /home say as they are loaded
+
+(defun home-tree (&rest files)
+  (append (machine-tree) (list (list "home" files))))
+
+(defun one-disk (tree)
+  (setq *machine-disk* (fat-bytes (make-fat-volume 16 tree))
+        *disk* (car (new-disks (list 3 *machine-disk*))))
+  (setq clara.windows::*running* nil)
+  (said-by #'clara.disk:start)
+  (said-by #'clara.fat:start))
+
+;; What is written down, and what is not: a form that defines, by a word
+;; of the language's, by a macro that is called that way or by anything
+;; that is called DEFINE-, and a LOAD; not a function that happens to
+;; begin with the three letters, and not a LOAD of one of the two files,
+;; which would then load itself.
+(defmacro deftest (name) `(quote ,name))
+(defun default-of (value) value)
+(defmacro defective (name) (error "~S cannot be expanded" name))
+(check '(t t t t t t t t t t t nil nil nil nil nil nil nil nil nil nil nil)
+       (mapcar (lambda (form) (and (clara.system::defining-p form) t))
+               '((defun f ()) (defmacro m ()) (defvar *v* 1) (defparameter *p* 1) (define-condition c () ()) (defstruct s a)
+                 (deftest of-the-users) (load "/x.lisp") (clara.windows:define-application "Mine" #'car) (define-whatever)
+                 (clara.windows:install-application "Mine" "/mine.lisp")
+                 (clara.windows:remove-application "Mine") (default-of 1) (defective one) (defer-nothing) (load "/home/defined.lisp") (load "/HOME/Init.lisp")
+                 (setq *v* 2) (in-package "X") 5 ((lambda ())) (let () (defun f ())))))
+(check (list (concatenate 'string (make-string 84 :initial-element #\a) " ...") "one line ..." "short")
+       (list (clara.system::brief (make-string 85 :initial-element #\a)) (clara.system::brief (format nil "  one line~%and another"))
+             (clara.system::brief "short")))
+(check '(t t nil nil nil)
+       (mapcar (lambda (name) (and (clara.system::home-name-p name) t))
+               '("/home/init.lisp" "/home/DEFINED.lisp" "/home/other.lisp" "/defined.lisp" defined)))
+(check '("" "a b" "a" "(f)") (mapcar #'clara.system::trimmed (list "" (format nil " ~% a b~%  ") "a" (format nil "~%(f)"))))
+(check '(4 4 14 2) (list (clara.system::form-start "    (f)" 0 7) (clara.system::form-start "(a) (f)" 3 7)
+                          (clara.system::form-start (format nil " ; (not this)~%(f)") 0 17)
+                          (clara.system::form-start "  " 0 2)))
+(check '(3 3 0) (list (clara.system::form-end "(f) " 0 4) (clara.system::form-end "(f)" 0 3) (clara.system::form-end "  " 0 2)))
+
+;; A machine without /home gets one when it starts, and what is defined
+;; from then on is written into it: a new form at the end, a form that
+;; defines a name again in the place of the first, and a line between forms
+;; that were read in different packages.
+(one-disk (machine-tree))
+(clara.host:set-start-state)
+(check (format nil "system: this is ClaraOS 0.0.0-host~%") (said-by-all #'clara.system:start))
+(check '("clara/" "EFI/" "home/" "notes.txt") (clara.fat:names "/"))
+(check t (eq clara.listener:*record* #'clara.system::record))
+(defpackage "CLARA.TESTS.PLAY" (:use "COMMON-LISP"))
+(flet ((typed (text package)
+         (let ((form (let ((*package* (find-package package))) (read-from-string text))))
+           (clara.system::record form (format nil "~% ~A " text) package))))
+  (let ((pages (clara.host:allocated-pages)))
+    (typed "(defun one () 1)" "COMMON-LISP-USER")
+    (typed "(+ 1 2)" "COMMON-LISP-USER")
+    (typed "(defvar *two* 2)" "COMMON-LISP-USER")
+    (typed "(defun ball () 'round)" "CLARA.TESTS.PLAY")
+    (typed "(defun one () 'in-play)" "CLARA.TESTS.PLAY")
+    (typed (format nil "(defun one ()~%  ;; a second time~%  'again)") "COMMON-LISP-USER")
+    (typed "(load \"/tools.lisp\")" "COMMON-LISP-USER")
+    (typed "(defun ONE () 'in-play-again)" "CLARA.TESTS.PLAY")
+    (typed "(load \"/tools.lisp\")" "COMMON-LISP-USER")
+    (typed "(defvar one 'a-variable-of-the-name-of-a-function)" "COMMON-LISP-USER")
+    (check (format nil "~A~%(defun one ()~%  ;; a second time~%  'again)~%~%(defvar *two* 2)~%~%~
+                        (cl:in-package \"CLARA.TESTS.PLAY\")~%~%(defun ball () 'round)~%~%(defun ONE () 'in-play-again)~%~%~
+                        (cl:in-package \"COMMON-LISP-USER\")~%~%(load \"/tools.lisp\")~%~%~
+                        (defvar one 'a-variable-of-the-name-of-a-function)~%"
+                   clara.system::*first-lines*)
+           (on-disk *machine-disk* "/home/defined.lisp"))
+    (check (list pages t) (list (clara.host:allocated-pages) (in-order-p *machine-disk*)))))
+;; It goes to the disk that the machine was started from, wherever names
+;; are looked up at the moment; and what cannot be written is said, and is
+;; nobody's error.
+(check "" (said-by-all (lambda ()
+                         (let ((clara.fat:*volume* nil))
+                           (clara.system::record '(defun three () 3) "(defun three () 3)" "COMMON-LISP-USER")))))
+(check t (and (search "(defun three () 3)" (on-disk *machine-disk* "/home/defined.lisp")) t))
+(setf (vdev-answer *disk*) 1)
+(check t (and (search "home: what was defined could not be written down in /home/defined.lisp: the disk 00:03.0 could not"
+                      (said-by-all (lambda () (clara.system::record '(defun four () 4) "(defun four () 4)" "COMMON-LISP-USER"))))
+              t))
+(setf (vdev-answer *disk*) 0)
+
+;; What the window manager's two functions take out of the launcher's list
+;; goes out of the file as well, whichever form put it there and in
+;; whichever package, so that a world which is made of the text is without
+;; it too. A name that is not in the file changes nothing, and neither
+;; does a name that is worked out.
+(one-disk (home-tree (list "defined.lisp" (format nil ";; mine~%(defun one () 1)~%~%;; an application~%~
+                                                       (clara.windows:define-application \"Mine\" #'one)~%~%~
+                                                       (clara.windows:define-command \"Tidy\" #'one)~%~%~
+                                                       (cl:in-package \"CLARA.TESTS\")~%~%~
+                                                       (clara.windows:install-application \"Mine\" \"/mine.lisp\")~%~%~
+                                                       (clara.windows:define-application \"Mine too\" #'car)~%"))))
+(clara.host:set-start-state :resumed t)
+(setq clara.system::*follows* nil)
+(said-by-all #'clara.system:start)
+(let ((before (on-disk *machine-disk* "/home/defined.lisp")))
+  (clara.system::record '(clara.windows:remove-application "Nobody's") "(clara.windows:remove-application \"Nobody's\")" "COMMON-LISP-USER")
+  (clara.system::record '(clara.windows:remove-application (car (list "Mine"))) "(clara.windows:remove-application (car (list \"Mine\")))"
+                        "COMMON-LISP-USER")
+  (clara.system::record '(clara.windows:unload-application "Mine") "(clara.windows:unload-application \"Mine\")" "COMMON-LISP-USER")
+  (check before (on-disk *machine-disk* "/home/defined.lisp")))
+(clara.system::record '(clara.windows:remove-application "Mine") "(clara.windows:remove-application \"Mine\")" "COMMON-LISP-USER")
+(check (format nil ";; mine~%(defun one () 1)~%~%;; an application~%~%~
+                    (clara.windows:define-command \"Tidy\" #'one)~%~%~
+                    (cl:in-package \"CLARA.TESTS\")~%~%~
+                    (clara.windows:define-application \"Mine too\" #'car)~%")
+       (on-disk *machine-disk* "/home/defined.lisp"))
+(clara.system::record '(clara.windows:remove-command "Tidy") "(clara.windows:remove-command \"Tidy\")" "CLARA.TESTS")
+(clara.system::record '(clara.windows:remove-application "Mine too") "(clara.windows:remove-application \"Mine too\")" "CLARA.TESTS")
+(check (list (format nil ";; mine~%(defun one () 1)~%~%;; an application~%~%(cl:in-package \"CLARA.TESTS\")~%~%") t)
+       (list (on-disk *machine-disk* "/home/defined.lisp") (in-order-p *machine-disk*)))
+;; What cannot be taken out is said, and is nobody's error.
+(clara.system::record '(defun three () 3) "(clara.windows:define-command \"Tidy\" #'car)" "COMMON-LISP-USER")
+(setf (vdev-answer *disk*) 1)
+(check t (and (search "home: what was taken back could not be taken out of /home/defined.lisp: "
+                      (said-by-all (lambda () (clara.system::record '(clara.windows:remove-command "Tidy")
+                                                                    "(clara.windows:remove-command \"Tidy\")" "COMMON-LISP-USER"))))
+              t))
+(setf (vdev-answer *disk*) 0)
+
+;; A file that the user has written into: what stands before a form stays
+;; before it, and a form in a package that is not there, or a place that
+;; cannot be read, leaves everything from there on as it is, with the new
+;; form after it and the name of its package before it. (The world of
+;; these is one that was saved without the text, so that nothing of the
+;; files is loaded.)
+(clara.host:set-start-state :resumed t)
+(setq clara.system::*follows* nil)
+(one-disk (home-tree (list "defined.lisp" (format nil ";; mine~%(defun one () 1) ; the first~%~%;; and the second~%(defun two () 2)~%"))))
+(said-by-all #'clara.system:start)
+(clara.system::record '(defun two () 22) "(defun two () 22)" "COMMON-LISP-USER")
+(clara.system::record '(defun one () 11) "(defun one () 11)" "COMMON-LISP-USER")
+(check (format nil ";; mine~%(defun one () 11) ; the first~%~%;; and the second~%(defun two () 22)~%")
+       (on-disk *machine-disk* "/home/defined.lisp"))
+(one-disk (home-tree (list "defined.lisp" (format nil "(defun one () 1)~%(cl:in-package \"NO-SUCH-PACKAGE-HERE\")~%(defun two () 2)~%"))))
+(said-by-all #'clara.system:start)
+(clara.system::record '(defun two () 22) "(defun two () 22)" "COMMON-LISP-USER")
+(clara.system::record '(defun one () 11) "(defun one () 11)" "COMMON-LISP-USER")
+(check (format nil "(defun one () 11)~%(cl:in-package \"NO-SUCH-PACKAGE-HERE\")~%(defun two () 2)~%~%~
+                    (cl:in-package \"COMMON-LISP-USER\")~%~%(defun two () 22)~%")
+       (on-disk *machine-disk* "/home/defined.lisp"))
+(one-disk (home-tree (list "defined.lisp" (format nil "(defun one () 1)~%(defun two () (~%"))))
+(said-by-all #'clara.system:start)
+(clara.system::record '(defun two () 22) "(defun two () 22)" "COMMON-LISP-USER")
+(check (format nil "(defun one () 1)~%(defun two () (~%~%(cl:in-package \"COMMON-LISP-USER\")~%~%(defun two () 22)~%")
+       (on-disk *machine-disk* "/home/defined.lisp"))
+
+;; A world that was made on this start loads what /home has: init.lisp and
+;; then defined.lisp, each form by itself, in COMMON-LISP-USER until a form
+;; says otherwise. A form that fails is passed over and said, with the
+;; reason; what cannot be read ends that file; and the package that names
+;; are read in afterwards is the one from before.
+(one-disk (home-tree (list "init.lisp" (format nil "(push :init clara.tests::*order*)~%(error \"this form fails\")~%~
+                                                    (cl:in-package \"CLARA.TESTS\")~%(push (package-name *package*) *order*)~%"))
+                     (list "defined.lisp" (format nil "(push (list :defined (package-name *package*)) clara.tests::*order*)~%~
+                                                       (car 'not-a-list)~%(push :after clara.tests::*order*)~%(this (is not whole~%"))))
+(clara.host:set-start-state)
+(setq *order* nil)
+(let ((package *package*)
+      (said (said-by-all #'clara.system:start)))
+  (check '(:init "CLARA.TESTS" (:defined "COMMON-LISP-USER") :after) (reverse *order*))
+  (check t (eq package *package*))
+  (check t (and (search (format nil "home: /home/init.lisp is loaded, 3 forms of it, and 1 was passed over:~%~
+                                     home:   (error \"this form fails\")~%home:     this form fails~%")
+                        said)
+                (search "home: /home/defined.lisp is loaded, 2 forms of it, and 2 were passed over:" said)
+                (search "home:   (car 'not-a-list)" said)
+                (search "home:   (this (is not whole" said)
+                t)))
+(check 2 (length (clara:all-threads)))                ; the thread that loaded is gone, and one watches the button
+;; A world that was saved has it all already, and is not loaded into; and
+;; after two starts that did not come to a prompt, the text may be why.
+(setq *order* nil)
+(clara.host:set-start-state :resumed t)
+(check (format nil "system: this is ClaraOS 0.0.0-host~%") (said-by-all #'clara.system:start))
+(clara.host:set-start-state :starts 1)
+(check t (and (search "home: /home/init.lisp is loaded" (said-by-all #'clara.system:start)) t))
+(setq *order* nil)
+(clara.host:set-start-state :starts 2)
+(check (format nil "system: this is ClaraOS 0.0.0-host~%~
+                    home: the two starts before this one did not come to a prompt: what is in /home/ is not loaded~%~
+                    home:   this world is the system's alone. Put the files right, and (clara.system:load-home) loads them~%")
+       (said-by-all #'clara.system:start))
+(check '(nil nil) (list *order* clara.system::*follows*))
+;; Asked for, the text is loaded into that world, which has it from then on.
+(check t (and (search "home: /home/init.lisp is loaded" (said-by-all #'clara.system:load-home)) t))
+(check '(t t) (list (and (member :init *order*) t) clara.system::*follows*))
+
+;; A text that does not come to an end is given so long, and stopped: the
+;; machine comes to its prompt all the same, and the file after it is
+;; loaded.
+(one-disk (home-tree (list "init.lisp" (format nil "(push :begun clara.tests::*order*)~%(loop (sleep 0.01))~%(push :never clara.tests::*order*)~%"))
+                     (list "defined.lisp" "(push :defined clara.tests::*order*)")))
+(clara.host:set-start-state)
+(setq *order* nil)
+(let ((clara.system:*patience* 300))
+  (check (format nil "system: this is ClaraOS 0.0.0-host~%~
+                      home: /home/init.lisp was not loaded to its end: it took more than 0 seconds, or could not be read~%~
+                      home: /home/defined.lisp is loaded, 1 form~%")
+         (said-by-all #'clara.system:start)))
+(check '(:begun :defined) (reverse *order*))
+(check t (eventually (lambda () (= (length (clara:all-threads)) 2))))
+
+;; A file that would load itself, or the other of the two, by a LOAD at
+;; its top: such a form is refused and said, whether the name is written
+;; there or worked out, and the rest of the file is loaded.
+(one-disk (home-tree (list "init.lisp" (format nil "(push :init clara.tests::*order*)~%(load \"/home/defined.lisp\")~%"))
+                     (list "defined.lisp" (format nil "(push :defined clara.tests::*order*)~%~
+                                                       (load (clara.system:home-file \"defined.lisp\"))~%~
+                                                       (load \"/HOME/INIT.LISP\")~%(push :after clara.tests::*order*)~%"))))
+(clara.host:set-start-state)
+(setq *order* nil)
+(let ((said (said-by-all #'clara.system:start)))
+  (check '(:init :defined :after) (reverse *order*))
+  (check t (and (search (format nil "home: /home/init.lisp is loaded, 1 form of it, and 1 was passed over:~%~
+                                     home:   (load \"/home/defined.lisp\")~%~
+                                     home:     /home/defined.lisp is loaded into a new world by itself, and not by a form of /home/~%")
+                        said)
+                (search "home: /home/defined.lisp is loaded, 2 forms of it, and 2 were passed over:" said)
+                (search (format nil "home:   (load (clara.system:home-file \"defined.lisp\"))~%~
+                                     home:     /home/defined.lisp is loaded into a new world by itself, and not by a form of /home/~%")
+                        said)
+                (search (format nil "home:   (load \"/HOME/INIT.LISP\")~%~
+                                     home:     /HOME/INIT.LISP is loaded into a new world by itself, and not by a form of /home/~%")
+                        said)
+                t)))
+
+;; The two files are the ones on the disk that the machine was started
+;; from, also when a form of the first has names looked up on another disk
+;; from then on, whether that has a /home of its own or none. And the
+;; start has not come to its prompt while they are loaded: the file that
+;; counts it is still there, so that a text which takes the machine down
+;; is found out.
+(dolist (other '((("home" (("defined.lisp" "(push :of-the-other-disk clara.tests::*order*)"))))
+                 (("mine.txt" "a disk without a home"))))
+  (two-disks (append (machine-tree '("starts" "1 00000000000000ee
+"))
+                     (list (list "home" (list (list "init.lisp"
+                                                    (format nil "(push (clara.system::there-p \"/clara/\" \"starts\") clara.tests::*order*)~%~
+                                                                 (setq clara.fat:*volume* (first (clara.fat:volumes)))"))
+                                              (list "defined.lisp" "(push :of-the-machine clara.tests::*order*)")))))
+             other :first :other)
+  (clara.host:set-start-state :token "00000000000000ee")
+  (setq *order* nil)
+  (check (format nil "system: this is ClaraOS 0.0.0-host~%~
+                      home: /home/init.lisp is loaded, 2 forms~%home: /home/defined.lisp is loaded, 1 form~%")
+         (said-by-all #'clara.system:start))
+  (check '((:of-the-machine t) t nil) (list *order* (eq clara.fat:*volume* (first (clara.fat:volumes)))
+                                            (on-disk *machine-disk* "/clara/starts"))))
+
+;; A world is saved on the disk that the machine was started from, also
+;; while the names of files are looked up on another.
+(two-disks (machine-tree '("starts" "1 00000000000000dd
+")) '(("mine.txt" "on a disk of my own")) :first :other)
+(clara.host:set-start-state :token "00000000000000dd")
+(said-by-all #'clara.system:start)
+(clara.host:set-heap-image (octets "a world, saved from anywhere"))
+(setq clara.fat:*volume* (first (clara.fat:volumes)))
+(check '(("mine.txt") "/clara/clara.image") (list (clara.fat:names "/") (clara:save-image)))
+(check '("a world, saved from anywhere" nil t)
+       (list (on-disk *machine-disk* "/clara/clara.image") (on-disk *other-disk* "/clara/clara.image")
+             (and (in-order-p *machine-disk*) (in-order-p *other-disk*))))
+;; A volume of an earlier start is no place for a world, whoever names it:
+;; its disk is not this start's. The world then goes where names are looked
+;; up first.
+(let ((earlier clara.fat:*image-volume*))
+  (said-by #'clara.fat:start)
+  (check nil clara.fat:*image-volume*)
+  (setq clara.fat:*image-volume* earlier)
+  (clara.host:set-heap-image (octets "a world of a later start"))
+  (check '(nil "there is no directory for a file /clara/clara.image to be in")
+         (list (and (member earlier (clara.fat:volumes)) t) (condition-text #'clara:save-image)))
+  (check '("a world, saved from anywhere" nil) (list (on-disk *machine-disk* "/clara/clara.image")
+                                                     (on-disk *other-disk* "/clara/clara.image"))))
+
+;;; A world made again (lisp/system.lisp): what a world that is leaving
+;;; writes down of itself, what the system that comes makes of it, a world
+;;; that takes what is new of the text, and a saved world that does not
+;;; come to its prompt.
+
+;; What can be written as text and read back the same.
+(check '("5" "\"a \\\"b\\\"\"" "(1 \"two\" #\\3 FOUR (:FIVE . 6))" "NIL" nil nil nil nil nil)
+       (let ((ring (list 1 2 3)))
+         (setf (cdr (last ring)) ring)
+         (mapcar #'clara.system::as-text
+                 (list 5 "a \"b\"" '(1 "two" #\3 cl-user::four (:five . 6)) nil
+                       ring #'car (make-symbol "LOOSE") (list 1 (vector 2)) (make-list 20001 :initial-element 0)))))
+(check '(t nil nil) (list (and (clara.system::as-text (make-list 5000 :initial-element 'cl-user::item)) t)
+                          (clara.system::as-text (make-list 15000 :initial-element 'cl-user::item))
+                          (clara.system::as-text (make-list 100 :initial-element (make-string 1000 :initial-element #\x)))))
+;; Nothing is text on trust: what does not read back as it was is none. (Here a number, to a reader that counts in sixteens.)
+(check '("17" nil) (list (clara.system::as-text 17) (let ((*read-base* 16)) (clara.system::as-text 17))))
+;; Names in lines that fit, and a line that says there are more than were said.
+(check '(() ("one") ("one, two")) (mapcar #'clara.system::name-lines '(() ("one") ("one" "two"))))
+(let ((lines (clara.system::name-lines (loop for i below 40 collect (format nil "A-NAME-OF-SOME-LENGTH-~D" i)))))
+  (check '(t t 40) (list (every (lambda (line) (<= (length line) 88)) lines) (> (length lines) 3)
+                         (+ (length lines) (reduce #'+ (mapcar (lambda (line) (count #\, line)) lines))))))
+(setq clara.system::*report* nil)
+(check (format nil "world: 5 things:~%world:   a, b, c, d, e~%")
+       (said-by (lambda () (clara.system::tell-names "world: 1 thing:" "world: ~D things:" '("a" "b" "c" "d" "e")))))
+(check (format nil "world: 1 thing:~%world:   a~%")
+       (said-by (lambda () (clara.system::tell-names "world: 1 thing:" "world: ~D things:" '("a")))))
+(let ((said (said-by (lambda () (clara.system::tell-names "world: 1 name:" "world: ~D names:"
+                                                          (loop for i below 40 collect (format nil "A-NAME-OF-SOME-LENGTH-~D" i)))))))
+  (check '(5 t) (list (count #\Newline said)
+                      (and (search (format nil "world:   and more: (clara.system:report) names them all~%") said) t))))
+;; What was said is kept and said again, the oldest lines going when there are too many.
+(check t (let ((again (said-by #'clara.system:report)))
+           (and (search (format nil "world: 5 things:~%world:   a, b, c, d, e~%world: 1 thing:~%world:   a~%world: 40 names:~%") again)
+                (search "A-NAME-OF-SOME-LENGTH-39" again)
+                t)))
+(setq clara.system::*report* nil)
+(dotimes (i 450)
+  (clara.system::keep (format nil "line ~D" i)))
+(check '(349 "line 449" "line 101") (list (length clara.system::*report*) (first clara.system::*report*)
+                                           (car (last clara.system::*report*))))
+(setq clara.system::*report* nil)
+
+;; The account that a world leaves when a system waits to be tried: the
+;; system it is for, the window manager when that runs, and of every
+;; package that is the user's the functions and the variables, with the
+;; values that are text. It is written as the machine is started again,
+;; and not before.
+(two-disks (machine-tree) `(("clara" (,(system-tree "0.0.1-new" *new-files*)))))
+(clara.host:set-start-state)
+(said-by-all #'clara.system:start)
+(defpackage "PLAYGROUND" (:use "COMMON-LISP"))
+(defun playground::swing () 'high)
+(defmacro playground::twice (form) `(progn ,form ,form))
+(defvar playground::*count* 3)
+(defvar playground::*words* (list "one" #\2 'playground::three :four '(5 . cl-user::six)))
+(defvar playground::*lock* (clara:make-lock "held"))
+(defvar playground::*ring* (let ((ring (list 1 2))) (setf (cdr (last ring)) ring) ring))
+(defvar playground::swing 'a-variable-too)
+(defpackage "CLARA.LATER" (:use "COMMON-LISP"))       ; as the launcher makes one for an application of the system's
+(defun clara.later::of-the-system () 'not-the-users)
+(check '(t nil t) (list (and (member (find-package "PLAYGROUND") (clara.system::user-packages)) t)
+                        (member (find-package "CLARA.SYSTEM") (clara.system::user-packages))
+                        (and (member (find-package "COMMON-LISP-USER") (clara.system::user-packages)) t)))
+(check nil (clara.system::waiting))
+(clara.system::write-text "/clara/next" (format nil "tried 0.0.1-new~%"))
+(check nil (clara.system::waiting))
+(clara.fat:remove-file "/clara/next")
+(said-by-all (lambda () (clara.system:upgrade :start-again nil)))
+(check '("0.0.1-new" nil) (list (clara.system::waiting) (on-disk *machine-disk* "/clara/carried")))
+;; (It goes to the disk that the machine was started from, wherever names are looked up at the moment.)
+(setq clara.fat:*volume* (second (clara.fat:volumes)))
+(check t (and (search "clara: starting the machine again" (said-by-all (lambda () (clara.system:start-again :save nil)))) t))
+(setq clara.fat:*volume* (first (clara.fat:volumes)))
+(check nil (on-disk *other-disk* "/clara/carried"))
+(let ((account (on-disk *machine-disk* "/clara/carried")))
+  (check 0 (search (format nil "(:carried \"0.0.0-host\" \"0.0.1-new\")~%(:name ") account))
+  (check t (and (search (format nil "(:name \"PLAYGROUND\" \"*COUNT*\" :variable)~%(:value \"PLAYGROUND\" \"*COUNT*\" \"3\")~%~
+                                     (:name \"PLAYGROUND\" \"*LOCK*\" :variable)~%~
+                                     (:name \"PLAYGROUND\" \"*RING*\" :variable)~%~
+                                     (:name \"PLAYGROUND\" \"*WORDS*\" :variable)~%~
+                                     (:value \"PLAYGROUND\" \"*WORDS*\" \"(\\\"one\\\" #\\\\2 PLAYGROUND::THREE :FOUR (5 . SIX))\")~%~
+                                     (:name \"PLAYGROUND\" \"SWING\" :function)~%~
+                                     (:name \"PLAYGROUND\" \"SWING\" :variable)~%~
+                                     (:value \"PLAYGROUND\" \"SWING\" \"CLARA.TESTS::A-VARIABLE-TOO\")~%~
+                                     (:name \"PLAYGROUND\" \"TWICE\" :function)~%")
+                        account)
+                t))
+  ;; Nothing of the system's, nothing that a package only has of another, and no symbol that is neither.
+  (check '(nil nil nil nil nil nil t)
+         (list (search "CLARA.SYSTEM" account) (search "CLARA.LATER" account) (search "(:name \"COMMON-LISP\" " account)
+               (search "(:name \"KEYWORD\" " account)
+               (search "(:name \"PLAYGROUND\" \"CAR\"" account) (search "\"THREE\"" account)
+               (in-order-p *machine-disk*))))
+;; With the window manager running, that is said in it; and a world that
+;; cannot be written down goes all the same, and says so.
+(let ((clara.windows::*running* t))
+  (clara.system::carry "0.0.1-new"))
+(check 0 (search (format nil "(:carried \"0.0.0-host\" \"0.0.1-new\")~%(:windows)~%(:name ") (on-disk *machine-disk* "/clara/carried")))
+(clara.fat:remove-file "/clara/carried")
+(clara.fat:make-directory "/clara/carried")
+(check t (let ((said (said-by-all (lambda () (clara.system:start-again :save nil)))))
+           (and (search "system: what this world has could not be written down for 0.0.1-new: " said)
+                (search "clara: starting the machine again" said)
+                t)))
+(clara.fat:remove-directory "/clara/carried")
+;; A start that is not the trial of a system has no use for an account.
+(clara.system::carry "0.0.1-new")
+(clara.host:set-start-state)
+(said-by-all #'clara.system:start)
+(check nil (on-disk *machine-disk* "/clara/carried"))
+
+;; The system that comes: it makes its world, loads the text, gives the
+;; variables the values that they had come to, says what it does not have
+;; of the names that the old world had, and saves the world.
+(defun trial-disk (account &rest home)
+  (let ((tree (append (machine-tree '("next" "tried 0.0.1-new
+") '("starts" "1 0000000000000007
+"))
+                      (and home (list (list "home" home))))))
+    (setf (second (second tree))
+          (append (list (system-tree "0.0.1-new" *new-files*)) (and account (list (list "carried" account)))
+                  (second (second tree))))
+    (one-disk tree))
+  (said-by #'clara.draw:start)                        ; a machine without a screen, until a test gives it one
+  (clara.host:set-start-state :system "0.0.1-new" :trial t :token "0000000000000007")
+  (clara.host:set-heap-image (octets "the world that was made again")))
+
+(trial-disk (format nil "(:carried \"0.0.0-host\" \"0.0.1-new\")~%~
+                         (:later \"a line of a later system\" 5)~%42~%~
+                         (:name \"SANDPIT\" \"DIG\" :function)~%(:name \"SANDPIT\" \"DIG\" :variable)~%~
+                         (:name \"SANDPIT\" \"*TOOL*\" :function)~%(:name \"SANDPIT\" \"FILL\" :function)~%~
+                         (:name \"SANDPIT\" \"*DEPTH*\" :variable)~%(:value \"SANDPIT\" \"*DEPTH*\" \"7\")~%~
+                         (:name \"SANDPIT\" \"*SAME*\" :variable)~%(:value \"SANDPIT\" \"*SAME*\" \"(1 2)\")~%~
+                         (:name \"SANDPIT\" \"*TOOL*\" :variable)~%~
+                         (:name \"SANDPIT\" \"*GONE*\" :variable)~%~
+                         (:name \"SANDPIT\" \"*FOUND*\" :variable)~%(:value \"SANDPIT\" \"*FOUND*\" \"(\\\"a\\\" #\\\\b SHELL)\")~%~
+                         (:name \"SANDPIT\" \"*BROKEN*\" :variable)~%(:value \"SANDPIT\" \"*BROKEN*\" \"(1 2\")~%~
+                         (:name \"NOWHERE\" \"THING\" :variable)~%(:value \"NOWHERE\" \"THING\" \"1\")~%~
+                         (:name \"COMMON-LISP-USER\" \"NEVER-DEFINED-HERE\" :function)~%~
+                         (:value \"SANDPIT\" 5 \"1\")~%(:name 5)~%")
+            (list "defined.lisp" (format nil "(defpackage \"SANDPIT\" (:use \"COMMON-LISP\"))~%~
+                                              (cl:in-package \"SANDPIT\")~%~
+                                              (defun dig () 'deeper)~%(defvar *depth* 0)~%(defvar *same* (list 1 2))~%~
+                                              (defvar *tool* (list 'a 'spade))~%")))
+(when (find-package "SANDPIT")
+  (delete-package "SANDPIT"))
+(clara.system::keep "a line that was said of the world before this one")
+(let ((said (said-by-all #'clara.system:start)))
+  (check (format nil "system: this is ClaraOS 0.0.1-new, on trial: the system before it is still in place~%~
+                      system: 0.0.1-new has come to its prompt, and is the system of this machine from here on~%~
+                      world: made anew by ClaraOS 0.0.1-new, of its files and of what /home/ holds as text~%~
+                      home: /home/defined.lisp is loaded, 6 forms~%~
+                      world: 2 variables have the values that they had come to in the world before:~%~
+                      world:   SANDPIT::*DEPTH*, SANDPIT::*FOUND*~%~
+                      world: 1 variable held what is no text, and is as its form makes it here:~%~
+                      world:   SANDPIT::*TOOL*~%~
+                      world: 7 names that the world before had are not defined in this one:~%~
+                      world:   SANDPIT::DIG (a variable), SANDPIT::*TOOL*, SANDPIT::FILL, SANDPIT::*GONE* (a variable)~%~
+                      world:   SANDPIT::*BROKEN* (a variable), NOWHERE::THING (a variable), NEVER-DEFINED-HERE~%~
+                      world: it is saved as it is now, and the next start is in it; (clara.system:report) says this again~%")
+         said)
+  ;; All of it but the system's two lines is said again when it is asked for.
+  (check (subseq said (search "world: made anew" said)) (said-by #'clara.system:report)))
+(check '(7 ("a" #\b cl-user::shell) (1 2) (a spade) deeper)
+       (list (symbol-value (find-symbol "*DEPTH*" "SANDPIT")) (symbol-value (find-symbol "*FOUND*" "SANDPIT"))
+             (symbol-value (find-symbol "*SAME*" "SANDPIT"))
+             (mapcar (lambda (symbol) (intern (symbol-name symbol) "CLARA.TESTS")) (symbol-value (find-symbol "*TOOL*" "SANDPIT")))
+             (intern (symbol-name (funcall (find-symbol "DIG" "SANDPIT"))) "CLARA.TESTS")))
+(check '("the world that was made again" nil nil t t)
+       (list (on-disk *machine-disk* "/clara/clara.image") (on-disk *machine-disk* "/clara/carried")
+             (on-disk *machine-disk* "/clara/starts") (in-order-p *machine-disk*) clara.system::*follows*))
+;; An account that was written for another system is not this one's, and
+;; one that says nothing of the old world's names says that all are here.
+(trial-disk (format nil "(:carried \"0.0.0-host\" \"0.0.9-another\")~%(:name \"COMMON-LISP-USER\" \"NEVER-DEFINED-HERE\" :function)~%"))
+(check t (let ((said (said-by-all #'clara.system:start)))
+           (and (search "world: the system before this one left no account of its world" said)
+                (not (search "NEVER-DEFINED-HERE" said)))))
+(check nil (on-disk *machine-disk* "/clara/carried"))
+(trial-disk (format nil "(:carried \"0.0.0-host\" \"0.0.1-new\")~%(:name \"COMMON-LISP\" \"CAR\" :function)~%"))
+(check t (and (search (format nil "world: every function and every variable that the world before had is defined in this one~%")
+                      (said-by-all #'clara.system:start))
+              t))
+(dolist (none (list "this is no account (" (format nil "(:name \"COMMON-LISP-USER\" \"NEVER-DEFINED-HERE\" :function)~%") ""))
+  (trial-disk none)
+  (check t (and (search "world: the system before this one left no account of its world" (said-by-all #'clara.system:start)) t)))
+;; A world that cannot be saved, here one that the disk has no room for,
+;; says so, and the start comes to its prompt.
+(trial-disk nil)
+(clara.host:set-heap-image (make-array (+ (clara.fat:free-bytes) 200000) :element-type '(unsigned-byte 8) :initial-element 0))
+(check t (and (search (format nil "world: it is saved as it is now, and the next start is in it; (clara.system:report) says this again~%~
+                                   world: no, it could not be saved: ")
+                      (said-by-all #'clara.system:start))
+              t))
+(check '(nil t) (list (on-disk *machine-disk* "/clara/starts") (in-order-p *machine-disk*)))
+
+;; The window manager, when the account says that it was running, is
+;; started before the text is loaded, so that a form of the text which
+;; opens a window can. On a machine without a screen that is said. And an
+;; account that does not speak of it leaves it as it is.
+(dolist (screen '(nil t))
+  (trial-disk (format nil "(:carried \"0.0.0-host\" \"0.0.1-new\")~%(:windows)~%")
+              (list "init.lisp" "(push (clara.windows:running-p) clara.tests::*order*)"))
+  (when screen
+    (new-desk :machine nil :start nil))
+  (setq *order* nil)
+  (let ((said (said-by-all #'clara.system:start)))
+    (check (list (list screen) screen (not screen))
+           (list *order* (clara.windows:running-p)
+                 (and (search "world: the window manager was running in the world before, and could not be started in this one"
+                              said)
+                      t))))
+  (clara.windows:stop))
+(trial-disk (format nil "(:carried \"0.0.0-host\" \"0.0.1-new\")~%")
+            (list "init.lisp" "(push (clara.windows:running-p) clara.tests::*order*)"))
+(new-desk :machine nil :start nil)
+(setq *order* nil)
+(said-by-all #'clara.system:start)
+(check '((nil) nil) (list *order* (clara.windows:running-p)))
+
+;; A world that came back as an image takes what the two files have that
+;; it has not: what was defined after it was saved, and what somebody
+;; wrote into a file since. A form that it has is not evaluated again.
+(one-disk (home-tree (list "init.lisp" (format nil "(push :init clara.tests::*order*)~%"))
+                     (list "defined.lisp" (format nil "(push :one clara.tests::*order*)~%~%(cl:in-package \"CLARA.TESTS\")~%~
+                                                       (push :two clara.tests::*order*)~%"))))
+(clara.host:set-start-state)
+(setq *order* nil)
+(said-by-all #'clara.system:start)
+(check '((:init :one :two) t) (list (reverse *order*) clara.system::*follows*))
+(clara.host:set-start-state :resumed t)
+(setq *order* nil)
+(check (format nil "system: this is ClaraOS 0.0.0-host~%") (said-by-all #'clara.system:start))
+(check nil *order*)
+;; The files change on the disk, as they do when a machine goes on after
+;; its world was saved and is then stopped without saving.
+(clara.system::write-text "/home/defined.lisp"
+                          (format nil ";; a comment that is new~%(push :one clara.tests::*order*)~%(push :one-and-a-half clara.tests::*order*)~%~%~
+                                       (cl:in-package \"CLARA.TESTS\")~%(push :two clara.tests::*order*)~%~
+                                       (push (list :three (package-name *package*)) *order*)~%~
+                                       (error \"a new form that fails\")~%(cl:in-package \"COMMON-LISP-USER\")~%~
+                                       (push :two clara.tests::*order*)~%"))
+(clara.system::write-text "/home/init.lisp" (format nil "(push :init clara.tests::*order*)~%   ~%"))
+(check (format nil "system: this is ClaraOS 0.0.0-host~%~
+                    home: /home/defined.lisp has 3 forms that this world did not have, which are loaded now, and 1 was passed over:~%~
+                    home:   (error \"a new form that fails\")~%home:     a new form that fails~%")
+       (said-by-all #'clara.system:start))
+;; (The last of them is a form that the world has, word for word, in another package.)
+(check '(:one-and-a-half (:three "CLARA.TESTS") :two) (reverse *order*))
+;; Nothing is new the next time, and a world that was made without the text takes none of it.
+(setq *order* nil)
+(check (format nil "system: this is ClaraOS 0.0.0-host~%") (said-by-all #'clara.system:start))
+(clara.system::write-text "/home/defined.lisp" (format nil "(push :unasked clara.tests::*order*)~%"))
+(setq clara.system::*follows* nil)
+(check (format nil "system: this is ClaraOS 0.0.0-host~%") (said-by-all #'clara.system:start))
+(check nil *order*)
+(setq clara.system::*follows* t)
+(check (format nil "system: this is ClaraOS 0.0.0-host~%~
+                    home: /home/defined.lisp has 1 form that this world did not have, which is loaded now~%")
+       (said-by-all #'clara.system:start))
+(check '(:unasked) *order*)
+;; What a listener writes down the world has, and does not load again. A
+;; form that somebody wrote into the file in between it has not: that one
+;; is loaded at the next start, and the form that was typed with it.
+(setq *order* nil)
+(clara.system::record '(defvar *typed-here* (push :typed clara.tests::*order*)) "(defvar *typed-here* (push :typed clara.tests::*order*))"
+                      "COMMON-LISP-USER")
+(check (format nil "system: this is ClaraOS 0.0.0-host~%") (said-by-all #'clara.system:start))
+(clara.system::write-text "/home/defined.lisp"
+                          (concatenate 'string (on-disk *machine-disk* "/home/defined.lisp")
+                                       (format nil "(push :by-hand clara.tests::*order*)~%")))
+(clara.system::record '(defvar *typed-later* 1) "(defvar *typed-later* (push :typed-later clara.tests::*order*))" "COMMON-LISP-USER")
+(check t (and (search "home: /home/defined.lisp has 2 forms that this world did not have, which are loaded now"
+                      (said-by-all #'clara.system:start))
+              t))
+(check '(:by-hand :typed-later) (reverse *order*))
+;; A file that is there for the first time is the world's when a listener made it.
+(one-disk (machine-tree))
+(clara.host:set-start-state)
+(said-by-all #'clara.system:start)
+(setq *order* nil)
+(clara.system::record '(defvar *first-of-all* 1) "(defvar *first-of-all* (push :first-of-all clara.tests::*order*))" "COMMON-LISP-USER")
+(clara.host:set-start-state :resumed t)
+(check (format nil "system: this is ClaraOS 0.0.0-host~%") (said-by-all #'clara.system:start))
+(check nil *order*)
+
+;; A world that is made knows nothing of a text that another world had:
+;; a file that is written later with the very words of one that the world
+;; before had loaded is new to it.
+(one-disk (home-tree (list "init.lisp" "(push :of-the-world-before clara.tests::*order*)")))
+(clara.host:set-start-state)
+(said-by-all #'clara.system:start)
+(one-disk (machine-tree))
+(said-by-all #'clara.system:start)
+(clara.system::write-text "/home/init.lisp" "(push :of-the-world-before clara.tests::*order*)")
+(clara.host:set-start-state :resumed t)
+(setq *order* nil)
+(check t (and (search "home: /home/init.lisp has 1 form that this world did not have, which is loaded now"
+                      (said-by-all #'clara.system:start))
+              t))
+(check '(:of-the-world-before) *order*)
+
+;; A form that says which package the next ones are read in, and fails:
+;; those are passed over, up to the next such form, since they would be
+;; read in a package that they were not written for.
+(one-disk (home-tree (list "defined.lisp" (format nil "(cl:in-package \"NO-SUCH-PACKAGE-ANYWHERE\")~%~
+                                                       (push :in-the-wrong-package clara.tests::*order*)~%(defun lost () 1)~%~
+                                                       (cl:in-package \"CLARA.TESTS\")~%(push :in-the-right-one *order*)~%"))))
+(clara.host:set-start-state)
+(setq *order* nil)
+(let ((said (said-by-all #'clara.system:start)))
+  (check t (and (search "home: /home/defined.lisp is loaded, 2 forms of it, and 3 were passed over:" said)
+                (search (format nil "home:   (push :in-the-wrong-package clara.tests::*order*)~%~
+                                     home:     its package, NO-SUCH-PACKAGE-ANYWHERE, is not there~%")
+                        said)
+                (search (format nil "home:   (defun lost () 1)~%home:     its package, NO-SUCH-PACKAGE-ANYWHERE, is not there~%") said)
+                t)))
+(check '(:in-the-right-one) *order*)
+
+;; A saved world that did not come to its prompt is passed over by the
+;; handoff, and a world is made in its place. The first time the saved one
+;; is kept, with a note of which it was, and the next start tries it again;
+;; the second time, the world that was made takes its place.
+(one-disk (home-tree (list "init.lisp" "(push :made-anew clara.tests::*order*)")))
+(clara.host:set-start-state :starts 1 :passed-over t)
+(clara.host:set-heap-image (octets "a world made in the place of one that did not start"))
+(setq *order* nil)
+(check (format nil "system: this is ClaraOS 0.0.0-host~%home: /home/init.lisp is loaded, 1 form~%~
+                    world: the world that was saved did not come to its prompt at the start before this one.~%~
+                    world:   It is kept, and the next start tries it once more; this world is of the files and of /home/~%")
+       (said-by-all #'clara.system:start))
+(check '("the world that the old system saved" t t)
+       (list (on-disk *machine-disk* "/clara/clara.image") (and (on-disk *machine-disk* "/clara/passed") t) (in-order-p *machine-disk*)))
+(check (format nil "system: this is ClaraOS 0.0.0-host~%home: /home/init.lisp is loaded, 1 form~%~
+                    world: the world that was saved did not come to its prompt a second time: this one takes its place~%~
+                    world: it is saved as it is now, and the next start is in it; (clara.system:report) says this again~%")
+       (said-by-all #'clara.system:start))
+(check '("a world made in the place of one that did not start" nil t)
+       (list (on-disk *machine-disk* "/clara/clara.image") (on-disk *machine-disk* "/clara/passed") (in-order-p *machine-disk*)))
+;; What tells one saved world from another is how long its file is and
+;; where the file begins: a world that is saved over another of the same
+;; length begins elsewhere.
+(flet ((numbers ()
+         (let* ((identity (clara.system::image-identity)) (space (position #\Space identity)))
+           (list (parse-integer identity :end space) (parse-integer identity :start (1+ space))))))
+  (let ((first (numbers)))
+    (clara.host:set-heap-image (octets "a world of just the same length as the first one is"))
+    (clara:save-image)
+    (let ((second (numbers)))
+      (clara.host:set-heap-image (octets "and one that is a little longer than that, by a few words"))
+      (clara:save-image)
+      (check '(51 51 57 nil) (list (first first) (first second) (first (numbers)) (= (second first) (second second)))))))
+(clara.host:set-heap-image (octets "a world made in the place of one that did not start"))
+(clara:save-image)
+;; Another saved world than the one that was noted is passed over for the
+;; first time: one that is as long and begins elsewhere, and one that
+;; begins there and is not as long.
+(let* ((identity (clara.system::image-identity))
+       (space (position #\Space identity))
+       (size (parse-integer identity :end space)) (cluster (parse-integer identity :start (1+ space))))
+  (dolist (other (list (format nil "~D ~D" size (1+ cluster)) (format nil "~D ~D" (1+ size) cluster)))
+    (clara.system::write-text "/clara/passed" other)
+    (check t (and (search "world:   It is kept, and the next start tries it once more" (said-by-all #'clara.system:start)) t))
+    (check (list "a world made in the place of one that did not start" (format nil "~A~%" identity))
+           (list (on-disk *machine-disk* "/clara/clara.image") (on-disk *machine-disk* "/clara/passed")))))
+;; A saved world that comes to its prompt after all was not the reason, and the note goes.
+(clara.host:set-start-state :resumed t)
+(said-by-all #'clara.system:start)
+(check nil (on-disk *machine-disk* "/clara/passed"))
+;; With no saved world on the disk there is nothing to keep or to replace.
+(one-disk (let ((tree (machine-tree)))
+            (setf (second (second tree)) (remove "clara.image" (second (second tree)) :key #'car :test #'equal))
+            tree))
+(clara.host:set-start-state :starts 1 :passed-over t)
+(check (format nil "system: this is ClaraOS 0.0.0-host~%") (said-by-all #'clara.system:start))
+(check '(nil nil) (list (on-disk *machine-disk* "/clara/passed") (on-disk *machine-disk* "/clara/clara.image")))
+
+;;; The network (lisp/net.lisp): a machine with a network card, and at the
+;;; other end of its wire a network that the tests make up. It knows which
+;;; card has an address (ARP), gives the machine an address (DHCP), knows
+;;; names (DNS), and has a web server, with as much of TCP under it as a
+;;; server needs. It holds every frame that the machine sends against the
+;;; checksums that the protocols want, worked out here in another way; and
+;;; it can be told to lose, spoil and mix up what it sends, as a wire does.
+;;; It has a thread of its own: a network does not wait for the machine.
+
+(defun be (bytes offset size)
+  (let ((value 0))
+    (dotimes (i size value)
+      (setq value (+ (* 256 value) (aref bytes (+ offset i)))))))
+
+(defun (setf be) (value bytes offset size)
+  (dotimes (i size value)
+    (setf (aref bytes (+ offset i)) (ldb (byte 8 (* 8 (- size i 1))) value))))
+
+;; The bytes from START to END added up two at a time, the first of two
+;; being the higher half, with what gathers above sixteen bits added back
+;; in below, and MORE added to it.
+(defun wire-sum (bytes start end &optional (more 0))
+  (let ((sum more))
+    (loop for i from start below end by 2
+          do (incf sum (+ (ash (aref bytes i) 8) (if (< (1+ i) end) (aref bytes (1+ i)) 0))))
+    (loop while (> sum #xffff)
+          do (setq sum (+ (logand sum #xffff) (ash sum -16))))
+    sum))
+
+(defun around-sum (from to protocol bytes)
+  (+ (ash from -16) (logand from #xffff) (ash to -16) (logand to #xffff) protocol bytes))
+
+(defun bytes-of (&rest parts)
+  (let ((bytes (make-array 0 :element-type '(unsigned-byte 8) :adjustable t :fill-pointer t)))
+    (dolist (part parts (coerce bytes '(simple-array (unsigned-byte 8) (*))))
+      (map nil (lambda (byte) (vector-push-extend byte bytes)) part))))
+
+(defun number-bytes (value size)
+  (loop for i from (1- size) downto 0 collect (ldb (byte 8 (* 8 i)) value)))
+
+(defstruct network
+  vdev thread stopped
+  (lock (sb-thread:make-mutex :name "the made-up network")) (wake (sb-thread:make-semaphore))
+  inbox                         ; the frames that the machine has sent and that are still to be looked at
+  (machine #x525400123456)      ; the machine's card,
+  (station #x52550a000202)      ; and the one at the other end of the wire,
+  (address #x0a000202)          ; whose address is also the way out and who knows names
+  (lease #x0a00020f)            ; the address that it gives the machine
+  (names (list (cons "releases.test" #x0a000202)))
+  files                         ; what its web server has: ((path . what) ...)
+  heard                         ; what the machine did, the last first
+  mute                          ; of :arp :dhcp :names :connections, what it does not answer
+  refuse                        ; it takes no connection
+  nak                           ; it does not give the address that it offered
+  names-fail                    ; it cannot say which address a name has
+  another-record                ; its answer for a name has another record before the address
+  (hosts (list (cons #x0a000209 #x525500000009))) ; other machines on it, each with its card: they serve what it serves
+  false-start                   ; a connection's beginning is first answered with something that is no answer to it
+  pause                         ; how many seconds it waits after each piece of an answer
+  strangers                     ; before each answer about an address or a name it sends one that is for another question
+  spoil-names                   ; how many of its answers for a name arrive with a byte changed
+  (pieces 0)                    ; how many pieces of answers its web server has sent, the ones sent again among them
+  (lose-opening 0)              ; how many of its answers to the beginning of a connection are lost,
+  (lose-request 0)              ; how many requests are lost before one arrives,
+  drop spoil swap               ; which segments of an answer are lost the first time, arrive with a byte changed, or
+                                ; arrive after the one that follows them: by their number in the answer, from 0
+  (first #xfffff000)            ; the number that its bytes are counted from on a connection, which soon goes round
+  (piece 1460)                  ; how long a segment of an answer is at most
+  no-end                        ; it does not say that an answer is over
+  (secure (list 443))           ; the ports at which its web server keeps the connection closed (TLS)
+  chain                         ; the certificates that it shows there, its own first,
+  key                           ; and the key of its own
+  accident                      ; what goes wrong on such a connection, of the things that the code below knows to get wrong
+  (record 1200)                 ; how many bytes of an answer it closes in one record
+  connections)
+
+(defstruct served
+  port to-port state theirs first request answer
+  address station                ; the machine of the network that the connection is to, and its card
+  end-heard                      ; the machine has said that it knows the answer to be over
+  (sent 0) (heard 0)            ; of the answer: how many bytes went out, and how many the machine says it has
+  ended (moment 0) (same 0) (window 65535)
+  again                         ; the piece that was sent a second time because the machine said three times that it lacks it
+  secure                        ; what the network keeps of a connection that is kept closed
+  more                          ; more is to come after what there is of the answer: it is not said to be over
+  dropped spoiled swapped held)
+
+(defvar *network* nil)
+(defvar *numbers* nil)         ; the device of the machine that makes numbers which nobody can guess, when it has one
+
+(defun network-note (network &rest what)
+  (sb-thread:with-mutex ((network-lock network))
+    (push what (network-heard network))))
+
+(defun network-saw (network what)
+  (sb-thread:with-mutex ((network-lock network))
+    (count what (network-heard network) :key #'car)))
+
+;; A frame for the machine: it waits for the card to have a page for it,
+;; which the driver gives back as soon as it has taken the frame before.
+(defun network-send (network frame)
+  (let ((frame (if (< (length frame) 60)
+                   (bytes-of frame (make-list (- 60 (length frame)) :initial-element 0))
+                   frame)))
+    (loop repeat 3000
+          do (when (network-stopped network)
+               (return))
+             (when (arrive-on-wire (network-vdev network) frame)
+               (return t))
+             (sleep 0.001)
+          finally (failed "the driver left the network card no page for a frame in three seconds"))))
+
+(defvar *from-station* nil)    ; the card that a frame for the machine is from, when it is not the network's own
+
+(defun frame-to-machine (network kind &rest parts)
+  (network-send network (apply #'bytes-of (number-bytes (network-machine network) 6)
+                               (number-bytes (or *from-station* (network-station network)) 6)
+                               (number-bytes kind 2) parts)))
+
+(defun packet-to-machine (network from to protocol &rest parts)
+  (let* ((inside (apply #'bytes-of parts))
+         (header (bytes-of (list #x45 0) (number-bytes (+ 20 (length inside)) 2) (list 0 0 #x40 0 64 protocol 0 0)
+                           (number-bytes from 4) (number-bytes to 4))))
+    (setf (be header 10 2) (logxor #xffff (wire-sum header 0 20)))
+    (frame-to-machine network #x0800 header inside)))
+
+(defun datagram-to-machine (network from to from-port to-port &rest parts)
+  (let* ((inside (apply #'bytes-of parts))
+         (datagram (bytes-of (number-bytes from-port 2) (number-bytes to-port 2) (number-bytes (+ 8 (length inside)) 2) (list 0 0)
+                             inside)))
+    (setf (be datagram 6 2)
+          (logxor #xffff (wire-sum datagram 0 (length datagram) (around-sum from to 17 (length datagram)))))
+    (packet-to-machine network from to 17 datagram)))
+
+;; A segment for the machine, with a byte of what it carries changed after
+;; the checksum was worked out when SPOILED says so.
+(defun segment-to-machine (network connection number flags data &optional spoiled)
+  (when (plusp (length data))
+    (incf (network-pieces network)))
+  (let* ((from (or (served-address connection) (network-address network))) (to (network-lease network))
+         (*from-station* (served-station connection))
+         (segment (bytes-of (number-bytes (served-to-port connection) 2) (number-bytes (served-port connection) 2)
+                            (number-bytes (ldb (byte 32 0) number) 4) (number-bytes (served-theirs connection) 4)
+                            (list #x50 flags #xff #xff 0 0 0 0) data)))
+    (setf (be segment 16 2)
+          (logxor #xffff (wire-sum segment 0 (length segment) (around-sum from to 6 (length segment)))))
+    (when spoiled
+      (setf (aref segment (1- (length segment))) (logxor 1 (aref segment (1- (length segment))))))
+    (packet-to-machine network from to 6 segment)))
+
+(defun lines-bytes (&rest lines)
+  (octets (format nil "~{~A~C~C~}~C~C" (loop for line in lines append (list line (code-char 13) (code-char 10)))
+                  (code-char 13) (code-char 10))))
+
+;; What the web server says to a request for a path.
+(defun network-answer (network path)
+  (let ((what (cdr (assoc path (network-files network) :test #'string=))))
+    (cond ((null what)
+           (bytes-of (lines-bytes "HTTP/1.1 404 Not Found" "Content-Length: 9" "Connection: close") (octets "not here.")))
+          ((and (consp what) (eq (car what) :unsized))
+           (bytes-of (lines-bytes "HTTP/1.0 200 OK") (octets (second what))))
+          ((and (consp what) (eq (car what) :short))
+           (bytes-of (lines-bytes "HTTP/1.1 200 OK" (format nil "content-length:   ~D" (+ 100 (length (octets (second what))))))
+                     (octets (second what))))
+          ((and (consp what) (eq (car what) :moved))
+           (lines-bytes "HTTP/1.1 301 Moved Permanently" (format nil "Location: ~A" (second what)) "Content-Length: 0"))
+          ((and (consp what) (eq (car what) :status))
+           (lines-bytes (format nil "HTTP/1.1 ~D Something" (second what)) "Content-Length: 0"))
+          ((and (consp what) (eq (car what) :raw))
+           (octets (second what)))
+          ((and (consp what) (eq (car what) :chunked))
+           ;; in chunks of 1, 2, 3 and so on, each with its length in base sixteen before it, in either kind of letter
+           (let ((bytes (octets (second what))) (parts (list (lines-bytes "HTTP/1.1 200 OK" "Transfer-Encoding: Chunked"))) (at 0) (size 1))
+             (loop while (< at (length bytes))
+                   do (let ((end (min (length bytes) (+ at size))))
+                        (push (octets (format nil (if (evenp size) "~X;with=more~C~C" "~(~X~)~C~C") (- end at) (code-char 13) (code-char 10))) parts)
+                        (push (subseq bytes at end) parts)
+                        (push (list 13 10) parts)
+                        (setq at end
+                              size (* size 3))))
+             (unless (third what)
+               (push (octets (format nil "0~C~C~C~C" (code-char 13) (code-char 10) (code-char 13) (code-char 10))) parts))
+             (apply #'bytes-of (reverse parts))))
+          (t
+           (bytes-of (lines-bytes "HTTP/1.1 200 OK" "Server: made up" (format nil "Content-Length: ~D" (length (octets what)))
+                                  "Connection: close")
+                     (octets what))))))
+
+;; As much of an answer goes out as the machine has room for, in segments,
+;; each with the accident that the test wants it to have the first time;
+;; and after the last one the word that the answer is over.
+(defun network-say (network connection)
+  (let ((answer (served-answer connection)) (piece (network-piece network)))
+    (when answer
+      (loop while (and (< (served-sent connection) (length answer))
+                       (< (- (served-sent connection) (served-heard connection)) (min (served-window connection) (* 12 piece))))
+            do (let* ((start (served-sent connection)) (end (min (length answer) (+ start piece))) (index (floor start piece))
+                      (number (+ (served-first connection) 1 start)) (data (subseq answer start end))
+                      (flags (if (= end (length answer)) #x18 #x10)))
+                 (setf (served-sent connection) end)
+                 (cond ((and (member index (network-drop network)) (not (member index (served-dropped connection))))
+                        (push index (served-dropped connection)))
+                       ((and (member index (network-spoil network)) (not (member index (served-spoiled connection))))
+                        (push index (served-spoiled connection))
+                        (segment-to-machine network connection number flags data t))
+                       ((and (member index (network-swap network)) (not (member index (served-swapped connection))))
+                        (push index (served-swapped connection))
+                        (setf (served-held connection) (list number flags data)))
+                       (t
+                        (segment-to-machine network connection number flags data)
+                        (when (served-held connection)
+                          (apply #'segment-to-machine network connection (served-held connection))
+                          (setf (served-held connection) nil))))
+                 (when (network-pause network)
+                   (sleep (network-pause network)))))
+      (when (and (served-held connection) (= (served-sent connection) (length answer)))
+        (apply #'segment-to-machine network connection (served-held connection))
+        (setf (served-held connection) nil))
+      (when (and (= (served-sent connection) (length answer)) (not (served-ended connection)) (not (network-no-end network))
+                 (not (served-more connection)))
+        (setf (served-ended connection) t)
+        (segment-to-machine network connection (+ (served-first connection) 1 (length answer)) #x11 nil)))))
+
+;; What the web server answers to what the machine has asked of it so far:
+;; NIL until all of a request is there.
+(defun network-request (network connection bytes)
+  (let* ((request (sb-ext:octets-to-string bytes :external-format :latin-1))
+         (end (search (format nil "~C~C~C~C" (code-char 13) (code-char 10) (code-char 13) (code-char 10)) request)))
+    (when (and (null end) (>= (length request) 4) (string/= (subseq request 0 4) "GET "))
+      ;; what is no request at all, the beginning of a greeting for one, is answered as a web server answers it
+      (return-from network-request (lines-bytes "HTTP/1.1 400 Bad Request" "Content-Length: 0" "Connection: close")))
+    (when end
+      (let ((path (subseq request 4 (search " HTTP/1.1" request)))
+            (port (served-to-port connection)))
+        (unless (and (string= (subseq request 0 4) "GET ") (search "Host: " request)
+                     (search "Connection: close" request) (search "User-Agent: ClaraOS/" request))
+          (failed "the machine asks a web server in a way that is not HTTP's: ~S" request))
+        ;; the port is named after the machine's name unless it is the one that goes without saying
+        (unless (eq (and (search (format nil ":~D~C" port (code-char 13)) request) t)
+                    (not (member port '(80 443))))
+          (failed "the machine asks a web server at the port ~D and names the port wrongly, or not at all: ~S" port request))
+        (network-note network :get path)
+        (network-answer network path)))))
+
+;; A segment from the machine, for the web server.
+(defun network-heard-segment (network frame)
+  (let* ((at 34) (whole (- (be frame 16 2) 20)) (header (* 4 (ash (aref frame (+ at 12)) -4)))
+         (port (be frame at 2)) (to-port (be frame (+ at 2) 2)) (number (be frame (+ at 4) 4)) (arrived (be frame (+ at 8) 4))
+         (flags (aref frame (+ at 13))) (data (subseq frame (+ at header) (+ at whole)))
+         (connection (find port (network-connections network) :key #'served-port)))
+    (unless (= (wire-sum frame at (+ at whole) (around-sum (be frame 26 4) (be frame 30 4) 6 whole)) #xffff)
+      (failed "the machine sent a segment whose checksum is wrong"))
+    (cond ((logbitp 2 flags)
+           (network-note network :given-up port)
+           (setf (network-connections network) (remove connection (network-connections network))))
+          ((and (logbitp 1 flags) (not (logbitp 4 flags)))
+           (network-note network :connect to-port)
+           (unless (and (= header 24) (= (aref frame (+ at 20)) 2) (= (be frame (+ at 22) 2) 1460))
+             (failed "the machine begins a connection without saying how long a segment may be"))
+           (cond ((member :connections (network-mute network)))
+                 ((network-refuse network)
+                  (segment-to-machine network (make-served :port port :to-port to-port :theirs (ldb (byte 32 0) (1+ number))
+                                                           :address (be frame 30 4) :station (be frame 0 6))
+                                      0 #x14 nil))
+                 (t
+                  (unless connection
+                    (setq connection (make-served :port port :to-port to-port :state :opening
+                                                  :theirs (ldb (byte 32 0) (1+ number)) :first (network-first network)
+                                                  :address (be frame 30 4) :station (be frame 0 6)))
+                    (push connection (network-connections network)))
+                  (when (network-false-start network)
+                    ;; something that is no answer to the beginning: it says that it has bytes that nobody sent
+                    (let ((theirs (served-theirs connection)))
+                      (setf (served-theirs connection) (ldb (byte 32 0) (+ theirs 77)))
+                      (segment-to-machine network connection 12345 #x10 nil)
+                      (setf (served-theirs connection) theirs)))
+                  (if (plusp (network-lose-opening network))
+                      (decf (network-lose-opening network))
+                      (segment-to-machine network connection (served-first connection) #x12 nil)))))
+          ((null connection)
+           (network-note network :stray port))
+          (t
+           (setf (served-window connection) (be frame (+ at 14) 2))
+           (when (and (eq (served-state connection) :opening) (logbitp 4 flags)
+                      (= arrived (ldb (byte 32 0) (1+ (served-first connection)))))
+             (setf (served-state connection) :open))
+           (when (plusp (length data))
+             (cond ((plusp (network-lose-request network))
+                    (decf (network-lose-request network)))
+                   ((= number (served-theirs connection))
+                    (setf (served-request connection) (bytes-of (served-request connection) data)
+                          (served-theirs connection) (ldb (byte 32 0) (+ number (length data))))
+                    (if (member (served-to-port connection) (network-secure network))
+                        (tls-heard network connection)
+                        (let ((answer (and (null (served-answer connection))
+                                           (network-request network connection (served-request connection)))))
+                          (when answer
+                            (setf (served-answer connection) answer
+                                  (served-moment connection) (get-internal-real-time)))))
+                    (segment-to-machine network connection (+ (served-first connection) 1 (served-sent connection)) #x10 nil))
+                   (t
+                    (segment-to-machine network connection (+ (served-first connection) 1 (served-sent connection)) #x10 nil))))
+           (when (logbitp 0 flags)
+             (when (= (ldb (byte 32 0) (+ number (length data))) (served-theirs connection))
+               (setf (served-theirs connection) (ldb (byte 32 0) (1+ (served-theirs connection))))
+               (network-note network :ended port))
+             (segment-to-machine network connection
+                                 (+ (served-first connection) 1 (served-sent connection) (if (served-ended connection) 1 0)) #x10 nil))
+           (when (and (logbitp 4 flags) (served-answer connection) (served-ended connection) (not (served-end-heard connection))
+                      (= arrived (ldb (byte 32 0) (+ (served-first connection) 2 (length (served-answer connection))))))
+             (setf (served-end-heard connection) t)
+             (network-note network :end-heard port))
+           (when (and (logbitp 4 flags) (served-answer connection))
+             (let ((got (min (length (served-answer connection))
+                             (ldb (byte 32 0) (- arrived (served-first connection) 1)))))
+               (cond ((> got (served-heard connection))
+                      (setf (served-heard connection) got
+                            (served-same connection) 0
+                            (served-moment connection) (get-internal-real-time)))
+                     ((and (= got (served-heard connection)) (< got (served-sent connection))
+                           (zerop (length data)) (not (logbitp 0 flags)))
+                      (incf (served-same connection))
+                      ;; The machine says three times more that it has no more than before: the one
+                      ;; piece that it lacks goes out again, once, as a web server sends it (RFC 5681).
+                      ;; Everything after it goes out again when nothing has moved for a while.
+                      (when (and (>= (served-same connection) 3) (not (eql (served-again connection) got)))
+                        (setf (served-again connection) got)
+                        (let ((end (min (length (served-answer connection)) (+ got (network-piece network)))))
+                          (segment-to-machine network connection (+ (served-first connection) 1 got) #x10
+                                              (subseq (served-answer connection) got end))))))))
+           (network-say network connection)))))
+
+;; A packet from the machine that is one of UDP's: a question to the DHCP
+;; server, or to whoever knows names.
+(defun network-heard-datagram (network frame)
+  (let* ((at 34) (whole (be frame (+ at 4) 2)) (from (be frame 26 4)) (to (be frame 30 4))
+         (port (be frame at 2)) (to-port (be frame (+ at 2) 2)) (inside (+ at 8)))
+    (unless (and (/= (be frame (+ at 6) 2) 0)
+                 (= (wire-sum frame at (+ at whole) (around-sum from to 17 whole)) #xffff))
+      (failed "the machine sent a packet of UDP's whose checksum is wrong, or that has none"))
+    (cond ((= to-port 67)
+           (let ((kind nil) (wanted nil) (server nil) (number (be frame (+ inside 4) 4)) (option (+ inside 240)))
+             (loop while (and (< option (+ at whole)) (/= (aref frame option) 255))
+                   do (let ((code (aref frame option)) (length (aref frame (1+ option))))
+                        (case code
+                          (53 (setq kind (aref frame (+ option 2))))
+                          (50 (setq wanted (be frame (+ option 2) 4)))
+                          (54 (setq server (be frame (+ option 2) 4))))
+                        (incf option (+ 2 length))))
+             (unless (and (= from 0) (= to #xffffffff) (= port 68) (= (be frame 0 6) #xffffffffffff)
+                          (= (aref frame inside) 1) (= (be frame (+ inside 28) 6) (network-machine network))
+                          (logbitp 15 (be frame (+ inside 10) 2)) (= (be frame (+ inside 236) 4) #x63825363)
+                          (>= (- whole 8) 300))
+               (failed "the machine asks for an address in a way that is not DHCP's"))
+             (when (and (eql kind 3) (not (and (eql wanted (network-lease network)) (eql server (network-address network)))))
+               (failed "the machine takes the address ~S from ~S, which nobody offered it" wanted server))
+             (network-note network :dhcp kind)
+             (unless (member :dhcp (network-mute network))
+               (let ((answer (cond ((eql kind 1) 2) ((network-nak network) 6) (t 5))))
+                 (when (network-strangers network)
+                   ;; somebody else's answer, and one that is no DHCP: neither is this machine's
+                   (datagram-to-machine
+                    network (network-address network) #xffffffff 67 68
+                    (list 2 1 6 0) (number-bytes (logxor number 1) 4) (list 0 0 #x80 0) (number-bytes 0 4)
+                    (number-bytes #x0a000263 4) (number-bytes 0 8) (number-bytes (network-machine network) 6)
+                    (make-list 202 :initial-element 0) (number-bytes #x63825363 4)
+                    (list 53 1 answer 54 4) (number-bytes (network-address network) 4) (list 255))
+                   (datagram-to-machine
+                    network (network-address network) #xffffffff 67 68
+                    (list 2 1 6 0) (number-bytes number 4) (list 0 0 #x80 0) (number-bytes 0 4)
+                    (number-bytes #x0a000264 4) (number-bytes 0 8) (number-bytes (network-machine network) 6)
+                    (make-list 202 :initial-element 0) (number-bytes #x12345678 4)
+                    (list 53 1 answer 54 4) (number-bytes (network-address network) 4) (list 255)))
+                 (datagram-to-machine
+                  network (network-address network) #xffffffff 67 68
+                  (list 2 1 6 0) (number-bytes number 4) (list 0 0 #x80 0) (number-bytes 0 4)
+                  (number-bytes (if (= answer 6) 0 (network-lease network)) 4) (number-bytes 0 8)
+                  (number-bytes (network-machine network) 6) (make-list 202 :initial-element 0)
+                  (number-bytes #x63825363 4)
+                  (list 0 53 1 answer 54 4) (number-bytes (network-address network) 4)
+                  (list 51 4 0 1 #x51 #x80 1 4 255 255 255 0 3 4) (number-bytes (network-address network) 4)
+                  (list 6 8) (number-bytes (network-address network) 4) (number-bytes #x08080808 4) (list 255))))))
+          (t
+           (let ((labels nil) (place (+ inside 12)))
+             (loop while (and (< place (+ at whole)) (plusp (aref frame place)))
+                   do (push (sb-ext:octets-to-string (subseq frame (1+ place) (+ place 1 (aref frame place)))) labels)
+                      (incf place (1+ (aref frame place))))
+             (let ((name (format nil "~{~A~^.~}" (reverse labels))) (question (subseq frame (+ inside 12) (+ place 5)))
+                   (number (be frame inside 2)))
+               (unless (and (= (be frame (+ inside 2) 2) #x0100) (= (be frame (+ inside 4) 2) 1)
+                            (= (be frame (1+ place) 2) 1) (= (be frame (+ place 3) 2) 1))
+                 (failed "the machine asks for the address of a name in a way that is not DNS's"))
+               (network-note network :name name to-port)
+               (unless (member :names (network-mute network))
+                 (let ((address (cdr (assoc name (network-names network) :test #'string-equal))))
+                   (when (network-strangers network)
+                     ;; the answer to another question, and the answer of somebody who was not asked
+                     (datagram-to-machine network to from to-port port
+                                          (number-bytes (logxor number 1) 2) (list #x81 #x80 0 1 0 1 0 0 0 0) question
+                                          (list #xc0 #x0c 0 1 0 1 0 0 0 60 0 4 10 0 2 99))
+                     (datagram-to-machine network #x0a000263 from to-port port
+                                          (number-bytes number 2) (list #x81 #x80 0 1 0 1 0 0 0 0) question
+                                          (list #xc0 #x0c 0 1 0 1 0 0 0 60 0 4 10 0 2 98)))
+                   (cond ((plusp (or (network-spoil-names network) 0))
+                          (decf (network-spoil-names network))
+                          (let* ((inside (bytes-of (number-bytes number 2) (list #x81 #x80 0 1 0 1 0 0 0 0) question
+                                                   (list #xc0 #x0c 0 1 0 1 0 0 0 60 0 4 10 0 2 97)))
+                                 (datagram (bytes-of (number-bytes to-port 2) (number-bytes port 2)
+                                                     (number-bytes (+ 8 (length inside)) 2) (list #x12 #x34) inside)))
+                            (packet-to-machine network to from 17 datagram)))
+                         ((network-names-fail network)
+                          (datagram-to-machine network to from to-port port
+                                               (number-bytes number 2) (list #x81 #x82 0 1 0 0 0 0 0 0) question))
+                         (address
+                          (datagram-to-machine network to from to-port port
+                                               (number-bytes number 2)
+                                               (list #x81 #x80 0 1 0 (if (network-another-record network) 2 1) 0 0 0 0) question
+                                               (and (network-another-record network)
+                                                    (list #xc0 #x0c 0 5 0 1 0 0 0 60 0 9 5 97 108 105 97 115 #xc0 #x0c 0))
+                                               (list #xc0 #x0c 0 1 0 1 0 0 0 60 0 4) (number-bytes address 4)))
+                         (t
+                          (datagram-to-machine network to from to-port port
+                                               (number-bytes number 2) (list #x81 #x83 0 1 0 0 0 0 0 0) question)))))))))))
+
+(defun network-heard-frame (network frame)
+  (let* ((kind (be frame 12 2)) (to (be frame 0 6))
+         ;; where what the frame carries ends, after which there is only what makes it sixty bytes long
+         (end (cond ((= kind #x0806) 42)
+                    ((= kind #x0800) (+ 14 (be frame 16 2)))
+                    (t (length frame)))))
+    (unless (= (be frame 6 6) (network-machine network))
+      (failed "the machine sent a frame that does not say that it is from its card"))
+    (unless (or (= to #xffffffffffff) (= to (network-station network)) (rassoc to (network-hosts network)))
+      (failed "the machine sent a frame to a card that is not on its network: ~X" to))
+    (when (find-if #'plusp frame :start (min end (length frame)))
+      (failed "the machine sent a frame with something after what it carries, where there should be nothing"))
+    (cond ((= kind #x0806)
+           (let* ((question (= (be frame 20 2) 1)) (wanted (be frame 38 4))
+                  (station (cond ((= wanted (network-address network)) (network-station network))
+                                 (t (cdr (assoc wanted (network-hosts network)))))))
+             (network-note network (if question :who-has :i-have) (if question wanted (be frame 28 4)))
+             (unless (and (= (be frame 14 2) 1) (= (be frame 16 2) #x0800) (= (aref frame 18) 6) (= (aref frame 19) 4)
+                          (= (be frame 22 6) (network-machine network))
+                          (if question (= to #xffffffffffff) (/= to #xffffffffffff)))
+               (failed "the machine asks who has an address in a way that is not ARP's"))
+             (when (and question station (not (member :arp (network-mute network))))
+               (let ((*from-station* station))
+                 (frame-to-machine network #x0806 (list 0 1 8 0 6 4 0 2) (number-bytes station 6)
+                                   (number-bytes wanted 4) (number-bytes (network-machine network) 6)
+                                   (number-bytes (be frame 28 4) 4))))))
+          ((= kind #x0800)
+           (unless (and (= (aref frame 14) #x45) (= (wire-sum frame 14 34) #xffff) (<= (+ 14 (be frame 16 2)) (length frame))
+                        (= (be frame 20 2) #x4000) (plusp (aref frame 22)))
+             (failed "the machine sent a packet that is not one of IPv4's, whole and with a right checksum"))
+           (network-note network :packet-to to (be frame 30 4))
+           (case (aref frame 23)
+             (17 (network-heard-datagram network frame))
+             (6 (network-heard-segment network frame))
+             (t (failed "the machine sent a packet of the protocol ~D" (aref frame 23)))))
+          (t (failed "the machine sent a frame of the kind ~X" kind)))))
+
+;; The network's own thread: it takes what the machine has sent, and sends
+;; an answer again that the machine has said nothing to for a while.
+(defun network-loop (network)
+  (loop
+    (sb-thread:wait-on-semaphore (network-wake network) :timeout 0.02)
+    (when (network-stopped network)
+      (return))
+    (loop
+      (let ((frame (sb-thread:with-mutex ((network-lock network)) (pop (network-inbox network)))))
+        (unless frame
+          (return))
+        (handler-case (network-heard-frame network frame)
+          (error (condition)
+            (failed "the made-up network could not make sense of a frame: ~A" condition)))))
+    (dolist (connection (network-connections network))
+      (when (and (served-answer connection) (< (served-heard connection) (served-sent connection))
+                 (> (- (get-internal-real-time) (served-moment connection)) (* 0.15 internal-time-units-per-second)))
+        (setf (served-sent connection) (served-heard connection)
+              (served-ended connection) nil
+              (served-moment connection) (get-internal-real-time))
+        (network-say network connection)))))
+
+;;; Certificates and keys for the made-up network, and its side of a
+;;; connection that is kept closed (lisp/tls.lisp). Certificates are written
+;;; here from RFC 5280, piece by piece, and signed with SBCL's big numbers;
+;;; the network's half of TLS 1.3 is written from RFC 8446, the half that a
+;;; server speaks, with the arithmetic of host/clara.lisp. So what the
+;;; machine reads, checks and opens was made by other code than its own.
+
+(defun der (kind &rest parts)
+  (let* ((inside (apply #'bytes-of parts)) (length (length inside)))
+    (bytes-of (list kind)
+              (cond ((< length 128) (list length))
+                    ((< length 256) (list #x81 length))
+                    (t (list #x82 (ash length -8) (logand length 255))))
+              inside)))
+
+(defun der-number (number)
+  (let ((bytes (number-bytes number (max 1 (ceiling (integer-length number) 8)))))
+    (der 2 (if (logbitp 7 (car bytes)) (cons 0 bytes) bytes))))
+
+(defun der-time (time &optional long)
+  (multiple-value-bind (second minute hour day month year) (decode-universal-time time 0)
+    (if long
+        (der 24 (octets (format nil "~4,'0D~2,'0D~2,'0D~2,'0D~2,'0D~2,'0DZ" year month day hour minute second)))
+        (der 23 (octets (format nil "~2,'0D~2,'0D~2,'0D~2,'0D~2,'0D~2,'0DZ" (mod year 100) month day hour minute second))))))
+
+;; A name: an organization, when one is given, and a common name.
+(defun der-name (common &optional organization)
+  (der 48
+       (and organization (der 49 (der 48 (der 6 '(#x55 4 10)) (der 12 (octets organization)))))
+       (and common (der 49 (der 48 (der 6 '(#x55 4 3)) (der 19 (octets common)))))))
+
+;; A key: on one of the two curves, a secret number and its point; or of
+;; RSA's, the number N, the small number E, and the secret one D.
+(defstruct tkey kind curve secret point n (e 65537) d)
+
+(defun curve-key (bits secret)
+  (let ((curve (clara.host:curve bits)))
+    (make-tkey :kind :curve :curve curve :secret secret :point (clara.host:curve-public curve secret))))
+
+(defun rsa-key (p q)
+  (let ((n (* p q)))
+    (make-tkey :kind :rsa :n n
+               :d (let ((phi (* (1- p) (1- q))))
+                    ;; one over 65537 modulo phi, the long way: the first d from 1 on with e*d = 1
+                    (loop for k from 1
+                          when (zerop (mod (1+ (* k phi)) 65537)) return (floor (1+ (* k phi)) 65537))))))
+
+(defvar *authority-key* (curve-key 256 #x1f2e3d4c5b6a79880123456789abcdeffedcba98765432100f1e2d3c4b5a6978))
+(defvar *signer-key* (curve-key 384 #x00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff0123456789abcdef0123456789abcdef))
+(defvar *shown-key* (curve-key 256 #x7a6b5c4d3e2f10010203040506070809a0b0c0d0e0f0112233445566778899aa))
+(defvar *other-key* (curve-key 256 #x5a4b3c2d1e0f11223344556677889900aabbccddeeff00112233445566778899))
+(defvar *large-key* (curve-key 384 #x0f0e0d0c0b0a09080706050403020100ffeeddccbbaa99887766554433221100123456789abcdef0fedcba9876543210))
+(defvar *rsa-key*
+  (rsa-key #xe37581af564c71b5aab937f738b2c11bbd52718f5855a5b2e3e9a7888a85a456d5804ce3dab3c88096d0800c2d843b37a9fc272b19b5bbfd6393575795244cc58e1a1f582fd1f2bfc17d970c967f056e0f9945790e8b399afb15a9bc45ec506c0ee49eb32ee163cb2d765cbf72bde358921425ec51729a379d4a61c4939ab577
+           #xc48957c6895c0f2116c0b8595fe936005243bf6cbd6fe31a19e0f38a988b81e61e214650d15f38039713f3dbbb35115be2650efd11b20d33b338c01aac02c8665c92acd75b2792331b882276e64635dda3b71d78a77c686d9accac23d20ff71bcfaf5cd6e0a37ff2a3fb3d2c686a602b60ace1336f7b71f9c434537ee26b5469))
+
+(defun key-size (key)
+  (if (eq (tkey-kind key) :curve)
+      (floor (clara.host:curve-bits (tkey-curve key)) 8)
+      (ceiling (integer-length (tkey-n key)) 8)))
+
+;; A key as a certificate has it.
+(defun der-key (key)
+  (if (eq (tkey-kind key) :curve)
+      (let ((size (key-size key)))
+        (der 48
+             (der 48 (der 6 '(#x2a #x86 #x48 #xce #x3d 2 1))
+                  (der 6 (if (= size 32) '(#x2a #x86 #x48 #xce #x3d 3 1 7) '(#x2b #x81 4 0 #x22))))
+             (der 3 '(0 4) (number-bytes (car (tkey-point key)) size) (number-bytes (cdr (tkey-point key)) size))))
+      (der 48
+           (der 48 (der 6 '(#x2a #x86 #x48 #x86 #xf7 #x0d 1 1 1)) (der 5))
+           (der 3 '(0) (der 48 (der-number (tkey-n key)) (der-number (tkey-e key)))))))
+
+(defvar *sum-prefixes*
+  '((256 #x30 #x31 #x30 #x0d #x06 #x09 #x60 #x86 #x48 #x01 #x65 #x03 #x04 #x02 #x01 #x05 #x00 #x04 #x20)
+    (384 #x30 #x41 #x30 #x0d #x06 #x09 #x60 #x86 #x48 #x01 #x65 #x03 #x04 #x02 #x02 #x05 #x00 #x04 #x30)
+    (512 #x30 #x51 #x30 #x0d #x06 #x09 #x60 #x86 #x48 #x01 #x65 #x03 #x04 #x02 #x03 #x05 #x00 #x04 #x40)))
+
+;; The block that a signature of RSA's newer kind is made of (RFC 8017, 9.1.1).
+(defun pss-block (bits sum modulus-bits)
+  (let* ((size (length sum)) (block-bits (1- modulus-bits)) (block-bytes (ceiling block-bits 8))
+         (salt (subseq (clara.host:digest-of 512 (bytes-of sum (octets "salt"))) 0 size))
+         (h (clara.host:digest-of bits (bytes-of (make-list 8 :initial-element 0) sum salt)))
+         (open (bytes-of (make-list (- block-bytes size size 2) :initial-element 0) '(1) salt))
+         (mask (apply #'bytes-of (loop for count from 0 below (ceiling (length open) size)
+                                       collect (clara.host:digest-of bits (bytes-of h (number-bytes count 4))))))
+         (covered (map 'vector #'logxor open mask)))
+    (setf (aref covered 0) (logand (aref covered 0) (ash #xff (- block-bits (* 8 block-bytes)))))
+    (bytes-of covered h '(#xbc))))
+
+;; The signature that a key gives some bytes, over the sum of that many
+;; bits: two numbers in a piece, on a curve; and of RSA's the older kind,
+;; or the newer when PSS says so.
+(defun sign-with (key bits bytes &key pss)
+  (let ((sum (clara.host:digest-of bits bytes)))
+    (if (eq (tkey-kind key) :curve)
+        (let* ((curve (tkey-curve key)) (n (clara.host:curve-n curve))
+               (k (1+ (mod (clara.host:octets-number (clara.host:digest-of 512 (bytes-of (number-bytes (tkey-secret key) 48) sum)))
+                           (1- n)))))
+          (multiple-value-bind (r s) (clara.host:curve-sign curve (tkey-secret key) sum k)
+            (der 48 (der-number r) (der-number s))))
+        (let* ((size (key-size key))
+               (prefix (cdr (assoc bits *sum-prefixes*)))
+               (block (if pss
+                          (pss-block bits sum (integer-length (tkey-n key)))
+                          (bytes-of '(0 1) (make-list (- size 3 (length prefix) (length sum)) :initial-element 255) '(0) prefix sum))))
+          (bytes-of (number-bytes (clara.host:expt-mod (clara.host:octets-number block) (tkey-d key) (tkey-n key)) size))))))
+
+;; How a certificate says that it is signed: by the kind of the signer's key
+;; and the sum.
+(defun der-way (signer bits)
+  (if (eq (tkey-kind signer) :curve)
+      (der 48 (der 6 (list #x2a #x86 #x48 #xce #x3d 4 3 (ecase bits (256 2) (384 3) (512 4)))))
+      (der 48 (der 6 (list #x2a #x86 #x48 #x86 #xf7 #x0d 1 1 (ecase bits (256 11) (384 12) (512 13) (1 5)))) (der 5))))
+
+;; A certificate: for SUBJECT, with KEY, signed by ISSUER with the key
+;; SIGNER. NAMES are the names it is for, and ADDRESSES the addresses.
+;; AUTHORITY says that it may sign certificates, DEPTH how many signers may
+;; be below it, USAGE what its key is for, as the bits of a byte, PURPOSES
+;; what it may be shown for, as lists of bytes, and MUST adds something
+;; that has to be understood and that nobody understands. WAY is how it
+;; says that it is signed, when that is not how it is; SPOIL changes a bit
+;; of what is signed after it was signed.
+(defun certificate (&key subject organization (issuer subject issuer-p) (issuer-organization (and (not issuer-p) organization))
+                         key (signer key) (bits 256)
+                         names addresses authority depth usage (purposes nil purposes-p) must
+                         (from (- (get-universal-time) 86400)) (until (+ (get-universal-time) 864000))
+                         way spoil long-dates (version t) (number 4660))
+  (let* ((way (or way (der-way signer bits)))
+         (more (bytes-of
+                (and (or authority depth)
+                     (der 48 (der 6 '(#x55 #x1d #x13)) (der 1 '(255))
+                          ;; :NO says outright that it may not sign, which is how some write what need not be written
+                          (der 4 (der 48 (and authority (der 1 (if (eq authority :no) '(0) '(255)))) (and depth (der-number depth))))))
+                (and usage (der 48 (der 6 '(#x55 #x1d #x0f)) (der 1 '(255)) (der 4 (der 3 (list 0 usage)))))
+                (and (or names addresses)
+                     (der 48 (der 6 '(#x55 #x1d #x11))
+                          (der 4 (apply #'der 48 (append (mapcar (lambda (name) (der #x82 (octets name))) names)
+                                                         (mapcar (lambda (address) (der #x87 (number-bytes address 4))) addresses))))))
+                (and purposes-p
+                     (der 48 (der 6 '(#x55 #x1d #x25)) (der 4 (apply #'der 48 (mapcar (lambda (purpose) (der 6 purpose)) purposes)))))
+                (and must (der 48 (der 6 '(#x2a 3 4 5)) (der 1 '(255)) (der 4 (der 5))))))
+         (body (der 48
+                    (and version (der #xa0 (der-number 2)))
+                    (der-number number)
+                    way
+                    (der-name issuer issuer-organization)
+                    (der 48 (der-time from long-dates) (der-time until long-dates))
+                    (der-name subject organization)
+                    (der-key key)
+                    (and (plusp (length more)) (der #xa3 (der 48 more)))))
+         (signature (sign-with signer bits body)))
+    (when spoil
+      ;; a bit of its number, which changes nothing else of what it says
+      (let ((at (+ 3 (search (bytes-of '(2 2) (number-bytes number 2)) body))))
+        (setf (aref body at) (logxor 1 (aref body at)))))
+    (der 48 body way (der 3 '(0) signature))))
+
+;; A certificate as files of certificates have it: in base 64, between two lines.
+(defun pem (bytes)
+  (let ((letters "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"))
+    (with-output-to-string (out)
+      (format out "-----BEGIN CERTIFICATE-----~%")
+      (loop for start from 0 below (length bytes) by 3
+            for column from 1
+            do (let* ((end (min (length bytes) (+ start 3)))
+                      (group (ash (be bytes start (- end start)) (* 8 (- 3 (- end start))))))
+                 (dotimes (i 4)
+                   (write-char (if (<= i (- end start)) (char letters (ldb (byte 6 (* 6 (- 3 i))) group)) #\=) out))
+                 (when (zerop (mod column 16))
+                   (terpri out))))
+      (format out "~%-----END CERTIFICATE-----~%"))))
+
+(defvar *authority* (certificate :subject "The tests' root" :organization "ClaraOS tests" :key *authority-key* :authority t :usage 6))
+(defvar *signer* (certificate :subject "The tests' signer in between" :issuer "The tests' root" :issuer-organization "ClaraOS tests"
+                              :key *signer-key* :signer *authority-key* :authority t :depth 0 :usage 6))
+(defvar *shown* (certificate :subject "releases.test" :issuer "The tests' signer in between" :key *shown-key* :signer *signer-key* :bits 384
+                           :names '("releases.test" "*.wild.test") :addresses '(#x0a000202) :usage 128
+                           :purposes '((#x2b 6 1 5 5 7 3 1))))
+
+;; The machine trusts these and nothing else: no list is read from a disk.
+;; They are read at once, into memory that is the machine's for as long as
+;; it runs, so that a test which counts page frames afterwards counts only
+;; what a fetch took.
+(defun trust-only (&rest certificates)
+  (clara.tls:start)
+  (setq clara.tls::*trusted* (mapcar #'pem certificates)
+        clara.tls::*system-roots* nil
+        clara.tls::*system-read* t)
+  (clara.tls::anchors))
+
+;;; The network's side of TLS 1.3
+
+(defstruct tls
+  (state :hello)                 ; :HELLO, then :WORD while the machine's last word is waited for, then :OPEN, and :OVER
+  (read 0)                       ; how far what the machine sent has been taken as records
+  (greeting (bytes-of))          ; the messages of the greeting so far
+  client server                  ; (key twelve-bytes) that each side closes its records with
+  (client-count 0) (server-count 0)
+  client-secret server-secret    ; what the keys of the greeting are made of,
+  client-next server-next        ; and the ones after it
+  asked                          ; the machine was asked who it is
+  (request (bytes-of)))          ; what the machine said after the greeting
+
+(defun tls-label (secret label context length)
+  (let ((full (octets (concatenate 'string "tls13 " label))))
+    (subseq (clara.host:hmac-of 256 secret (bytes-of (number-bytes length 2) (list (length full)) full
+                                                     (list (length context)) context '(1)))
+            0 length)))
+
+(defun tls-secret (secret label greeting)
+  (tls-label secret label (clara.host:digest-of 256 greeting) 32))
+
+(defun tls-pair (secret)
+  (list (tls-label secret "key" #() 16) (tls-label secret "iv" #() 12)))
+
+(defun tls-nonce (pair count)
+  (map 'vector #'logxor (second pair) (bytes-of '(0 0 0 0) (number-bytes count 8))))
+
+;; A record, closed: its bytes, their kind, and PADDING zeroes.
+(defun tls-seal (pair count kind bytes &key (padding 0) spoil)
+  (let* ((inside (bytes-of bytes (list kind) (make-list padding :initial-element 0)))
+         (header (bytes-of '(23 3 3) (number-bytes (+ (length inside) 16) 2))))
+    (multiple-value-bind (closed tag) (clara.host:aes-gcm (first pair) (tls-nonce pair count) header inside)
+      (when spoil
+        (setf (aref closed 0) (logxor 1 (aref closed 0))))
+      (bytes-of header closed tag))))
+
+;; A record, opened: its kind and its bytes, or NIL when it does not open.
+(defun tls-open (pair count record)
+  (let* ((length (- (length record) 21))
+         (opened (and (>= length 1)
+                      (clara.host:aes-gcm (first pair) (tls-nonce pair count) (subseq record 0 5) (subseq record 5 (+ 5 length))
+                                          :opening t :tag (subseq record (+ 5 length))))))
+    (when opened
+      (let ((end (position-if #'plusp opened :from-end t)))
+        (and end (values (aref opened end) (subseq opened 0 end)))))))
+
+(defun tls-message (kind &rest parts)
+  (let ((inside (apply #'bytes-of parts)))
+    (bytes-of (list kind) (number-bytes (length inside) 3) inside)))
+
+(defun tls-extension (kind &rest parts)
+  (let ((inside (apply #'bytes-of parts)))
+    (bytes-of (number-bytes kind 2) (number-bytes (length inside) 2) inside)))
+
+;; More goes out on a connection, after what went out before.
+(defun tls-send (connection &rest parts)
+  (setf (served-answer connection) (apply #'bytes-of (or (served-answer connection) (bytes-of)) parts)
+        (served-moment connection) (get-internal-real-time)))
+
+;; What the machine's first message says, as (kind . bytes) for each thing
+;; in it, after the checks of everything that has one right way.
+(defun tls-read-hello (network hello)
+  (let* ((again (aref hello 38)) (at (+ 39 again)) (ciphers (be hello at 2))
+         (methods (+ at 2 ciphers)) (list (+ methods 1 (aref hello methods))) (end (+ list 2 (be hello list 2)))
+         (found nil))
+    (unless (and (= (aref hello 0) 1) (= (be hello 1 3) (- (length hello) 4)) (= (be hello 4 2) #x0303)
+                 (= again 0) (= ciphers 2) (= (be hello (+ at 2) 2) #x1301)
+                 (= (aref hello methods) 1) (= (aref hello (1+ methods)) 0) (= end (length hello)))
+      (failed "the machine begins a greeting in a way that is not TLS 1.3's: ~S" hello))
+    (let ((e (+ list 2)))
+      (loop while (< e end)
+            do (push (cons (be hello e 2) (subseq hello (+ e 4) (+ e 4 (be hello (+ e 2) 2)))) found)
+               (incf e (+ 4 (be hello (+ e 2) 2)))))
+    (let ((name (cdr (assoc 0 found))) (versions (cdr (assoc 43 found))) (groups (cdr (assoc 10 found)))
+          (share (cdr (assoc 51 found))) (ways (cdr (assoc 13 found))))
+      (unless (and (equalp versions #(2 3 4)) (equalp groups #(0 2 0 29))
+                   share (= (length share) 38) (= (be share 0 2) 36) (= (be share 2 2) 29) (= (be share 4 2) 32)
+                   ways (= (be ways 0 2) (- (length ways) 2)) (evenp (length ways))
+                   (= (length found) (if name 5 4)))
+        (failed "the machine's greeting does not say what it has to, or says it wrongly: ~S" found))
+      (when name
+        (unless (and (= (be name 0 2) (- (length name) 2)) (= (aref name 2) 0) (= (be name 3 2) (- (length name) 5)))
+          (failed "the machine names the machine that it means in a way that is none"))
+        (network-note network :named (sb-ext:octets-to-string (subseq name 5)))))
+    (unless (/= (length (remove-duplicates (subseq hello 6 38))) 1)
+      (failed "the machine's thirty-two bytes that nobody can guess are all the same"))
+    found))
+
+;; The network's greeting, when the machine's first message has come: its
+;; own first message, in the open, and the rest of what it has to say,
+;; closed. What the test wants wrong is wrong.
+(defun tls-greet (network connection tls hello)
+  (let* ((accident (network-accident network))
+         (found (tls-read-hello network hello))
+         (key (network-key network))
+         (secret (bytes-of (loop for i below 32 collect (logand 255 (+ 7 (* i 13) (served-port connection))))))
+         (shared (clara.host:x25519-of secret (subseq (cdr (assoc 51 found)) 6)))
+         (first (tls-message 2 '(3 3)
+                             (if (eq accident :again)
+                                 (clara.host:digest-of 256 (octets "HelloRetryRequest"))
+                                 (loop for i below 32 collect (logand 255 (+ 1 (* i 3)))))
+                             (if (eq accident :echo) '(4 1 2 3 4) '(0))
+                             (if (eq accident :other-cipher) '(#x13 #x02) '(#x13 #x01))
+                             '(0)
+                             (let ((more (bytes-of
+                                          (and (not (eq accident :old)) (tls-extension 43 '(3 4)))
+                                          (and (not (eq accident :no-share))
+                                               (cond ((eq accident :other-share)
+                                                      (tls-extension 51 '(0 23 0 65) (make-list 65 :initial-element 4)))
+                                                     ((eq accident :nothing-share)
+                                                      ;; a point that makes zeroes of every number
+                                                      (tls-extension 51 '(0 29 0 32) (make-list 32 :initial-element 0)))
+                                                     (t
+                                                      (tls-extension 51 '(0 29 0 32) (clara.host:x25519-of secret (cons 9 (make-list 31 :initial-element 0)))))))
+                                          (and (eq accident :more) (tls-extension 16 '(0 3 2 104 50))))))
+                               (bytes-of (number-bytes (length more) 2) more)))))
+    (when (eq accident :gives-up)
+      (tls-send connection '(21 3 3 0 2 2 40))
+      (setf (tls-state tls) :over)
+      (return-from tls-greet))
+    (setf (tls-greeting tls) (bytes-of hello first))
+    (if (eq accident :trailing-hello)
+        ;; the beginning of another message in the record of the first, where the keys are about to change
+        (tls-send connection '(22 3 3) (number-bytes (+ 2 (length first)) 2) first '(8 0))
+        (tls-send connection '(22 3 3) (number-bytes (length first) 2) first))
+    (when (eq accident :old-word)
+      (tls-send connection '(20 3 3 0 1 1)))
+    (when (eq accident :old-word-wrong)
+      (tls-send connection '(20 3 3 0 1 2)))
+    (let* ((zeroes (make-list 32 :initial-element 0))
+           (early (clara.host:hmac-of 256 zeroes zeroes))
+           (greeting (clara.host:hmac-of 256 (tls-secret early "derived" #()) shared))
+           (master (clara.host:hmac-of 256 (tls-secret greeting "derived" #()) zeroes))
+           (said nil))
+      (setf (tls-client-secret tls) (tls-secret greeting "c hs traffic" (tls-greeting tls))
+            (tls-server-secret tls) (tls-secret greeting "s hs traffic" (tls-greeting tls))
+            (tls-client tls) (tls-pair (tls-client-secret tls))
+            (tls-server tls) (tls-pair (tls-server-secret tls)))
+      (flet ((say (message)
+               (setf (tls-greeting tls) (bytes-of (tls-greeting tls) message))
+               (push message said)))
+        (say (tls-message 8 (if (eq accident :says-more) (bytes-of '(0 9) (tls-extension 16 '(0 3 2 104 50))) '(0 0))))
+        (when (eq accident :asks)
+          (setf (tls-asked tls) t)
+          (say (tls-message 13 '(0) (let ((more (tls-extension 13 '(0 2 4 3)))) (bytes-of (number-bytes (length more) 2) more)))))
+        (when (eq accident :asks-wrongly)
+          (say (tls-message 13 '(1 9) (let ((more (tls-extension 13 '(0 2 4 3)))) (bytes-of (number-bytes (length more) 2) more)))))
+        (when (eq accident :endless)
+          ;; a greeting that goes on for longer than anybody keeps
+          (say (tls-message 99 (make-list 80000 :initial-element 0))))
+        (let ((list (apply #'bytes-of (loop for certificate in (if (eq accident :no-certificate) nil (network-chain network))
+                                            collect (bytes-of (number-bytes (length certificate) 3) certificate
+                                                              ;; what goes with a certificate, which the machine passes over
+                                                              (if (eq accident :with-more)
+                                                                  (let ((more (tls-extension 5 '(1 2 3 4))))
+                                                                    (bytes-of (number-bytes (length more) 2) more))
+                                                                  '(0 0)))))))
+          (say (tls-message 11 '(0) (number-bytes (length list) 3) list)))
+        (unless (eq accident :no-signature)
+          (let* ((curve (eq (tkey-kind key) :curve))
+                 (bits (if (and curve (= (key-size key) 48) (not (eq accident :short-way))) 384 256))
+                 (signed (bytes-of (make-list 64 :initial-element 32) (octets "TLS 1.3, server CertificateVerify") '(0)
+                                   (clara.host:digest-of 256 (tls-greeting tls))))
+                 (signature (sign-with (if (eq accident :other-key) *other-key* key) bits signed :pss (not (eq accident :older-way)))))
+            (when (eq accident :signature)
+              (setf (aref signature (- (length signature) 3)) (logxor 4 (aref signature (- (length signature) 3)))))
+            (say (tls-message 15
+                              (cond ((eq accident :wrong-way) '(8 7))
+                                    ((eq accident :other-way) (if curve '(8 4) '(4 3)))
+                                    ((eq accident :older-way) '(4 1))
+                                    ((not curve) '(8 4))
+                                    ((eq accident :short-way) '(4 3))
+                                    ((= bits 384) '(5 3))
+                                    (t '(4 3)))
+                              (number-bytes (length signature) 2) signature))))
+        (let ((word (clara.host:hmac-of 256 (tls-label (tls-server-secret tls) "finished" #() 32)
+                                        (clara.host:digest-of 256 (tls-greeting tls)))))
+          (when (eq accident :word)
+            (setf (aref word 5) (logxor 1 (aref word 5))))
+          (say (tls-message 20 word))))
+      (setf (tls-client-next tls) (tls-secret master "c ap traffic" (tls-greeting tls))
+            (tls-server-next tls) (tls-secret master "s ap traffic" (tls-greeting tls)))
+      ;; the messages go out closed: all in one record; each in one of its own; in pieces of a
+      ;; few bytes, whatever message they are of; or in the open, which nothing after the first may be
+      (let ((messages (reverse said)))
+        (flet ((closed (bytes &optional (kind 22))
+                 (prog1 (tls-seal (tls-server tls) (tls-server-count tls) kind bytes
+                                  :padding (if (eq accident :padded) 37 0))
+                   (incf (tls-server-count tls)))))
+          (cond ((eq accident :in-the-open)
+                 (let ((all (apply #'bytes-of messages)))
+                   (tls-send connection '(22 3 3) (number-bytes (length all) 2) all)))
+                ((eq accident :apart)
+                 (dolist (message messages)
+                   (tls-send connection (closed message))))
+                ((member accident '(:pieces :endless))
+                 (let ((all (apply #'bytes-of messages)) (size (if (eq accident :pieces) 61 16000)))
+                   (loop for start from 0 below (length all) by size
+                         do (tls-send connection (closed (subseq all start (min (length all) (+ start size))))))))
+                ((eq accident :early)
+                 (tls-send connection (closed (apply #'bytes-of (butlast messages))))
+                 (tls-send connection (closed (octets "too early") 23))
+                 (tls-send connection (closed (car (last messages)))))
+                ((eq accident :nothing)
+                 (tls-send connection (tls-seal (tls-server tls) 0 0 (bytes-of)))
+                 (incf (tls-server-count tls)))
+                ((eq accident :trailing)
+                 ;; the beginning of a message after the last word, with the keys of the greeting
+                 (tls-send connection (closed (bytes-of (apply #'bytes-of messages) '(4 0)))))
+                (t
+                 (tls-send connection (closed (apply #'bytes-of messages)))))))
+      (setf (tls-state tls) :word))))
+
+;; What the network says once the machine has asked for something: the
+;; answer of its web server, in records, and at the end the word that it is
+;; done. What the test wants wrong is wrong.
+(defun tls-answer (network connection tls answer)
+  (let ((accident (network-accident network)) (size (network-record network)))
+    (flet ((closed (bytes &optional (kind 23) &rest more)
+             (prog1 (apply #'tls-seal (tls-server tls) (tls-server-count tls) kind bytes
+                           :padding (if (eq accident :padded) 37 0) more)
+               (incf (tls-server-count tls))))
+           (renew ()
+             (setf (tls-server-next tls) (tls-label (tls-server-next tls) "traffic upd" #() 32)
+                   (tls-server tls) (tls-pair (tls-server-next tls))
+                   (tls-server-count tls) 0)))
+      (when (eq accident :tickets)
+        (tls-send connection (closed (bytes-of (tls-message 4 '(0 0 1 0 1 2 3 4 0 0 4 9 9 9 9 0 0))
+                                               (tls-message 4 '(0 0 1 0 1 2 3 4 0 0 4 8 8 8 8 0 0)))
+                                     22)))
+      (when (eq accident :late-greeting)
+        (tls-send connection (closed (tls-message 8 '(0 0)) 22)))
+      (when (eq accident :old-word-late)
+        (tls-send connection '(20 3 3 0 1 1)))
+      (when (eq accident :cut)
+        (setq answer (subseq answer 0 (floor (length answer) 2))))
+      (loop for start from 0 below (length answer) by size
+            for number from 0
+            do (let ((piece (subseq answer start (min (length answer) (+ start size)))))
+                 (when (and (member accident '(:renew :renew-quietly :renew-wrongly)) (= number 1))
+                   (tls-send connection (closed (bytes-of (tls-message 24 (list (ecase accident (:renew 1) (:renew-quietly 0) (:renew-wrongly 7))))
+                                                          (if (eq accident :renew-wrongly) (bytes-of) (bytes-of)))
+                                                22))
+                   (renew))
+                 (cond ((and (eq accident :spoiled) (= number 1))
+                        (tls-send connection (closed piece 23 :spoil t)))
+                       ((and (eq accident :twice) (= number 1))
+                        (let ((record (closed piece)))
+                          (tls-send connection record record)))
+                       ((and (eq accident :open-record) (= number 1))
+                        (tls-send connection '(23 3 3) (number-bytes (length piece) 2) piece))
+                       ((and (eq accident :long) (= number 1))
+                        (tls-send connection '(23 3 3) (number-bytes 17000 2) (make-list 17000 :initial-element 1)))
+                       (t
+                        (tls-send connection (closed piece))))))
+      (unless (member accident '(:no-goodbye :cut))
+        (tls-send connection (closed (if (eq accident :complains) '(2 80) '(1 0)) 21))))
+    (setf (tls-state tls) :over
+          (served-more connection) nil)))
+
+;; A record from the machine.
+(defun tls-record (network connection tls record)
+  (let ((kind (aref record 0)))
+    (case (tls-state tls)
+      (:hello
+       (unless (and (= kind 22) (= (be record 1 2) #x0301))
+         (failed "the machine begins a connection that is to be kept closed with a record of the kind ~D" kind))
+       (tls-greet network connection tls (subseq record 5)))
+      (:word
+       (multiple-value-bind (inner bytes) (and (= kind 23) (tls-open (tls-client tls) (tls-client-count tls) record))
+         (incf (tls-client-count tls))
+         (cond ((and (= kind 21) (= (length record) 7) (= (aref record 5) 2))
+                ;; the machine gives up before it has any keys, which it says in the open
+                (network-note network :alert (aref record 6))
+                (setf (tls-state tls) :over
+                      (served-more connection) nil))
+               ((null inner)
+                (failed "the machine sent a record in its greeting that does not open with the keys of the greeting"))
+               ((= inner 21)
+                (network-note network :alert (aref bytes 1))
+                (unless (= (aref bytes 0) 2)
+                  (failed "the machine gives a greeting up without saying that it is for good"))
+                (setf (tls-state tls) :over
+                      (served-more connection) nil))
+               ((/= inner 22)
+                (failed "the machine sent something of the kind ~D in its greeting" inner))
+               (t
+                (when (and (tls-asked tls) (= (aref bytes 0) 11))
+                  (unless (equalp (subseq bytes 0 8) #(11 0 0 4 0 0 0 0))
+                    (failed "the machine, asked who it is, does not say that it has no certificate: ~S" bytes))
+                  (network-note network :no-certificate)
+                  (setf (tls-greeting tls) (bytes-of (tls-greeting tls) (subseq bytes 0 8))
+                        (tls-asked tls) nil
+                        bytes (subseq bytes 8)))
+                (when (plusp (length bytes))
+                  (when (tls-asked tls)
+                    (failed "the machine, asked who it is, says its last word without answering"))
+                  (unless (equalp bytes (tls-message 20 (clara.host:hmac-of 256 (tls-label (tls-client-secret tls) "finished" #() 32)
+                                                                           (clara.host:digest-of 256 (tls-greeting tls)))))
+                    (failed "the machine's last word is not the one that goes with the greeting"))
+                  (network-note network :word)
+                  (setf (tls-client tls) (tls-pair (tls-client-next tls))
+                        (tls-server tls) (tls-pair (tls-server-next tls))
+                        (tls-client-count tls) 0
+                        (tls-server-count tls) 0
+                        (tls-state tls) :open))))))
+      ((:open :over)
+       (multiple-value-bind (inner bytes) (and (= kind 23) (tls-open (tls-client tls) (tls-client-count tls) record))
+         (incf (tls-client-count tls))
+         (cond ((null inner)
+                (failed "the machine sent a record after the greeting that does not open with its keys"))
+               ((= inner 21)
+                (network-note network (if (equalp bytes #(1 0)) :goodbye :alert) (aref bytes 1)))
+               ((and (= inner 22) (equalp bytes #(24 0 0 1 0)))
+                (network-note network :renewed)
+                (setf (tls-client-next tls) (tls-label (tls-client-next tls) "traffic upd" #() 32)
+                      (tls-client tls) (tls-pair (tls-client-next tls))
+                      (tls-client-count tls) 0))
+               ((/= inner 23)
+                (failed "the machine sent something of the kind ~D after the greeting" inner))
+               ((eq (tls-state tls) :over)
+                (failed "the machine goes on asking on a connection whose answer it has"))
+               (t
+                (setf (tls-request tls) (bytes-of (tls-request tls) bytes))
+                (let ((answer (network-request network connection (tls-request tls))))
+                  (when answer
+                    (tls-answer network connection tls answer))))))))))
+
+;; What has arrived on a connection that is to be kept closed: every record
+;; that is whole.
+(defun tls-heard (network connection)
+  (let ((tls (or (served-secure connection)
+                 (setf (served-more connection) t
+                       (served-secure connection) (make-tls)))))
+    (loop
+      (let* ((bytes (served-request connection)) (at (tls-read tls)) (have (- (length bytes) at)))
+        (unless (and (>= have 5) (>= have (+ 5 (be bytes (+ at 3) 2))))
+          (return))
+        (setf (tls-read tls) (+ at 5 (be bytes (+ at 3) 2)))
+        (tls-record network connection tls (subseq bytes at (tls-read tls)))))))
+
+;; The network is no more, and neither is the thread of the machine's
+;; card: a machine that is made after this one gets the same memory, and a
+;; thread that still looked at the old card's queues there would be
+;; looking at the new machine's.
+(defun stop-network ()
+  (when *network*
+    (setf (network-stopped *network*) t)
+    (sb-thread:signal-semaphore (network-wake *network*))
+    (sb-thread:join-thread (network-thread *network*) :default nil :timeout 5)
+    (setq *network* nil))
+  (let ((thread (and clara.net::*card* (clara.net::card-thread clara.net::*card*))))
+    (when (and thread (clara:thread-alive-p thread))
+      (clara:destroy-thread thread)
+      (unless (eventually (lambda () (not (clara:thread-alive-p thread))))
+        (failed "the thread of a network card does not end when it is told to")))))
+
+;; A machine with a network card, a network at the other end of it, and a
+;; disk when BYTES are given. What START says of the card.
+(defun new-network (&rest options)
+  (stop-network)
+  (let ((disk (getf options :disk)) (offers (getf options :offers (list 32 1)))
+        (numbers (getf options :numbers t)) (trusted (getf options :trusted (list *authority*))))
+    (remf options :disk)
+    (remf options :offers)
+    (remf options :numbers)
+    (remf options :trusted)
+    (new-machine)
+    (attach-bus)
+    (add-function 0 0 0 #x8086 #x29c0 #x060000)
+    (apply #'trust-only trusted)
+    (setq *numbers* (and numbers (if (eq numbers t) (add-numbers 6) (apply #'add-numbers 6 numbers))))
+    (when disk
+      (setq *disk* (add-disk 3 disk)))
+    (when (getf options :other)
+      (add-disk 5 (getf options :other))
+      (remf options :other))
+    (let* ((hold (getf options :hold 0))
+           (vdev (add-net 4 (list #x52 #x54 0 #x12 #x34 #x56) :offers offers))
+           (network (progn
+                      (remf options :hold)
+                      (setf (vdev-hold vdev) hold)
+                      (apply #'make-network :vdev vdev (append options (list :chain (list *shown* *signer*) :key *shown-key*))))))
+      (setf (vdev-wire vdev)
+            (lambda (frame)
+              (sb-thread:with-mutex ((network-lock network))
+                (setf (network-inbox network) (append (network-inbox network) (list frame))))
+              (sb-thread:signal-semaphore (network-wake network))))
+      (setf (network-thread network) (sb-thread:make-thread (lambda () (network-loop network)) :name "the made-up network"))
+      (setq *network* network)
+      (with-output-to-string (*standard-output*)
+        (clara.pci:start))
+      (when disk
+        (said-by #'clara.disk:start)
+        (said-by #'clara.fat:start))
+      (said-by #'clara.random:start)
+      (said-by #'clara.net:start))))
+
+;; The other side is given three seconds to say something here, where a
+;; machine gives it ten: nothing on this network takes longer than a
+;; fraction of one, and a test that waits in vain should not wait long.
+(setq clara.net:*patience* 3000)
+
+;; Numbers in memory, the highest byte first, and the sums that the
+;; protocols make of them: the example of RFC 1071 is the sum ddf2, of
+;; which the checksum is 220d.
+(let ((page (clara.unsafe:allocate-memory 1)))
+  (clara.net::put-one page #x12)
+  (clara.net::put-two (+ page 1) #x3456)
+  (clara.net::put-four (+ page 3) #x789abcde)
+  (clara.net::put-six (+ page 7) #xf0123456789a)
+  (check '(#x12 #x3456 #x789abcde #xf0123456789a #x12 #x34 #x9a)
+         (list (clara.net::one page) (clara.net::two (+ page 1)) (clara.net::four (+ page 3)) (clara.net::six (+ page 7))
+               (clara.unsafe:memory-8 page) (clara.unsafe:memory-8 (+ page 1)) (clara.unsafe:memory-8 (+ page 12))))
+  (dotimes (i 8)
+    (setf (clara.unsafe:memory-8 (+ page 100 i)) (nth i '(#x00 #x01 #xf2 #x03 #xf4 #xf5 #xf6 #xf7))))
+  (check '(#x2ddf0 #xddf2 #x220d #x2ddf0 #xf600)
+         (list (clara.unsafe:internet-sum (+ page 100) 8) (clara.net::fold (clara.unsafe:internet-sum (+ page 100) 8))
+               (clara.net::checksum (clara.unsafe:internet-sum (+ page 100) 8))
+               (+ (clara.unsafe:internet-sum (+ page 100) 7) #xf7) (clara.unsafe:internet-sum (+ page 106) 1)))
+  (clara.net::clear (+ page 100) 8)
+  (check 0 (clara.unsafe:internet-sum (+ page 100) 8))
+  (clara.unsafe:free-memory page 1))
+(check '(#xffff #x1 #x1 #x3 0) (mapcar #'clara.net::fold '(#xffff #x10000 #xffff0001 #x20001 0)))
+(check '(t nil nil t nil) (list (clara.net::after 5 4) (clara.net::after 4 5) (clara.net::after 4 4)
+                                (clara.net::after 2 #xfffffffe) (clara.net::after #xfffffffe 2)))
+;; Addresses as text, and text as addresses.
+(check '("10.0.2.15" "255.255.255.255" "0.0.0.0" "52:54:00:12:34:56" "ff:0a:00:00:00:01")
+       (list (clara.net::address-text #x0a00020f) (clara.net::address-text #xffffffff) (clara.net::address-text 0)
+             (clara.net::station-text #x525400123456) (clara.net::station-text #xff0a00000001)))
+(check '(#x0a00020f #xffffffff nil nil nil nil nil nil)
+       (mapcar #'clara.net::text-address '("10.0.2.15" "255.255.255.255" "10.0.2" "10.0.2.256" "10.0.2.x" "releases.test" "" "1.2.3.4.5")))
+(check '(("a" "b" "") ("") ("ab")) (list (clara.net::pieces "a.b." #\.) (clara.net::pieces "" #\.) (clara.net::pieces "ab" #\.)))
+(check '(0 42 123456789 nil nil nil) (mapcar #'clara.net::number-of '("0" "42" "123456789" "" "4x" "1234567890")))
+;; The address of something on a web server, taken apart.
+(check '(("claraos.org" 80 "/" nil) ("claraos.org" 80 "/releases/latest" nil) ("10.0.2.2" 8000 "/a:b/c" nil) ("h" 1 "/" nil)
+         ("claraos.org" 443 "/" t) ("claraos.org" 443 "/x?y" t) ("h" 8443 "/" t) ("h" 80 "/" t))
+       (mapcar (lambda (address) (multiple-value-list (clara.net::parse-address address)))
+               '("http://claraos.org" "HTTP://claraos.org/releases/latest" "http://10.0.2.2:8000/a:b/c" "http://h:1"
+                 "https://claraos.org" "HTTPS://claraos.org/x?y" "https://h:8443/" "https://h:80")))
+(check '("ftp://claraos.org/ is no address that begins with http:// or https://"
+         "https:/claraos.org/ is no address that begins with http:// or https://"
+         "http:///x names no machine, or no port of one" "http://h:0/ names no machine, or no port of one"
+         "http://h:65536/ names no machine, or no port of one" "http://h:x/ names no machine, or no port of one"
+         "https:///x names no machine, or no port of one")
+       (mapcar (lambda (address) (condition-text (lambda () (clara.net::parse-address address))))
+               '("ftp://claraos.org/" "https:/claraos.org/" "http:///x" "http://h:0/" "http://h:65536/" "http://h:x/" "https:///x")))
+(check '(t t nil nil nil nil)
+       (mapcar (lambda (address) (and (clara.net::secure-address-p address) t))
+               '("https://claraos.org/" "HTTPS://h" "http://claraos.org/" "https://" "https:/h" nil)))
+
+;; A machine without a network card says so, and everything that wants
+;; the network says that there is none.
+(new-machine)
+(attach-bus)
+(add-function 0 0 0 #x8086 #x29c0 #x060000)
+(with-output-to-string (*standard-output*)
+  (clara.pci:start))
+(check (format nil "net: no network card that has a driver here: nothing is fetched from another machine~%")
+       (said-by #'clara.net:start))
+(check '(nil nil "this machine has no network card that has a driver here")
+       (list (clara.net:address) (clara.net:station) (condition-text (lambda () (clara.net:fetch-text "http://10.0.2.2/")))))
+;; A card that does not say which address it has is not started.
+(check t (and (search "net: 00:04.0 did not start: the card does not say which address it has on the wire"
+                      (new-network :offers (list 0 1)))
+              t))
+(check nil (clara.net:station))
+
+;; A card: its address on the wire. The machine asks for nothing as it
+;; starts. When something first wants the network, it asks which address it
+;; has, takes the one that it is offered, and says what it learned.
+(check (format nil "net: 00:04.0 is a network card, 52:54:00:12:34:56 on the wire~%") (new-network))
+(check '("52:54:00:12:34:56" nil) (list (clara.net:station) (network-heard *network*)))
+(let ((pages (clara.host:allocated-pages)))
+  (check (format nil "net: this machine is 10.0.2.15 on its network, 10.0.2.2 is the way out, 10.0.2.2 knows names~%")
+         (said-by #'clara.net:up))
+  (check '("10.0.2.15" 1 1 0) (list (clara.net:address) (count '(:dhcp 1) (network-heard *network*) :test #'equal)
+                                    (count '(:dhcp 3) (network-heard *network*) :test #'equal)
+                                    (network-saw *network* :who-has)))
+  (check pages (clara.host:allocated-pages)))
+
+;; The machine says that it has its address when it is asked who has it,
+;; and remembers who asked. Whoever is asked about another address says
+;; nothing.
+(let ((asked (count '(:i-have #x0a00020f) (network-heard *network*) :test #'equal)))
+  (frame-to-machine *network* #x0806 (list 0 1 8 0 6 4 0 1) (number-bytes #x525500000009 6) (number-bytes #x0a000209 4)
+                    (number-bytes 0 6) (number-bytes #x0a00020f 4))
+  (check t (eventually (lambda () (> (count '(:i-have #x0a00020f) (network-heard *network*) :test #'equal) asked))))
+  (check #x525500000009 (cdr (assoc #x0a000209 (clara.net::card-neighbours clara.net::*card*))))
+  (setq asked (network-saw *network* :i-have))
+  (frame-to-machine *network* #x0806 (list 0 1 8 0 6 4 0 1) (number-bytes #x525500000009 6) (number-bytes #x0a000209 4)
+                    (number-bytes 0 6) (number-bytes #x0a000210 4))
+  (sleep 0.1)
+  (check asked (network-saw *network* :i-have)))
+;; What is on a wire is anybody's to send: frames that are too short, of
+;; another kind, with a wrong checksum, or in pieces, are dropped, and the
+;; card goes on.
+(frame-to-machine *network* #x86dd (make-list 40 :initial-element 7))
+(network-send *network* (bytes-of (list 1 2 3)))
+(packet-to-machine *network* #x0a000202 #x0a00020f 17 (list 0 53 0 68 0 4 0 0))
+(packet-to-machine *network* #x0a000202 #x0a00020f 6 (list 1 2 3))
+(let ((frame (bytes-of (number-bytes #x525400123456 6) (number-bytes #x52550a000202 6) (list 8 0)
+                       (list #x45 0 0 28 0 0 #x20 0 64 17 0 0 10 0 2 2 10 0 2 15) (list 0 53 0 68 0 8 0 0))))
+  (setf (be frame 24 2) (logxor #xffff (wire-sum frame 14 34)))
+  (network-send *network* frame)                                  ; a piece of a packet
+  (setf (be frame 20 2) #x4000
+        (be frame 24 2) #x1234)
+  (network-send *network* frame))                                 ; a wrong checksum
+(sleep 0.1)
+(check t (clara:thread-alive-p (clara.net::card-thread clara.net::*card*)))
+
+;; Names. The name server that the network named is asked, once for a
+;; name; an address that is written out is asked of nobody.
+(check '("10.0.2.2" "10.0.2.2" "10.0.2.2" "192.168.1.20" 1)
+       (list (clara.net:resolve "releases.test") (clara.net:resolve "RELEASES.test") (clara.net:resolve "10.0.2.2")
+             (clara.net:resolve "192.168.1.20") (network-saw *network* :name)))
+(check '(:name "releases.test" 53) (find :name (network-heard *network*) :key #'car))
+(check "there is no machine of the name nowhere.example" (condition-text (lambda () (clara.net:resolve "nowhere.example"))))
+(check "a..b is no name that can be asked for" (condition-text (lambda () (clara.net:resolve "a..b"))))
+;; Another record before the address is passed over; a server that cannot
+;; say is believed; and one that is named instead of the network's is the
+;; one that is asked, at the port that is named.
+(setf (network-names *network*) (list (cons "long.way.round.test" #x0a000207))
+      (network-another-record *network*) t)
+(check "10.0.2.7" (clara.net:resolve "long.way.round.test"))
+(setf (network-names-fail *network*) t)
+(check "10.0.2.2, who knows names, could not say which address another.test has"
+       (condition-text (lambda () (clara.net:resolve "another.test"))))
+(setf (network-names-fail *network*) nil
+      (network-another-record *network*) nil
+      (network-names *network*) (list (cons "third.test" #x0a000208)))
+(let ((clara.net:*name-server* "10.0.2.2") (clara.net:*name-port* 5353))
+  (check "10.0.2.8" (clara.net:resolve "third.test"))
+  (check '(:name "third.test" 5353) (find :name (network-heard *network*) :key #'car)))
+(let ((clara.net:*name-server* "not an address"))
+  (check "\"not an address\", in CLARA.NET:*NAME-SERVER*, is no address" (condition-text (lambda () (clara.net:resolve "fourth.test")))))
+;; Nobody answers: the question is asked again, and then it is an error.
+(setf (network-mute *network*) (list :names))
+(let ((clara.net:*patience* 250) (clara.net:*again* 60) (asked (network-saw *network* :name)))
+  (check "10.0.2.2, who knows names, does not say which address fifth.test has"
+         (condition-text (lambda () (clara.net:resolve "fifth.test"))))
+  (check t (>= (- (network-saw *network* :name) asked) 3)))
+(setf (network-mute *network*) nil)
+(check nil (clara.net::card-listeners clara.net::*card*))
+
+;; A card of an earlier start is another machine's: a world that was
+;; saved may still hold one, and nothing is sent through it.
+(let ((earlier clara.net::*card*))
+  (new-network)
+  (check '("the network card 00:04.0 is from an earlier start" nil)
+         (list (condition-text (lambda () (clara.net::arp-out earlier nil 0 #x0a000202))) (network-heard *network*))))
+
+;; Answers that are for another question, that come from somebody who was
+;; not asked, or that are no answers at all, are nobody's: the machine goes
+;; on waiting for its own. And an answer that arrives damaged is no answer:
+;; the question is asked again.
+(new-network :strangers t)
+(check (format nil "net: this machine is 10.0.2.15 on its network, 10.0.2.2 is the way out, 10.0.2.2 knows names~%")
+       (said-by #'clara.net:up))
+(check "10.0.2.2" (clara.net:resolve "releases.test"))
+(new-network :spoil-names 1)
+(said-by #'clara.net:up)
+(let ((clara.net:*again* 60))
+  (check '("10.0.2.2" 2) (list (clara.net:resolve "releases.test") (network-saw *network* :name))))
+
+;; What arrives for the machine that is not right is dropped without a
+;; word. Here that is seen by what the machine does say: to a piece of a
+;; connection that it does not have, that it has no such connection.
+(new-network)
+(said-by #'clara.net:up)
+(flet ((given-up ()
+         (sleep 0.1)
+         (network-saw *network* :given-up))
+       (stray (&key (to #x0a00020f) (header 20) (pieces #x4000) spoil-packet spoil-segment (flags #x10))
+         (let* ((segment (bytes-of (list 0 80 #xc0 #x01) (number-bytes 1000 4) (number-bytes 2000 4) (list #x50 flags #xff #xff 0 0 0 0)))
+                (packet (bytes-of (list (+ #x40 (floor header 4)) 0) (number-bytes (+ header (length segment)) 2) (list 0 0)
+                                  (number-bytes pieces 2) (list 64 6 0 0) (number-bytes #x0a000202 4) (number-bytes to 4)
+                                  (make-list (- header 20) :initial-element 1))))
+           (setf (be segment 16 2) (logxor #xffff (wire-sum segment 0 20 (around-sum #x0a000202 to 6 20)))
+                 (be packet 10 2) (logxor #xffff (wire-sum packet 0 header)))
+           (when spoil-packet
+             (setf (aref packet 8) 63))
+           (when spoil-segment
+             (setf (aref segment 7) 1))
+           (frame-to-machine *network* #x0800 packet segment))))
+  (stray)
+  (check 1 (given-up))
+  (stray :header 24)                       ; more in its head than the twenty bytes: what it carries begins later
+  (check 2 (given-up))
+  (stray :spoil-packet t)
+  (stray :spoil-segment t)
+  (stray :pieces #x2000)                   ; the first piece of a packet
+  (stray :pieces #x0005)                   ; a later piece of one
+  (stray :to #x0a000210)                   ; for another machine
+  (stray :flags #x04)                      ; one that gives up itself is not answered by giving up
+  (check 2 (given-up)))
+
+;; A network on which nobody says which address the machine has, or says
+;; it and then takes it back: an error, and the machine has no address.
+(new-network :mute (list :dhcp))
+(let ((clara.net:*patience* 250) (clara.net:*again* 60))
+  (check "no DHCP server says which address this machine has on its network" (condition-text #'clara.net:up))
+  (check t (>= (count '(:dhcp 1) (network-heard *network*) :test #'equal) 3)))
+(check '(nil nil) (list (clara.net::card-address clara.net::*card*) (clara.net::card-listeners clara.net::*card*)))
+(new-network :nak t)
+(let ((clara.net:*patience* 250) (clara.net:*again* 60))
+  (check "the DHCP server that offered this machine an address did not give it" (condition-text #'clara.net:up)))
+;; And one where nobody says who has the address of the way out.
+(new-network :mute (list :arp) :names nil)
+(let ((clara.net:*patience* 250) (clara.net:*again* 60))
+  (said-by #'clara.net:up)
+  (check "nobody on the network says that it has the address 10.0.2.2" (condition-text (lambda () (clara.net:fetch-text "http://10.0.2.2/x"))))
+  (check "nobody on the network says that it has the address 10.0.2.2" (condition-text (lambda () (clara.net:fetch-text "http://192.168.7.7/x")))))
+
+;;; Files from a web server, and what a wire does to them on the way.
+
+(defvar *long* (let ((text (make-string 200000)))
+                 (dotimes (i (length text) text)
+                   (setf (char text i) (code-char (+ 32 (mod (* i 7) 90)))))))
+
+;; What a fetch gives of an address: the text, when it is one; and the page
+;; frames that are in use are the ones that were before.
+(defun fetched (address &rest options)
+  (let ((pages (clara.host:allocated-pages)))
+    (prog1 (handler-case (apply #'clara.net:fetch-text address options)
+             (error (condition) (list :error (princ-to-string condition))))
+      (unless (eventually (lambda () (= pages (clara.host:allocated-pages))))
+        (failed "a fetch of ~A kept ~D page frames" address (- (clara.host:allocated-pages) pages))))))
+
+(defun files ()
+  (list (cons "/hello.txt" "hello from the made-up network")
+        (cons "/empty" "")
+        (cons "/long" *long*)
+        (cons "/unsized" (list :unsized "nobody said how long this is"))
+        (cons "/unsized-long" (list :unsized *long*))
+        (cons "/short" (list :short "less than was promised"))
+        (cons "/moved" (list :moved "/hello.txt"))
+        (cons "/moved-far" (list :moved "http://releases.test/moved"))
+        (cons "/secure" (list :moved "https://claraos.org/hello.txt"))
+        (cons "/round" (list :moved "/round"))
+        (cons "/nowhere" (list :moved ""))
+        (cons "/broken" (list :status 500))
+        (cons "/no-http" (list :raw (format nil "this is not what a web server says~C~C~C~C" (code-char 13) (code-char 10)
+                                            (code-char 13) (code-char 10))))
+        (cons "/endless-head" (list :raw (make-string 20000 :initial-element #\h)))
+        (cons "/chunks" (list :chunked "a file that comes in chunks, each longer than the one before it"))
+        (cons "/long-chunks" (list :chunked *long*))
+        (cons "/no-chunks" (list :chunked ""))
+        (cons "/cut-chunks" (list :chunked "chunks without the one that ends them" t))))
+
+(check t (and (search "is a network card" (new-network :files (files))) t))
+(said-by #'clara.net:up)
+(check '("hello from the made-up network" "" "nobody said how long this is" "hello from the made-up network"
+         "hello from the made-up network")
+       (list (fetched "http://10.0.2.2/hello.txt") (fetched "http://releases.test/empty") (fetched "http://releases.test:8080/unsized")
+             (fetched "http://releases.test/moved") (fetched "http://releases.test/moved-far")))
+(check '((:get "/hello.txt") (:get "/empty") (:get "/unsized") (:get "/moved") (:get "/hello.txt") (:get "/moved-far") (:get "/moved")
+         (:get "/hello.txt"))
+       (reverse (remove :get (network-heard *network*) :key #'car :test-not #'eq)))
+(check '(80 80 8080) (subseq (reverse (mapcar #'second (remove :connect (network-heard *network*) :key #'car :test-not #'eq))) 0 3))
+;; A long file comes whole, in a hundred and more pieces, over numbers that go round to zero on the way.
+(check t (equal *long* (fetched "http://releases.test/long")))
+(check t (equal *long* (fetched "http://releases.test/unsized-long")))
+(multiple-value-bind (memory bytes pages) (clara.net:fetch "http://releases.test/long")
+  (check (list 200000 (clara.host:sha-512-of (octets *long*)) t)
+         (list bytes (clara.unsafe:sha-512 memory bytes) (>= (* 4096 pages) bytes)))
+  (clara.unsafe:free-memory memory pages))
+;; What a server can say that is no file.
+(check '((:error "releases.test answers 404 to the request for /nothing")
+         (:error "releases.test answers 500 to the request for /broken")
+         (:error "releases.test ended the connection after 22 bytes of the 122 of /short")
+         (:error "there is no machine of the name claraos.org")
+         (:error "http://releases.test/round is said to be somewhere else more often than is followed")
+         (:error "releases.test answers 301 to the request for /nowhere")
+         (:error "releases.test does not answer as HTTP does")
+         (:error "releases.test answers with a head that does not end"))
+       (mapcar #'fetched '("http://releases.test/nothing" "http://releases.test/broken" "http://releases.test/short"
+                           "http://releases.test/secure" "http://releases.test/round" "http://releases.test/nowhere"
+                           "http://releases.test/no-http" "http://releases.test/endless-head")))
+;; A file that comes in chunks is put together.
+(check '("a file that comes in chunks, each longer than the one before it" t ""
+         (:error "releases.test sends /cut-chunks in chunks that do not come to an end"))
+       (list (fetched "http://releases.test/chunks") (equal *long* (fetched "http://releases.test/long-chunks"))
+             (fetched "http://releases.test/no-chunks") (fetched "http://releases.test/cut-chunks")))
+;; No more is taken than was asked for, whether the server says how long the file is or not.
+(check '((:error "http://releases.test/long is 200000 bytes, and more than 100000 are not taken")
+         (:error "10.0.2.2 sends more than the 100000 bytes that were to be taken from it") t)
+       (list (fetched "http://releases.test/long" :limit 100000) (fetched "http://releases.test/unsized-long" :limit 100000)
+             (equal *long* (fetched "http://releases.test/long" :limit 200000))))
+(check nil (clara.net::card-connections clara.net::*card*))
+
+;; A wire loses things, changes them, and brings them in another order.
+;; Whatever becomes of the pieces of a file on the way, the file is the
+;; file: a piece that did not come is sent again when the machine says
+;; what it has, a piece that was changed fails its checksum and counts as
+;; one that did not come, and a piece that comes early is not taken.
+(dolist (accident '((:drop (0)) (:drop (3 4 5 77)) (:drop (35)) (:spoil (0 1 50)) (:swap (0 9 10 60)) (:drop (2) :spoil (3) :swap (4))
+                    (:piece 100 :drop (5 6 7 8 1000)) (:piece 1 :drop (3)) (:first #xffffffff) (:first 0)))
+  (apply #'new-network :files (list (cons "/long" (if (eql (getf accident :piece) 1) (subseq *long* 0 300) *long*))) accident)
+  (said-by #'clara.net:up)
+  (let ((whole (fetched "http://releases.test/long")))
+    (check (list accident t) (list accident (equal whole (if (eql (getf accident :piece) 1) (subseq *long* 0 300) *long*))))))
+;; A card that does not send what it is given: whatever would have
+;; answered through it gives up after a while, and the thread that takes
+;; what arrives goes on, having dropped the frame that it could not answer.
+(new-network :hold 100)
+(said-by #'clara.net:up)
+(flet ((stray ()
+         (let ((segment (bytes-of (list 0 80 #xc0 #x01) (number-bytes 1000 4) (number-bytes 2000 4) (list #x50 #x10 #xff #xff 0 0 0 0))))
+           (setf (be segment 16 2) (logxor #xffff (wire-sum segment 0 20 (around-sum #x0a000202 #x0a00020f 6 20))))
+           (packet-to-machine *network* #x0a000202 #x0a00020f 6 segment))))
+  (dotimes (i 8)
+    (stray))
+  (check t (eventually (lambda () (plusp (clara.net::card-dropped clara.net::*card*)))))
+  (check '(t 6) (list (clara:thread-alive-p (clara.net::card-thread clara.net::*card*)) (network-saw *network* :given-up))))
+
+;; A machine that is on the machine's own network is spoken to itself,
+;; and one that is not, by the way out: each frame goes to the card of the
+;; one or of the other.
+(new-network :files (files))
+(said-by #'clara.net:up)
+(check '("hello from the made-up network" "hello from the made-up network")
+       (list (fetched "http://10.0.2.9/hello.txt") (fetched "http://192.168.7.7/hello.txt")))
+(check '((#x525500000009) (#x52550a000202))
+       (flet ((cards (address)
+                (remove-duplicates (mapcar #'second (remove-if-not (lambda (note) (and (eq (car note) :packet-to) (= (third note) address)))
+                                                                    (network-heard *network*))))))
+         (list (cards #x0a000209) (cards #xc0a80707))))
+;; The other side hears that the machine knows a file to be over.
+(check t (eventually (lambda () (= (network-saw *network* :end-heard) 2))))
+;; A card may say late that it has sent a frame, and has the page of the
+;; frame until then: three frames are on their way here at any moment.
+(new-network :files (list (cons "/long" *long*)) :hold 3)
+(said-by #'clara.net:up)
+(check t (equal *long* (fetched "http://releases.test/long")))
+;; The beginning of a connection is answered first by something that is
+;; no answer to it: that is not taken for the answer.
+(new-network :files (files) :false-start t)
+(said-by #'clara.net:up)
+(check "hello from the made-up network" (fetched "http://10.0.2.2/hello.txt"))
+;; The head of an answer comes in two pieces, with the end of it between
+;; them and a while between the pieces: the end is found all the same.
+(new-network :files (list (cons "/slow" (list :raw (format nil "HTTP/1.1 200 OK~C~CContent-Length: 5~C~C~C~Chello"
+                                                                (code-char 13) (code-char 10) (code-char 13) (code-char 10)
+                                                                (code-char 13) (code-char 10)))))
+             :piece 36 :pause 0.15)
+(said-by #'clara.net:up)
+(check "hello" (fetched "http://10.0.2.2/slow"))
+;; A piece that is lost costs the other side that piece, and not what
+;; came after it: those pieces are kept until the one before them is there.
+(new-network :files (list (cons "/long" *long*)) :drop (list 0 60))
+(said-by #'clara.net:up)
+(check '(t t) (list (equal *long* (fetched "http://releases.test/long")) (< (network-pieces *network*) 150)))
+;; The end of a file that does not say how long it is counts only when
+;; everything before it is there: here the last piece comes after it.
+(new-network :files (list (cons "/unsized-long" (list :unsized *long*))) :drop (list 136))
+(said-by #'clara.net:up)
+(check t (equal *long* (fetched "http://releases.test/unsized-long")))
+;; The other side hears that the machine has done with a connection.
+(check t (eventually (lambda () (plusp (network-saw *network* :ended)))))
+;; The beginning of a connection is lost, twice, and so is the request:
+;; each is said again until it is heard.
+(new-network :files (files) :lose-opening 2 :lose-request 2)
+(said-by #'clara.net:up)
+(let ((clara.net:*again* 50))
+  (check "hello from the made-up network" (fetched "http://10.0.2.2/hello.txt")))
+(check '(3 1) (list (network-saw *network* :connect) (network-saw *network* :get)))
+;; A server that takes no connection, one that does not answer at all, one
+;; that takes a connection and then says nothing, and one that never says
+;; that a file without a length is over.
+(new-network :files (files) :refuse t)
+(said-by #'clara.net:up)
+(check '(:error "10.0.2.2 takes no connection at its port 80") (fetched "http://10.0.2.2/hello.txt"))
+(new-network :files (files) :mute (list :connections))
+(said-by #'clara.net:up)
+(let ((clara.net:*patience* 250) (clara.net:*again* 60))
+  (check '(:error "10.0.2.2 does not answer at its port 81") (fetched "http://10.0.2.2:81/hello.txt")))
+(new-network :files (files) :lose-request 1000)
+(said-by #'clara.net:up)
+(let ((clara.net:*patience* 250) (clara.net:*again* 60))
+  (check '(:error "10.0.2.2 does not say that it has what it was sent") (fetched "http://10.0.2.2/hello.txt")))
+(new-network :files (files) :no-end t)
+(said-by #'clara.net:up)
+(let ((clara.net:*patience* 300))
+  (check '("hello from the made-up network" (:error "10.0.2.2 has sent nothing for 0 seconds"))
+         (list (fetched "http://10.0.2.2/hello.txt") (fetched "http://10.0.2.2/unsized"))))
+;; Whoever was told that a connection is over hears that again when it goes on speaking.
+(check t (eventually (lambda () (plusp (network-saw *network* :given-up)))))
+
+;;; What a connection that is kept closed is made of (CLARA.UNSAFE): the
+;;; arithmetic that the kernel has in C, here in SBCL's big numbers
+;;; (host/clara.lisp). Each is held against the examples of its standard,
+;;; which are the ones that the kernel's own self-tests have, so that the
+;;; two sides are the same arithmetic because both are the standard's.
+
+(defun hex (text)
+  (loop for i from 0 below (length text) by 2 collect (parse-integer text :start i :end (+ i 2) :radix 16)))
+
+(defun in-memory (address bytes)
+  (let ((i 0))
+    (map nil (lambda (byte)
+               (setf (clara.unsafe:memory-8 (+ address i)) byte)
+               (incf i))
+         bytes)
+    i))
+
+(defun from-memory (address count)
+  (format nil "~(~{~2,'0x~}~)" (loop for i below count collect (clara.unsafe:memory-8 (+ address i)))))
+
+(stop-network)
+(new-machine)
+(let ((page (clara.unsafe:allocate-memory 2)))
+  ;; sums (FIPS 180-4), of "abc", of nothing, and written over the bytes that they are the sum of
+  (in-memory page (octets "abc"))
+  (check '(32 "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+           48 "cb00753f45a35e8bb5a03d699ac65007272c32ab0eded1631a8b605a43ff5bed8086072ba1e7cc2358baeca134c825a7"
+           64 "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a" "e3b0c44298fc1c14" 32 "ba7816bf8f01cfea")
+         (list (clara.unsafe:digest 256 page 3 (+ page 64)) (from-memory (+ page 64) 32)
+               (clara.unsafe:digest 384 page 3 (+ page 64)) (from-memory (+ page 64) 48)
+               (clara.unsafe:digest 512 page 3 (+ page 64)) (from-memory (+ page 64) 32)
+               (progn (clara.unsafe:digest 256 page 0 (+ page 64)) (from-memory (+ page 64) 8))
+               (clara.unsafe:digest 256 page 3 page) (from-memory page 8)))
+  (check "there is no sum of 224 bits here: there are the ones of 256, of 384 and of 512"
+         (condition-text (lambda () (clara.unsafe:digest 224 page 3 (+ page 64)))))
+  (check t (string= (clara.unsafe:sha-512 page 32) (progn (clara.unsafe:digest 512 page 32 (+ page 64)) (from-memory (+ page 64) 64))))
+  ;; a sum with a key (RFC 4231, the second example and the sixth, whose key is longer than a block)
+  (in-memory page (octets "Jefe"))
+  (in-memory (+ page 16) (octets "what do ya want for nothing?"))
+  (check '(32 "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843" 48 "af45d2e376484031" 64 "164b7a7bfcf819e2")
+         (list (clara.unsafe:hmac 256 page 4 (+ page 16) 28 (+ page 64)) (from-memory (+ page 64) 32)
+               (clara.unsafe:hmac 384 page 4 (+ page 16) 28 (+ page 64)) (from-memory (+ page 64) 8)
+               (clara.unsafe:hmac 512 page 4 (+ page 16) 28 (+ page 64)) (from-memory (+ page 64) 8)))
+  (in-memory page (make-list 131 :initial-element #xaa))
+  (in-memory (+ page 256) (octets "Test Using Larger Than Block-Size Key - Hash Key First"))
+  (check '("60e431591ee0b67f" "80b24263c7c1a3eb")
+         (list (progn (clara.unsafe:hmac 256 page 131 (+ page 256) 54 (+ page 512)) (from-memory (+ page 512) 8))
+               (progn (clara.unsafe:hmac 512 page 131 (+ page 256) 54 (+ page 512)) (from-memory (+ page 512) 8))))
+  ;; a secret made into keys (RFC 5869, the first example): the sum with a key is all that it takes
+  (in-memory page (hex "000102030405060708090a0b0c"))
+  (in-memory (+ page 32) (make-list 22 :initial-element 11))
+  (clara.unsafe:hmac 256 page 13 (+ page 32) 22 (+ page 64))
+  (check "077709362c2e32df0ddc3f0dc47bba6390b6c73bb50f9c3122ec844ad7c2b3e5" (from-memory (+ page 64) 32))
+  (in-memory (+ page 128) (hex "f0f1f2f3f4f5f6f7f8f901"))
+  (clara.unsafe:hmac 256 (+ page 64) 32 (+ page 128) 11 (+ page 192))
+  (check "3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf" (from-memory (+ page 192) 32))
+  ;; bytes closed and opened (the fourth example of the mode, which has bytes beside it and ends in no whole block)
+  (let ((key page) (nonce (+ page 16)) (beside (+ page 32)) (data (+ page 64)) (tag (+ page 160)) (out (+ page 256))
+        (plain "d9313225f88406e5a55909c5aff5269a86a7a9531534f7da2e4c303d8a318a721c3c0c95956809532fcf0e2449a6b525b16aedf5aa0de657ba637b39"))
+    (in-memory key (hex "feffe9928665731c6d6a8f9467308308"))
+    (in-memory nonce (hex "cafebabefacedbaddecaf888"))
+    (in-memory beside (hex "feedfacedeadbeeffeedfacedeadbeefabaddad2"))
+    (in-memory data (hex plain))
+    (check (list t "42831ec2217774244b7221b784d0d49ce3aa212f2c02a4e035c17e2329aca12e21d514b25466931c7d8f6a5aac84aa051ba30b396a0aac973d58e091"
+                 "5bc94fbc3221a5db94fae95ae7121a47" t plain)
+           (list (clara.unsafe:aes-128-gcm-seal key nonce beside 20 data 60 out tag) (from-memory out 60) (from-memory tag 16)
+                 (clara.unsafe:aes-128-gcm-open key nonce beside 20 out 60 out tag) (from-memory out 60)))
+    ;; what does not open: a bit of the bytes, of the tag, of what went beside them, of the twelve bytes, of the key; and nothing is written then
+    (clara.unsafe:aes-128-gcm-seal key nonce beside 20 data 60 out tag)
+    (dolist (place (list out tag beside nonce key (+ out 59) (+ tag 15)))
+      (setf (clara.unsafe:memory-8 place) (logxor 1 (clara.unsafe:memory-8 place)))
+      (in-memory (+ page 512) (make-list 60 :initial-element 0))
+      (check '(nil "0000000000000000")
+             (list (clara.unsafe:aes-128-gcm-open key nonce beside 20 out 60 (+ page 512) tag) (from-memory (+ page 512) 8)))
+      (setf (clara.unsafe:memory-8 place) (logxor 1 (clara.unsafe:memory-8 place))))
+    ;; and nothing at all is closed and opened too, with a tag of its own
+    (in-memory key (make-list 16 :initial-element 0))
+    (in-memory nonce (make-list 12 :initial-element 0))
+    (check '(t "58e2fccefa7e3061367f1d57a4e7455a" t)
+           (list (clara.unsafe:aes-128-gcm-seal key nonce beside 0 data 0 out tag) (from-memory tag 16)
+                 (clara.unsafe:aes-128-gcm-open key nonce beside 0 out 0 out tag))))
+  ;; what two sides agree on (RFC 7748, 6.1), and the points that make nothing
+  (in-memory page (hex "77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a"))
+  (in-memory (+ page 32) (hex "de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f"))
+  (in-memory (+ page 64) (cons 9 (make-list 31 :initial-element 0)))
+  (in-memory (+ page 96) (make-list 32 :initial-element 0))
+  (check '(t "4a5d9d5ba4ce2de1728e3bf480350f25e07e21c947d19e3376f09b3c1e161742" t
+           "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a" nil nil)
+         (list (clara.unsafe:x25519 page (+ page 32) (+ page 128)) (from-memory (+ page 128) 32)
+               (clara.unsafe:x25519 page (+ page 64) (+ page 128)) (from-memory (+ page 128) 32)
+               (clara.unsafe:x25519 page (+ page 96) (+ page 128))
+               (progn (setf (clara.unsafe:memory-8 (+ page 96)) 1) (clara.unsafe:x25519 page (+ page 96) (+ page 128)))))
+  ;; a number to a power, modulo another: small ones that anybody can check, and what is refused
+  (in-memory page '(4))
+  (in-memory (+ page 16) '(1 #xf1))
+  (check '(t "01bd" t "0001" nil nil nil nil)
+         (list (clara.unsafe:power-mod page 1 13 (+ page 16) 2 (+ page 32)) (from-memory (+ page 32) 2)
+               (clara.unsafe:power-mod page 1 0 (+ page 16) 2 (+ page 32)) (from-memory (+ page 32) 2)
+               (progn (in-memory (+ page 16) '(1 #xf0)) (clara.unsafe:power-mod page 1 13 (+ page 16) 2 (+ page 32)))
+               (progn (in-memory (+ page 16) '(0 #xf1)) (clara.unsafe:power-mod page 1 13 (+ page 16) 2 (+ page 32)))
+               (progn (in-memory (+ page 16) '(3)) (clara.unsafe:power-mod page 1 13 (+ page 16) 1 (+ page 32)))
+               (clara.unsafe:power-mod page 1 13 (+ page 16) 0 (+ page 32))))
+  ;; the numbers that the kernel's self-test makes by a rule, of 2048 bits, to the power 65537
+  (let ((modulus (loop for i below 256 collect (logand 255 (+ (* i 37) 129)))) (base (loop for i below 256 collect (logand 255 (+ (* i 91) 7)))))
+    (in-memory page (cons (logior (car modulus) #x80) (append (butlast (cdr modulus)) (list (logior (car (last modulus)) 1)))))
+    (in-memory (+ page 512) (cons (logand (car base) #x7f) (cdr base)))
+    (check '(t "8052ee4799e04978" "95ab5feec05dd654")
+           (list (clara.unsafe:power-mod (+ page 512) 256 65537 page 256 (+ page 1024))
+                 (from-memory (+ page 1024) 8) (from-memory (+ page 1272) 8))))
+  ;; signatures on the two curves: the examples of the kernel's self-test, which OpenSSL takes too
+  (dolist (bits '(256 384))
+    (let* ((size (floor bits 8)) (key (if (= bits 256) *shown-key* *signer-key*)) (curve (tkey-curve key))
+           (sum (clara.host:digest-of bits (octets "a sum to sign")))
+           (key-at page) (sum-at (+ page 128)) (r-at (+ page 256)) (s-at (+ page 384)))
+      (multiple-value-bind (r s) (clara.host:curve-sign curve (tkey-secret key) sum 123456789)
+        (in-memory key-at (append (number-bytes (car (tkey-point key)) size) (number-bytes (cdr (tkey-point key)) size)))
+        (in-memory sum-at sum)
+        (in-memory r-at (number-bytes r size))
+        (in-memory s-at (cons 0 (number-bytes s size)))
+        (check '(t nil nil nil nil nil nil)
+               (list (clara.unsafe:ecdsa bits key-at sum-at size r-at size s-at (1+ size))
+                     (clara.unsafe:ecdsa bits key-at sum-at size s-at (1+ size) r-at size)
+                     (clara.unsafe:ecdsa (if (= bits 256) 384 256) key-at sum-at size r-at size s-at (1+ size))
+                     (clara.unsafe:ecdsa 521 key-at sum-at size r-at size s-at (1+ size))
+                     (progn (setf (clara.unsafe:memory-8 sum-at) (logxor 1 (clara.unsafe:memory-8 sum-at)))
+                            (prog1 (clara.unsafe:ecdsa bits key-at sum-at size r-at size s-at (1+ size))
+                              (setf (clara.unsafe:memory-8 sum-at) (logxor 1 (clara.unsafe:memory-8 sum-at)))))
+                     (progn (setf (clara.unsafe:memory-8 (+ key-at size)) (logxor 1 (clara.unsafe:memory-8 (+ key-at size))))
+                            (prog1 (clara.unsafe:ecdsa bits key-at sum-at size r-at size s-at (1+ size))
+                              (setf (clara.unsafe:memory-8 (+ key-at size)) (logxor 1 (clara.unsafe:memory-8 (+ key-at size))))))
+                     (progn (in-memory r-at (make-list size :initial-element 0))
+                            (clara.unsafe:ecdsa bits key-at sum-at size r-at size s-at (1+ size))))))))
+  (clara.unsafe:free-memory page 2))
+
+;;; Numbers that nobody can guess (lisp/random.lisp): the driver of the
+;;; device that makes them, which here makes them by a rule.
+
+(defun new-numbers (&rest options)
+  (new-machine)
+  (attach-bus)
+  (add-function 0 0 0 #x8086 #x29c0 #x060000)
+  (setq *numbers* (apply #'add-numbers 6 options))
+  (with-output-to-string (*standard-output*)
+    (clara.pci:start))
+  (said-by #'clara.random:start))
+
+(check (format nil "random: 00:06.0 makes numbers that nobody can guess~%") (new-numbers))
+(let ((pages (clara.host:allocated-pages)) (memory (clara.unsafe:allocate-memory 3)))
+  ;; as many bytes as were asked for, and no more: what lies behind them is as it was
+  (in-memory memory (make-list 12288 :initial-element 0))
+  (check '(1 "0000") (list (clara.random:bytes memory 1) (from-memory (+ memory 1) 2)))
+  (check 0 (clara.random:bytes memory 0))
+  (check '(5000 2 nil) (let ((asked (vdev-asked *numbers*)))
+                         (list (clara.random:bytes memory 5000) (- (vdev-asked *numbers*) asked)
+                               (find-if #'plusp (loop for i from 5000 below 5010 collect (clara.unsafe:memory-8 (+ memory i)))))))
+  ;; they are not all the same, and not the same twice
+  (check '(t t) (list (> (length (remove-duplicates (loop for i below 64 collect (clara.unsafe:memory-8 (+ memory i))))) 16)
+                      (let ((first (from-memory memory 32)))
+                        (clara.random:bytes memory 32)
+                        (not (string= first (from-memory memory 32))))))
+  ;; the page that the device wrote into is wiped: the numbers lie where they were asked for, and nowhere else
+  (check nil (find-if #'plusp (loop for i below 4096
+                                   collect (clara.unsafe:memory-8 (+ (clara.random::source-page clara.random::*source*) i)))))
+  ;; numbers below another: all of them come up, and none that is not below
+  (check '(0 1 2 3 4 5) (sort (remove-duplicates (loop repeat 300 collect (clara.random:below 6))) #'<))
+  (check '(0) (remove-duplicates (loop repeat 20 collect (clara.random:below 1))))
+  (check t (every (lambda (number) (< -1 number 1000000000000)) (loop repeat 50 collect (clara.random:below 1000000000000))))
+  (check '("0 is not a number above 0 and up to 281474976710656, below which a number could be taken"
+           "281474976710657 is not a number above 0 and up to 281474976710656, below which a number could be taken"
+           "SIX is not a number above 0 and up to 281474976710656, below which a number could be taken")
+         (mapcar (lambda (limit) (condition-text (lambda () (clara.random:below limit)))) '(0 281474976710657 six)))
+  (clara.unsafe:free-memory memory 3)
+  (check pages (clara.host:allocated-pages)))
+;; A device that fills less than it is given is asked again, until all is there.
+(new-numbers :few 7)
+(let ((memory (clara.unsafe:allocate-memory 1)))
+  (check '(100 15) (let ((asked (vdev-asked *numbers*)))
+                     (list (clara.random:bytes memory 100) (- (vdev-asked *numbers*) asked))))
+  (check t (> (length (remove-duplicates (loop for i below 100 collect (clara.unsafe:memory-8 (+ memory i))))) 16))
+  (clara.unsafe:free-memory memory 1))
+;; One that has no message to send is looked at all the same; one that says nothing is given up, and asked nothing more;
+;; and one that answers with no numbers at all is not asked for ever.
+(new-numbers :mute t)
+(let ((memory (clara.unsafe:allocate-memory 1)))
+  (check 40 (clara.random:bytes memory 40))
+  (clara.unsafe:free-memory memory 1))
+(new-numbers :silent t)
+(let ((memory (clara.unsafe:allocate-memory 1)) (clara.random:*patience* 300))
+  (check '("the device 00:06.0 has made no numbers in 300 milliseconds"
+           "the device 00:06.0 left a request unanswered, and is asked nothing more")
+         (list (condition-text (lambda () (clara.random:bytes memory 8))) (condition-text (lambda () (clara.random:bytes memory 8)))))
+  (clara.unsafe:free-memory memory 1))
+(new-numbers :few 0)
+(let ((memory (clara.unsafe:allocate-memory 1)))
+  (check "the device 00:06.0 goes on answering with no numbers at all" (condition-text (lambda () (clara.random:bytes memory 8))))
+  (clara.unsafe:free-memory memory 1))
+;; A machine without the device says so, as it starts and when a number is wanted.
+(new-machine)
+(attach-bus)
+(add-function 0 0 0 #x8086 #x29c0 #x060000)
+(with-output-to-string (*standard-output*)
+  (clara.pci:start))
+(check (format nil "random: no device that makes numbers which nobody can guess: nothing is fetched by HTTPS~%")
+       (said-by #'clara.random:start))
+(check '("this machine has no device that makes numbers which nobody can guess: a virtio RNG device is one"
+         "this machine has no device that makes numbers which nobody can guess: a virtio RNG device is one")
+       (list (condition-text (lambda () (clara.random:bytes clara.host:+memory-base+ 1)))
+             (condition-text (lambda () (clara.random:below 6)))))
+;; And a device that a world has kept from an earlier start is forgotten by the next one.
+(new-numbers)
+(new-machine)
+(attach-bus)
+(add-function 0 0 0 #x8086 #x29c0 #x060000)
+(with-output-to-string (*standard-output*)
+  (clara.pci:start))
+(check '(t nil) (list (and clara.random::*source* t) (progn (said-by #'clara.random:start) clara.random::*source*)))
+
+;;; Certificates (lisp/tls.lisp): read as they are written, and held
+;;; against a name, against the time, and against each other.
+
+(defun read-bytes (bytes)
+  (let* ((pages (max 1 (ceiling (length bytes) 4096))) (memory (clara.unsafe:allocate-memory pages)))
+    (in-memory memory bytes)
+    (clara.tls::read-certificate memory (length bytes))))
+
+(new-machine)
+;; The time of day, both ways, on days that a count of days gets wrong when it forgets a leap year.
+(check t (every (lambda (time)
+                  (multiple-value-bind (second minute hour day month year) (decode-universal-time time 0)
+                    (and (= time (clara.tls::universal year month day hour minute second))
+                         (string= (clara.tls::date-text time) (format nil "~D-~2,'0D-~2,'0D ~2,'0D:~2,'0D" year month day hour minute)))))
+                (append (loop for year in '(1970 1999 2000 2001 2024 2026 2028 2099 2100 2101 2400)
+                              append (loop for (month day) in '((1 1) (2 28) (3 1) (12 31) (7 4))
+                                           collect (encode-universal-time 59 58 23 day month year 0)))
+                        (list (encode-universal-time 0 0 0 29 2 2024 0) (encode-universal-time 0 0 0 29 2 2000 0) 0 3913056000))))
+(check '("2026-11-20 20:53" "1900-01-01 00:00" "2000-02-29 12:00")
+       (list (clara.tls::date-text (encode-universal-time 48 53 20 20 11 2026 0)) (clara.tls::date-text 0)
+             (clara.tls::date-text (encode-universal-time 0 0 12 29 2 2000 0))))
+;; What a certificate says, read back: whom it is for, its names, its dates, its key, and what it may be used for.
+(let* ((from (encode-universal-time 0 30 12 1 2 2026 0)) (until (encode-universal-time 59 59 23 31 12 2049 0))
+       (plain (read-bytes (certificate :subject "one.test" :organization "Somebody" :issuer "The tests' root" :key *shown-key*
+                                       :signer *authority-key* :names '("one.test" "*.one.test") :addresses '(#x0a000203)
+                                       :from from :until until)))
+       (signer (read-bytes *signer*))
+       (later (read-bytes (certificate :subject "late.test" :key *rsa-key* :signer *rsa-key* :bits 384 :usage 128 :must t
+                                       :purposes '((#x2b 6 1 5 5 7 3 2)) :long-dates t :version nil
+                                       :from (encode-universal-time 0 0 0 1 1 2050 0) :until (encode-universal-time 0 0 0 1 1 2051 0))))
+       (nameless (read-bytes (certificate :subject nil :organization "Only an organization" :key *large-key* :signer *large-key* :bits 384
+                                          :purposes '((#x55 #x1d #x25 0))))))
+  (check (list "one.test" '("one.test" "*.one.test") '(#x0a000203) from until 256 '(:ecdsa . 256) nil nil nil t nil)
+         (list (clara.tls::certificate-name plain) (clara.tls::certificate-names plain) (clara.tls::certificate-addresses plain)
+               (clara.tls::certificate-from plain) (clara.tls::certificate-until plain) (clara.tls::certificate-key plain)
+               (clara.tls::certificate-signed plain) (clara.tls::certificate-authority plain) (clara.tls::certificate-depth plain)
+               (clara.tls::certificate-usage plain) (clara.tls::certificate-serves plain) (clara.tls::certificate-unknown plain)))
+  (check '("The tests' signer in between" 384 (:ecdsa . 256) t 0 6 t nil nil)
+         (list (clara.tls::certificate-name signer) (clara.tls::certificate-key signer) (clara.tls::certificate-signed signer)
+               (clara.tls::certificate-authority signer) (clara.tls::certificate-depth signer) (clara.tls::certificate-usage signer)
+               (clara.tls::certificate-serves signer) (clara.tls::certificate-unknown signer) (clara.tls::certificate-names signer)))
+  (check (list "late.test" :rsa 256 65537 '(:rsa . 384) 128 nil t (encode-universal-time 0 0 0 1 1 2050 0))
+         (list (clara.tls::certificate-name later) (clara.tls::certificate-key later) (clara.tls::certificate-modulus-bytes later)
+               (clara.tls::certificate-exponent later) (clara.tls::certificate-signed later) (clara.tls::certificate-usage later)
+               (clara.tls::certificate-serves later) (clara.tls::certificate-unknown later) (clara.tls::certificate-from later)))
+  (check '("Only an organization" 384 t) (list (clara.tls::certificate-name nameless) (clara.tls::certificate-key nameless)
+                                                (clara.tls::certificate-serves nameless)))
+  ;; who signed whom: by the name and by the signature, and a bit of either is another answer
+  (let ((work (clara.unsafe:allocate-memory 1)) (root (read-bytes *authority*)) (own (read-bytes *shown*)))
+    (check '(t t t nil nil nil t nil)
+           (list (clara.tls::signed-by-p signer root work) (clara.tls::signed-by-p own signer work) (clara.tls::signed-by-p root root work)
+                 (clara.tls::signed-by-p own root work) (clara.tls::signed-by-p signer own work) (clara.tls::signed-by-p plain signer work)
+                 (clara.tls::signed-by-p later later work)
+                 (clara.tls::signed-by-p (read-bytes (certificate :subject "one.test" :issuer "The tests' root" :issuer-organization "ClaraOS tests"
+                                                                  :key *shown-key* :signer *authority-key* :spoil t))
+                                         root work)))
+    ;; and each of the names that a certificate is for: its own, in either kind of letters; the star for one part, the first; an address
+    (check '(t t t nil nil nil t nil nil t nil)
+           (mapcar (lambda (host) (and (clara.tls::for-name-p plain host) t))
+                   '("one.test" "ONE.Test" "a.one.test" "a.b.one.test" "two.test" "one.test.evil.example" "*.one.test" ".one.test"
+                     "aone.test" "10.0.2.3" "10.0.2.4")))))
+;; A date of the last century, which is written with two digits like one of this; a certificate that says outright that it
+;; may not sign; and three that are certificates but for one byte: a piece that says it is longer than what it is in, a
+;; length of the kind that has no end, and a date that is not Greenwich's.
+(let ((old (read-bytes (certificate :subject "old.test" :key *shown-key* :from (encode-universal-time 0 0 0 1 7 1998 0)
+                                    :until (encode-universal-time 0 0 0 1 7 2049 0))))
+      (none (read-bytes (certificate :subject "none.test" :key *shown-key* :authority :no))))
+  (check (list (encode-universal-time 0 0 0 1 7 1998 0) (encode-universal-time 0 0 0 1 7 2049 0) nil)
+         (list (clara.tls::certificate-from old) (clara.tls::certificate-until old) (clara.tls::certificate-authority none))))
+(flet ((changed (find replace)
+         (let* ((bytes (copy-seq *shown*)) (at (search find bytes)))
+           (replace bytes replace :start1 at)
+           (condition-text (lambda () (read-bytes bytes))))))
+  (check '("it is not written as a certificate is: a piece is longer than what it is in"
+           "it is not written as a certificate is: a piece has a length that is none"
+           "it is not written as a certificate is: a date is none, or is not Greenwich's")
+         (list (changed (bytes-of '(#x82 13) (octets "releases.test")) '(#x82 77))
+               (changed (bytes-of '(#x82 13) (octets "releases.test")) '(#x82 #x80))
+               (let* ((bytes (copy-seq *shown*)) (at (position 90 bytes)))   ; the first Z, which ends the first date
+                 (setf (aref bytes at) 43)
+                 (condition-text (lambda () (read-bytes bytes)))))))
+;; What is not a certificate at all, and what is one with something wrong in how it is written.
+(dolist (wrong (list (bytes-of) (bytes-of '(48 3 1 2 3)) (bytes-of '(49 0)) (subseq *shown* 0 100) (bytes-of *shown* '(0))
+                     (bytes-of '(48 #x84 0 0 0 1 0)) (bytes-of '(48 #x82 #xff #xff) (subseq *shown* 4))))
+  (check t (and (search "it is not written as a certificate is" (condition-text (lambda () (read-bytes wrong)))) t)))
+;; A file of certificates: each between its two lines, whatever else the file says, and with either kind of line end; one that
+;; cannot be read is passed over, and one that does not end is an error.
+(let* ((text (format nil "Somebody wrote this file.~%~A~%# and a remark~%~A~A-----BEGIN CERTIFICATE-----~%AAAA~%-----END CERTIFICATE-----~%"
+                     (pem *authority*) (substitute #\Return #\Tab (pem *signer*)) (pem *shown*)))
+       (memory (clara.unsafe:allocate-memory 2)))
+  (clara.unsafe:string-memory text memory)
+  (check '(("The tests' root" "The tests' signer in between" "releases.test") 1)
+         (multiple-value-bind (certificates passed) (clara.tls::certificates-in memory (clara.unsafe:string-bytes text))
+           (list (mapcar #'clara.tls::certificate-name certificates) passed)))
+  (clara.unsafe:string-memory "-----BEGIN CERTIFICATE-----MIIB" memory)
+  (check "a certificate in the list has no end" (condition-text (lambda () (clara.tls::certificates-in memory 31))))
+  (check nil (clara.tls::certificates-in memory 5)))
+;; The list that the system has from the beginning (lisp/roots.pem): every certificate in it is read; each has a name and dates
+;; that are dates; and each that signed itself in a way that is known here did sign itself, which is hundreds of signatures that
+;; nobody here made, of RSA's and on both curves.
+(let* ((text (with-open-file (in (source "lisp/roots.pem") :external-format :latin-1)
+               (let ((all (make-string (file-length in))))
+                 (subseq all 0 (read-sequence all in)))))
+       (bytes (sb-ext:string-to-octets text :external-format :latin-1))
+       (memory (clara.unsafe:allocate-memory (ceiling (length bytes) 4096)))
+       (work (clara.unsafe:allocate-memory 1)))
+  (in-memory memory bytes)
+  (multiple-value-bind (certificates passed) (clara.tls::certificates-in memory (length bytes))
+    (check '(t 0) (list (> (length certificates) 100) passed))
+    (check nil (remove-if (lambda (certificate)
+                            (and (stringp (clara.tls::certificate-name certificate))
+                                 (< (clara.tls::certificate-from certificate) (clara.tls::certificate-until certificate))
+                                 (clara.tls::certificate-authority certificate)))
+                          certificates))
+    (let ((kinds (mapcar #'clara.tls::certificate-key certificates))
+          (themselves (remove-if-not (lambda (certificate)
+                                       (and (clara.tls::certificate-signed certificate) (clara.tls::certificate-key certificate)))
+                                     certificates)))
+      (check '(t t t) (list (> (count :rsa kinds) 30) (> (count 384 kinds) 10) (> (length themselves) 80)))
+      (check nil (mapcar #'clara.tls::certificate-name
+                         (remove-if (lambda (certificate) (clara.tls::signed-by-p certificate certificate work)) themselves)))
+      (check t (and (find "ISRG Root X1" certificates :key #'clara.tls::certificate-name :test #'string=) t)))))
+
+;; Signatures, as closely as they can be looked at: what a signer with the key could make that is nearly a signature and
+;; is none. A signature of RSA's is a block to a secret power; each of these blocks is right but for one thing, and what
+;; is made of it has to be refused. The older kind first (RFC 8017, 9.2): another second byte, a byte of the filling that
+;; is not 255, no zero after the filling, the word for another sum, and a filling that is too short with something after
+;; the sum to make up for it, which is how such signatures were once made up without the key.
+(new-machine)
+(let* ((owner (read-bytes (certificate :subject "an owner" :key *rsa-key* :signer *rsa-key*)))
+       (work (clara.unsafe:allocate-memory 1)) (memory (clara.unsafe:allocate-memory 1))
+       (message (octets "what is signed")) (size 256)
+       (sum (clara.host:digest-of 256 message)) (prefix (cdr (assoc 256 *sum-prefixes*))))
+  (flet ((good-p (way block)
+           (let ((signature (number-bytes (clara.host:expt-mod (clara.host:octets-number block) (tkey-d *rsa-key*) (tkey-n *rsa-key*)) size)))
+             (in-memory memory message)
+             (in-memory (+ memory 1024) signature)
+             (and (clara.tls::signature-good-p owner way memory (length message) (+ memory 1024) size work) t)))
+         (padded (&key (second 1) (filling 255) (after 0) (prefix prefix) (sum sum) more)
+           (let ((fill (- size 3 (length prefix) (length sum) (length more))))
+             (bytes-of (list 0 second) (make-list fill :initial-element filling) (list after) prefix sum more))))
+    (check '(t nil nil nil nil nil nil)
+           (list (good-p '(:rsa . 256) (padded))
+                 (good-p '(:rsa . 256) (padded :second 2))
+                 (good-p '(:rsa . 256) (let ((bytes (padded))) (setf (aref bytes 20) 254) bytes))
+                 (good-p '(:rsa . 256) (padded :after 255))
+                 (good-p '(:rsa . 256) (padded :prefix (cdr (assoc 384 *sum-prefixes*)) :sum (subseq (clara.host:digest-of 384 message) 0 32)))
+                 (good-p '(:rsa . 256) (padded :more (make-list 190 :initial-element 7)))
+                 (good-p '(:rsa . 256) (let ((bytes (padded))) (setf (aref bytes (1- size)) (logxor 1 (aref bytes (1- size)))) bytes))))
+    ;; the word for the sum with a byte of it another, over the right sum; and the signature with a zero before it, which is
+    ;; the same number and not the same signature
+    (check '(nil nil)
+           (list (good-p '(:rsa . 256) (padded :prefix (let ((other (copy-list prefix))) (setf (nth 14 other) 2) other)))
+                 (let ((signature (number-bytes (clara.host:expt-mod (clara.host:octets-number (padded)) (tkey-d *rsa-key*) (tkey-n *rsa-key*)) size)))
+                   (in-memory memory message)
+                   (in-memory (+ memory 1024) (cons 0 signature))
+                   (and (clara.tls::signature-good-p owner '(:rsa . 256) memory (length message) (+ memory 1024) (1+ size) work) t))))
+    ;; and the newer kind (9.1): as it should be; another last byte; a salt of another length; the 1 before the salt another
+    ;; number; a bit of the sum at its end changed; and the same signature held against the other way of reading it
+    (flet ((newer (&key (last #xbc) (salt-bytes 32) (one 1) spoil dirt top)
+             (let* ((salt (subseq (clara.host:digest-of 512 (octets "another salt")) 0 salt-bytes))
+                    (h (clara.host:digest-of 256 (bytes-of (make-list 8 :initial-element 0) sum salt)))
+                    (open (bytes-of (make-list (- size 32 salt-bytes 2) :initial-element 0) (list one) salt))
+                    (mask (apply #'bytes-of (loop for count from 0 below (ceiling (length open) 32)
+                                                  collect (clara.host:digest-of 256 (bytes-of h (number-bytes count 4))))))
+                    (covered (map 'vector #'logxor open mask)))
+               (setf (aref covered 0) (logand (aref covered 0) 127))
+               (when dirt
+                 ;; something among the zeroes before the salt
+                 (setf (aref covered 9) (logxor 4 (aref covered 9))))
+               (when top
+                 ;; the bit above the block, set: still a number below the key's, whose first byte is above 128
+                 (setf (aref covered 0) (logior (aref covered 0) 128)))
+               (when spoil
+                 (setf (aref h 31) (logxor 1 (aref h 31))))
+               (bytes-of covered h (list last)))))
+      (check '(t nil nil nil nil nil t)
+             (list (good-p '(:pss . 256) (newer))
+                   (good-p '(:pss . 256) (newer :last #xbd))
+                   (good-p '(:pss . 256) (newer :salt-bytes 20))
+                   (good-p '(:pss . 256) (newer :one 2))
+                   (good-p '(:pss . 256) (newer :spoil t))
+                   (good-p '(:rsa . 256) (newer))
+                   (good-p '(:pss . 256) (pss-block 256 sum 2048))))
+      (check '(nil nil t)
+             (list (good-p '(:pss . 256) (newer :dirt t))
+                   (good-p '(:pss . 256) (newer :top t))
+                   (< (aref (newer :top t) 0) (ldb (byte 8 2040) (tkey-n *rsa-key*)))))))
+  ;; A signature on a curve is two numbers in a piece, and nothing else: not with something after it, not with a
+  ;; number that is written as a negative one, and not as a piece that says it is longer than it is.
+  (let* ((own (read-bytes (certificate :subject "an owner" :key *shown-key*)))
+         (signature (loop for i from 0
+                          do (let ((signed (sign-with *shown-key* 256 (bytes-of message (list i)))))
+                               ;; one whose first number has its highest bit set, and so a zero before it
+                               (when (and (= (aref signed 3) 33) (= (aref signed 4) 0))
+                                 (setq message (bytes-of message (list i)))
+                                 (return signed))))))
+    (flet ((good-p (signature &optional (bytes (length signature)))
+             (in-memory memory message)
+             (in-memory (+ memory 1024) signature)
+             (and (clara.tls::signature-good-p own '(:ecdsa . 256) memory (length message) (+ memory 1024) bytes work) t)))
+      (check '(t nil nil nil nil nil)
+             (list (good-p signature)
+                   (good-p (bytes-of signature '(0)))
+                   ;; the same number without its zero, which is a negative number as such things are written
+                   (good-p (bytes-of (list 48 (1- (aref signature 1)) 2 32) (subseq signature 5)))
+                   (good-p (bytes-of (list 48 (1+ (aref signature 1))) (subseq signature 2) '(0)))
+                   (good-p signature (1- (length signature)))
+                   (good-p (bytes-of '(49) (subseq signature 1)))))))
+  ;; A key of RSA's that is shorter than 2048 bits is a key of no kind that is known here; and a certificate whose name
+  ;; for its signer is not that signer's name was not signed by it, whatever its signature says.
+  (let ((short (rsa-key #xeb79384708c4695a4a0b8d00211ab2ae920a5aef788006a1134480d70ae42880ac56e9c60760525d715606691538fe815d03a9775b186cbee267e833b9d0f8b1
+                        #xcfff6457b1996d04505fa636f298252030faba4962bb974caee064bc5f4a27e2edc37bb616d82190198a02c4fdea82154fecbed3f287dc4f1bc8b3a7fdbc1acd))
+        (root (read-bytes *authority*)))
+    (check '(nil t nil)
+           (list (clara.tls::certificate-key (read-bytes (certificate :subject "short.test" :key short :signer *shown-key*)))
+                 (and (clara.tls::signed-by-p (read-bytes (certificate :subject "one.test" :issuer "The tests' root" :issuer-organization "ClaraOS tests"
+                                                                       :key *shown-key* :signer *authority-key*))
+                                              root work)
+                      t)
+                 (clara.tls::signed-by-p (read-bytes (certificate :subject "one.test" :issuer "The tests' root" :key *shown-key*
+                                                                  :signer *authority-key*))
+                                         root work)))))
+;; A sum with a key that is exactly a block long, which is used as it is, and one that is a byte longer, which is not.
+(let ((page (clara.unsafe:allocate-memory 1)))
+  (in-memory page (loop for i below 65 collect i))
+  (in-memory (+ page 128) (octets "what do ya want for nothing?"))
+  (check '("5431cc41830bee78" "b8510ec6c86f16d7")
+         (list (progn (clara.unsafe:hmac 256 page 64 (+ page 128) 28 (+ page 256)) (from-memory (+ page 256) 8))
+               (progn (clara.unsafe:hmac 256 page 65 (+ page 128) 28 (+ page 256)) (from-memory (+ page 256) 8)))))
+
+;;; A connection that is kept closed (lisp/tls.lisp), to a web server of the
+;;; made-up network that keeps its side of it (above): what is fetched over
+;;; it, what the machine makes of every way in which the other side can be
+;;; somebody else or the connection another, and what it tells the other
+;;; side then.
+
+;; What the machine told the network about its connections, the first thing first.
+(defun told ()
+  (reverse (remove-if-not (lambda (what) (member (car what) '(:alert :goodbye :renewed :no-certificate :word :named)))
+                          (network-heard *network*))))
+
+;; A machine and a network whose web server shows a certificate, with what
+;; the test wants wrong; what a fetch of ADDRESS gives; and what the machine
+;; told the network, once the network has heard it.
+(defun kept-closed (address &rest options)
+  (apply #'new-network :files (files) options)
+  (said-by #'clara.net:up)
+  (let ((result (fetched address)))
+    (eventually (lambda () (or (network-saw *network* :goodbye) (network-saw *network* :alert))))
+    (list result (told))))
+
+(defvar *hello* "hello from the made-up network")
+
+;; A file over a connection that is kept closed: the machine names the machine that it means, says its last word, asks,
+;; and says that it is done. The same when the certificates come one to a record, in pieces of a few bytes, with zeroes
+;; behind what they carry, and after a word of an older TLS that means nothing; when the machine is asked who it is, which
+;; it answers with no certificate; and when tickets for another day come before the answer.
+(check (list *hello* '((:named "releases.test") (:word) (:goodbye 0))) (kept-closed "https://releases.test/hello.txt"))
+(dolist (accident '(:apart :pieces :padded :old-word :tickets :no-goodbye :with-more))
+  (check (list accident *hello* (if (eq accident :no-goodbye) '((:named "releases.test") (:word) (:goodbye 0)) '((:named "releases.test") (:word) (:goodbye 0))))
+         (cons accident (kept-closed "https://releases.test/hello.txt" :accident accident))))
+(check (list *hello* '((:named "releases.test") (:no-certificate) (:word) (:goodbye 0)))
+       (kept-closed "https://releases.test/hello.txt" :accident :asks))
+;; A long file, in many records, as the wire loses, spoils and swaps its pieces; an empty one; one in chunks; and one at another port.
+(check (list *long* '((:named "releases.test") (:word) (:goodbye 0))) (kept-closed "https://releases.test/long"))
+(check (list *long* '((:named "releases.test") (:word) (:goodbye 0)))
+       (kept-closed "https://releases.test/long" :drop '(1 5 40) :spoil '(2 30) :swap '(3 4 60) :record 16384))
+(check (list "" *long* "a file that comes in chunks, each longer than the one before it" *hello* *hello*)
+       (progn (new-network :files (files) :secure '(443 8443) :record 100)
+              (said-by #'clara.net:up)
+              (list (fetched "https://releases.test/empty") (fetched "https://releases.test/long-chunks")
+                    (fetched "https://releases.test/chunks") (fetched "https://releases.test:8443/hello.txt")
+                    (fetched "https://RELEASES.test/moved"))))
+(check 2 (count '(:get "/hello.txt") (network-heard *network*) :test #'equal))
+;; The keys change in the middle of an answer, and the machine changes its own when it is asked to, before it says that it is done.
+(check (list *hello* '((:named "releases.test") (:word) (:renewed) (:goodbye 0)))
+       (kept-closed "https://releases.test/hello.txt" :accident :renew :record 40))
+(check (list *hello* '((:named "releases.test") (:word) (:goodbye 0)))
+       (kept-closed "https://releases.test/hello.txt" :accident :renew-quietly :record 40))
+;; A file that is as long as may be taken, to the byte, is taken, whether its length was said or not: what the connection
+;; carries beside it does not count. One byte more is not.
+(check (list *long* *long* '(:error "https://releases.test/long is 200000 bytes, and more than 199999 are not taken")
+             '(:error "https://releases.test/unsized-long is more than 199999 bytes, which are not taken"))
+       (progn (new-network :files (files) :record 300)
+              (said-by #'clara.net:up)
+              (list (fetched "https://releases.test/long" :limit 200000) (fetched "https://releases.test/unsized-long" :limit 200000)
+                    (fetched "https://releases.test/long" :limit 199999) (fetched "https://releases.test/unsized-long" :limit 199999))))
+;; A machine that was asked for by its address is not named, and its certificate has to have the address.
+(check (list *hello* '((:word) (:goodbye 0))) (kept-closed "https://10.0.2.2/hello.txt"))
+;; From an address that is not kept closed to one that is, the machine goes; the other way it does not.
+(check (list *hello* '(:error "releases.test says that /down is to be had at http://releases.test/hello.txt, where nothing is kept closed: it is not fetched from there"))
+       (progn (new-network :files (append (list (cons "/up" (list :moved "https://releases.test/hello.txt"))
+                                                (cons "/down" (list :moved "http://releases.test/hello.txt")))
+                                          (files)))
+              (said-by #'clara.net:up)
+              (list (fetched "http://releases.test/up") (fetched "https://releases.test/down"))))
+;; The other side says that it is done, and that is the end of the file, whether or not it ends the connection under it too.
+(check "nobody said how long this is" (car (kept-closed "https://releases.test/unsized" :no-end t)))
+;; What is asked for may be longer than goes into one piece of a connection: all of it arrives, in order, either way.
+(check (list 2001 2001)
+       (let ((path (make-string 2000 :initial-element #\a)))
+         (new-network :files (files))
+         (said-by #'clara.net:up)
+         (fetched (format nil "http://releases.test/~A" path))
+         (fetched (format nil "https://releases.test/~A" path))
+         (mapcar (lambda (what) (length (second what))) (remove :get (network-heard *network*) :key #'car :test-not #'eq))))
+;; A file whose length nobody said is whole only when the other side says that it is done: an end without that word is
+;; an end that somebody on the way may have made. And an answer that is cut short is cut short.
+(check (list "nobody said how long this is" '(:error "releases.test ended the connection without saying that /unsized was whole: what came of it may be cut short")
+             '(:error "releases.test ended the connection without saying that /unsized was whole: what came of it may be cut short"))
+       (list (car (kept-closed "https://releases.test/unsized"))
+             (car (kept-closed "https://releases.test/unsized" :accident :no-goodbye))
+             (car (kept-closed "https://releases.test/unsized" :accident :cut))))
+(check t (let ((result (car (kept-closed "https://releases.test/long" :accident :cut))))
+           (and (consp result) (search "releases.test ended the connection after" (second result))
+                (search "bytes of the 200000 of /long" (second result)) t)))
+
+;; What goes wrong in a greeting, and the number that the other side is told: each of these is somebody else at the other
+;; end, or somebody in between.
+(dolist (wrong '((:old "releases.test speaks no TLS 1.3, and nothing older is spoken here" 70)
+                 (:again "releases.test asks to begin again with another exchange of keys, and this system has the one only" 40)
+                 (:other-cipher "releases.test answers with a cipher, or with a way of going on, that it was not offered" 47)
+                 (:echo "releases.test answers with a cipher, or with a way of going on, that it was not offered" 47)
+                 (:other-share "releases.test answers with an exchange of keys that it was not offered" 47)
+                 (:no-share "releases.test answers without its half of the exchange of keys" 109)
+                 (:more "releases.test answers the greeting with something that it was not asked for" 110)
+                 (:gives-up "releases.test gave the connection up: it found nothing in what this machine speaks that it speaks too" nil)
+                 (:says-more "releases.test says something about the connection that it was not asked for" 110)
+                 (:no-certificate "releases.test shows no certificate, or more than are looked at" 50)
+                 (:no-signature "releases.test sent something else where its signature belongs in a greeting" 10)
+                 (:signature "releases.test has not shown that the key of its certificate is its own: its greeting is not signed with it" 51)
+                 (:other-key "releases.test has not shown that the key of its certificate is its own: its greeting is not signed with it" 51)
+                 (:wrong-way "releases.test signs its greeting in a way that it was not offered, or that does not go with its key" 47)
+                 (:other-way "releases.test signs its greeting in a way that it was not offered, or that does not go with its key" 47)
+                 (:word "releases.test and this machine have not heard the same greeting: something of it was changed on the way" 51)
+                 (:in-the-open "releases.test sent a record in the open where everything is closed" 10)
+                 (:early "releases.test sent something before the greeting was over" 10)
+                 (:nothing "releases.test sent a record with nothing in it" 10)
+                 (:trailing "releases.test sent the beginning of something with the keys of what came before it" 10)
+                 (:trailing-hello "releases.test sent the beginning of something with the keys of what came before it" 10)
+                 (:old-word-wrong "releases.test sent a word of an older TLS that is none" 10)
+                 (:nothing-share "releases.test sent a half of the exchange of keys that makes nothing" 47)
+                 (:asks-wrongly "releases.test asks who this machine is in a way that is none" 47)
+                 (:endless "releases.test says more in its greeting than is taken" 80)))
+  (check (list (first wrong) (list :error (second wrong)) (and (third wrong) (list (list :alert (third wrong)))))
+         (destructuring-bind (result told) (kept-closed "https://releases.test/hello.txt" :accident (first wrong))
+           (list (first wrong) result (remove :named told :key #'car)))))
+;; And after it, in what is fetched: a record that was changed on the way, one that comes twice, one in the open, one that is
+;; too long, a piece of a greeting, a word of an older TLS, and keys that change in a way that is none.
+(dolist (wrong '((:spoiled "what releases.test sent does not open with the key of this connection: it was changed on the way, or is not from releases.test" 20)
+                 (:twice "what releases.test sent does not open with the key of this connection: it was changed on the way, or is not from releases.test" 20)
+                 (:open-record "what releases.test sent does not open with the key of this connection: it was changed on the way, or is not from releases.test" 20)
+                 (:long "releases.test sent a record of 17000 bytes, which is longer than a record may be" 22)
+                 (:late-greeting "releases.test sent a piece of a greeting after the greeting was over" 10)
+                 (:old-word-late "releases.test sent a record in the open where everything is closed" 10)
+                 (:renew-wrongly "releases.test says that its keys change in a way that is none" 47)))
+  (check (list (first wrong) (list :error (second wrong)) (list '(:word) (list :alert (third wrong))))
+         (destructuring-bind (result told) (kept-closed "https://releases.test/hello.txt" :accident (first wrong) :record 40)
+           (list (first wrong) result (remove :named told :key #'car)))))
+;; At a port where nothing keeps a connection closed, and at one where nothing answers.
+(check '((:error "releases.test does not answer as TLS does: nothing at that port of it keeps a connection closed")
+         (:error "10.0.2.2 takes no connection at its port 443"))
+       (list (car (kept-closed "https://releases.test:80/hello.txt")) (car (kept-closed "https://releases.test/hello.txt" :refuse t))))
+
+;; Certificates: who the other side is. Each of these is a machine that shows certificates which are in order but for one
+;; thing, with the key that goes with its own.
+(defun shown (own key &rest more)
+  (destructuring-bind (&key (chain (list *signer*)) (trusted (list *authority*)) (host "releases.test") accident) more
+    (destructuring-bind (result told) (kept-closed (format nil "https://~A/hello.txt" host) :chain (cons own chain) :key key :trusted trusted
+                                                   :accident accident
+                                                   :names (list (cons "releases.test" #x0a000202) (cons "a.wild.test" #x0a000202)
+                                                                (cons "wild.test" #x0a000202) (cons "a.b.wild.test" #x0a000202)))
+      (list result (second (find :alert told :key #'car))))))
+
+(defun signed-below (&rest options)
+  (apply #'certificate :subject "releases.test" :issuer "The tests' signer in between" :key *shown-key* :signer *signer-key* :bits 384
+         (append options (list :names '("releases.test")))))
+
+(let ((day 86400) (now (get-universal-time)))
+  ;; keys of RSA's, with the newer kind of signature at the end of the greeting and the older in the certificates; the larger
+  ;; curve; a certificate that the trusted one signed itself; one that is trusted itself; and the names with a star
+  (check (list (list *hello* nil) (list *hello* nil) (list *hello* nil) (list *hello* nil) (list *hello* nil))
+         (let ((root (certificate :subject "An RSA root" :key *rsa-key* :authority t :bits 512)))
+           (list (shown (certificate :subject "releases.test" :issuer "An RSA root" :key *rsa-key* :signer *rsa-key* :bits 384 :names '("releases.test"))
+                        *rsa-key* :chain nil :trusted (list root))
+                 (shown (certificate :subject "releases.test" :issuer "The tests' signer in between" :key *large-key* :signer *signer-key* :bits 384
+                                     :names '("releases.test"))
+                        *large-key*)
+                 (shown (certificate :subject "releases.test" :issuer "The tests' root" :issuer-organization "ClaraOS tests" :key *shown-key*
+                                     :signer *authority-key* :names '("releases.test"))
+                        *shown-key* :chain nil)
+                 (let ((alone (certificate :subject "releases.test" :key *other-key* :names '("releases.test"))))
+                   (shown alone *other-key* :chain nil :trusted (list alone)))
+                 (shown *shown* *shown-key* :host "a.wild.test"))))
+  ;; a key on the larger curve signs over the larger sum, and says so: the smaller sum under the smaller curve's name is
+  ;; a signature that verifies and that nobody was offered
+  (check '((:error "releases.test signs its greeting in a way that it was not offered, or that does not go with its key") 47)
+         (shown (certificate :subject "releases.test" :issuer "The tests' signer in between" :key *large-key* :signer *signer-key* :bits 384
+                             :names '("releases.test"))
+                *large-key* :accident :short-way))
+  ;; and a key of RSA's signs the end of a greeting in the newer way only: the older one is for certificates
+  (check '((:error "releases.test signs its greeting in a way that it was not offered, or that does not go with its key") 47)
+         (let ((root (certificate :subject "An RSA root" :key *rsa-key* :authority t)))
+           (shown (certificate :subject "releases.test" :issuer "An RSA root" :key *rsa-key* :signer *rsa-key* :names '("releases.test"))
+                  *rsa-key* :chain nil :trusted (list root) :accident :older-way)))
+  ;; the certificates in another order, and with one among them that has nothing to do with the others
+  (check (list *hello* nil) (shown *shown* *shown-key* :chain (list (certificate :subject "A bystander" :key *other-key* :authority t) *signer*)))
+  ;; a name that the certificate is not for
+  (check '(((:error "the certificate that wild.test shows is not for that name: it is for releases.test and 1 other names") 42)
+           ((:error "the certificate that a.b.wild.test shows is not for that name: it is for releases.test and 1 other names") 42)
+           ((:error "the certificate that releases.test shows is not for that name: it is for elsewhere.test") 42)
+           ((:error "the certificate that releases.test shows is not for that name: it is for no name at all") 42)
+           ((:error "the certificate that 10.0.2.2 shows is not for that name: it is for releases.test") 42))
+         (list (shown *shown* *shown-key* :host "wild.test") (shown *shown* *shown-key* :host "a.b.wild.test")
+               (shown (certificate :subject "releases.test" :issuer "The tests' signer in between" :key *shown-key* :signer *signer-key* :bits 384
+                                   :names '("elsewhere.test"))
+                      *shown-key*)
+               (shown (certificate :subject "releases.test" :issuer "The tests' signer in between" :key *shown-key* :signer *signer-key* :bits 384)
+                      *shown-key*)
+               (shown (signed-below) *shown-key* :host "10.0.2.2")))
+  ;; the time: a certificate that is not good yet, one that is good no longer, and the same of the ones above it
+  (check '(45 45 45 45)
+         (mapcar #'second
+                 (list (shown (signed-below :from (+ now day) :until (+ now day day)) *shown-key*)
+                       (shown (signed-below :from (- now day day) :until (- now day)) *shown-key*)
+                       (shown *shown* *shown-key*
+                              :chain (list (certificate :subject "The tests' signer in between" :issuer "The tests' root" :issuer-organization "ClaraOS tests"
+                                                        :key *signer-key* :signer *authority-key* :authority t :until (- now day))))
+                       (shown *shown* *shown-key*
+                              :trusted (list (certificate :subject "The tests' root" :organization "ClaraOS tests" :key *authority-key* :authority t
+                                                          :until (- now day)))))))
+  (check t (let ((result (car (shown (signed-below :from (- now day day) :until (- now day)) *shown-key*))))
+             (and (search "the certificate of releases.test was good until " (second result))
+                  (search ", and this machine's clock says that it is " (second result))
+                  t)))
+  ;; who signed it: nobody that is trusted; nobody but itself; somebody who may not sign, whose key is not for signing, or
+  ;; who lets nobody sign below; a signature that is not the signer's; and a way of signing that is not known
+  (check '(((:error "the certificate of The tests' signer in between is signed by somebody whom this system does not know, and who was not shown") 48)
+           ((:error "the certificate of releases.test is signed by somebody whom this system does not know, and who was not shown") 48)
+           ((:error "the certificate of releases.test is signed by nobody but itself, and is none that this system trusts") 48)
+           ((:error "the certificate of releases.test is signed by The tests' signer in between, who may not sign certificates") 42)
+           ((:error "the certificate of releases.test is signed by The tests' signer in between, whose key is not for signing certificates") 42)
+           ((:error "the certificate of releases.test is too far below The tests' signer in between, who lets fewer sign in between") 42)
+           ((:error "the certificate of releases.test is signed by somebody whom this system does not know, and who was not shown") 48)
+           ((:error "the certificate of releases.test is signed in a way that is not known here") 43))
+         (flet ((signer (&rest options)
+                  (apply #'certificate :subject "The tests' signer in between" :issuer "The tests' root" :issuer-organization "ClaraOS tests"
+                         :key *signer-key* :signer *authority-key* options)))
+           (list (shown *shown* *shown-key* :trusted nil)
+                 (shown *shown* *shown-key* :chain nil)
+                 (shown (certificate :subject "releases.test" :key *shown-key* :names '("releases.test")) *shown-key* :chain nil)
+                 (shown *shown* *shown-key* :chain (list (signer :authority :no)))
+                 (shown *shown* *shown-key* :chain (list (signer :authority t :usage 128)))
+                 ;; two signers in between, of which the upper one lets none sign below it
+                 (shown (certificate :subject "releases.test" :issuer "The lower signer" :key *shown-key* :signer *other-key* :names '("releases.test"))
+                        *shown-key*
+                        :chain (list (certificate :subject "The lower signer" :issuer "The tests' signer in between" :key *other-key*
+                                                  :signer *signer-key* :bits 384 :authority t)
+                                     *signer*))
+                 (shown (signed-below :spoil t) *shown-key*)
+                 (shown (signed-below :way (der 48 (der 6 '(#x2a #x86 #x48 #x86 #xf7 #x0d 1 1 5)) (der 5))) *shown-key*))))
+  ;; what a certificate is for: one that says something which has to be understood, one that is not for a machine that
+  ;; serves, and one whose key is not for signing a greeting
+  (check '(((:error "the certificate of releases.test says something that has to be understood, and is not understood here") 43)
+           ((:error "the certificate of releases.test is not for a machine that serves") 43)
+           ((:error "the certificate of releases.test has a key that is not for signing a greeting") 43))
+         (list (shown (signed-below :must t) *shown-key*)
+               (shown (signed-below :purposes '((#x2b 6 1 5 5 7 3 2))) *shown-key*)
+               (shown (signed-below :usage 4) *shown-key*)))
+  ;; and what is no certificate, or too many of them
+  (check '(t ((:error "releases.test shows no certificate, or more than are looked at") 50))
+         (list (let ((result (shown (bytes-of '(48 3 1 2 3)) *shown-key*)))
+                 (and (search "releases.test shows a certificate that cannot be read: it is not written as a certificate is" (second (car result)))
+                      (eql (second result) 42)))
+               (shown *shown* *shown-key* :chain (make-list 10 :initial-element *signer*)))))
+
+;; TRUST adds a certificate to the ones that the machine trusts, from its text or from a file, and says whom it is for; a
+;; world keeps the texts, and a start reads them again, into memory of its own.
+(new-network :files (files) :trusted nil :disk (fat-bytes (make-fat-volume 16 `(("home" (("root.pem" ,(pem *authority*))))))))
+(said-by #'clara.net:up)
+(check '(:error "the certificate of The tests' signer in between is signed by somebody whom this system does not know, and who was not shown")
+       (fetched "https://releases.test/hello.txt"))
+(check '(nil ("The tests' root") ("The tests' root") "hello from the made-up network" ("The tests' signer in between" "The tests' root"))
+       (list (clara.tls:roots) (clara.tls:trust "/home/root.pem") (clara.tls:roots) (fetched "https://releases.test/hello.txt")
+             (progn (clara.tls:trust (format nil "~A~A" (pem *signer*) (pem *authority*)))
+                    (subseq (clara.tls:roots) 1))))
+(check '("there is no certificate in that text that can be read" "there is no file /home/none.pem"
+         "42 is neither the text of a certificate nor the name of a file that has one" 2)
+       (list (condition-text (lambda () (clara.tls:trust (format nil "-----BEGIN CERTIFICATE-----~%AAAA~%-----END CERTIFICATE-----~%"))))
+             (condition-text (lambda () (clara.tls:trust "/home/none.pem")))
+             (condition-text (lambda () (clara.tls:trust 42)))
+             (length clara.tls::*trusted*)))
+(clara.tls:start)
+(setq clara.tls::*system-read* t)
+(check '(nil 0 3) (list clara.tls::*own-roots* clara.tls::*own-read* (length (clara.tls:roots))))
+;; Without the device that makes numbers which nobody can guess, nothing is fetched that way, and the machine says why;
+;; and the page frames of a greeting that did not begin go back.
+(check '(:error "this machine has no device that makes numbers which nobody can guess: a virtio RNG device is one")
+       (car (kept-closed "https://releases.test/hello.txt" :numbers nil)))
+;; A machine that fetches nothing that way has read no list.
+(new-network :files (files))
+(setq clara.tls::*system-read* nil)
+(said-by #'clara.net:up)
+(check '("hello from the made-up network" nil) (list (fetched "http://releases.test/hello.txt") clara.tls::*system-read*))
+(setq clara.tls::*system-read* t)
+
+;;; A system from another machine (lisp/system.lisp): a release is a
+;;; system's files on a web server, with a signature of its manifest. What
+;;; arrives is held against the signature and the manifest, and is taken
+;;; like a system from a disk.
+
+(check '((0 0 28) (1 2) (10 0 3 1) (0 0 1) nil nil nil nil)
+       (mapcar #'clara.system::version-of '("0.0.28-41d0c97b" "1.2" "10.0.3.1-x-y" "0.0.1-new" "new-0.0.1" "" "-1" "0..1")))
+(check '(t t t nil nil nil nil nil t)
+       (list (clara.system::newer-p "0.0.29-a" "0.0.28-b") (clara.system::newer-p "0.1.0-a" "0.0.99-b")
+             (clara.system::newer-p "1.0-a" "0.9.9-b") (clara.system::newer-p "0.0.28-a" "0.0.28-b")
+             (clara.system::newer-p "0.0.27-a" "0.0.28-b") (clara.system::newer-p "0.0-a" "0.0.1-b")
+             (clara.system::newer-p "newest" "0.0.1-b") (clara.system::newer-p "0.0.2-a" "this one")
+             (clara.system::newer-p "0.0.28.1-a" "0.0.28-b")))
+(check '("http://h/a/latest" "http://h/a/latest" "http://h/a/x/manifest")
+       (list (clara.system::at-address "http://h/a/" "latest") (clara.system::at-address "http://h/a" "latest")
+             (clara.system::at-address "http://h/a" "x" "/manifest")))
+
+(defvar *secret* (loop for i from 1 to 32 collect i))     ; the secret half of the key that the tests sign with
+(defun digits-of (bytes)
+  (format nil "~(~{~2,'0x~}~)" (coerce bytes 'list)))
+(defvar *public* (digits-of (clara.host:ed25519-public *secret*)))
+
+;; What a web server has of a release: the files of the system NAME, its
+;; manifest, the signature of that, and the word that it is the newest.
+(defun release (name files &key (latest name) (secret *secret*) wrong (at "/releases/") signature manifest)
+  (let* ((tree (second (system-tree name files :wrong wrong)))
+         (signed (second (assoc "manifest" tree :test #'string=))))
+    (append (list (cons (concatenate 'string at "latest") (format nil "~A~%" latest))
+                  (cons (format nil "~A~A/manifest.sig" at latest)
+                        (or signature (format nil "~A~%" (digits-of (clara.host:ed25519-sign secret (octets signed)))))))
+            (loop for (file contents) in tree
+                  collect (cons (format nil "~A~A/~A" at latest file) (if (and manifest (string= file "manifest")) manifest contents))))))
+
+;; A machine with its own disk, a network card, and a network that has
+;; those files; started, and with the key that the tests sign with.
+(defun machine-and-releases (files &rest options)
+  (setq *machine-disk* (fat-bytes (make-fat-volume 16 (machine-tree))))
+  (apply #'new-network :disk *machine-disk* :files files options)
+  (setq clara.windows::*running* nil)
+  (clara.host:set-start-state)
+  (said-by-all #'clara.system:start)
+  (said-by #'clara.net:up)
+  (setq clara.system:*release-key* *public*
+        clara.system:*releases* nil))
+
+;; The newest system that is published somewhere, and all of it taken: the
+;; files are on the disk, each as the manifest says, the manifest is the
+;; one that was signed, and the machine is to try the system when it
+;; starts next. Every file was asked for once.
+(machine-and-releases (release "0.0.1-new" *new-files*))
+(check '("0.0.1-new" "0.0.1-new") (list (clara.system:newest "https://releases.test/releases/") (clara.system:newest "https://releases.test/releases")))
+(let ((pages (clara.host:allocated-pages)))
+  (check (format nil "system: 0.0.1-new is published at https://releases.test/releases/, and signed with the key that this system has: its files are fetched~%~
+                      system: 0.0.1-new is on the disk, and is tried at the next start~%")
+         (said-by-all (lambda () (clara.system:upgrade :from "https://releases.test/releases/" :start-again nil))))
+  (check t (eventually (lambda () (= pages (clara.host:allocated-pages))))))
+(check (list "(the new system)" *long-text* "" "the new kernel" "the new kernel of the other processor"
+             (second (assoc "manifest" (second (system-tree "0.0.1-new" *new-files*)) :test #'string=))
+             (format nil "try 0.0.1-new~%") "(the old system)" t)
+       (list (on-disk *machine-disk* "/clara/0.0.1-new/boot.lisp") (on-disk *machine-disk* "/clara/0.0.1-new/long.lisp")
+             (on-disk *machine-disk* "/clara/0.0.1-new/empty.lisp") (on-disk *machine-disk* (format nil "/clara/0.0.1-new/~A" *this-kernel*))
+             (on-disk *machine-disk* (format nil "/clara/0.0.1-new/~A" *other-kernel*)) (on-disk *machine-disk* "/clara/0.0.1-new/manifest")
+             (on-disk *machine-disk* "/clara/next") (on-disk *machine-disk* "/clara/0.0.0-host/boot.lisp") (in-order-p *machine-disk*)))
+(check (sort (append (list "/releases/latest" "/releases/latest" "/releases/latest" "/releases/0.0.1-new/manifest.sig"
+                           "/releases/0.0.1-new/manifest")
+                     (mapcar (lambda (file) (format nil "/releases/0.0.1-new/~A" (car file))) *new-files*))
+             #'string<)
+       (sort (mapcar #'second (remove :get (network-heard *network*) :key #'car :test-not #'eq)) #'string<))
+;; The machine is started again to try it, unless it is told not to; and
+;; with nothing said of where, a machine without another disk looks where
+;; it knows ClaraOS to be published, when it knows of such a place.
+(machine-and-releases (release "0.0.1-new" *new-files*))
+(check "no other disk of this machine holds a ClaraOS other than this one, 0.0.0-host" (condition-text #'clara.system:upgrade))
+(setq clara.system:*releases* "https://10.0.2.2/releases/")
+(check t (let ((said (said-by-all #'clara.system:upgrade)))
+           (and (eql 0 (search (format nil "system: no other disk of this machine holds another ClaraOS, so the newest one is looked for at ~
+                                            https://10.0.2.2/releases/~%system: 0.0.1-new is published at https://10.0.2.2/releases/")
+                               said))
+                (search "clara: starting the machine again" said)
+                t)))
+(check (list '(:again) (format nil "try 0.0.1-new~%") 0)
+       (list (clara.host:power) (on-disk *machine-disk* "/clara/next")
+             (search "(:carried \"0.0.0-host\" \"0.0.1-new\")" (on-disk *machine-disk* "/clara/carried"))))
+(check "this system knows of no place where ClaraOS is published: CLARA.SYSTEM:*RELEASES* names none"
+       (let ((clara.system:*releases* nil)) (condition-text #'clara.system:newest)))
+
+;; What is not taken, and what the disk has of it afterwards: nothing that
+;; a start would try.
+(defun not-taken (files &rest more)
+  (machine-and-releases files)
+  (let ((pages (clara.host:allocated-pages)))
+    (prog1 (list (let ((complaint nil))
+                   (said-by-all (lambda ()
+                                  (setq complaint (condition-text (lambda () (apply #'clara.system:upgrade :from "https://releases.test/releases/"
+                                                                                    :start-again nil more))))))
+                   complaint)
+                 (on-disk *machine-disk* "/clara/next") (on-disk *machine-disk* "/clara/0.0.1-new/manifest")
+                 (and (on-disk *machine-disk* "/clara/0.0.1-new/boot.lisp") t) (in-order-p *machine-disk*))
+      (unless (eventually (lambda () (= pages (clara.host:allocated-pages))))
+        (failed "an upgrade that was refused kept ~D page frames" (- (clara.host:allocated-pages) pages))))))
+
+;; What an upgrade says, and what it ends with when it ends with an error.
+(defun said-and-complaint (&rest arguments)
+  (let ((complaint nil))
+    (list (said-by-all (lambda () (setq complaint (condition-text (lambda () (apply #'clara.system:upgrade arguments))))))
+          complaint)))
+
+;; A release that somebody else signed; one whose signature is no
+;; signature; and one whose manifest was changed after it was signed.
+(dolist (files (list (release "0.0.1-new" *new-files* :secret (loop for i from 2 to 33 collect i))
+                     (release "0.0.1-new" *new-files* :signature "this is no signature")
+                     (release "0.0.1-new" *new-files* :signature "")
+                     (release "0.0.1-new" *new-files*
+                              :manifest (second (assoc "manifest" (second (system-tree "0.0.1-new" (cons '("more.lisp" "(more)") *new-files*)))
+                                                       :test #'string=)))))
+  (check '("the manifest of 0.0.1-new at https://releases.test/releases/ is not signed with the key that this system has: nothing of it is taken"
+           nil nil nil t)
+         (not-taken files)))
+;; A file that is not what the signed manifest says: the files before it
+;; are on the disk, the manifest is not, and nothing says to try it.
+(check '("the file /clara/0.0.1-new/long.lisp is not what the manifest of its system says it is" nil nil t t)
+       (not-taken (release "0.0.1-new" *new-files* :wrong "long.lisp")))
+;; A file that the server does not have.
+(check '("releases.test answers 404 to the request for /releases/0.0.1-new/long.lisp" nil nil t t)
+       (not-taken (remove "/releases/0.0.1-new/long.lisp" (release "0.0.1-new" *new-files*) :key #'car :test #'string=)))
+;; The word of which system is the newest is not signed, and is not
+;; believed further than to look: a name that is none, and a name whose
+;; manifest is that of another system.
+(check '("https://releases.test/releases/latest names no system: what it says is \"../../EFI/BOOT\"" nil nil nil t)
+       (not-taken (release "0.0.1-new" *new-files* :latest "../../EFI/BOOT")))
+(check '("https://releases.test/releases/latest names no system: what it says is \"the newest of all\"" nil nil nil t)
+       (not-taken (release "0.0.1-new" *new-files* :latest "the newest of all")))
+(check '("the manifest of 0.0.2-newer at https://releases.test/releases/ is that of another system, or of none" nil nil nil t)
+       (not-taken (release "0.0.1-new" *new-files* :latest "0.0.2-newer")))
+;; A system that is no newer than the one that runs is not taken unasked,
+;; and the one that runs is not taken at all.
+(check '("the newest ClaraOS at https://releases.test/releases/ is 0.0.0-other, which is no newer than this one, 0.0.0-host: :ANY T takes it all the same"
+         nil nil nil t)
+       (list* (car (not-taken (release "0.0.0-other" *new-files*))) (cdr (not-taken (release "0.0.0-other" *new-files*)))))
+(machine-and-releases (release "0.0.0-other" *new-files*))
+(check '("0.0.0-other" t) (list (progn (said-by-all (lambda () (clara.system:upgrade :from "https://releases.test/releases/" :start-again nil :any t)))
+                                        (clara.system::waiting))
+                                 (and (on-disk *machine-disk* "/clara/0.0.0-other/manifest") t)))
+(check '("the newest ClaraOS at https://releases.test/releases/ is 0.0.0-host, which is the system that runs" nil nil nil t)
+       (not-taken (release "0.0.0-host" *old-files*) :any t))
+;; A release is fetched over a connection that is kept closed, and over no other: not when the address is given, and not
+;; when it is the one that the system knows of, which the machine then does not say that it looks at. Nothing is asked
+;; of the network for it.
+(machine-and-releases (release "0.0.1-new" *new-files*))
+(check '("http://releases.test/releases/ does not begin with https://: a release is fetched over a connection that is kept closed, and over no other"
+         "http://releases.test/releases/ does not begin with https://: a release is fetched over a connection that is kept closed, and over no other"
+         ("" "releases.test/releases/ does not begin with https://: a release is fetched over a connection that is kept closed, and over no other")
+         0 nil)
+       (list (condition-text (lambda () (clara.system:newest "http://releases.test/releases/")))
+             (condition-text (lambda () (clara.system:upgrade :from "http://releases.test/releases/" :any t)))
+             (let ((clara.system:*releases* "releases.test/releases/")) (said-and-complaint))
+             (network-saw *network* :get) (on-disk *machine-disk* "/clara/next")))
+;; Without a key nothing that is fetched can be held against anything, so
+;; nothing is fetched, and the machine does not say that it looks
+;; anywhere: not where the address is given, and not where it is the one
+;; that the system knows of.
+(machine-and-releases (release "0.0.1-new" *new-files*))
+(setq clara.system:*release-key* nil)
+(check "this system has no key to hold a release against: CLARA.SYSTEM:*RELEASE-KEY* is NIL"
+       (condition-text (lambda () (clara.system:upgrade :from "https://releases.test/releases/"))))
+(check '("" "this system has no key to hold a release against: CLARA.SYSTEM:*RELEASE-KEY* is NIL")
+       (let ((clara.system:*releases* "https://releases.test/releases/")) (said-and-complaint :any t)))
+(check '(0 nil nil) (list (network-saw *network* :get) (on-disk *machine-disk* "/clara/next") (clara.host:power)))
+;; A disk still goes before the network: a machine that knows where
+;; ClaraOS is published and has another disk with a system on it takes the
+;; one on the disk, and asks the network nothing.
+(setq *machine-disk* (fat-bytes (make-fat-volume 16 (machine-tree))))
+(new-network :disk *machine-disk* :files (release "0.0.2-newer" *new-files*)
+             :other (fat-bytes (make-fat-volume 16 `(("clara" (,(system-tree "0.0.1-new" *new-files*)))))))
+(setq clara.windows::*running* nil)
+(clara.host:set-start-state)
+(said-by-all #'clara.system:start)
+(setq clara.system:*release-key* *public*
+      clara.system:*releases* "https://releases.test/releases/")
+(check '("0.0.1-new" nil 0)
+       (let ((name nil))
+         (said-by-all (lambda () (setq name (clara.system:upgrade :start-again nil))))
+         (list name (network-heard *network*) (network-saw *network* :get))))
+(setq clara.system:*releases* nil)
+(machine-and-releases (release "0.0.1-new" *new-files*))
+;; And a volume that is named is a volume.
+(setq clara.system:*release-key* *public*
+      clara.system:*releases* "https://releases.test/releases/")
+(check "that volume holds no ClaraOS other than this one, 0.0.0-host"
+       (condition-text (lambda () (clara.system:upgrade :from (clara.system:boot-volume)))))
+(setq clara.system:*releases* nil)
+
+;; The network's thread and the card's go with the machine.
+(stop-network)
+(setq clara.net:*patience* 10000)
+
+(clara.host:reset-machine)
+(clara.host:set-start-state)
+(clara:destroy-thread clara.system::*watcher*)
+(check t (eventually (lambda () (= (length (clara:all-threads)) 1))))
+
 ;; A thread that is stopped before it has begun, and that nobody waits for,
 ;; is gone all the same: closing a window stops its thread in that way, and
 ;; on a machine that is slow enough the thread has not yet had its turn.

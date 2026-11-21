@@ -7,9 +7,17 @@
 # kernel booted from, and wrote to.
 # usage: tools/boottest.sh <x86_64|aarch64> [extra qemu args...]
 #        such as: -smp 4, -cpu max, -machine gic-version=2
-# env:   TIMEOUT=90   MARKER="text to wait for"
+# env:   TIMEOUT=90   MARKER="text to wait for" (the kernel's last line, which
+#                 is "clara: nothing more to do" unless this says another. A
+#                 session that ends by shutting the machine down has
+#                 "clara: turning the machine off" for it: the machine then has
+#                 to go by itself, and there is no screen left to save.)
 #        SESSION=tools/session.txt (what is typed and what has to come back;
-#                 empty: only Ctrl-D is typed)
+#                 empty: only Ctrl-D is typed. {{system}} in it is the name of
+#                 the system that was built, and {{version}} its version.)
+#        PANICS=1 (how many times the kernel is to stop with a report on the
+#                 way, a panic or an exception: 0 unless this says otherwise,
+#                 and one more than that ends the boot at once)
 #        NAME=aarch64-gic2 (what the files in build/ are called; default: the arch)
 #        MKDISK="--fat 16 --table mbr" (the kind of disk that is made of the ESP
 #                 directory for the machine to boot from: tools/mkdisk.py)
@@ -22,6 +30,17 @@
 #        WORK=build/work.img (give the machine a copy of that disk as well, the
 #                 way tools/run.sh gives a user's machine a disk of the user's
 #                 own; afterwards the host looks at the volume on it too)
+#        SERVE=directory (the machine has somewhere to fetch from: the
+#                 directory, by HTTP, and a name server that knows every name
+#                 which ends in .test, both on this computer and on one port
+#                 (tools/serve.py). {{port}} in the session is that port,
+#                 which the machine reaches at 10.0.2.2, and {{key}} is what
+#                 KEY= says, the public half of the key that a release there
+#                 is signed with)
+#        CERTS=directory (and the same directory by HTTPS, on another port,
+#                 which is {{secure}} in the session: the certificates that
+#                 the server shows are the ones in that directory, which
+#                 tools/certs.py makes)
 #        plus what tools/run.sh reads
 set -eu
 arch=${1:?usage: tools/boottest.sh <arch> [qemu args]}
@@ -29,6 +48,11 @@ shift
 name=${NAME:-$arch}
 marker=${MARKER:-clara: nothing more to do}
 timeout=${TIMEOUT:-90}
+# Does the session end with the machine turning itself off?
+case "$marker" in
+*"turning the machine off"*) goes=1 ;;
+*) goes= ;;
+esac
 session=${SESSION-tools/session.txt}
 log=build/boot-$name.log
 shot=build/screen-$name.png
@@ -42,6 +66,43 @@ boot=build/boot-$name.img
 mkdir -p build
 rm -f "$shot" "$sock" "$keys" "$orders" "$heard" "$typing".* "$scratch"
 : > "$log"
+
+# A machine that is to fetch something gets somewhere to fetch it from,
+# which lasts as long as this script does.
+port=0 secure=0
+if [ -n "${SERVE:-}" ]; then
+    rm -f "build/serve-$name.port"
+    python3 -I tools/serve.py "$SERVE" "build/serve-$name.port" ${CERTS:+"$CERTS"} > "build/serve-$name.log" 2>&1 &
+    server=$!
+    trap 'kill "$server" 2> /dev/null || true' EXIT
+    n=0
+    while [ ! -s "build/serve-$name.port" ] && [ "$n" -lt 100 ]; do
+        sleep 0.1
+        n=$((n + 1))
+    done
+    read -r port secure < "build/serve-$name.port" 2> /dev/null || port=0
+    if [ "$port" = 0 ]; then
+        echo "boottest $name: FAILED, tools/serve.py did not start"
+        cat "build/serve-$name.log"
+        exit 1
+    fi
+fi
+
+# A session can name the system that was built and its version, which are
+# different for every build: they are written into a copy of it. And the
+# ports that it fetches from, the key that what it fetches is signed
+# with, how many certificates the system's list has ({{roots}}), and what
+# time it is on this computer as the machine is started, in seconds since
+# 1900 began, which is how the machine counts it too ({{now}}).
+if [ -n "$session" ]; then
+    system=$(ls "${ESP:-build/esp}/clara" 2> /dev/null | head -1)
+    version=$(sed -n 's/^#define CLARA_VERSION "\(.*\)"/\1/p' kernel/kernel.h)
+    sed -e "s/{{system}}/$system/g" -e "s/{{version}}/$version/g" -e "s/{{port}}/$port/g" -e "s/{{secure}}/$secure/g" \
+        -e "s/{{key}}/${KEY:-}/g" -e "s/{{roots}}/$(grep -c 'BEGIN CERTIFICATE' lisp/roots.pem)/g" \
+        -e "s/{{now}}/$(($(date +%s) + 2208988800))/g" \
+        "$session" > "build/typed-$name.txt"
+    session=build/typed-$name.txt
+fi
 
 # The disk that the machine boots from, and that its kernel writes to: a
 # new one, or a copy of the one that was asked for, so that a disk is only
@@ -90,6 +151,12 @@ dd if=/dev/zero of="$scratch" bs=1024 count=1024 2> /dev/null
 #               it: for a window, which echoes what is typed on the screen
 #               and not on the serial port, so nothing waits for an echo.
 #               As short as a line after ^K.
+#   ^R          the machine starts again here, by the form in the line before
+#               it: what follows is typed at the kernel that comes up then,
+#               once it reads.
+#   ^W pattern  wait until the kernel has printed a line that the pattern
+#               fits, grep's kind of pattern, before what follows: a ^M that
+#               is for a kernel which says nothing more by itself.
 # So the session is typed in parts, and a part waits for a line of the
 # kernel's: a Ctrl-C or a command, and what follows them, until the kernel
 # has echoed the line before, which it is evaluating by then; a line for
@@ -97,10 +164,14 @@ dd if=/dev/zero of="$scratch" bs=1024 count=1024 2> /dev/null
 # what is typed on the keyboard is read ahead of what the serial port still
 # holds; and what follows such a line until that line has been echoed. A
 # line that is waited for must not come earlier in the session as well.
+# What follows a ^R waits until the kernel has said as often that it reads
+# as the machine has been started by then.
 #   $typing.N          what part N types on the serial port
 #   $typing.N.monitor  the commands it sends to the monitor first
 #   $typing.N.after    the line that the kernel has to have printed
-LC_ALL=C awk -v out="$typing" '
+#   $typing.N.boots    or how many times it has to have said that it reads
+#   $typing.N.grep     or a pattern that a line of what it printed has to fit
+LC_ALL=C awk -v out="$typing" -v goes="$goes" '
     function keyname(c,    i) {
         if (c ~ /^[a-z0-9]$/) return c
         if (c ~ /^[A-Z]$/) return "shift-" tolower(c)
@@ -124,6 +195,8 @@ LC_ALL=C awk -v out="$typing" '
                       print "sendkey " keyname(substr($0, i, 1)) > (out "." part ".monitor")
                   print "sendkey ret" > (out "." part ".monitor"); commands = 1; next }
     /^\^K$/     { begin_part(before); keyboard = 1; next }
+    /^\^R$/     { part++; boots++; print boots + 1 > (out "." part ".boots"); commands = 0; next }
+    /^\^W /     { part++; print substr($0, 4) > (out "." part ".grep"); commands = 0; next }
     /^[> ] /    { if (keyboard) {
                       for (i = 3; i <= length($0); i++)
                           print "sendkey " keyname(substr($0, i, 1)) > (out "." part ".monitor")
@@ -135,7 +208,8 @@ LC_ALL=C awk -v out="$typing" '
                   }
                   last = $0 }
                 { before = $0 }
-    END         { if (commands) {
+    END         { if (goes) exit 0 # the machine turns itself off, and nothing ends the reading
+                  if (commands) {
                       print "tools/boottest.sh: a session cannot end with a ^M or a ^T line: Ctrl-D would not wait for it" > "/dev/stderr"
                       exit 2
                   }
@@ -178,19 +252,32 @@ type_part() {
 # is not over before Enter is. So the log gets a byte at its end that no
 # line has, which only a line that has not ended runs into.
 echoed() {
-    [ -f "$typing.$part.after" ] &&
-        { LC_ALL=C tr -d '\r' < "$log"; printf '\001'; } | LC_ALL=C grep -qxF -- "$(cat "$typing.$part.after")"
+    if [ -f "$typing.$part.boots" ]; then
+        [ "$(grep -c '^clara: reading' "$log")" -ge "$(cat "$typing.$part.boots")" ]
+    elif [ -f "$typing.$part.grep" ]; then
+        grep -q -- "$(cat "$typing.$part.grep")" "$log"
+    else
+        [ -f "$typing.$part.after" ] &&
+            { LC_ALL=C tr -d '\r' < "$log"; printf '\001'; } | LC_ALL=C grep -qxF -- "$(cat "$typing.$part.after")"
+    fi
 }
 
 # The kernel echoes what is typed after its prompt, so what it printed
 # between its invitation and its last line has to be the transcript, and
-# after it the prompt at which Ctrl-D arrived. A Ctrl-C that stops a form
-# is not echoed, and the other lines that begin with ^ are for this script.
+# after it the prompt at which Ctrl-D arrived, when that is how the session
+# ended. A Ctrl-C that stops a form is not echoed, and the other lines that
+# begin with ^ are for this script. Where the machine was started again,
+# what the firmware and the kernel said until the kernel read once more is
+# no part of the session.
 check_session() {
     [ -n "$session" ] || return 0
-    LC_ALL=C tr -d '\r' < "$log" | LC_ALL=C sed -n '/^clara: reading/,/^clara: nothing/p' \
-        | sed '1d;$d' > "$heard"
-    { grep -v '^^' "$session"; echo '> '; } | diff -u - "$heard"
+    last=$(LC_ALL=C tr -d '\r' < "$log" | LC_ALL=C grep -n -m 1 -- "$marker" | cut -d: -f1)
+    LC_ALL=C tr -d '\r' < "$log" | head -n "$((last - 1))" | LC_ALL=C awk '
+        /^clara: reading/ { reading = 1; next }
+        !reading          { next }
+                          { print }
+        /^clara: starting the machine again/ { reading = 0 }' > "$heard"
+    { grep -v '^^' "$session"; [ -n "$goes" ] || echo '> '; } | diff -u - "$heard"
 }
 
 # Give the last line time to reach the screen, then ask the QEMU monitor for
@@ -208,6 +295,17 @@ screenshot_and_quit() {
 stop_qemu() {
     kill "$pid" 2>/dev/null || true
     wait "$pid" 2>/dev/null || true
+}
+
+# A machine that has said it is turning itself off has to be gone a moment
+# later, without anybody having stopped it.
+gone_by_itself() {
+    n=0
+    while kill -0 "$pid" 2>/dev/null && [ "$n" -lt 100 ]; do
+        sleep 0.1
+        n=$((n + 1))
+    done
+    ! kill -0 "$pid" 2>/dev/null
 }
 
 # The volume that the kernel booted from, and wrote to, as the host's own
@@ -247,7 +345,15 @@ expected() {
 i=0
 while [ "$i" -lt $((timeout * 4)) ]; do
     if grep -q "$marker" "$log"; then
-        screenshot_and_quit
+        if [ -n "$goes" ]; then
+            if ! gone_by_itself; then
+                stop_qemu
+                echo "boottest $name: FAILED, the machine said that it was turning itself off, and was still there ten seconds later"
+                exit 1
+            fi
+        else
+            screenshot_and_quit
+        fi
         stop_qemu
         if [ "$part" -gt 0 ] && ! check_session; then
             echo "boottest $name: FAILED, the kernel did not answer $session as written (above: -expected, +heard)"
@@ -268,8 +374,9 @@ while [ "$i" -lt $((timeout * 4)) ]; do
     elif echoed; then
         type_part
     fi
-    # A kernel that has stopped with a report is not going to say more.
-    if grep -q '^panic: \|^exception: ' "$log"; then
+    # A kernel that has stopped with a report is not going to say more,
+    # unless the session is one that starts the machine again after it.
+    if [ "$(grep -c '^panic: \|^exception: ' "$log")" -gt "${PANICS:-0}" ]; then
         break
     fi
     kill -0 "$pid" 2>/dev/null || break

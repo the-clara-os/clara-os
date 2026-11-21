@@ -1,3 +1,12 @@
+# The website, https://claraos.org, and with it the newest ClaraOS as a
+# release: https://claraos.org/releases/ is where a ClaraOS looks for a
+# newer one when it is told to upgrade and no other disk of its machine
+# holds a system (lisp/system.lisp). Every deployment puts the whole site
+# in the place of the one before, so every one of them builds the system
+# of its commit, signs it and lays it out beside the pages, and what is
+# published there is always the system of the newest commit on main that
+# changed any of it. The paths are what goes into the site and into a
+# system.
 name: Website
 
 on:
@@ -6,7 +15,10 @@ on:
     paths:
       - 'site/**'
       - 'ROADMAP.md'
-      - 'kernel/kernel.h'
+      - 'kernel/**'
+      - 'lisp/**'
+      - 'tools/**'
+      - 'Makefile'
       - 'fonts/spleen-8x16.bdf'
       - '.github/workflows/site.yml'
   workflow_dispatch:
@@ -19,6 +31,7 @@ concurrency:
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     permissions:
       contents: read
@@ -38,6 +51,42 @@ jobs:
       # built, not copied.
       - name: Build the Site
         run: python3 -I site/build.py _site
+
+      # The system of this commit, built the way CI builds it: the list is
+      # the part of the Makefile's that a build needs.
+      - name: Install the Toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang lld make python3
+          clang --version
+
+      - name: Build the System
+        run: make
+
+      # The system becomes the release of this site (`make release`,
+      # tools/release.py): its files, the list of them, and the signature
+      # of that list, made with the key that only this environment has,
+      # the secret RELEASE_KEY of github-pages, which takes deployments
+      # from main and from nowhere else. The key is in a file that nobody
+      # else on the runner can read for as long as the signing takes, and
+      # no other step sees it. `make release` lays nothing out unless the
+      # key is the one whose public half the system has in it
+      # (lisp/system.lisp), and holds what it laid out against that half,
+      # as a machine will: with another key in the secret, or with none,
+      # this step fails, nothing is published, and the site stays as it
+      # was, with the release that it had.
+      - name: Sign the System and Lay It Out as a Release
+        env:
+          RELEASE_KEY: ${{ secrets.RELEASE_KEY }}
+        run: |
+          if [ -z "$RELEASE_KEY" ]; then
+            echo "::error::The environment github-pages has no secret RELEASE_KEY, so there is nothing to sign the release with. Nothing is published, and the site stays as it was."
+            exit 1
+          fi
+          key="$RUNNER_TEMP/release-key"
+          trap 'rm -f "$key"' EXIT
+          (umask 077 && printf '%s\n' "$RELEASE_KEY" > "$key")
+          make release KEY="$key" RELEASES=_site/releases
 
       - name: Upload the Site
         uses: actions/upload-pages-artifact@v5

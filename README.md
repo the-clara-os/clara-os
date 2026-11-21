@@ -40,7 +40,7 @@ keyboard is read like what arrives on the serial port. A virtio disk has
 its driver too, and on it the FAT file system is read and written: the
 volume the machine booted from is the first whose files can be listed,
 read, loaded, written and deleted from the prompt,
-`(directory "/clara/*.lisp")`, `(load "/clara/hello.lisp")` or
+`(directory "/*")`, `(load "/hello.lisp")` or
 `(with-open-file (out "/notes.txt" :direction :output) (write-line "kept" out))`.
 And the world can be saved: `(clara:save-image)` writes the heap to a file
 on the boot volume, and the next boot starts from that file, with
@@ -75,6 +75,37 @@ times as quick as the kernel's machine where the time goes into calls and
 arithmetic. The evaluator is still there to run the compiler until it has
 compiled itself, and the kernel's machine to do what the processor's code
 leaves to it, and every such start holds the three against each other.
+And the machine is shut down by asking it (lisp/system.lisp):
+`(clara.system:shut-down)` at a prompt, `Shut Down` in the launcher's
+list, or the power button that a host presses. It asks the windows whether
+something would be lost, saves the world, has the disks keep what they
+were given, and turns itself off; `(clara.system:start-again)` starts it
+again instead, in the world that it saved. A newer ClaraOS is put on the
+disk by the one that is running: `(clara.system:upgrade)` takes the system
+that another disk of the machine holds, into a directory of its own beside
+the one that runs, and starts the machine again to try it. The old system
+stays until the new one has come to its prompt, and is what the machine
+starts as when the new one does not; the files that were written stay
+where they are. What was defined at a prompt comes across too: each form
+that defines something is written down as it is typed, in
+`/home/defined.lisp`, and a world that is made from the files loads that
+file after `/home/init.lisp`, which is the user's to write. The system
+that is leaving also writes down what its variables had come to, as far
+as that is text, and the one that comes gives those values back, saves
+the world that it made, and says by name what did not come across;
+`(clara.system:report)` says it again. And a newer ClaraOS can be fetched:
+there is a network (lisp/net.lisp), a driver for virtio's network card
+with ARP, IPv4, UDP, DHCP, DNS, TCP and HTTP over it, as far as fetching a
+file takes, and HTTPS (lisp/tls.lisp): TLS 1.3, with certificates held
+against the authorities that sign for the web,
+`(clara.net:fetch-text "https://claraos.org/")`. The newest ClaraOS is
+published at `https://claraos.org/releases/`, built and signed each time
+a change is merged, and `(clara.system:upgrade)` takes it from there when
+no other disk of the machine holds a system: when it is newer than the
+one that runs, its manifest is signed with the key that the system has
+(Ed25519, checked in the kernel), and every file is what the manifest
+says. `:from "https://.../"` names another place. What a connection is kept closed with is in the kernel too,
+each piece held against the examples of its standard at every boot.
 The same Lisp files load
 under SBCL on the host, where they are tested against a machine that is
 made up for the purpose.
@@ -106,20 +137,36 @@ Then, on either:
                       # tools/resumed.txt; AArch64 does all that twice, once for each version of
                       # its interrupt controller, and boots once more with the Lisp collector
                       # running at every chance it has, from a disk whose saved world is damaged;
+                      # each kind of processor starts once more to be shut down, started again and
+                      # turned off by its power button (tools/power.txt); a machine of each kind takes
+                      # another system from a second disk and has to come up as it, and one takes a
+                      # system that does not start and has to be the old one again (tools/upgrade.txt,
+                      # tools/at-once.txt, tools/trial.txt); one fetches a signed release of another
+                      # system from a web server on this computer, and has to come up as it
+                      # (tools/network.txt, tools/serve.py);
                       # and what the user manual shows of the prompt is typed at one more machine,
                       # which has a second disk, as WORK= below gives one
     make run-aarch64  # QEMU window, serial on the terminal: type a form in either; Ctrl-C stops a form
-                      # that does not end, Ctrl-D ends the session, Ctrl-A X in the terminal leaves QEMU;
-                      # hvf-accelerated on Apple silicon. The disk, build/disk-aarch64.img, is kept from
-                      # one run to the next, with a world that was saved on it, until the next build
+                      # that does not end, (clara.system:shut-down) saves the world and turns the
+                      # machine off, which ends QEMU, and Ctrl-A X in the terminal leaves QEMU as it is;
+                      # hvf-accelerated on Apple silicon. The disk, build/disk-aarch64.img, is made once
+                      # and kept, with the files and the world on it; a newer build goes to the machine
+                      # as a second disk, and the system on the disk takes it as it starts. The machine
+                      # has a network card on a network that QEMU makes up, through which it reaches
+                      # this computer at 10.0.2.2 and whatever this computer reaches (NET= for none)
+    FRESH=1 make run-aarch64
+                      # the same with a new disk; the one that was there is kept under another name
     make run-x86_64   # same, emulated (TCG), so the firmware takes a few seconds
     WORK=~/clara-work.img make run-aarch64
-                      # the same machine with a second disk, which is yours and outlives every build:
+                      # the same machine with a second disk, which is yours alone:
                       # the manual's "A disk of your own" says how to make one and how to reach it
     make image        # build/claraos.img, a GPT + FAT32 raw disk for UTM; needs macOS
     make site         # build/site: the website, which is not built when the manual lacks a name that
                       # the system defines, or when its picture is of another version than the kernel's
     make screenshot   # after make test: site/boot.png, the website's picture, of the screen as it was left
+    make release KEY=my.key RELEASES=releases
+                      # the build as a release in that directory, signed with the key in that file: what the
+                      # website's workflow publishes at https://claraos.org/releases/, with the project's key
 
 Layout:
 
@@ -128,16 +175,19 @@ Layout:
     kernel/lisp/     the Lisp runtime: objects and the heap, symbols and packages, the reader, the printer,
                      the evaluator, and the machine that compiled code runs on (vm.c)
     lisp/            Lisp sources: the language's own part, the compiler, the console, drawing, the drivers, the
-                     file system, the listener, the window manager and the terminal in a window, which the kernel loads as it starts, and
+                     file system, the network, the listener, the window manager and the terminal in a window, which the kernel loads as it starts, and
                      the two applications, editor.lisp and files.lisp, which the launcher loads when they are picked;
-                     the build copies them to the ESP's \clara directory, read at boot
+                     the build copies them to the system's directory on the ESP, \clara\<its name>, read at boot
     fonts/           the console font, Spleen 8x16, which tools/bdf2c.py turns into kernel/font.c
     site/            the website: the front page and the user manual (manual.html), filled in from the
                      repository and held against it by site/build.py (`make site`)
-    tools/           run.sh (QEMU), mkdisk.py (the disk a machine boots from), boottest.sh (headless
-                     check, typed session and screenshot), session.txt and resumed.txt (what the check
-                     types and what must come back, at a new world and at one that was saved),
-                     mkimage.sh (UTM disk)
+    tools/           run.sh (QEMU), mkdisk.py (the disk a machine boots from), system.py (the name of a build
+                     and the list of its files), boottest.sh (headless check, typed session and
+                     screenshot), session.txt and resumed.txt (what the check types and what must come
+                     back, at a new world and at one that was saved), power.txt, upgrade.txt, at-once.txt,
+                     trial.txt and network.txt (the same for shutting down and for upgrades), serve.py (the
+                     web server that a boot fetches from), release.py (a key, a signature, and a system
+                     laid out as a release), mkimage.sh (UTM disk)
 
 ## Running in UTM
 
@@ -160,20 +210,23 @@ what to do at the prompt once it is there.
 6. Start. The display and the serial window both show the boot report,
    which ends at a prompt. A form typed in either,
    `(mapcar #'1+ '(1 2 3))` say, is evaluated, and what it gives is printed
-   on both. `(directory "/clara/*")` lists the files the system was
-   loaded from. Ctrl-C stops a form that does not end, `(loop)` for one,
-   and the prompt comes back. Ctrl-D ends it, and the kernel halts with
-   `clara: nothing more to do`. `(clara.windows:start)` puts the window
+   on both. `(clara.fat:names (clara.system:system-file ""))` lists the
+   files the system was loaded from. Ctrl-C stops a form that does not end, `(loop)` for one,
+   and the prompt comes back. `(clara.windows:start)` puts the window
    manager on the display, with a prompt in a window; the tablet of step 5
-   is its pointer.
+   is its pointer. `(clara.system:shut-down)` saves the world and turns
+   the machine off, and so should UTM's Request power down, which presses
+   the machine's power button.
 7. `(clara:save-image)` saves the world on the disk. The next start says
    `lisp: the heap is an image` in its report, and whatever was defined is
-   there. To start from the Lisp files again, import `build/claraos.img`
-   afresh.
+   there. To start from the Lisp files again,
+   `(delete-file "/clara/clara.image")`.
 
-UTM copies the image into the VM bundle, so after a rebuild either import it
-again or replace the copy inside the `.utm` bundle (Show Package Contents,
-`Data/`). `utmctl start ClaraOS` starts the VM from the terminal.
+UTM copies the image into the VM bundle, and that copy is the machine's
+disk from then on. To put a newer ClaraOS on it, add the newer
+`build/claraos.img` as a second VirtIO drive, start the machine and say
+`(clara.system:upgrade)`: the manual's chapter "A newer ClaraOS" has the
+steps. `utmctl start ClaraOS` starts the VM from the terminal.
 
 ## License
 

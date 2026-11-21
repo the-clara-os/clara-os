@@ -31,9 +31,25 @@ void kmain(struct boot_info *bi)
     pmm_reclaim(bi);
     fault_selftest();
 
+    sha512_selftest();
+    ed25519_selftest();
+    /* What a connection that is kept closed is made of (lisp/tls.lisp). */
+    sha256_selftest();
+    hmac_selftest();
+    aes_selftest();
+    x25519_selftest();
+    bignum_selftest();
+    ecdsa_selftest();
     acpi_init(bi->acpi_rsdp);
     arch_interrupts_init();
     timer_selftest();
+    timer_set_clock(&bi->clock);
+    if (bi->clock.known)
+        kprintf("clock: the firmware says that it is %u-%02u-%02u %02u:%02u:%02u\n", bi->clock.year, bi->clock.month,
+                bi->clock.day, bi->clock.hour, bi->clock.minute, bi->clock.second);
+    else
+        kprintf("clock: the firmware does not say what time it is\n");
+    arch_power_init();
 
     /* With a tick to take turns on, this flow of control becomes one
      * thread among others. */

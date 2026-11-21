@@ -1,3 +1,5 @@
+> (setq clara.listener:*record* nil)
+NIL
 > (defvar *made* (let ((clara.native:*translate* nil)) (compile nil '(lambda (n) (let ((made nil)) (dotimes (i n) (push (let ((k i)) (lambda () (list k))) made)) (mapcar #'funcall made))))))
 *MADE*
 > (defvar *quick* (compile nil '(lambda (n) (let ((kept nil)) (dotimes (i n) (push (list i (* i i)) kept)) (length kept)))))

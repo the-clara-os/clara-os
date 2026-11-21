@@ -409,55 +409,147 @@ The compiler:
 
 Upgrades:
 
-- [ ] **M15a an upgrade in place.** A newer ClaraOS comes to a machine
-  today as another disk, and what was on the old one goes with it: the
-  files that were written there and the world that was saved. The upgrade
-  is done by the system that is running instead. It takes the newer system
-  from a second disk, the one that `make image` makes, attached as one
-  more VirtIO drive, and writes its kernels and its Lisp files onto the
-  disk that it was started from, where everything else stays as it is. It
-  writes them in an order that a machine can stop in at any moment and
-  still start, and the system that was there is kept until the new one has
-  come to its prompt. `make run-*` keeps its disk from one build to the
-  next and is given a new build the same way, and the manual's way of
-  putting a newer ClaraOS into UTM becomes this one.
-- [ ] **M15b work kept as text.** What is defined at the prompt is in the
-  heap and nowhere else, so it lasts as long as the world it was defined
-  in, and a world that was saved is of no use to a kernel that lays its
-  objects out in another way. So the work is kept as text as well, which
-  every version reads: a directory on the boot volume that is the user's,
-  and that no upgrade writes to; a file there that every world loads once
-  it has been made from the files; and a second one that the listener
-  writes, each form that defines something as it was typed, so that a
-  world that is made again has what was defined in the one before it
-  without anybody having written it down. The image stays what makes a
-  machine start quickly.
-- [ ] **M15c a world made again.** An upgrade ends in a world of the new
-  system. After one, the world is made from the new system's files, the
-  user's text is loaded into it and it is saved, without anybody asking,
-  and the report says what was done and what did not come across. That
-  holds also where the world that was saved could be gone on with, its
-  objects being laid out as before: the system's own Lisp in it is the
-  older system's.
-- [ ] **M15d upgrades over the network.** The newer system is fetched and
-  not carried: the running system asks where ClaraOS is published which
-  version is the newest, fetches it when it is newer than its own, sees
-  that what came is what was published, and hands it to the upgrade of
-  M15a, which then takes a system from a second disk or from the network.
-  Where it is published is perhaps the releases of the repository on
-  GitHub, the kernels and the Lisp files of a version being the files of
-  its release. It waits for two things that are not there: a network,
-  which is under "Later" and is work of its own, and releases.
-- [ ] **M15e shutting down.** A machine that runs ClaraOS is stopped from
-  outside today, by leaving QEMU or with UTM's button, and that is the
-  plug pulled: the system is not told, and what the world holds that was
-  not saved is gone. Shutting down is something that the system does
-  itself. It is asked to at the prompt, in the window manager, or by the
-  machine's power button, which is what a host presses when it wants a
-  machine to stop. It tells the applications, stops the threads, saves the
-  world unless it is told not to, sees that what was written is on the
-  disk, and turns the machine off, or starts it again. Starting again is
-  how an upgrade ends, so M15a needs that half of it.
+- [x] **M15a an upgrade in place** (2026-11-20, version 0.0.26). A newer
+  ClaraOS came to a machine as another disk, and what was on the old one
+  went with it: the files that were written there and the world that was
+  saved. The upgrade is now done by the system that is running. A system
+  is a directory on the disk, `/clara/<name>`, named by its version and
+  eight digits of its build, with its Lisp files, its kernels and a
+  manifest that lists them with their sums; the kernel reads the files of
+  its own directory and no others, so a second system lies beside the
+  first. `(clara.system:upgrade)` takes the system that another disk of
+  the machine holds, the one that `make image` makes, attached as one
+  more VirtIO drive: file by file, each held against the manifest, into a
+  directory of its own, with everything else on the disk left as it is.
+  Then the machine starts again and the newer system is tried: the
+  firmware starts the old kernel, which starts the new one in place of
+  itself, once. When the new system has come to its prompt it puts its
+  kernels where the firmware looks and takes the old directory away; when
+  it has not, the next start is the old system's, in the world it saved,
+  and it says so. A machine can stop at any moment of all that and still
+  start. Every start is counted on the disk by the handoff before it is
+  known how it goes, and a saved world that did not come to its prompt is
+  passed over at the next start, which is the key that was missing for a
+  world that does not start. The same count says which volume the machine
+  was started from, wherever its disk is on the bus. `make run-*` keeps
+  its disk from one build to the next and hands the machine each newer
+  build as a second disk to take at once, and the manual's way of putting
+  a newer ClaraOS into UTM is this one. Directories can be made and taken
+  away (`clara.fat:make-directory`). A world is started by the system
+  that saved it and by no other, so what was defined at a prompt does not
+  come across an upgrade yet: that is M15b and M15c.
+- [x] **M15b work kept as text** (2026-11-20, version 0.0.27). What is
+  defined at a prompt was in the heap and nowhere else, so it lasted as
+  long as the world it was defined in, and a world that was saved is of no
+  use to another system: after an upgrade it was gone. The work is now
+  kept as text as well, which every system reads, in a directory that is
+  the user's and that no upgrade touches: `/home`, on the disk that the
+  machine starts from, which a system makes when it is not there.
+  `/home/defined.lisp` is written by the listeners, the one on the serial
+  port and the ones in windows: each form that defines something, as it
+  was typed, comments and all, once it has been evaluated, with a form
+  that defines a name again in the place of the earlier one, and the
+  package that forms are read in said between them. `/home/init.lisp` is
+  the user's to write. A world that is made from the files loads the two,
+  a form at a time: a form that fails is said in the report and passed
+  over, a file that does not come to an end is stopped after a minute,
+  and after two starts in a row that did not come to a prompt nothing of
+  it is loaded. So an upgrade ends in a world that has what was defined
+  in the one before it, the functions, the macros, the structures, the
+  packages and the variables as their forms give them, and so does a
+  start that had to pass a saved world over. A world is saved on the disk
+  that the machine started from, wherever names are looked up at the
+  moment. The image stays what makes a machine start quickly.
+- [x] **M15c a world made again** (2026-11-20, version 0.0.28). An upgrade
+  ended in a world that had the definitions of the one before it, from
+  the text, and nothing else of it; that world was not saved, so every
+  later start made it again; and nothing said what was missing. Now the
+  world that is leaving writes an account of itself for the system that
+  is to take its place, as the machine is started again to try it: which
+  functions and variables there are in the packages that are the user's,
+  and of the variables the values that can be written as text. The system
+  that comes makes its world from its own files, starts the window
+  manager when it was running, loads the text of `/home`, gives the
+  variables the values that they had come to, saves the world without
+  anybody asking, and says what it found, by name: which variables have
+  their values, which held something that is no text and are as their
+  forms make them, and which names of the old world are not defined in
+  the new one. `(clara.system:report)` says it again. A world also knows
+  which text it has, so a start in a saved world loads what the two files
+  have that the world has not: what was defined after the world was
+  saved, on a machine that then stopped without saving, is there at the
+  next start, with an image or without one. A saved world that does not
+  come to its prompt is kept the first time and replaced the second, by
+  the world that was made in its place. The language has `do-symbols`. No
+  converter from one layout of the heap to another was needed: the old
+  system writes text, and the new one reads it.
+- [x] **M15d upgrades over the network** (2026-11-20, version 0.0.29). A
+  newer ClaraOS is fetched, and not carried on a disk. ClaraOS has a
+  network for that, as much of one as fetching takes: a driver for
+  virtio's network card, and over it ARP, IPv4, UDP, DHCP, DNS, TCP and
+  HTTP, each as far as a machine needs it that asks and does not serve
+  (lisp/net.lisp). `(clara.net:fetch-text "http://...")` fetches a file,
+  and the machine asks the network for its address the first time
+  something wants one. A release is a system's directory on a web server
+  with a signature of its manifest beside it; `(clara.system:upgrade :from
+  "http://.../")` asks which system is the newest there, takes it when it
+  is newer than the one that runs, holds the manifest against the
+  signature with the key that the system has, and every file against the
+  manifest, and from there on it is the upgrade of M15a: tried at the
+  next start, and the old system there until the new one has come to its
+  prompt. There is no TLS: what arrives is believed for its signature and
+  not for the road it came by, and the kernel checks Ed25519 signatures,
+  in C. `tools/release.py` makes a key, signs, and lays a release out.
+  `make run-*` gives every machine a network card. Two things are not
+  decided here and are empty: where ClaraOS is published, and the key
+  that it is signed with, without which nothing is taken over the
+  network.
+- [x] **M15e shutting down** (2026-11-20, version 0.0.25). A machine that
+  runs ClaraOS was stopped from outside, by leaving QEMU or with UTM's
+  button, and that was the plug pulled: the system was not told, and what
+  the world held that was not saved was gone. Shutting down is now
+  something that the system does itself, and starting again with it. It is
+  asked to at a prompt, `(clara.system:shut-down)` and
+  `(clara.system:start-again)`; in the window manager, by `Shut Down` and
+  `Restart` at the end of the launcher's list; or by the machine's power
+  button, which is what a host presses when it wants a machine to stop,
+  `system_powerdown` to QEMU and Request power down in UTM. It asks the
+  windows whether their programs hold something that would be lost, and
+  goes no further while one says so, an editor whose text is not saved for
+  one: that window comes to the top, and whoever asked is told. Then it
+  saves the world unless it was told not to, stops the window manager and
+  with it the applications, has every disk put what it was given where it
+  lasts, and turns the machine off or starts it again. The substrate does
+  the last step by what ACPI's table of fixed hardware says of the machine:
+  PSCI on AArch64, the sleep state S5 and the reset register on x86_64,
+  with the two facts that only the DSDT has searched for in its bytes,
+  since nothing here interprets them. The firmware's own service for it is
+  not called, and DESIGN.md says why. The power button is looked at four
+  times a second, by a thread. A machine that has no way of being turned
+  off is told so in its boot report, and after a shutdown it is saved,
+  stopped and left for the host. `make test` has two more boots for it,
+  one for each kind of processor, which refuse to shut down over an
+  editor's text, start again into the world that was saved on the way, and
+  go by themselves when the power button is pressed. Starting again is how
+  an upgrade ends, so M15a has that half of it to stand on.
+- [x] **M15f HTTPS** (2026-11-20, version 0.0.30). What M15d fetched came
+  over a road that anybody on it can read and change, which is no way to
+  publish a system. An address that begins with `https://` is now fetched
+  over a connection that is kept closed: TLS 1.3 (lisp/tls.lisp). The
+  other side shows a certificate, and the machine holds it against the
+  name that was asked for, against the day, and against the certificates
+  that signed it, up to one that the system trusts: the authorities that
+  sign for the web, Mozilla's list, a file of the system
+  (lisp/roots.pem), to which `(clara.tls:trust ...)` adds. `(clara.net:fetch-text
+  "https://claraos.org/")` fetches the website. A release is fetched by
+  HTTPS and from no other kind of address; its signature stays under
+  that. The arithmetic is in C, each piece held against the examples of
+  its standard at every boot: SHA-256 and SHA-384, HMAC, AES-128 in
+  Galois/Counter Mode, X25519, numbers of thousands of bits to a power,
+  and signatures on the curves P-256 and P-384. Two things that such a
+  connection needs came with it: the time of day, from the firmware's
+  clock (`get-universal-time`), and numbers that nobody can guess, from
+  virtio's device for them (lisp/random.lisp, `clara.random:below`).
 
 Code for the processor:
 
@@ -543,9 +635,9 @@ Code for the processor:
   files. CASE compares symbols and integers with EQ, an instruction, where
   it called EQL and MEMBER, which the translator spent its time in.
 
-Later, in no order: virtio-net and TCP/IP; outline fonts; sound; CLOS; a
-USB keyboard and mouse, which is what UTM gives a machine that is not told
-otherwise.
+Later, in no order: the rest of a network, a machine that listens, IPv6;
+outline fonts; sound; CLOS; a USB keyboard and mouse, which is what
+UTM gives a machine that is not told otherwise.
 
 The website, <https://claraos.org>, is built from this file by
 site/build.py: the milestone list above, with its version numbers, is what
@@ -610,6 +702,29 @@ Infrastructure, done:
   that and starts nothing. The manual names a `.dmg` among the disks that
   do, says that a disk left open is ejected, and has the lock in its table
   of what goes wrong.
+
+- **ClaraOS, published** (2026-11-20, version 0.0.31). The newest ClaraOS
+  is at `https://claraos.org/releases/`, and a machine takes it from
+  there: `(clara.system:upgrade)` on a machine with no other disk that
+  holds a system says where it looks, asks which system is the newest,
+  and takes it when it is newer than the one that runs and signed with
+  the key whose public half the system has. The address and that half
+  are in lisp/system.lisp now (`clara.system:*releases*`,
+  `clara.system:*release-key*`). The secret half is Julio's, on his
+  computer, and a secret of the environment that the website is deployed
+  from, `github-pages`, which takes deployments from main and from
+  nowhere else. The website's workflow (.github/workflows/site.yml) runs
+  for every change to the system as well as to the site, builds both
+  kernels, and has `make release` lay the system out beside the pages,
+  sign it, and hold what it laid out against the public half in the
+  source, as a machine will: with another key in the secret, or with
+  none, the job fails, and the site stays as it was. A system without a
+  key asks for nothing, where it used to ask and then refuse. `make
+  release-test`, which `make test` begins with, runs `make release` with
+  a key that it makes: the release has to be laid out when that key is
+  the one to go by, and refused when it is held against the system's.
+  And a build no longer goes wrong when its sources go back to what they
+  were at an earlier build (below).
 
 Infrastructure, for sessions with budget left over:
 
@@ -1437,198 +1552,660 @@ Shortcuts and loose ends, under the milestone that settles each one. A
 session reads its own group before it starts, and whatever it leaves open
 is added here in the same change.
 
-M15a, an upgrade in place:
+M15a, an upgrade in place, what it left:
 
-- Where things stand (2026-11-18). A newer ClaraOS reaches a machine as a
-  new disk: in UTM `build/claraos.img` is imported again in place of the
-  drive, and `make run-*` makes build/disk-<arch>.img again when build/esp
-  has something newer. The world that was saved and every file that was
-  written go with the old disk, which the manual says since 0.0.22, where
-  it also has the way to keep files meanwhile under QEMU: a second disk,
-  the user's own (`WORK=`, below under M15b). UTM keeps a drive that it imported as a qcow2
-  file of its own, so the host does not open it afterwards.
-- It was done by hand once, under QEMU on AArch64: 0.0.18 running from its
-  disk, the disk that tools/mkdisk.py makes of 0.0.19's build/esp attached
-  as a second VirtIO drive, and at the prompt, for every name of
-  `/EFI/BOOT/*` and `/clara/*.lisp` on the second volume,
-  `clara.fat:read-file` with `clara.fat:*volume*` bound to that volume,
-  `clara.fat:write-file` with it bound to the first, and
-  `clara.unsafe:free-memory`: eighteen files. Started again from that disk
-  the machine was 0.0.19 and a text file that had been written before was
-  there. The world that 0.0.18 had saved was refused, its objects being
-  laid out otherwise, and a function that was defined in it was gone. What
-  the host's checker makes of the volume after that was not looked at.
-- What the slice has to settle. Which volume is the system's: the kernel
-  does not know which disk it was booted from, and names are looked up on
-  the first volume on the bus, so a second disk that comes first is taken
-  for the system's. How the newer system says what it is, its version and
-  its files, before anything is written. The order: a file is written so
-  that a machine can stop at any moment, a set of files is not, and a
-  kernel of one version beside the Lisp files of another is a machine that
-  may not start. A directory of its own for the files of each version,
-  with the kernel written last, is one way. How the system that was there
-  is started when the new one does not come up: whether the firmware's
-  variables can still be written once boot services are left was not
-  looked into, and the firmware's shell starts a kernel that is kept under
-  another name. Both kernels are on the disk, and both are replaced.
-- UTM. The second drive is added by hand for an upgrade and taken out
-  after it; whether it has to come after the system's drive in UTM's list
-  was not tried, and nothing of this was tried in UTM. A folder that UTM
-  shares is no way in: of its two kinds one needs a SPICE agent in the
-  guest and the other a driver for a virtio-9p device (1af4:1009, which
-  0.0.19 lists as a device of a class without a name), and ClaraOS has
-  neither. A newer system over the network is M15d.
-- `make test` needs an older system to upgrade from, and CI has the tree
-  of one commit. A second kernel built of the same sources under another
-  version is one way; the image checks of M10 were done by hand with a
-  kernel that had a row more in a table.
+- UTM was not tried: a second VirtIO drive added for the upgrade and taken
+  out after it, whether it has to come after the system's drive in UTM's
+  list (the system finds its own volume by what the handoff wrote there,
+  so it should not have to), and what UTM makes of a machine that starts
+  itself again in the middle. A folder that UTM shares is still no way in.
+- The handoff writes to the boot volume at every start, through the
+  firmware's file system: `\clara\starts`, and `\clara\next` when a system
+  is tried. A volume that the firmware cannot write to gets neither. Such
+  a machine starts, never passes a world over, cannot be upgraded in
+  place, and takes the first volume on the bus for its own. Nothing says
+  so in the boot report.
+- The old kernel stays in memory while the system that it started is
+  tried: the firmware lists it as loaded, and the new kernel's allocator
+  leaves those two mebibytes alone until the next start. And the old
+  kernel's handoff is what starts the new one, so a kernel from before
+  0.0.26 cannot be upgraded from at all: tools/run.sh puts a disk of that
+  kind aside, under a name that it says, and starts from a new one.
+- A system that was tried and failed keeps its directory, with a file
+  `failed` in it, until an upgrade is asked for again or another system
+  takes the old one's place. The disk has room for it, and nothing shows
+  it but a listing of `/clara`.
+- (Settled in M15b and M15c: what was defined comes across as text, the
+  values of variables as far as they are text, the new world is saved in
+  the place of the old system's, and the window manager is started in it
+  when it was running. A saved world that does not come to its prompt a
+  second time is replaced.)
+- Sums are held when a system is taken from another disk, and not when a
+  kernel is started: a file of the system's directory that went bad on the
+  disk afterwards is read as it is.
+- The upgrade takes any system that is not the one that runs, an older
+  one as well, and says nothing about which is newer: `make run-*` after a
+  `git checkout` of an older commit puts the older system on the disk.
+- Both kernels are on the disk and both are replaced, the other
+  processor's without ever having been started on this machine.
+- `make test` builds its systems to upgrade to from the same sources under
+  other names (build/system-other, build/system-broken), so what is tested
+  is the mechanism and never a real difference between two versions. An
+  upgrade from the release before to this tree would need that release
+  built, which CI's one commit does not have.
+- By hand, and in no test: tools/run.sh itself, which `make test` never
+  runs without `DISK=`. A disk kept across a build and given the build as
+  a second disk; the same build twice, which gives no second disk;
+  `FRESH=1`; a disk from before 0.0.26, a copy of Julio's, put aside; a
+  second machine on a disk that one is running from, which is refused
+  with the reason where `lsof` is there to ask; and a work disk beside all
+  of it, a copy of his, with his own file loaded from it.
+- What was broken on purpose: 67 mistakes in lisp/fat.lisp,
+  lisp/system.lisp, kernel/boot.c, kernel/lisp/image.c, kernel/sha512.c
+  and the function that says what a start was, each run through the host
+  tests or through the boots that upgrade. Five got through. Four became
+  tests: a line of a manifest that is no file and reads like one; a count
+  of free bytes that left the last cluster out; a directory that could
+  not be entered in a full root, whose cluster has to be given back; and
+  the count of starts, which a system on trial has to begin anew, seen
+  only where a disk says "at once", so `make test` has a boot that goes
+  that way (tools/at-once.txt). The fifth changes nothing: the length of
+  a file is held against the manifest before its sum is, and no file has
+  the right sum and the wrong length.
+M15b, work kept as text, what it left:
 
-M15b, work kept as text:
+- What takes a definition back is not written down, apart from the window
+  manager's REMOVE-APPLICATION and REMOVE-COMMAND with a name that is
+  written out (since 0.0.28): after DELETE-PACKAGE, or a SETF that takes
+  a function's place, the form that defined the thing is still in the
+  file, and a world that is made of the text has it again.
+- What is written down is decided by a form's first word (DESIGN.md), so
+  a good deal of what changes a world is not: a form inside another, a
+  PROGN or a LET; a SETQ, and a SETF of a function or of a property; what
+  was done to a package after its DEFPACKAGE, by EXPORT, IMPORT or
+  USE-PACKAGE, so that a package which was put together by hand comes
+  back as its DEFPACKAGE made it; what Ctrl-E evaluated in the editor,
+  which is in the editor's file; and the forms of a file that was loaded,
+  of which the LOAD is written down and nothing else.
+- What is not a definition is not written down: in a world that is made
+  of the text alone, a variable that was changed after its DEFVAR has the
+  value that the form gives it, and a form that got its value by doing
+  something does it again, or fails: a DEFVAR that opened a window is
+  passed over in a world without a window manager. Across an upgrade the
+  values come along and the window manager is started (M15c).
+- The file keeps a definition where its name was first defined. A later
+  version of it that leans on something which was defined in between, a
+  macro for one, is loaded before that, compiled as a call of a function,
+  and fails when it is called. The order of a session is not always an
+  order that loads, and nothing here sorts it: the user moves the form in
+  the file.
+- (Settled in M15c: a world that came back as an image loads what the
+  two files have that it has not.)
+- A LOAD is written down as it was typed, and the name of a file does not
+  say which volume it is on: a new world looks it up on the volume that
+  the machine started from. A file that was loaded from a disk of the
+  user's own, with `clara.fat:*volume*` set, is not found there, which the
+  report says. The volume has no name of its own yet. A LET of the
+  variable does not reach another thread, so the Editor and the file
+  browser follow a SETQ only, and a user who sets it has to set it back.
+  Which disk is the user's is "the second" still; a machine with more
+  disks needs a mark on the volume.
+- The file is read and written whole for every form that is written down,
+  and read a form at a time to find the one to replace. That is nothing
+  for the hundreds of forms of a session and grows with the file; nothing
+  makes it shorter but the user.
+- A text that takes the kernel down, a fault and not an error, costs two
+  starts, and the third has nothing of `/home` and says so. The file is
+  not marked: once a start has come to its prompt the count begins anew,
+  and the next world that is made from the files loads the text again.
+  It is for the user to put the file right at that third start, or to
+  save the world there.
+- A file is given a minute (`clara.system:*patience*`), by the clock,
+  whatever the machine: where a machine is emulated, an honest file that
+  loads a great deal may be cut short. The variable is the world's, so a
+  form of `init.lisp` can give `defined.lisp` longer, and nothing can
+  give `init.lisp` longer but a world that was saved with another value.
+- The two files are refused as the argument of a LOAD that stands at the
+  top of either. A file that one of them loads, and that loads one of
+  them, goes round until the stack is full or the minute is over.
+- UTM was not tried: that `/home` is made and written on the drive that
+  UTM made of the image. A second drive for the user's files was not
+  tried there either (0.0.22): whether UTM keeps it apart from the
+  system's drive when that is imported again. UTM turns an imported drive
+  into a qcow2 file of its own, which the host does not open, so carrying
+  files in and out by the host is QEMU's way only.
+- A form of the text that fills the stack is passed over on ClaraOS, which
+  the upgrade boot sees. Under SBCL a full stack in a thread ends the
+  whole run, so the host tests have no such form.
+- What was broken on purpose: 64 mistakes in lisp/system.lisp,
+  lisp/listener.lisp, lisp/fat.lisp and lisp/boot.lisp, each run through
+  the host tests, and through the upgrade boot or the manual's where only
+  a kernel can tell. Seven got through. Five became tests: the package
+  that a listener says a form was read in, which the test could not tell
+  from the package afterwards; a variable and a function of one name,
+  which are two entries of the file; a LOAD whose name is worked out, on
+  the host and at a kernel; and a volume of an earlier start, which the
+  file system has to forget and has to refuse as the place for a world.
+  Two change nothing: the name that a form defines is printed in the
+  form's own package, and any one package would do as long as it is the
+  same for both forms; and a text that names a package which is not there
+  is marked as not read to its end, where the name alone has the same
+  effect.
 
-- Which forms the listener writes down: DEFUN, DEFMACRO, DEFVAR,
-  DEFPARAMETER, DEFSTRUCT, DEFPACKAGE, DEFINE-CONDITION and their like,
-  with the package that each was read in; whether a LOAD is written down
-  as a LOAD; and what to make of a form that defines something by way of a
-  macro of the user's. A name that is defined a second time is in the file
-  twice: when the file is made shorter, and by whom. A form that a newer
-  system cannot evaluate has to be said and passed over, and not keep the
-  world from being made. The listener of the serial port and the one in a
-  window write the one file.
-- What is not a definition is not kept: a variable that was changed after
-  its DEFVAR comes back with the value that the form gives it. That is
-  M15c's, below.
-- Where the directory is and what it is called, and whether `make image`
-  and tools/mkdisk.py make it. Whether a second disk can be the user's:
-  since 0.0.22 `WORK=` gives a machine under QEMU one, and the manual says
-  how files are kept there, all of it by hand. What that leaves for this
-  slice. The volume has no name of its own: it is reached by binding or
-  setting `clara.fat:*volume*`, and a name of a file does not say which
-  volume it is on. A LET of the variable does not reach another thread, so
-  the Editor and the file browser follow a SETQ only, and a user who sets
-  it has to set it back. SAVE-IMAGE writes where the variable points: an
-  error on a volume without `/clara`, and on one that has it a world that
-  no start finds. So: a name for the user's volume, SAVE-IMAGE on the boot
-  volume whatever the variable holds, and the file that every new world
-  loads looked for there. Which disk is the user's is "the second" today;
-  a machine with more disks needs a mark on the volume. Directories cannot
-  be made, so the user's are made on the host.
-- The disk driver has the gap that the file system had until 0.0.22: a
-  disk that a variable kept from an earlier start is asked as if it were
-  there (`request`, lisp/disk.lisp). No file function reaches one any
-  more; `clara.disk:read-sectors` and `write-sectors` still take it.
-- UTM. A second drive for the user's files was not tried there: whether
-  UTM keeps it apart from the system's drive when that is imported again,
-  and that it has to come after it in the list of drives. UTM turns an
-  imported drive into a qcow2 file of its own, which the host does not
-  open, so carrying files in and out by the host is QEMU's way only.
-- tools/run.sh makes build/disk-<arch>.img again when the build is newer,
-  also while a machine is still running from that file, which then has
-  its disk rewritten under it. The second machine does not start (QEMU's
-  lock), and the first is not told. Making the new disk beside the old
-  one and moving it into place would leave the running machine its own.
+M15c, a world made again, what it left:
 
-M15c, a world made again:
+- What counts as the user's is COMMON-LISP-USER and the packages that
+  were made after the world was, apart from the ones called CLARA. So a
+  function that the user added to a package of the system's is in no
+  account, and a package of the user's that is called CLARA-something is
+  taken for the system's.
+- What comes across as a value: numbers, characters, strings, symbols and
+  lists of those, up to 20000 parts and 64000 characters of text. Not a
+  vector that is no string; not a structure, until the reader takes back
+  the `#S(...)` that the printer writes; not a list that leads back into
+  itself. Two variables that held one list hold two after the upgrade.
+  The variables of the system's own packages are not carried at all: a
+  setting like `clara.native:*translate*` or `clara.system:*patience*` is
+  as the new system makes it, unless `init.lisp` sets it.
+- The values are given back after the whole text is loaded. A form of the
+  text that works something out from a variable sees the value that the
+  variable's form gave it, and not the one that was carried.
+- The account is written by the shutdown that starts the trial. A machine
+  that is reset from outside after `(clara.system:upgrade :start-again
+  nil)` leaves none, and neither does a system from before 0.0.28: the
+  new system says that it has no account, and the world is the text's.
+- The new system takes the old one's place before it loads the text
+  (`commit`). A text that takes the new kernel down does not send the
+  machine back to the old system: the count of starts is what catches
+  it, and the third start has no text.
+- A start in a saved world compares forms as text. A form that was only
+  written differently counts as new and is evaluated again; a form that
+  was taken out of a file stays defined in the world; and of `init.lisp`
+  only what is new is evaluated, so that file is no script that runs at
+  every start.
+- A world that was made without the text, after two starts that went
+  wrong, follows no text until `(clara.system:load-home)` is typed in it,
+  and no later start says so again.
+- The note of a saved world that was passed over is the length of its
+  file and where it begins on the disk. Two worlds saved one after the
+  other could have both numbers in common; nothing reads the file to
+  tell them apart. And when the world that takes the place of one that
+  does not start fails in the same way once it is saved, the two go
+  round: every other start comes to its prompt.
+- A world is saved without being asked after an upgrade and when a saved
+  one failed twice, and at no other start. A machine whose world was
+  never saved has no image, and makes its world at every start, as it
+  did.
+- What is said is kept in the world, the last four hundred lines of it,
+  and `(clara.system:report)` writes all of them out at once.
+- UTM was not tried.
+- The stress boot writes nothing down: tools/stress.txt begins by telling
+  the listener not to. With a collection at every safe point, writing one
+  form into `/home/defined.lisp` took twenty seconds on the Mac's emulator
+  and about a minute on CI, where the boot went from 249 s to 423 s of its
+  600 with M15b. So the writing down is not tried under the collector's
+  slow test, and what it costs grows with the file: every form reads the
+  whole of it.
+- By hand, and in no test: tools/run.sh from the seat, with a copy of
+  Julio's work disk beside the machine's. A new disk, a function and a
+  variable defined, the variable changed, a file written to `/home`, the
+  window manager started, a shutdown; then another build, which the
+  machine took as it started, and the new world had the function, the
+  value, the file's form and the window manager; then the plug pulled
+  after one more definition, and the start after it loaded that one from
+  the text into the world that the upgrade had saved.
+- What was broken on purpose: 105 mistakes in lisp/system.lisp,
+  kernel/lisp/builtin.c and lisp/boot.lisp, each run through the host
+  tests, and through the boot that upgrades, the one that fails, the
+  manual's or a first boot where only a kernel can tell. Thirteen got
+  through. Ten became tests: packages of the system's own in the account,
+  two ways; an account written where names are looked up and not where
+  the machine started; a value that does not read back as it was; a name
+  that was a function there and is a variable here; a saved world told
+  from another by its length alone, and by its place alone; a form that
+  the world has in another package; and a world that is made keeping the
+  report, and the knowledge of the text, of the one before it. One was a
+  restriction that restricted nothing, a name that had to be written out
+  before a removal was held against the file, and is gone. Two change
+  nothing: a form that names a package is never among the forms that a
+  world is said to have, so it is evaluated whether it is looked for
+  there or not; and a world that does not note what it took out of the
+  file finds at its next start that the file has nothing new.
+- Once, the host tests ended with SBCL's "unhandled condition in
+  --disable-debugger mode, quitting" and no line of their own, right
+  after a test was edited, and passed when they were run again as they
+  were, and in the two hundred runs after that, eighty of them one after
+  the other for no other reason. What it was is not known.
 
-- An image outlives the kernel that saved it (DESIGN.md, Images), and what
-  it has in Lisp stays the older system's. Tried on 2026-11-18: a world
-  that 0.0.17 saved was started by the kernel of 0.0.18, with a function
-  of the user's in it and with what 0.0.18 has more of in C, and its
-  launcher had the one application of 0.0.17 and not the three of 0.0.18.
-  A world that is made again after every upgrade changes that decision,
-  and DESIGN.md with it. Whether an older world can still be gone on with
-  when somebody asks for it is open.
-- Until this milestone a world that is refused is lost, and the user's
-  definitions with it. The number in image.c went from 1 to 2 with M14a
-  and to 3 with M14b, which added instructions and changed what a macro
-  is: a world that 0.0.19 saved is refused by 0.0.20. A slice that raises
-  it says so in its pull request.
-- What only the heap has: the value that a variable came to, a list that
-  was built by hand. A converter from each layout to the next would keep
-  those, and is a piece of work for every change of layout, too many while
-  a layout lasts a milestone. The other way is for the old system to write
-  them out as text before the upgrade, which needs no converter, the old
-  system knowing its own objects and the new one reading text: lists,
-  numbers, strings, symbols and characters as the printer writes them, and
-  structures once the reader takes back the `#S(...)` that the printer
-  writes. A closure, a thread, a lock, a stream, a surface, and anything
-  that points round in a ring are not text, and would be named and left
-  behind. Neither way is in the milestone as it is written above.
+M15d, upgrades over the network, what it left:
 
-M15d, upgrades over the network:
+- ClaraOS was not published when this slice ended, and no machine took a
+  release without being given an address and a key by hand. It is since
+  0.0.31 ("ClaraOS, published", under the infrastructure that is done),
+  with what Julio said to each of the three things that stood in the way
+  (2026-11-20). Where: not at a place that answers plain HTTP, which is
+  what this slice had asked for, with "Enforce HTTPS" switched off for
+  the website ("we don't do that here"), but at
+  `https://claraos.org/releases/`, the directory `releases` of what the
+  site's workflow publishes, which M15f lets a machine fetch from. The
+  key: he made one (`python3 tools/release.py key <file>`), its public
+  half is in lisp/system.lisp, and the secret half is his and the
+  publishing's. It says whose releases a machine takes over the network
+  and nothing else: a system from a disk is held against its manifest
+  and against no key, and somebody who publishes a ClaraOS of their own
+  gives the variable the public half of their own key. And publishing:
+  the website's workflow builds, signs and lays out a release for every
+  change that is merged. What that left has a group of its own, below.
+- No TLS was this slice's, and is M15f's. The entry had left two ways
+  open, HTTPS in ClaraOS or a file that is trusted and a road that is
+  not, and this slice took the second: what it built fetches by plain
+  HTTP. That stays, for a web server on one's own computer; a release is
+  no longer fetched that way.
+- The network is the client's half of each protocol, and of that the part
+  that fetching needs. One card, the first. IPv4, and no IPv6. No pieces
+  of packets, in either direction. No ICMP: the machine does not answer a
+  ping, and does not understand being told that a port is closed or a
+  packet too long, so such a thing ends in patience running out. DHCP is
+  asked once: the address is kept for as long as the machine runs,
+  whatever the server said about how long it lasts. DNS asks for
+  addresses of IPv4 by UDP, and knows no other server than the first that
+  the network named, or the one in `clara.net:*name-server*`; an answer
+  that is too long for one packet is not asked for again by TCP.
+- TCP: this side opens, and never listens. What it sends is one piece,
+  again every second without growing slower, to a patience of ten
+  seconds. It has no window above 64 KiB, no selective acknowledgement
+  and no time stamps, and the number that it counts its bytes from is
+  worked out from the clock, which somebody who wants to guess it can.
+  Pieces that come early are kept, sixty-four of them at most.
+- HTTP: one file to a connection, which is closed after it. An answer
+  that is sent in chunks is put together. Nothing is compressed, since
+  nothing says that it may be. An address is followed three times when a
+  server says that the file is somewhere else.
+- The machine does not know the time. A release cannot be too old, and a
+  key cannot have ended.
+- `latest` is believed as far as its name goes (DESIGN.md), so somebody
+  on the way can keep a machine from learning of a newer release, and
+  can offer it any release that was once published and is newer than the
+  one that runs.
+- A fetch says nothing while it runs, and a release is a few megabytes: on
+  a slow line the prompt stands still, and comes back with an error when
+  nothing has arrived for ten seconds (`clara.net:*patience*`).
+- Not tried: a web server on the Internet. Everything was fetched from
+  this computer, through QEMU's network, and from a network that the
+  tests make up. And UTM: its machine has a virtio network card on a
+  network that it shares with the host, which should be this one.
+- By hand, and in no test: tools/run.sh from the seat, with a web server
+  on the Mac (`python3 -m http.server`) handing out the release that
+  `make test` had laid out in build/releases: the machine asked for its
+  address, fetched, was given the key, took the release, started again
+  and came up as the other system. And `NET=`, which has to say `-nic
+  none` to QEMU: left to itself, QEMU gives the AArch64 machine a card of
+  its own.
+- The thread that takes what arrives must never ask the network anything.
+  It did: to answer a piece of a connection that it does not have, it
+  asked who has the sender's address, and the answer to that was its own
+  to take, so it stood still for ten seconds for every such piece. An
+  answer now goes to the card that the packet came from. A test found
+  it, and not a planted mistake.
+- What was broken on purpose: 129 mistakes in lisp/net.lisp,
+  lisp/system.lisp, kernel/ed25519.c, kernel/sha512.c and
+  kernel/lisp/unsafe.c, each run through the host tests, a first boot, or
+  the boot that fetches. One could not be built. Seventeen got through.
+  Thirteen became tests: a frame whose padding is not cleared, and one
+  that does not say whose it is; a question for an address that goes to
+  one card and not to all; a card of an earlier start that still sends;
+  a page that is written again while the card still has it; an answer to
+  the beginning of a connection that is none; a machine on the same
+  network that is reached by the way out; the end of a file that is not
+  counted; the memory of a connection that grows and forgets what had
+  come early; the end of an answer's head that falls between two pieces;
+  a frame that the thread cannot answer, which must not end the thread;
+  a disk that no longer goes before the network; and, in the kernel's
+  own tests, a sum taken of pieces that end in the middle of a block. One
+  was a line that did nothing, clearing twelve bytes that nothing ever
+  writes, and is gone. Three change nothing that can be seen: whoever
+  waits for something looks every twentieth of a second whether or not
+  it is told that something arrived, so not telling costs time only; a
+  signature whose number is exactly the order of the base point, which
+  the check takes for too large, cannot be made to pass the rest of the
+  check either; and a check that held only thirty-one of the thirty-two
+  bytes of a signature's point against what it worked out would still
+  refuse every signature that a test can make, since the point goes
+  into the sum that the rest is worked out from.
+- What the five milestones cost CI, on the first green run of each: the
+  whole job 7m54s, 10m33s, 14m10s, 14m40s and 15m28s, of a limit that went
+  from 15 minutes to 25. The boot that fetches takes 47 s there. The
+  stress boot took 202 s, 249 s, 423 s, 371 s and 382 s of its 600: it
+  grows with the world, since every form that its session types is
+  compiled with a collection at every safe point, and a collection goes
+  through a heap that now has the network and twice the system in it.
+  The 423 s were the writing down, which that session no longer does. It
+  is the boot to watch when more goes into the world. Twice that day a
+  run stood in its first step, installing packages on the runner at 46
+  kB/s, until the limit ended it: started again, each passed.
+- The made-up network of the host tests answered every repeated
+  acknowledgement by sending a whole window again, which made thirty
+  thousand pieces of one lost piece in a second and looked like a fault
+  of the machine's. A web server sends the one piece again, once, and so
+  does it now.
 
-- What it stands on. There is no network: no driver for a network device,
-  no addresses, no TCP. "virtio-net and TCP/IP" is under "Later" and has
-  no milestones of its own, and this is the first thing on the roadmap
-  that needs them: a driver for virtio-net, an address by DHCP, a name
-  looked up by DNS, TCP, and HTTP as far as fetching a file goes. The
-  device is there on most machines: QEMU's AArch64 machine has a
-  virtio-net device without being asked (1af4:1000 in the boot report),
-  and so has the machine in UTM, on a network that it shares with the
-  host. QEMU's x86_64 machine has one of Intel's (8086:10d3), so
-  tools/run.sh would give it a virtio one.
-- HTTPS. GitHub sends a request over plain HTTP on to HTTPS, and so does
-  the website, which GitHub serves as well. HTTPS in ClaraOS is the
-  largest piece of all of this: TLS with its exchange of keys and its
-  ciphers, certificates and their chain to a root that is trusted, the
-  time of day to hold them against, which the system does not know (a
-  file that it writes is dated 1980), and under all of it arithmetic on
-  integers of hundreds of bits, where the language has fixnums and nothing
-  larger. The other way is to trust the file and not the road: a release
-  that is signed with a key whose public half is in the system, and
-  checked when it has arrived, by whatever road. That still needs the
-  arithmetic of one kind of signature, and a place that gives the files
-  over plain HTTP, which neither the releases nor the website are. Which
-  of the two it is to be is for the slice to decide, and decides how large
-  the slice is.
-- Releases. The repository has none, and no tags: a version is a number in
-  kernel/kernel.h and a merge. Publishing one is a workflow that builds
-  both kernels and puts them and the Lisp files where they can be fetched,
-  with the version and a sum of every file. Nothing in that needs a
-  network in ClaraOS, so it can come first, and M15a's second disk could
-  then be a file that is fetched on the host and not built there:
-  `make image` needs macOS, and tools/mkdisk.py, which does not, makes a
-  disk of the same kind.
-- What is fetched is what M15a takes from a second disk, behind one
-  function: the files, their version and their sums. A machine that stops
-  while it fetches has changed nothing on its disk. To begin with, the
-  system looks for a newer version when it is asked to, and not by itself.
+M15e, shutting down, what it left:
 
-M15e, shutting down:
+- UTM was not tried. Its Request power down sends QEMU the same
+  `system_powerdown` that the tests send, to the same kind of machine, and
+  a ClaraOS that turns itself off should end the virtual machine there as
+  it ends QEMU; that it does, and what UTM makes of a machine that starts
+  itself again, is for somebody at a UTM window to see.
+- The DSDT is searched and not read (kernel/acpi.c). "Off" is the first
+  number after the name `_S5_`, and the power button of a machine without
+  a PC's fixed hardware is in the first region of memory after the string
+  `ACPI0013`. QEMU writes both that way, on both machines and with either
+  version of the interrupt controller. A firmware that writes them another
+  way is said to have no way of being turned off, or no button. The type
+  of S5 is 0 on QEMU, so that the kernel shifts it to the right bits of
+  the control register is not something a boot can notice.
+- The button is asked for four times a second, by a thread. Its interrupt
+  comes by a line on both machines, and no line is wired here (Devices, in
+  DESIGN.md).
+- Ctrl-D at the first prompt halts the machine as it always did, with
+  nothing saved, and a machine that has halted is deaf to its power
+  button: the host has to stop it. The tests end their sessions that way
+  and look at the screen afterwards, which a machine that turned itself
+  off does not have.
+- What is asked before a shutdown is the windows, and of those only the
+  ones that were given a function for it (`:unfinished`), which the editor
+  is. A thread that computes, a program without a window, and a file that
+  is open for writing and not closed yet are not asked and go with the
+  machine: such a file is not written.
+- A world is saved at every shutdown, as it is. One that was broken at the
+  prompt is saved broken, and starts like that: `:save nil` is for the one
+  who knows. One that does not come to its prompt is passed over (M15a),
+  and replaced the second time (M15c).
+- (Settled in M15b: a world is saved on the volume that the machine was
+  started from, wherever `clara.fat:*volume*` points, so a shutdown with
+  the variable set to a second disk no longer stops at SAVE-IMAGE.)
+- tools/run.sh no longer starts QEMU with `-no-reboot`, under which a
+  machine that started itself again ended QEMU instead. A kernel that
+  resets the machine by a fault it cannot report, three faults in a row on
+  x86_64, now starts again and again where it used to end QEMU.
+- By hand, and in no test: `(clara.unsafe:power-off)` and
+  `(clara.unsafe:reset)` straight from a prompt, on the three machines;
+  the button pressed with nobody listening, which the kernel has to forget;
+  and a session that pressed it twice. What a machine says when the
+  substrate cannot turn it off is seen under SBCL only, where no machine
+  can: every machine that the tests boot has a way.
+- What was broken on purpose, to see that something notices: 66 mistakes
+  in lisp/disk.lisp, lisp/windows.lisp, lisp/editor.lisp, lisp/system.lisp,
+  kernel/acpi.c, the two power.c and the three functions in C, each run
+  through the host tests or through the two boots of tools/power.txt. Four
+  got through. Two became tests: a command taken out of the launcher's
+  list that is not its first, and a second request to shut down while the
+  first is saving the world. One draws nothing that differs, the line
+  across a list without applications, which lies on the list's own edge.
+  And one cannot be seen on these machines: the search for a device's
+  registers in the DSDT stops at the next device's name, and QEMU's
+  generic event device has its registers before any other is named.
 
-- Where things stand (2026-11-18). Nothing in the kernel turns a machine
-  off or starts it again. Ctrl-D at the first prompt ends the session, the
-  kernel says that it has nothing more to do and halts, and the machine
-  stands still until the host stops it; nothing in the window manager
-  stops the machine. A file is on the disk from the moment the form that
-  wrote it has answered, so no file is lost by stopping. What is lost is
-  the world as it has become since it was last saved. tools/run.sh starts
-  QEMU with `-no-reboot`, under which a machine that starts itself again
-  ends QEMU instead.
-- How a machine is turned off and started again. The firmware has a
-  service for both among its runtime services, ResetSystem, the same on
-  both architectures. The kernel has never called a runtime service, and
-  whether it still can from its own page tables was not looked into.
-  Without that it is PSCI on AArch64, and ACPI on x86_64, where the value
-  that turns a machine off is in AML, which the kernel does not read: the
-  tables it reads are XSDT, APIC, GTDT and MCFG. Where a machine cannot be
-  turned off, the system says that it can be now, and stands still.
-- The power button. A host asks a machine to stop by pressing its power
-  button (`system_powerdown` in QEMU's monitor), and that comes as an
-  event of ACPI, by another way on each architecture. The system does not
-  hear it. Which of UTM's ways of stopping a machine is that request, and
-  which the plug, was not looked at.
-- What a shutdown does with the world. That it is saved without anybody
-  asking is a call to be settled: a world that was broken is then saved
-  broken and starts like that, and there is no key that says "from the
-  files" (the loose end of M10). So the image before it is kept, or the
-  system asks. And what becomes of what is not finished: a thread that
-  runs, an editor with text that was not saved, a file that is open for
-  writing.
-- What is on the disk. The driver for virtio's disks never asks a disk to
-  flush: whether a write that the device has answered is in the host's
-  file when QEMU is ended a moment later was not tried.
-- The order. An upgrade ends by starting the machine again, so that half
-  comes before M15a, or with it.
+M15f, HTTPS, what it left:
+
+- UTM was not tried, as with the five before it. A machine there needs
+  the device that makes numbers, which the manual says how to add when
+  the report says that there is none; whether UTM gives a machine one by
+  itself was not looked at.
+- One of each, and no more: TLS 1.3; X25519 for the exchange of keys;
+  AES-128 in Galois/Counter Mode with SHA-256. A server that speaks only
+  an older TLS is refused in those words. One that wants another exchange
+  of keys asks to begin again, which is refused too, and not answered
+  with another: the curve P-256 is the one that every server has to have,
+  and its arithmetic is there, for signatures, but with a number that is
+  a secret it would have to take the same time whatever the number is,
+  which it does not. The cipher of ChaCha20 and Poly1305 is not there
+  either, nor AES-256.
+- AES is written with its table of 256 bytes, so how long it takes
+  depends a little on the key (DESIGN.md says why that is let be). The
+  cipher that does not have that is the one in the point before.
+- A certificate that was taken back by whoever signed it is still taken:
+  nothing asks (no OCSP, no lists). Certificates are known that are
+  signed with RSA's older padding or on the two curves, over SHA-256,
+  SHA-384 or SHA-512, and that have keys of RSA's, from 2048 bits to
+  4096, or on the two curves. Anything else is "signed in a way that is
+  not known here": RSA's newer padding in a certificate, Ed25519, the
+  curve of 521 bits, which one certificate of the list has its key on,
+  and SHA-1, which three of the list's certificates are signed with, each
+  by itself, where nothing checks it. What a
+  certificate says that has to be understood is understood for four
+  things (whether it may sign, what its key is for, its names, what it
+  may be shown for); a certificate with anything else of that kind is not
+  taken, limits on the names that a signer may sign for among them.
+- The list of whom the system trusts is Mozilla's of 2026-11-05, 118
+  certificates, the file that curl publishes (SHA-256 427c0642...7285).
+  It is renewed by hand: `curl -o lisp/roots.pem
+  https://curl.se/ca/cacert.pem`, and a look at what changed. A system
+  has the list that it was built with until it is upgraded. Nothing
+  takes a certificate out of the list short of editing the file, and
+  what `clara.tls:trust` added is forgotten by a world that is made
+  again: a line in `/home/init.lisp` is where it belongs.
+- The clock is asked once, as the machine starts, and counted on from
+  there with the kernel's ticks. Nothing sets it, nothing asks the
+  network what time it is, and it has no zone: it is Greenwich's when the
+  firmware's is, which QEMU's is. A file that the system writes is still
+  dated 1980.
+- The numbers that nobody can guess come from virtio's device and from
+  nowhere else: not from the processor's own instruction for them, where
+  it has one, and not from a pool that is kept. The numbers that TCP and
+  DNS tell their exchanges apart by are still the ones of M15d, made by a
+  rule from the time and a count.
+- Every file is a connection of its own, greeted from the beginning:
+  some thirty greetings for a system. Nothing comes back to a connection
+  of before (the tickets for that are passed over), and nothing asks for
+  two files over one. Where the machine is virtualized, a greeting and
+  300,000 bytes after it take less than two hundredths of a second.
+- A machine that is asked who it is says that it has no certificate, and
+  what the server makes of that is the server's.
+- A file whose length is not said has to be ended with the word that the
+  connection is over. Python's web server does not say it unless it is
+  told to, which tools/serve.py does; a web server that drops such a
+  connection is refused, where a browser would take the file.
+- The Internet was tried by hand, and no test goes there:
+  https://claraos.org/ and a picture from it, the same from an address
+  that begins with http://, which the website sends on, a file of the
+  repository from github.com, which sends on to
+  raw.githubusercontent.com, and that address itself. Those are
+  certificates of two authorities, with keys of both kinds. The machine
+  says "ClaraOS" and its version to every web server that it asks
+  (User-Agent), which is why nothing else was asked.
+- Found on the way, in M15d's code: the memory of a connection is moved
+  to where there is more room by the thread that takes what arrives,
+  while the thread that fetches reads it, or has just handed it to its
+  caller. A connection has a lock for its memory now, and takes nothing
+  more once the file is somebody's (`frozen`). Nothing had shown it. With
+  TLS it shows: a long file over a closed connection fails under SBCL,
+  whose threads really run at once, when the lock is taken out again.
+- Found on the way, in M15a's tests: tools/trial.txt listed `/clara` with
+  the system's own directory before the one named "broken", which is how
+  the two sort for a system whose eight digits begin with 0 to b, and
+  not for one whose digits begin with c to f. One build in four failed
+  that boot. No commit on the way had been one of them; 0.0.30's first
+  build was. One verdict of M15a's planted mistakes had rested on it
+  (`:starts` always 0, in a copy of the tree whose digits began with c):
+  planted again, with the session put right, it is noticed for what it
+  is.
+- The disk of the kind FAT12 that one machine of `make test` starts from
+  was twelve megabytes, with clusters of four kilobytes, and the world is
+  saved on it twice over for a moment. With this slice the world and the
+  system no longer fitted: it is twenty-four megabytes now, with clusters
+  of eight, which is as far as that kind goes with such clusters.
+- Mistakes planted on purpose: 238, of which 66 in the arithmetic in C,
+  held against the self-tests that a boot runs, 16 in what Lisp calls of
+  it, in the clock and in what is started, held against a boot with its
+  session, and 156 in the Lisp, held against the host tests. 29 got
+  through at first. 22 of them became examples and tests: a
+  multiplication that needs its topmost piece, which next to no numbers
+  do and numbers just below a power of two do; a modulus with a zero
+  before it; a signature whose second number is the order too much, and
+  a key whose x is above the order, both made up for the purpose and
+  both taken by OpenSSL where they are signatures; the session's sum
+  with a key, whose key and bytes were of one length; a piece of a
+  certificate that says it is longer than what it is in, a length
+  without end, a date that is not Greenwich's and one of the last
+  century, an authority that says outright that it is none; signatures
+  of RSA's with one thing wrong in the block that they are made of, the
+  word for the sum, a zero before the signature, dirt among the zeroes
+  and the bit above the block; a greeting that goes on for longer than
+  is kept, a word of an older TLS that is none, a half of the exchange
+  of keys that makes nothing, a question about who the machine is that
+  is asked wrongly, the beginning of a message in the record of the
+  first one, the older way of signing with RSA where only the newer is
+  allowed; a request that is longer than one piece of a connection; and
+  an answer that ends in words while the connection under it stays
+  open. Seven change nothing that can be seen: a whole block of SHA-256
+  that waits is summed with what comes next, or at the end; a key that
+  is no point of its curve gives sums that no signature fits, and no
+  numbers can be made that tell; a sum above the order comes to the same
+  in the multiplication; a signature with a zero in it, and one that
+  comes to no point at all, are each refused by the check for the other;
+  a number below another that is taken from an uneven stretch of
+  numbers is wrong by one part in millions of millions; and a piece that
+  arrives after the file was handed on arrives in an instant that no
+  test can make.
+- What it cost CI, on the first green run: 12m16s for the job, of its 25
+  minutes; the boot that fetches 38 s, where M15d's had taken 47; the
+  first boots of the three machines 43, 38 and 37 s; and the stress boot
+  231 s of its 600, where M15d's had taken 382. That run's machine was
+  plainly a faster one than the ones before it, so the two are not to be
+  held against each other, and what the new files cost a boot there is
+  not known from it. On the Mac the emulated first boot went from 31 s
+  to 36.
+- One more fault was mine and lasted an hour: what is said over a
+  connection gave up with words of its own when the connection was no
+  longer open, which it is not when the answer has already come and was
+  too long. The host tests failed for it one time in two with six of
+  them running at once, and never alone. They are run eight at once
+  after a change to lisp/net.lisp now, three times.
+
+ClaraOS, published, what it left:
+
+- The workflow has not run. The environment `github-pages` takes
+  deployments from main only, and its secret is read by nothing else, so
+  the first run is the one that the merge of the pull request starts.
+  What was tried instead, on the Mac: the script of the signing step,
+  taken out of the workflow file as it is written there and run by bash
+  with a key that was made for the purpose. With no secret it stops and
+  says so; with a key that is not the system's, `make release` refuses,
+  and nothing is in `_site/releases`; with a key whose public half
+  `make release` was told to go by, the release is laid out and holds.
+  The file with the key is gone afterwards each time. The build is CI's
+  own, with the same packages, and `make release` runs in CI with every
+  `make test` (`make release-test`). Not tried, since they cannot be before the
+  merge: that the secret holds the key whose public half is in the
+  source (if not, the step fails and the site stays as it was); the
+  upload and the deployment with a directory `releases` in them; and how
+  Pages hands out files that end in `.EFI`, `.pem` and `.sig`, or in
+  nothing. The first thing to do after the merge: `(clara.system:newest)`
+  on a machine, which has to name the system of main.
+- No machine has taken a release from there. The first that can is one
+  that runs an older system than the published one, so the next version
+  is the first real upgrade over the Internet. Until then what is known
+  is the two halves: a machine that takes a release by HTTPS from a web
+  server on this computer (`make test`), and one that fetches pages and
+  a picture from claraos.org (M15f, by hand).
+- Only the newest release is there. A deployment puts the whole site in
+  the place of the one before, and the release of the one before goes
+  with it. Pages lets a file be kept for ten minutes by whoever fetched
+  it on the way, so for that long after a deployment `latest` may name
+  the release before, whose files are gone, or a file may be the one of
+  the build before: the machine says that a file is not there, or is not
+  what the manifest says, takes nothing, and has to be asked again
+  later.
+- What is published is main, as soon as it is merged, without waiting
+  for the run of CI on main: the check that a pull request must pass is
+  what stands before it, and behind it the trial that every machine
+  gives a new system, which keeps the old one until the new one has come
+  to its prompt. The kernels that are published are built by the
+  website's job, and are not the files that CI booted: the same sources,
+  and the same compiler as long as both jobs install the same packages.
+  A release that waits for a green run on main, or is made of the very
+  files that were booted, would be one workflow started by the other,
+  and the site would wait a quarter of an hour for it. Julio was told of
+  the two ways (2026-11-20, in the pull request and in the report); it
+  is published at the merge until he says otherwise.
+- A system's name says which sources it is, and not who built it: the
+  system that the Mac builds from a commit and the one that is published
+  from it have one name and kernels that differ. A machine that runs the
+  one is told that it has the newest. And a deployment for a change to
+  the site alone builds the same system again, with whatever compiler
+  the runner has by then.
+- One key, with no end and no successor. A machine takes what is signed
+  with the key that its system has, so a new key reaches the machines by
+  a release that is signed with the old one, which is only possible
+  while the old one is there. Nothing says what happens when it is lost,
+  or read by somebody else: every machine would have to be given the new
+  half by hand, `(setq clara.system:*release-key* ...)`, or a system from
+  a disk.
+- `https://claraos.org/releases/` shows a browser nothing, a page that is
+  not there: the directory has files and no page, and the manual names
+  the address without linking to it.
+- No test asks the place. The host tests look at what the two variables
+  are, set both to NIL, and say where they look each time. A session
+  that tells a machine to upgrade when no other disk has a system for it
+  sets `clara.system:*releases*` first (tools/upgrade.txt,
+  tools/at-once.txt), or has given the machine a name server that knows
+  no name outside this computer (tools/network.txt, which so shows that
+  the place is asked for: "there is no machine of the name
+  claraos.org"). Nothing but that rule stops a new session from asking
+  the real place: QEMU's network reaches the Internet.
+- Found on the way, in M15a's Makefile, and mended: a build whose sources
+  had gone back to what they were at an earlier build did not start. A
+  Lisp file is changed, the system is built, the change is taken out
+  again, and the system is built once more: its name is the earlier one
+  again, the object with that name in it is still there, and older than
+  the kernels of the build in between, so make did not link them again.
+  They kept the other name, looked for their files in a directory that
+  was gone, and the machine stopped with "boot.lisp did not load". Now
+  the name is in a file, build/system.name, which is written when the
+  name changes, and the object is made again when that file is newer;
+  and the build stops when a kernel does not name the system whose
+  directory it is copied into. Tried by hand in a copy of the tree: from
+  that state, with nothing changed, with a Lisp file changed, and with
+  the change taken out and the file as old as before. No test does it,
+  since a test would have to change a source. make still goes by the
+  second: a file that is put back in the second in which a build ended
+  is not seen, which a script does and a person does not.
+- By hand, and in no test, from a machine under tools/boottest.sh with a
+  session of its own: a file of this repository of 568,718 bytes, more
+  than either kernel, by HTTPS from raw.githubusercontent.com, held
+  against its SHA-512; and `(clara.system:newest)` and
+  `(clara.system:upgrade)` at the real place, which answered 404 for
+  `/releases/latest`, as it must before anything is published.
+- What was broken on purpose: 23 mistakes. Fifteen in lisp/system.lisp,
+  in the order of what an upgrade over the network looks at, in what it
+  says and when, and in the place and the key themselves: the host tests
+  noticed thirteen, and the boot that fetches the other two, another
+  address and a key with one digit changed, which is why its session
+  names both in full. Eight in tools/release.py, the Makefile and the
+  line that the Makefile reads the key from: `make release-test` noticed
+  six. Two change nothing by themselves. Without the line that holds the
+  release against the key once more, everything is laid out as before;
+  that line speaks when the tool signs wrongly, which a planted wrong
+  signature showed. And the count of the key's digits is only a clearer
+  word for what the tool refuses anyway. The workflow file itself is
+  held against nothing: a step that is left out of it is not noticed
+  before a merge.
+- What it cost CI, on its first green run: 17m09s for the job, the boot
+  that fetches 54 s, and the stress boot 431 s of the 600 that it had.
+  Publishing added nothing to that boot: the counts of its collections
+  are within a hundredth of those of the run before, which was a commit
+  of words alone and took 327 s, 14m39s for the job; and the first green
+  run of M15f, earlier that evening, took 231 s, on a machine that was
+  plainly a faster one. So the same work takes between 231 s and 431 s
+  there, by the machine that a run is given, and what M15f's files cost
+  that boot is now known: on a machine like the ones before it, 431 s
+  where M15d's took 382. A machine a third slower than this run's would
+  have run into the limit with nothing wrong. The stress boot has 900 s
+  now, and the job 30 minutes where it had 25. That buys time and
+  nothing else: the session is still the thing to make cheaper before
+  more goes into the world.
+- UTM: not tried, as before.
 
 No milestone yet, to be picked up when they start to matter:
 

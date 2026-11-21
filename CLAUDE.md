@@ -32,8 +32,8 @@ starting one, say what it will take, and let Julio choose.
 Build with `make` (Homebrew's llvm and lld under /opt/homebrew/opt when they
 are there, otherwise clang and lld-link from the PATH; `LLVM=` and `LLD=`
 name other directories). `make test` runs the host tests of the Lisp
-files under SBCL (`make host-test`, ten seconds), then boots both
-architectures headless under QEMU, nine boots in about two minutes,
+files under SBCL (`make host-test`, twenty seconds), then boots both
+architectures headless under QEMU, fifteen boots in about five minutes,
 types a session at each kernel, and saves what each screen shows to
 build/screen-<name>.png; look at those images when a change touches the
 display. `make run-aarch64` and `make run-x86_64` open a QEMU window with
@@ -134,14 +134,15 @@ Rules:
   the firmware's `Shell>` means the firmware did not find that disk. The
   disk is a file that tools/mkdisk.py makes of build/esp, a FAT volume of
   any of the three kinds behind either table of partitions or none
-  (`--fat`, `--table`): build/disk-<arch>.img for `make run-*`, made again
-  when build/esp has something newer and kept until then with whatever
-  the kernel wrote to it, a saved world among it; and for a boot of the
-  tests build/boot-<name>.img, new every time. Run by hand without
-  `DISK=`, tools/run.sh makes that first file again when the build is
-  newer, also under a machine that is running from it, which Julio often
-  has: give it `DISK=` and a file of the session's own, or use
-  tools/boottest.sh, which always does.
+  (`--fat`, `--table`): build/disk-<arch>.img for `make run-*`, made once
+  and kept from then on, with whatever the kernel wrote to it; and for a
+  boot of the tests build/boot-<name>.img, new every time. Run by hand
+  without `DISK=`, tools/run.sh works on the first of those: it gives the
+  machine a newer build as a second disk, which the system on the disk
+  takes as it starts (upgrades, below), so the disk that Julio runs from
+  is another system afterwards. Give it `DISK=` and a file of the
+  session's own, or use tools/boottest.sh, which always does. In another
+  worktree build/ is another directory, and nothing of his is touched.
 - `WORK=file` gives a machine a second disk, the user's own (the manual,
   "A disk of your own"): tools/run.sh puts it in front of the other
   arguments, which is behind the boot disk and the keyboard and pointers
@@ -215,7 +216,10 @@ Rules:
   image or not. A change to what an object is in memory, to the tags, to
   `enum lisp_type`, to a struct of lisp.h or to `lisp_roots`, raises
   `FORMAT` in image.c in the same change, or an older image is taken for
-  a heap that it is not. So does a change to what code for the processor
+  a heap that it is not. (An image is started by the system that saved it
+  and by no other since 0.0.26, and every build is another system, so the
+  number matters for an image that is carried to another build by hand
+  and for nothing else; it is raised all the same.) So does a change to what code for the processor
   leans on, since a world holds its code: the order of the words of
   `struct lisp_machine`, what the functions that it names take and give,
   the numbers of machine.h, and how such code begins and what it keeps
@@ -497,7 +501,7 @@ Rules:
 - What DISASSEMBLE writes is in a session and in the manual, and a line
   of a session that begins with two spaces is one that is typed: a line of
   a listing begins with its number.
-- `make test` boots nine times. Three machines, x86_64, AArch64 with GIC
+- `make test` boots fifteen times. Three machines, x86_64, AArch64 with GIC
   version 3, and AArch64 emulated with GIC version 2, whose files in build/
   are named aarch64-gic2, each from a disk of another kind, and each twice:
   the first boot is typed tools/session.txt, which ends by saving the world,
@@ -521,7 +525,10 @@ Rules:
   `watched()` before it. That boot then has the texts translated and run
   by the processor, with the same done at the safe points of its code.
   tools/stress.txt then types a few forms with the collector still at it,
-  one of them on the keyboard. Each of those forms is compiled under the
+  one of them on the keyboard. Its first form tells the listener to write
+  nothing down (`clara.listener:*record*`): a form that is written into
+  `/home/defined.lisp` with a collection at every safe point takes twenty
+  seconds where the machine is emulated, and a minute on CI. Each of those forms is compiled under the
   collector, by a compiler that the processor runs, and read by a console
   that it runs: that session is where the processor's code is tried with
   a collection at every one of its safe points in code that nobody wrote
@@ -531,13 +538,344 @@ Rules:
   between them. That boot runs the kernel that is on its disk, which is
   the one the first AArch64 session booted: to try a change there by
   hand, run `tools/boottest.sh aarch64` first and give the stress boot
-  `DISK=build/boot-aarch64.img`. Before that one, two boots for the user
+  `DISK=build/boot-aarch64.img`. Before that one, two boots for what is
+  done to a machine and not in it, x86_64-power and aarch64-power, each
+  from the disk that its machine's first session left (tools/power.txt,
+  below, under shutting down), three for upgrades, x86_64-upgrade,
+  aarch64-at-once and aarch64-trial (tools/upgrade.txt, tools/at-once.txt,
+  tools/trial.txt), each with the disk of another system beside its own,
+  one that fetches a signed release of another system by HTTPS from a web
+  server on this computer and upgrades to it (aarch64-network,
+  tools/network.txt), and two boots for the user
   manual, named manual and manual-again: what the manual shows of the prompt
   is typed at them. The serial port of each is QEMU's standard input and
   output: the log is what the kernel printed, and a FIFO feeds it what the
   session types. QEMU's hvf has no version 2, and UTM uses version 3.
   tools/boottest.sh passes any further arguments on to QEMU, which is how to
   try another machine: `tools/boottest.sh aarch64 -smp 4 -cpu max`.
+- A system and its directory (the Makefile, tools/system.py,
+  kernel/system.c, kernel/boot.c). A build has a name, `$(SYSTEM)` in the
+  Makefile: the version and eight digits worked out from `SYSTEM_SRCS`,
+  which are all the sources of the two kernels and of lisp/. A new kind of
+  source that goes into a kernel or onto the boot volume goes into that
+  list. The name is in both kernels (`clara_system`) and is the name of
+  the directory on the boot volume that holds the system's files, its
+  kernels a second time and its `manifest`; the kernel reads its own
+  directory and no other. So a path of a system's file has digits in it
+  that change with every edit: Lisp asks `(clara.system:system-file
+  "boot.lisp")`, a session writes `{{system}}` and `{{version}}`, which
+  tools/boottest.sh fills in, and the manual shows such a name only in a
+  `<pre>` that nothing types. `/clara/<name>` in LOAD still finds a file
+  of the system's among what was read at boot, and an application that is
+  installed by a bare name is a file of the system's directory
+  (`clara.windows:*application-directory*`). `make build/system-other/stamp`
+  makes a second system of the same sources under the name
+  `<version>-other`, as build/system-other/esp, for two links; a name that
+  begins with `broken` gets a boot.lisp that is no Lisp. The Makefile must
+  never have `.SECONDARY:`: with it make does not relink a kernel when
+  the system's name has changed, and the kernel then looks for a
+  directory that the build did not make. The same happened without it
+  when the name went back to one that had been built before, a change to
+  a Lisp file that was built and taken out again: the object of that
+  name was still there, and older than the kernels. So the name is in
+  build/system.name, which is written only when the name is another, the
+  object with the name in it depends on that file, and the rule that
+  fills the system's directory stops the build when a kernel does not
+  name that system. Whatever else is made from the name depends on that
+  file too.
+- What the handoff does with files (kernel/boot.c), all of it through the
+  firmware's file system and before a line of Lisp runs, so that it holds
+  when the Lisp does not start. `\clara\starts` counts the starts that did
+  not come to a prompt: the handoff writes the count plus one, with a
+  number of this start's own behind it, and `clara.system::came-to-prompt`
+  deletes the file. After one such start the image is not read
+  (`image_passed_over`). `\clara\next` is a system to try: "try <name>",
+  which the old kernel's handoff turns into "tried <name>" before it has
+  the firmware load and start the new system's kernel in place of itself
+  (`start_system`), and into "failed <name>" when it finds "tried" at a
+  later start. What Lisp knows of all that is `(clara.unsafe:start-state)`.
+  A change there is tried on both architectures, whose firmware is not the
+  same program: the `-upgrade`, `-at-once` and `-trial` boots of
+  `make test`.
+- Upgrades (lisp/system.lisp). `take` copies a system's directory from
+  another volume, each file held against the manifest (`take-file`,
+  `clara.unsafe:sha-512`), the manifest last, and then writes
+  `/clara/next`: that order is what lets a machine stop anywhere, and the
+  host tests look at the volume after each refusal. `settle` is what a
+  start does about the system, from `start`: a system on trial takes the
+  old one's place (`commit`), a failed trial is said and marked, a disk
+  that says `/clara/at-once` is taken from at once, and then the start has
+  come to its prompt. It uses `clara.fat` and never OPEN or
+  WITH-OPEN-FILE, which under SBCL are the host's. The manifest's form is
+  read by every older system that upgrades to a newer one, so it is only
+  ever added to: a reader passes over a line it does not know. In the host
+  tests `system-tree` makes a system's directory with a right manifest or
+  a wrong one, `two-disks` a machine with its own disk and another, and
+  `clara.host:set-start-state` what the kernel says of the start.
+- Work kept as text (lisp/system.lisp, lisp/listener.lisp). A listener
+  calls `clara.listener:*record*` with every form that was typed and went
+  well, its text and the name of the package it was read in.
+  `clara.system::record` writes the ones that define something
+  (`defining-p`) into `/home/defined.lisp` on the volume that the machine
+  was started from, and a world that this start made from the files loads
+  `/home/init.lisp` and then that file (`load-home`, from `settle`), a
+  form at a time, each file in a thread that is given `*patience*`. So
+  what a session defines at the top of a line is written to the disk of
+  its boot, and is loaded by every later boot that makes a world from
+  that disk: the upgrade boots and the stress boot. A form of
+  tools/session.txt that must not come back that way, one that starts a
+  thread or redefines a function of the language's, is typed inside a
+  PROGN. What a new world says of the text, the lines that begin with
+  `home:`, is asked for with `EXPECT=` (`UPGRADED` in the Makefile). The
+  file's form is read by every later system, like the manifest's: forms,
+  comments and `(cl:in-package "NAME")` lines, and nothing else. A world
+  is saved on that volume too, whatever `clara.fat:*volume*` holds
+  (`clara.fat:*image-volume*`). In the host tests `home-tree` gives a
+  machine a `/home` and `one-disk` a machine with one disk; a test that
+  types definitions sets the start to `:resumed t`, since a world that
+  was made loads them in a thread, and SBCL then warns that a function is
+  defined a second time.
+- A world made again (lisp/system.lisp). The shutdown (`finish`) has the
+  world that is leaving write `/clara/carried` when `/clara/next` says
+  that a system is to be tried (`carry`). `make-world` is what a start
+  does for a world that it made from the files: the window manager when
+  the account says that it ran, the text (`load-home`), the account
+  (`arrive`), and the save, in that order; `catch-up` is what it does for
+  a world that came as an image. A line about how a world came to be
+  what it is begins with `home:` or `world:` and goes through `tell`,
+  which keeps it for `(clara.system:report)`. The account's form is read
+  by the next system, like the manifest's: forms of keywords and strings,
+  one to a line, only ever added to. A world knows the text that it has
+  (`*known*`), and whatever loads or writes a file of `/home` says so
+  with `know`, or the next start in that world evaluates the forms
+  again. In the host tests a start that is `:resumed t` is a world that
+  goes on in the same SBCL: what the test before it left in `*known*` and
+  `*follows*` is what that world knows, and a test that means something
+  else sets them. `trial-disk` there gives a machine a system on trial,
+  with an account and a `/home`. A machine of the tests has a screen
+  only when `new-desk :machine nil` gave it one after its disks: the
+  screen of the machine before is memory that is the disk's by then, and
+  a window manager that draws there writes into the volume's table. A
+  line that a session waits for with `^W` comes once in the whole log, so
+  the world of tools/trial.txt that stands still says a different thing
+  the second time.
+- The network (lisp/net.lisp). A frame is put together in a page frame
+  of the card's by `send-frame`, which calls FILL with the address where
+  what the frame carries begins and wants its length back; each protocol
+  wraps the FILL of the one above it (`send-packet`, `send-datagram`,
+  `segment-out`). FILL runs with the card's lock held, so it writes bytes
+  and nothing else: whatever has to ask the network something first, who
+  has an address, does that before. Numbers on the wire have their
+  highest byte first (`two`, `four`, `put-two`), and a checksum is
+  `clara.unsafe:internet-sum`, folded. What arrives is handled in the
+  card's thread (`serve`), which never waits for an answer, since it is
+  the one that would have to take it: it answers what is answered at
+  once and goes on. Whoever waits for something does it with `ask-until`,
+  which looks, asks again every second and gives up after `*patience*`.
+  START forgets the card of an earlier start. Under SBCL the card is
+  `add-net` and the network at the other end of its wire `new-network`: a
+  thread that answers for ARP, DHCP and DNS and serves files, holds every
+  frame that the machine sends against checksums that it works out in
+  its own way, and has accidents when it is told to (`:drop`, `:spoil`,
+  `:swap`, `:lose-opening`, `:mute`). Whatever the machine learns to send
+  gets its check there, and a new way for the other side to go wrong an
+  option. That network must not answer every repeated acknowledgement
+  with everything again: it did, and one lost piece became thirty
+  thousand in a second, which looked like a fault of the machine's.
+- When the host tests end with SBCL's "unhandled condition in
+  --disable-debugger mode" and a reader's error about a package that does
+  not exist, somewhere far down lisp/host/tests.lisp, look for a
+  parenthesis that was left open further up: everything after it was read
+  as one form, and nothing of it was evaluated. A machine of the tests
+  that is made while a thread of the machine before it still runs gets
+  that thread's writes in its memory: `stop-network` ends the card's
+  thread and waits for it before the next machine is made.
+- A boot that fetches something: `SERVE=directory` has tools/boottest.sh
+  start tools/serve.py, a web server and a name server on one free port
+  of this computer, which a machine under QEMU reaches at 10.0.2.2.
+  `{{port}}` in the session is that port, and `{{key}}` what `KEY=`
+  says. With `CERTS=directory` the same web server is there once more,
+  on another port, `{{secure}}`, where it keeps its connections closed
+  with the certificates of that directory, which tools/certs.py makes;
+  the machine is told to trust their root from a disk, which is how a
+  user would do it (`WORK=`, a disk made of the root alone). The web
+  server there is OpenSSL's, by way of Python: the one piece of the tests
+  of TLS that nobody here wrote. `{{roots}}` is how many certificates
+  lisp/roots.pem has, which the system says when it first reads them, and
+  `{{now}}` what time it is on this computer as the boot begins, counted
+  as the machine counts it: a session holds the machine's clock against
+  that, to a quarter of an hour.
+  tools/run.sh gives every machine a virtio network card on QEMU's
+  own network (`NET=` for none) and the device that makes numbers which
+  nobody can guess (`RNG=` for none), so every boot of `make test` has
+  both, and the first session asks for the machine's address, a number
+  and the time on all three machines. No test goes further than this
+  computer. When something is tried by hand against the Internet, it is
+  the project's own website and repository and nothing else: the machine
+  names ClaraOS to every web server that it asks.
+- A release (tools/release.py, lisp/system.lisp). `take` copies a system
+  by way of a function that reads a file of it by name, from a volume or
+  from a web server (`from-volume`, `take-release`): what a system is
+  held against as it is taken is in `take`, once, for both. A signature
+  is checked in C (kernel/ed25519.c), which holds itself against the
+  examples of RFC 8032 at every boot; `python3 tools/release.py constants`
+  works out the numbers that are written there. Under SBCL
+  `clara.host:ed25519-sign` signs what a test then offers
+  (`release`, `machine-and-releases`). No key is in the repository:
+  `make test` makes one for the run, in build/.
+- Where ClaraOS is published (DESIGN.md has what was decided). The system
+  has the place and the public half of the key in lisp/system.lisp:
+  `clara.system:*releases*`, `https://claraos.org/releases/`, and
+  `clara.system:*release-key*`. The Makefile reads that half from its
+  `defvar` line with sed, so the line keeps its form: `(defvar
+  *release-key* "` at the start of a line, and the 64 digits. The secret
+  half is Julio's alone: a file on his computer, which is never read, by
+  a tool either, and the secret RELEASE_KEY of the environment
+  `github-pages`. `make release KEY=<file> RELEASES=<directory>` lays
+  the build out as a release, with no other key than the one whose half
+  is in the source, and holds what it laid out against that half; it is
+  what .github/workflows/site.yml runs, and that workflow cannot be
+  tried before a merge, so whatever it is to do goes into `make
+  release`, which `make release-test` runs with a key of its own, at the
+  beginning of `make test` (`PUBLIC=` on the command line says which
+  half to go by; the environment does not). Change the step of the
+  workflow itself as little as possible, and try its script by hand when
+  you do: take it out of the file and run it with bash, with
+  `RUNNER_TEMP`, `RELEASE_KEY` from a key made with `tools/release.py
+  key`, and `PUBLIC=` on the `make release` line. A scratch directory
+  `_site` in the tree is yours to take away afterwards.
+- No test asks the place where ClaraOS is published, and nothing typed
+  by hand does without need. lisp/host/tests.lisp sets both variables
+  to NIL once it has looked at them. A session that types
+  `(clara.system:upgrade)` at a machine with no other disk that holds
+  another system would ask claraos.org, since QEMU's network reaches the
+  Internet: such a session sets `clara.system:*releases*` first, to NIL
+  (tools/upgrade.txt, tools/at-once.txt) or to the web server of the
+  test, or has given the machine the test's name server, which knows no
+  name outside this computer (tools/network.txt).
+- A connection that is kept closed (lisp/tls.lisp; DESIGN.md has what was
+  decided). The arithmetic is C, a file to each kind (kernel/sha256.c,
+  hmac.c, aes.c, the X25519 of ed25519.c, bignum.c, ecdsa.c), each with a
+  self-test in kmain that holds it against the examples of its standard,
+  and each a function of CLARA.UNSAFE on bytes of memory (unsafe.c). The
+  stand-ins in lisp/host/clara.lisp are the same arithmetic in SBCL's big
+  numbers, written from the standards and not from the C; the host tests
+  hold them against the same examples. After a change to the C, build
+  those files for the host with a `panic` of your own and a `main` that
+  reads numbers, and hold what they give against Python's big numbers on
+  a few thousand cases made at random: that was done once, in /tmp, and
+  found nothing, which is what it is for. A table of numbers there is not
+  typed: it is worked out, by a script, and pasted.
+- lisp/net.lisp knows of TLS that there are six functions for it
+  (`clara.net:*secure*`), which lisp/tls.lisp hands over as it is loaded,
+  after lisp/system.lisp, whose volume it reads the system's list from.
+  Whoever reads the memory of a connection holds the connection's lock:
+  the thread that takes what arrives moves that memory to where there is
+  more room. And nothing is sent with that lock held, since sending may
+  have to ask the network something that only that thread can take the
+  answer to. So an error in lisp/tls.lisp is `refuse`, with the number
+  that the other side is to be told, and the telling is done by whoever
+  opened the connection, once the error has come that far and the lock is
+  let go. Everything of a connection that is a secret is in one page
+  frame, at the places that the constants name, and that page is wiped
+  before it goes back. One record is taken at a time, and no more than
+  the greeting needs: the keys change after some messages, and a record
+  that was opened with the keys of before is a record that does not open.
+- The tests of TLS (lisp/host/tests.lisp). The made-up network's web
+  server keeps connections closed at the ports that `:secure` names, 443
+  when nothing is said, with its own half of TLS 1.3, written there from
+  the RFC on the arithmetic of host/clara.lisp. `certificate` makes a
+  certificate with whatever a test wants in it or wrong with it,
+  `kept-closed` gives what a fetch gives and what the machine told the
+  other side, and `shown` the same for a server that shows the
+  certificates it is given. What the other side can get wrong is an
+  `:accident`, a keyword that `tls-greet` or `tls-answer` knows: a new
+  way of being wrong gets a keyword there, and a row in one of the two
+  tables with the words that the machine says and the number that it
+  tells the other side. The machine trusts what `:trusted` says and
+  reads no list from a disk (`trust-only`); one test reads lisp/roots.pem
+  itself and has every certificate in it that signed itself in a way
+  which is known here check its own signature. The device that makes
+  numbers is `add-numbers`, which makes them by a rule so that a test
+  that fails fails again.
+- After a change to lisp/net.lisp or lisp/tls.lisp, run the host tests
+  eight at once, three times over (`sbcl --script lisp/host/tests.lisp`,
+  eight of them started together, and the last line of each). Under SBCL
+  the threads of the machine and of the made-up network really run at
+  once, and a fault that needs one of them to lose its turn at one
+  particular call shows when the computer is busy and not otherwise: one
+  such failed one run in two that way, and no run alone.
+- lisp/roots.pem is the list that curl publishes of Mozilla's, as it is,
+  so that its sum is the published one: `curl -o lisp/roots.pem
+  https://curl.se/ca/cacert.pem`, and never the file that Homebrew keeps
+  under /opt/homebrew/etc, to which macOS adds the certificates of the
+  computer's own keychain. The handoff does not read it into memory
+  (kernel/boot.c, `of_the_system`); the system reads it from its volume
+  when something is first fetched by HTTPS.
+- The time of day is what the firmware's clock said in the handoff
+  (kernel/boot.c, `read_clock`) and the ticks since (kernel/timer.c):
+  `get-universal-time`, whose answer is in `either` of the self-test,
+  since a firmware need not have a clock.
+- A session never says in which order the names of two systems come. A
+  system is named by eight digits of its sources, which sort before
+  "broken" and "other" for some builds and after them for others:
+  tools/trial.txt listed `/clara` whole, and failed for every build whose
+  digits began with c, d, e or f, one in four, which nobody saw until
+  0.0.30 was one of them. Take the system's own name out of such a list,
+  and ask for it by itself.
+- A session can wait for the kernel to say something before it goes on:
+  `^W pattern`, for a kernel that will say nothing more by itself, a panic
+  for one, which `PANICS=1` allows the boot once. `^M system_reset` after
+  it starts the machine again the hard way.
+- tools/run.sh, without `DISK=`: the machine's disk is kept, and
+  `python3 tools/mkdisk.py --systems <disk>` says which systems are on it.
+  When that is not the build's, the build goes along as
+  build/upgrade-<arch>.img, a disk with `/clara/at-once` on it. A disk
+  with no system that has a directory, one from before 0.0.26, is put
+  aside under a name that is said (`-old`), and so is the disk when
+  `FRESH=1` asks for a new one (`-before`): nothing of the machine's is
+  ever deleted there. No boot of `make test` goes that way, so after a
+  change it is run by hand, in a worktree of its own: twice with the same
+  build, once with another (a line added to a file of lisp/ and taken out
+  again), with `FRESH=1`, and with a disk of the old kind.
+- Shutting down (lisp/system.lisp, kernel/arch/<arch>/power.c,
+  kernel/acpi.c). `leave` is the one procedure behind every way of asking,
+  and `finish` its second half, in a thread of its own, since the thread
+  that asked may be an application's and stopped on the way: whatever is
+  added to a shutdown goes into `finish`, in the order that DESIGN.md
+  gives, and gets a line in the host tests, whose machine stays on
+  whatever it is told and whose disk says at every request whether the
+  window manager still runs (`vdev-watch`). What a new thread writes goes
+  where `*standard-output*` points outside every binding, so a test hears
+  it with `said-by-all`. The substrate's three functions are
+  `clara.unsafe:power-off`, `reset` and `power-button`; each architecture
+  finds its way in `arch_power_init`, from ACPI's FADT, and says in the
+  boot report's line `power:` what it found. Two facts are searched for in
+  the bytes of the DSDT (`acpi_sleep_type`, `acpi_device_memory`): a
+  change there is tried on all three machines, since each has a DSDT of
+  its own. A program that holds what would be lost gives its window an
+  `:unfinished` function, as lisp/editor.lisp does, and nothing else is
+  asked before a shutdown.
+- A session can go across a start: a line `^R` after the form that starts
+  the machine again, and what follows is typed at the kernel that comes up
+  then. What the kernel says between "clara: starting the machine again"
+  and its next invitation is no part of the transcript. A session that
+  ends with the machine turning itself off is given
+  `MARKER='^clara: turning the machine off'`: nothing is typed to end it,
+  it may end with a `^M` line, the machine has to be gone by itself ten
+  seconds later, and there is no screen to save. To press the power
+  button: `^M system_powerdown`. tools/run.sh no longer passes QEMU
+  `-no-reboot`, so a machine that starts itself again does.
+- A function in a file of the world cannot have a name of Common Lisp's,
+  also one that the kernel's own COMMON-LISP does not export: under SBCL
+  the name is the symbol of COMMON-LISP, which is locked. RESTART is one,
+  which is why it is `clara.system:start-again` and `clara.unsafe:reset`.
+- The launcher's list has applications and, under a line, commands
+  (`clara.windows:define-command`): a command is a function that is called
+  in a thread of its own and that nothing waits for, where LAUNCH waits
+  for an application's window. The tests' desk has the commands that a
+  test gives it and no others (`new-desk :commands`), like its
+  applications; `*defined-commands*` are the ones that the files defined.
 - Assembly lives in kernel/arch/<arch>/entry.S and nowhere else. On x86_64
   it follows the Microsoft calling convention, like the C around it:
   arguments in rcx and rdx, 32 bytes of home space above the return
@@ -547,9 +885,11 @@ Rules:
   `arch_frame_size` bytes, and `arch_frame_init` fills in a new thread's.
   A register added to the frame is switched with the rest; a register
   left out of it is shared by all threads.
-- lisp/*.lisp is copied to the ESP's \clara directory, and the handoff
-  (kernel/boot.c) reads every file there into a `struct boot_file`, the
-  image too when there is one. Unless the world is an image's, the
+- lisp/*.lisp is copied to the system's directory on the ESP,
+  \clara\<the system's name> (upgrades, below), and the handoff
+  (kernel/boot.c) reads every file there but the kernels and the manifest
+  into a `struct boot_file`, and of \clara itself the image when there is
+  one and the file `stress`. Unless the world is an image's, the
   kernel loads boot.lisp itself and panics when that fails, with the file
   and the line. Any other file is loaded by `(load "name.lisp")`, from
   boot.lisp or from the prompt.
@@ -576,7 +916,8 @@ Rules:
   in the order of `world` in lisp.c (the compiler, then native and the file
   of the machine's own processor, arm64.lisp or x86-64.lisp, whose name
   is the machine's in `*features*`, and then the console, draw, pci,
-  virtio, input, disk, fat, the listener, windows and terminal), and
+  virtio, input, disk, fat, random, net, the listener, windows, terminal,
+  system and tls), and
   lisp/host/tests.lisp loads the same files: a new one goes into both, and what its package exports goes into
   a list of names in the manual, or `make site` stops. A file that is an
   application is not in `world`, and the launcher loads it (below). What `lisp_main`
@@ -898,8 +1239,10 @@ Rules:
   site/build.py from ROADMAP.md, kernel/kernel.h (the version)
   and the console font (`make site`, then open build/site/index.html), and
   published by .github/workflows/site.yml on every push to main that touches
-  them. The page reads the milestone entries of ROADMAP.md, so keep their
-  form.
+  them, or the system: the same workflow builds the system of that
+  commit and publishes it beside the pages, as the release at
+  `https://claraos.org/releases/` (above). The page reads the milestone
+  entries of ROADMAP.md, so keep their form.
 - The user manual is site/manual.html, the second page of the website
   (Julio, 2026-11-17: it "should have everything a user needs to operate
   ClaraOS, from installation to command line operations", and "should be

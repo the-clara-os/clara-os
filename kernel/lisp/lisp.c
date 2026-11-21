@@ -9,6 +9,7 @@
 #define IMAGE "clara.image" /* the file of \clara that is a world, saved */
 
 static int g_resumed; /* the world is an image's: it was made on the boot that saved it, and not on this one */
+static const struct boot_info *g_boot; /* what the handoff learned of the starts before this one */
 
 /* The image among the files that the boot handoff read, when there is
  * one, taken out of their list: it is no file for LOAD to find. Its name
@@ -33,9 +34,14 @@ void lisp_init(struct boot_info *bi)
 {
     struct boot_file *image = take_image(bi);
 
+    g_boot = bi;
     lisp_heap_init();
     kprintf("lisp: objects are tagged 64-bit words, in a heap at %p that begins with NIL\n",
             (void *)(uintptr_t)VM_HEAP_BASE);
+    /* A world that did not come to its prompt the last time is not started a second time: the
+     * handoff did not read it (boot.c), and the world is made of the files, as on a new machine. */
+    if (bi->image_passed_over)
+        kprintf("lisp: clara.image is passed over: the start before this one did not come to its prompt\n");
     if (image) {
         g_resumed = lisp_image_load(image);
         /* What it held is in the heap by now, or of no use: the page frames it was read into are free. */
@@ -46,6 +52,39 @@ void lisp_init(struct boot_info *bi)
         lisp_symbols_init();
     lisp_eval_init(bi->files);
     lisp_unsafe_init(&bi->fb);
+}
+
+/* (start-state): what the kernel knows of this start and of the ones
+ * before it, for the Lisp that sees to the system as a whole
+ * (lisp/system.lisp), as a list of names and values: :SYSTEM, the name of
+ * this system; :RESUMED, whether the world is one that was saved, and not
+ * made on this start; :STARTS, how many starts in a row before this one
+ * did not come to a prompt; :TOKEN, the sixteen digits that the handoff
+ * wrote into \clara\starts on the volume that the machine was started
+ * from, or NIL when it could write nothing; :TRIAL, whether this system is
+ * being tried, with the one before it still in place; :FAILED, the name of
+ * a system that was tried and did not come to its prompt, or NIL; and
+ * :PASSED-OVER, whether a saved world was there and was not started. */
+LISP_PRIMITIVE(lisp_p_start_state)
+{
+    static const char digits[] = "0123456789abcdef";
+    lisp t = lisp_roots.t, state = LISP_NIL;
+    char token[16];
+
+    (void)argc;
+    (void)argv;
+#define FACT(name, value) state = lisp_cons(lisp_symbol_in(lisp_roots.keyword, name, 1), lisp_cons(value, state))
+    FACT("PASSED-OVER", g_boot->image_passed_over ? t : LISP_NIL);
+    FACT("FAILED", g_boot->failed[0] ? lisp_string_from_utf8(g_boot->failed, strlen(g_boot->failed)) : LISP_NIL);
+    FACT("TRIAL", g_boot->trial ? t : LISP_NIL);
+    for (unsigned i = 0; i < 16; i++)
+        token[i] = digits[g_boot->token >> (60 - 4 * i) & 15];
+    FACT("TOKEN", g_boot->token ? lisp_string_from_utf8(token, sizeof token) : LISP_NIL);
+    FACT("STARTS", lisp_fixnum((int64_t)g_boot->starts));
+    FACT("RESUMED", g_resumed ? t : LISP_NIL);
+    FACT("SYSTEM", lisp_string_from_utf8(clara_system, strlen(clara_system)));
+#undef FACT
+    return state;
 }
 
 /* Where the self-test prints to: memory, so that it can look at the text. */
@@ -679,6 +718,17 @@ static const struct {
     { "(delete-package \"COMMON-LISP\")",
       "error: the package COMMON-LISP is one that the system cannot do without, and is not deleted" },
     { "(delete-package \"CLARA.NEVER\")", "error: there is no package named CLARA.NEVER" },
+    /* every symbol that a package has by name, its own and the ones it has of the packages it uses */
+    { "(let* ((lent (make-package \"CLARA.LENT\")) (p (make-package \"CLARA.WALKED\" :use (list lent))) (names nil) (n 0))"
+      "  (export (intern \"OFFERED\" lent) lent) (intern \"HIDDEN\" lent) (intern \"OWN\" p) (export (intern \"SHOWN\" p) p)"
+      "  (do-symbols (s p) (push (symbol-name s) names))"
+      "  (do-symbols (s \"CLARA.WALKED\") (setq n (+ n 1)))"
+      "  (list (sort names #'string-lessp) n (do-symbols (s lent 'done))"
+      "        (let ((*package* lent) (m 0)) (do-symbols (s) (setq m (+ m 1))) m)"
+      "        (do-symbols (s p) (when (eq (symbol-package s) lent) (return (symbol-name s))))"
+      "        (delete-package p) (delete-package lent)))",
+      "((\"OFFERED\" \"OWN\" \"SHOWN\") 3 DONE 2 \"OFFERED\" T T)" },
+    { "(do-symbols (s \"CLARA.NEVER\"))", "error: there is no package named CLARA.NEVER" },
     { "(list char-code-limit (char-code (code-char (1- char-code-limit))))", "(1114112 1114111)" },
     { "(list (let ((*package* (find-package \"KEYWORD\"))) (package-name *package*)) (package-name *package*))",
       "(\"KEYWORD\" \"CLARA.SELF-TEST\")" },
@@ -1591,6 +1641,10 @@ static const struct {
       "\"this machine has no I/O ports\"" },
     /* which of the two this is, for #+ and #- */
     { "*features*", "(:CLARA :X86-64)", "(:CLARA :ARM64)" },
+    /* the time of day, where the firmware has a clock: later than the beginning of 2026, and not going backwards */
+    { "(handler-case (let ((now (get-universal-time))) (list (> now 3976214400) (<= now (get-universal-time))))"
+      " (error (c) (format nil \"~A\" c)))",
+      "(T T)", "\"this machine does not know what time it is: its firmware did not say\"" },
     /* what the firmware said about the machine */
     { "(list (keywordp (clara.unsafe:serial-device)) (integerp (nth-value 1 (clara.unsafe:serial-device)))"
       " (let ((screen (multiple-value-list (clara.unsafe:framebuffer)))) (or (null (car screen)) (length screen))))",
@@ -2056,8 +2110,8 @@ static void new_world(void)
 {
     static const char *const world[] = { "compiler.lisp", "native.lisp",   "font.lisp",    "console.lisp",
                                          "draw.lisp",     "pci.lisp",      "virtio.lisp",  "input.lisp",
-                                         "disk.lisp",     "fat.lisp",      "listener.lisp", "windows.lisp",
-                                         "terminal.lisp" };
+                                         "disk.lisp",     "fat.lisp",      "random.lisp",   "net.lisp",      "listener.lisp",
+                                         "windows.lisp",  "terminal.lisp", "system.lisp",   "tls.lisp" };
     uint64_t before[LISP_TYPES], after[LISP_TYPES], ticks, collections;
     char processor[16] = { 0 };
     struct lisp_functions functions;
@@ -2220,6 +2274,15 @@ static void lisp_main(void)
      * there are the files that came with the kernel. */
     if (!lisp_evaluate(own_form("(progn (clara.pci:start) (clara.input:start) (clara.disk:start) (clara.fat:start))")))
         panic("lisp: the drivers did not start");
+    /* The device that makes numbers which nobody can guess, and the network
+     * card, when the machine has them: each is found and opened, and the
+     * card asks nothing of the network until something wants it. */
+    if (!lisp_evaluate(own_form("(let ((random (find-package \"CLARA.RANDOM\")))"
+                                "  (if random (funcall (intern \"START\" random))))")))
+        panic("lisp: what makes numbers that nobody can guess did not start");
+    if (!lisp_evaluate(own_form("(let ((net (find-package \"CLARA.NET\")))"
+                                "  (if net (funcall (intern \"START\" net))))")))
+        panic("lisp: the network did not start");
     /* What draws finds the screen. A world that was saved before there was
      * anything to draw with has no such package, and starts without it. */
     if (!lisp_evaluate(own_form("(let ((draw (find-package \"CLARA.DRAW\")))"
@@ -2233,6 +2296,18 @@ static void lisp_main(void)
     if (!lisp_evaluate(own_form("(let ((windows (find-package \"CLARA.WINDOWS\")))"
                                 "  (if windows (funcall (intern \"RESUME\" windows))))")))
         panic("lisp: the window manager did not start");
+    /* What shuts the machine down hears its power button from here on. A
+     * world that an older kernel saved has no such thing, and is stopped
+     * from outside as it always was. */
+    if (!lisp_evaluate(own_form("(let ((system (find-package \"CLARA.SYSTEM\")))"
+                                "  (if system (funcall (intern \"START\" system))))")))
+        panic("lisp: what shuts the machine down did not start");
+    /* What keeps a connection closed forgets whom an earlier start had read
+     * that it trusts: that was read into memory which is this start's to
+     * hand out again. */
+    if (!lisp_evaluate(own_form("(let ((tls (find-package \"CLARA.TLS\")))"
+                                "  (if tls (funcall (intern \"START\" tls))))")))
+        panic("lisp: what keeps a connection closed did not start");
     listen = own_form("clara.listener:run");
     while (!lisp_call(listen, told, &condition)) {
         condition = lisp_values.value[0];
