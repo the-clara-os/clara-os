@@ -1727,10 +1727,13 @@ architectures (kernel/vm.c).
   of it has arrived, which is what a request wants, so HTTP and TLS are
   as they were.
 - That thread still waits for nobody, and it now also acts when nothing
-  arrives: four times a second it looks at what time has brought about
-  (`tend`), twenty times while something is on its way. Since it cannot
-  wait to learn which card has an address, it sends that question, drops
-  what it meant to send, and comes to it again at its next turn.
+  arrives: it looks at what time has brought about (`tend`) twenty times
+  a second while there is a connection, four times while the machine has
+  an address to keep, and once a second on a machine that has nothing to
+  do with its network, which should pay next to nothing for having one.
+  Since it cannot wait to learn which card has an address, it sends that
+  question, drops what it meant to send, and comes to it again at its
+  next turn.
 - Bytes go out with the connection's lock held, because the memory that
   they lie in moves up when the other side says that it has some of
   them. So nothing waits for the network with that lock: whoever puts

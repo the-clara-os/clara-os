@@ -1189,7 +1189,9 @@
         (card-lease card) (* 1000 (min (or (nth 6 given) 86400) 31536000))
         (card-leased card) (now)
         (card-renewed card) nil
-        (card-question card) nil))
+        (card-question card) nil)
+  ;; the card's thread looks at the time more often from now on, and is told so
+  (clara:signal-event (clara.virtio:device-event (card-device card))))
 
 ;; The address is no longer this machine's, and nothing says any more
 ;; which addresses are on its network.
@@ -1993,6 +1995,8 @@
          (open nil))
     (clara:with-lock-held ((card-book card))
       (setf (card-connections card) (cons connection (card-connections card))))
+    ;; the card's thread looks after this connection from now on, and is told so
+    (clara:signal-event (clara.virtio:device-event (card-device card)))
     (unwind-protect
          (progn
            (ask-until card (lambda () (not (eq (connection-state connection) :asked)))
@@ -2642,15 +2646,20 @@
 ;; was given is taken, twelve bytes of virtio's before each frame, and the
 ;; page given back to the card for the next one. Whoever waits for
 ;; something to arrive is told to look. A frame that cannot be made sense
-;; of is counted and dropped: what is on a wire is anybody's to send. Four
-;; times a second at least, and twenty times while a connection has
-;; something on its way, the thread looks at what time has brought about.
-;; It never waits for an answer, since it is the one that would have to
-;; take it.
+;; of is counted and dropped: what is on a wire is anybody's to send. When
+;; nothing arrives, the thread wakes all the same, to look at what time
+;; has brought about: twenty times a second while there is a connection,
+;; four times while the machine has an address that it has to keep, and
+;; once a second otherwise. A machine that has nothing to do with its
+;; network does next to nothing for it: where every call is a collection,
+;; as in the boot that tries the collector, a dozen calls four times a
+;; second were a good part of what that machine did. It never waits for
+;; an answer, since it is the one that would have to take it.
 (defun take (card)
-  (let ((event (clara.virtio:device-event (card-device card))) (queue (card-receive card)) (*waits* nil))
+  (let ((event (clara.virtio:device-event (card-device card))) (queue (card-receive card)) (*waits* nil)
+        (soon nil) (often nil))
     (loop
-      (clara:wait-event event (if (some #'waiting (card-connections card)) 50 250))
+      (clara:wait-event event (cond (soon 50) (often 250) (t 1000)))
       (let ((any nil))
         (loop
           (multiple-value-bind (page written) (clara.virtio:queue-take queue)
@@ -2663,21 +2672,24 @@
                   (setf (card-dropped card) (1+ (card-dropped card))))))
             (clara.virtio:queue-add queue (list (list page 4096 t)) page)))
         ;; and what this machine has sent to itself
-        (loop
-          (let ((packet (clara:with-lock-held ((card-book card))
-                          (let ((first (car (card-inside card))))
-                            (setf (card-inside card) (cdr (card-inside card)))
-                            first))))
-            (unless packet
-              (return))
-            (setq any t)
-            (unwind-protect
-                 (handler-case (if (= (ash (one (car packet)) -4) 6)
-                                   (packet-six-in card (car packet) (cdr packet) nil)
-                                   (packet-in card (car packet) (cdr packet) nil))
-                   (error ()
-                     (setf (card-dropped card) (1+ (card-dropped card)))))
-              (clara.unsafe:free-memory (car packet) 1))))
+        (when (card-inside card)
+          (loop
+            (let ((packet (clara:with-lock-held ((card-book card))
+                            (let ((first (car (card-inside card))))
+                              (setf (card-inside card) (cdr (card-inside card)))
+                              first))))
+              (unless packet
+                (return))
+              (setq any t)
+              (unwind-protect
+                   (handler-case (if (= (ash (one (car packet)) -4) 6)
+                                     (packet-six-in card (car packet) (cdr packet) nil)
+                                     (packet-in card (car packet) (cdr packet) nil))
+                     (error ()
+                       (setf (card-dropped card) (1+ (card-dropped card)))))
+                (clara.unsafe:free-memory (car packet) 1)))))
+        (setq soon (card-connections card)
+              often (card-lease card))
         (tend card)
         (when any
           (clara.virtio:queue-notify queue)

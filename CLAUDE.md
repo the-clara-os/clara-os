@@ -770,6 +770,14 @@ Rules:
   server of IPv6 itself. So the machine does not say it, and a new line
   that says something of the network is held against the container
   below before it is pushed, as every change to the network is.
+- A thread that wakes by itself, the card's for one, is paid for by
+  every boot: in the stress boot each call of a function in Lisp is a
+  collection, in every thread, and a dozen calls four times a second in
+  a thread that had nothing to do made that boot twice as long on a slow
+  runner of CI. What such a thread does when there is nothing to do is
+  read a word or two and go back to sleep, and it sleeps as long as it
+  can: `take` wakes once a second on a machine without an address, and
+  whoever gives it more to look after signals its event.
 - `card-answering`, the card's note of where the packet came from that
   it is looking at, is the card's thread's, and `answering-card` is the
   one place that reads it, once. Whatever the card's thread writes that

@@ -2510,11 +2510,24 @@ M17a to M17c, the three together, what checking them found:
   machine that stands still: the next time that picture tells a
   firmware that did not start the system from a system that reported a
   fault, and both from a machine that never went down.
-- What the three cost CI, on the run that passed: 13m18s for the whole
-  job where main's last run had 12m21s, the stress boot 281 s of its 900
-  where it had 251, and no other boot more than a second from what it
-  took before. The runners differ by more than that from one run to the
-  next, so it says only that nothing here made a boot slow.
+- What the three cost CI. The first run that passed took 13m18s where
+  main's last had 12m21s, and its stress boot 281 s of its 900 where it
+  had 251; the next took 20m18s, and its stress boot 549 s. The runner
+  was slower that time, by a third for every other boot, and by twice
+  for that one. The boot's own report said where: what it does before
+  its session took what it takes on main, to the second, and the session
+  took the rest. The session is typed with a collection at every safe
+  point, which every call of a function in Lisp is, in every thread; and
+  the card's thread had come to make a dozen such calls four times a
+  second, on a machine that never used its network, to look at what time
+  had brought about. On a slow machine that was most of what the machine
+  did. An idle card's thread wakes once a second now, four times while
+  the machine has an address to keep and twenty while there is a
+  connection, and reads two words before it looks further. Measured as
+  the note under "What a translated world costs CI" says, on the Mac
+  with the machine emulated: 186 s before, 169 s after, 167 s with no
+  network card at all, and 157 s for main the day before, so what is
+  left is the world, which is larger by what lisp/net.lisp grew.
 
 No milestone yet, to be picked up when they start to matter:
 
