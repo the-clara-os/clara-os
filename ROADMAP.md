@@ -3101,18 +3101,19 @@ M20a, M20b and M20c, objects, what they left:
 - What was checked by hand and by planted mistakes. 132 mistakes were put
   into lisp/clos.lisp, the printer, the evaluator, the compiler,
   lisp/boot.lisp, lisp/system.lisp and the collector, one at a time, and
-  each tree given to the host tests or to a boot. Thirteen got through at
-  first. Two of those showed faults and not gaps: the methods of
-  PRINT-OBJECT were asked for the last instance of a list first, so that
-  the first one to fail was not the one that was heard of; and a slot
-  that the instances share was given its first value again by every new
-  instance that found it without one, where the standard gives it when
-  the class is defined and at no other time. Nine were things that
-  nothing asked, and each got a form in tools/objects.txt or a check
-  beside it. Two change nothing that can be seen (a structure that is
-  noted is also written in a round whose text is thrown away; a second
-  method is not called while an exit is under way, with or without the
-  look that says so).
+  each tree given to the host tests or to a boot. Eleven got through at
+  first. One of those showed a fault and not a gap: a slot that the
+  instances share was given its first value again by every new instance
+  that found it without one, where the standard gives it when the class
+  is defined and at no other time. Closing another showed a second: the
+  methods of PRINT-OBJECT were asked for the last instance of a list
+  first, so that the first one to fail was not the one that was heard
+  of. Seven were things that nothing asked, and each got a form in
+  tools/objects.txt or a check beside it; one is asked by the first
+  session, which the boot that I gave it to does not type. Two change
+  nothing that can be seen (a structure that is noted is also written in
+  a round whose text is thrown away; a second method is not called while
+  an exit is under way, with or without the look that says so).
 - What it costs the tests. The world has 2105 functions where it had
   1913, and is loaded in 320 ms where it took 290, on the Mac. The stress
   boot, where the machine is emulated, on the Mac, main and this side by
@@ -3130,7 +3131,13 @@ M20a, M20b and M20c, objects, what they left:
   written into the loops, which makes a collection a seventh quicker
   than main's, emulated, with the heap a tenth larger: 189 s for the
   stress boot, against main's 209. `make test` has one boot more,
-  x86_64-objects, 21 s on the Mac, where x86_64 is emulated.
+  x86_64-objects, 21 s on the Mac, where x86_64 is emulated. In the
+  Ubuntu container on the Mac the stress boot took 162 s, where it took
+  204 s at M19. On CI the first run took 14m46s of the job's thirty
+  minutes, on a runner between the two kinds (x86_64 in 53 s, where the
+  quick kind has 42 to 45 and the slow 55), and its stress boot 246 s of
+  its 900; main's last run, on a quick runner (x86_64 in 42 s), had
+  13m14s and 261 s. The new boot took 33 s there.
 - UTM is untried, like everything else there, and so is the object
   system on a machine with more than the tests' half gigabyte of memory.
 
