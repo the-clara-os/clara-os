@@ -2754,7 +2754,16 @@ M18a and M18b, fonts, what they left:
   seen at 251 to 263 s on the fast kind and at 435 to 466 on the slow, so
   365 s on one between them says no more than the Mac's two figures do,
   and nothing against them. No other boot took longer there than main's
-  last run had it, which was on the slow kind.
+  last run had it, which was on the slow kind. The second run was on the
+  slow kind itself, its x86_64 boot 56 s as main's last: 19m38s, and the
+  stress boot 502 s where main's had 466, a thirteenth more, which is
+  what the Mac says. `aarch64-network` took 61 s where it had 57, for
+  eight more files to fetch, and no other boot more than three seconds
+  longer. That leaves the stress boot at more than half of its 900 s on
+  a slow runner, as it was before this (466 s, and 549 s once in M17's
+  runs), and the job at two thirds of its thirty minutes: nothing was
+  done about either here, and "What a translated world costs CI" is
+  still where the time of that boot is to be taken out.
 
 No milestone yet, to be picked up when they start to matter:
 
