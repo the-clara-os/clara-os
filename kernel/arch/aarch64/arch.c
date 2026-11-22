@@ -52,6 +52,9 @@ int arch_serial_getc(void)
 const char *const arch_serial_kind = "PL011";
 const uint64_t arch_serial_base = UART_BASE;
 
+/* The firmware of these machines reads no memory that it calls free. */
+const uint64_t arch_kept_frame = 0;
+
 /* There are no I/O ports on this architecture: every device is in memory. */
 int arch_port_read(uint16_t port, unsigned size, uint32_t *value)
 {

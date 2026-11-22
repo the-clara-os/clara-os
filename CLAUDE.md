@@ -963,12 +963,35 @@ Rules:
   and ask for it by itself.
 - A boot that does not get to its end, a machine that stands still or a
   kernel that stopped with a report, leaves build/screen-<name>.png like
-  one that passed: tools/boottest.sh asks QEMU for the screen before it
-  stops the machine. Look at it before anything else when a boot ran out
-  of time and its serial log just ends: twice a machine that was told to
-  start again said so and was never heard from again (ROADMAP.md, "the
-  three together"), and the log alone could not say whether the firmware
-  or the system stood still.
+  one that passed, and says where its processor was: tools/boottest.sh
+  asks QEMU for the screen, and for the registers twice, before it stops
+  the machine (build/monitor-<name>.log has every register). Look at
+  both before anything else when a boot ran out of time and its serial
+  log just ends. A screen of 640 by 480 that says `Guest has not
+  initialized the display (yet)` is a machine that went down and whose
+  firmware has not come to its screen; a processor that is not in the
+  kernel's image, whose place the boot report gives (`kernel image at`),
+  nor in the code that the world made (0x200000000000 and up), is in the
+  firmware. Three times an x86_64 machine that was told to start again
+  said so and was never heard from again, and those two things are what
+  said why (ROADMAP.md, "A page frame that the firmware reads").
+- RAM keeps what it holds when a machine is started again, and the
+  firmware starts in it. OVMF of EDK2's release of November 2025, which
+  is Ubuntu 26.04's and so CI's, takes the page frame at 0x812000 for a
+  map of the memory when two words there are of the right shape, and
+  stood still for good when they were the Lisp heap's.
+  kernel/arch/x86_64/arch.c names the frame (`arch_kept_frame`), and
+  kernel/pmm.c takes it out of use and clears it where the firmware's
+  map hands it over: the boot report then has a line `page frames: the
+  one at ... is kept out of use`, and a machine with another firmware has
+  no such line. Whatever is put low in memory by hand, a table, a
+  buffer at an address of the kernel's own choosing, is looked for
+  there first when a machine does not come back. Two things that found
+  it: QEMU writes words into a machine's memory at every reset
+  (`-device loader,addr=0x812000,data=0x20000017a5d0,data-len=8`, and a
+  second one for 0x812008 with 0x268), which shows a firmware's fault
+  without a system; and `pmemsave 0 0x20000000 "file"` in QEMU's monitor
+  saves the memory of a machine that stands still, the name in quotes.
 - A session can wait for the kernel to say something before it goes on:
   `^W pattern`, for a kernel that will say nothing more by itself, a panic
   for one, which `PANICS=1` allows the boot once. `^M system_reset` after
@@ -1342,7 +1365,7 @@ Rules:
   card runs dry while the machine is busy, and nothing about how it
   sounds, which is his to say.
 - What QEMU's card does, found by trying it: it is there from QEMU 8.2
-  on, which is CI's; with `streams=1` it has the one stream that plays,
+  on (CI's is 10.2); with `streams=1` it has the one stream that plays,
   and QEMU does not complain of a microphone that the host cannot give;
   a period comes back when QEMU has taken it, which is before it is
   heard; the count of bytes still to play that comes back with it is 0
@@ -1701,12 +1724,20 @@ Rules:
   pushed. The serial logs and screenshots of
   a run are in its artifact, boot-reports.
 - To see a change the way CI will before pushing it, with Docker running:
-  an ubuntu:24.04 container with the packages from the workflow, a copy of
-  the tree without build/, and `make test` in it. In zsh a pattern that
-  matches no file ends the whole command line before it runs: a line
-  that begins with `rm build/*x*` and goes on to `make test` and a `grep`
-  of its log then shows the log of the run before. build/ itself must not be
-  shared with the container: the objects in it come from another compiler.
+  a container of the Ubuntu release that the runners have, ubuntu:26.04,
+  with the packages from the workflow, a copy of the tree without build/,
+  and `make test` in it. Which release that is stands in the first lines
+  of a run's log (`Image: ubuntu-26.04`), and `ubuntu-latest` moves to
+  the next one some day: look there before believing this line. Another
+  release has another QEMU and another firmware. This file said 24.04
+  until 0.0.44, where CI had been on 26.04 from its first run, and a
+  stall that only the firmware of 26.04 has (above) passed fourteen times
+  in that container and was written down as unexplained. In zsh a
+  pattern that matches no file ends the whole command line before it
+  runs: a line that begins with `rm build/*x*` and goes on to `make test`
+  and a `grep` of its log then shows the log of the run before. build/
+  itself must not be shared with the container: the objects in it come
+  from another compiler.
   Have the container print what a failed boot differed in before it ends
   (the lines of test.log from the boot's command on, and the end of its
   build/boot-<name>.log), or start it without `--rm`: a boot that failed

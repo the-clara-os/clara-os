@@ -69,13 +69,14 @@ shot=build/screen-$name.png
 sock=build/monitor-$name.sock
 keys=build/serial-$name.in
 orders=build/monitor-$name.in
+answers=build/monitor-$name.log
 typing=build/typing-$name
 heard=build/session-$name.txt
 scratch=build/scratch-$name.img
 boot=build/boot-$name.img
 wav=build/sound-$name.wav
 mkdir -p build
-rm -f "$shot" "$sock" "$keys" "$orders" "$heard" "$typing".* "$scratch" "$wav"
+rm -f "$shot" "$sock" "$keys" "$orders" "$answers" "$heard" "$typing".* "$scratch" "$wav"
 
 # What the machine plays goes into a file, at the pace that its card plays
 # at, so that the file has the numbers that the machine sent and no others.
@@ -255,7 +256,9 @@ pid=$!
 
 # The QEMU monitor is a socket, and one connection to it stays open for the
 # whole boot, fed from a second FIFO: keys for the keyboard, moves of the
-# mouse, and at the end the order for a screenshot.
+# mouse, and at the end the order for a screenshot. What the monitor answers
+# is kept, for the one time that something is asked of it: where the
+# processor of a machine is that did not get to its end.
 mkfifo "$orders"
 exec 4<> "$orders"
 n=0
@@ -263,7 +266,7 @@ while [ ! -S "$sock" ] && [ "$n" -lt 50 ]; do
     sleep 0.1
     n=$((n + 1))
 done
-nc -U "$sock" < "$orders" > /dev/null 2>&1 3>&- 4>&- &
+nc -U "$sock" < "$orders" > "$answers" 2>&1 3>&- 4>&- &
 
 part=0 # the next one to type
 
@@ -424,15 +427,23 @@ while [ "$i" -lt $((timeout * 4)) ]; do
     i=$((i + 1))
 done
 # The machine did not get there. What its screen shows goes with the logs,
-# when the machine is still there to be asked: the serial port has no more
-# to say of one that stands still, and the screen tells a firmware that
-# did not start the system from a system that reported a fault, and both
-# from a machine that was told to start again and did not.
+# when the machine is still there to be asked, and where its processor is,
+# asked for twice, a second apart: the serial port has no more to say of a
+# machine that stands still. The screen tells a firmware that did not start
+# the system from a system that reported a fault, and both from a machine
+# that was told to start again and did not. The processor's place tells one
+# that waits from one that goes round, and the kernel, which says in its
+# report where its image lies, from the firmware.
 if kill -0 "$pid" 2>/dev/null; then
+    printf 'info registers\n' >&4
+    sleep 1
+    printf 'info registers\n' >&4
     screenshot_and_quit || true
 fi
 stop_qemu
 [ -s "$shot" ] && echo "boottest $name: the screen as it was is in $shot"
+at=$(LC_ALL=C grep -a -o 'RIP=[0-9a-f]*\| PC=[0-9a-f]*' "$answers" 2> /dev/null | tr -d ' ' | tr '\n' ' ')
+[ -z "$at" ] || echo "boottest $name: its processor was at $at(every register is in $answers)"
 echo "boottest $name: FAILED, no '$marker' after $((i / 4))s of ${timeout}s"
 echo "--- qemu ---"; cat "build/qemu-$name.log"
 echo "--- serial ---"; tail -40 "$log"

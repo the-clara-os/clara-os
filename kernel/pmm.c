@@ -6,7 +6,12 @@
  * start. Boot-services memory is free on paper too, but the processor goes
  * on using what the firmware left in it, page tables, a stack and exception
  * vectors, until the kernel has put its own in their place. pmm_reclaim
- * adds that memory then. */
+ * adds that memory then.
+ *
+ * One frame can be free on paper and still not the system's to use: the one
+ * that the firmware reads when the machine starts, which a machine that is
+ * started again finds as it was left (arch_kept_frame). Where the map hands
+ * that frame over, it is taken out of use for good, and cleared. */
 #include "efi.h"
 #include "kernel.h"
 
@@ -52,6 +57,30 @@ static void mark(uint64_t i, uint64_t count, int used)
         else
             g_bitmap[i / 64] &= ~(1ULL << (i % 64));
     }
+}
+
+/* A free frame leaves the allocator for good, and holds nothing from then
+ * on. Says whether the frame at addr was free, and so is kept now: it is
+ * not when it lies outside RAM, or when the map did not call it free. */
+static int keep(uint64_t addr)
+{
+    uint64_t frame = addr >> PAGE_SHIFT;
+
+    if (frame < g_first || frame - g_first >= g_frames || in_use(frame - g_first))
+        return 0;
+    mark(frame - g_first, 1, 1);
+    g_free--;
+    memset(phys_ptr(addr), 0, PAGE_SIZE);
+    return 1;
+}
+
+/* The frame that the firmware reads, once the map has given it up: as
+ * conventional memory at the start, or with the boot-services memory. */
+static void keep_for_firmware(void)
+{
+    if (arch_kept_frame && keep(arch_kept_frame))
+        kprintf("page frames: the one at %p is kept out of use, and cleared: the firmware reads it\n",
+                (void *)(uintptr_t)arch_kept_frame);
 }
 
 void pmm_init(const struct boot_info *bi)
@@ -110,6 +139,7 @@ void pmm_init(const struct boot_info *bi)
     }
     mark(((uintptr_t)g_bitmap >> PAGE_SHIFT) - g_first, bitmap_pages, 1);
     g_free -= bitmap_pages;
+    keep_for_firmware();
 
     kprintf("page frames: %llu of %llu free (%llu MiB), boot-services memory not counted yet\n", g_free, ram,
             g_free >> (20 - PAGE_SHIFT));
@@ -238,6 +268,7 @@ void pmm_reclaim(const struct boot_info *bi)
         pmm_free(start, count);
         reclaimed += count;
     }
+    keep_for_firmware();
     kprintf("page frames: %llu more from boot-services memory, overwritten first: %llu free (%llu MiB)\n",
             reclaimed, g_free, g_free >> (20 - PAGE_SHIFT));
 }
@@ -285,6 +316,21 @@ void pmm_selftest(void)
     pmm_free(first, ALIGNED);
     pmm_free(one, 1);
     pmm_free(second, ALIGNED);
+
+    /* A frame that is kept: a free one with something in it. It has to be
+     * out of use afterwards, and so cannot be kept a second time, and has
+     * to hold nothing. The test then gives it back, which nothing does for
+     * the frame that the firmware reads. */
+    one = pmm_alloc(1);
+    pattern(one, 1, 0x7777777777777777ULL, 0);
+    pmm_free(one, 1);
+    if (!keep(one) || keep(one) || g_free != before - 1)
+        panic("pmm self-test: the free frame at %llx was not kept, or was kept twice", one);
+    for (uint64_t i = 0; i < PAGE_SIZE / 8; i++)
+        if (((volatile uint64_t *)phys_ptr(one))[i])
+            panic("pmm self-test: the frame at %llx was kept with %llx still in it", one,
+                  (uint64_t)((volatile uint64_t *)phys_ptr(one))[i]);
+    pmm_free(one, 1);
     if (g_free != before)
         panic("pmm self-test: %llu frames free at the end, %llu at the start", g_free, before);
     if (pmm_alloc(g_free + 1))

@@ -978,6 +978,43 @@ Infrastructure, done:
   of memory at the text that asks for four thousand million characters,
   which is a panic.
 
+- **A page frame that the firmware reads** (2026-11-22, version 0.0.44).
+  An x86_64 machine that was told to start again sometimes said so and
+  was never heard from again: the boot of `make test` that upgrades, at
+  its second start, on CI and nowhere else. Once in the first run of
+  M17's pull request, where it was put down as unexplained, and then
+  twice running on main, at a commit that had changed two documents. It
+  was the firmware, in memory that the system had left as it was. OVMF
+  looks into the page frame at 0x812000 whenever a machine starts, for
+  what a loader of another kind (IGVM) would have left there, a map of
+  the memory and a count of the processors, and takes the words in it
+  for such a map when the second is not 0 and the third is small. As
+  EDK2 was from 2025-09-29 to 2025-12-10 (its commits 5e8db785e4 and
+  e4f99a8554), which its release of November 2025 is and with it the
+  OVMF of Ubuntu 26.04, the firmware's own map hands that frame to the
+  system as free memory, low in RAM, where the allocator looks first. In
+  a world that was made from the files it became part of the Lisp heap.
+  RAM keeps what it holds when a machine is started again, so the next
+  start read words of the heap as the machine's memory, put the 64-bit
+  window of the PCI bus at 0x200000800000000 on a processor that has 40
+  bits of address, and went round for good in the driver of the host
+  bridge, which holds its windows against the map of the address space in
+  a loop that does not look at whether it was answered. The kernel names
+  that frame now (`arch_kept_frame`, kernel/arch/x86_64/arch.c), and the
+  allocator takes it out of use for good where the firmware's map calls
+  it free, and clears it (kernel/pmm.c): what the later firmware has a
+  system do, by keeping the frame to itself in its map. The boot report
+  says so in a line of its own on a machine with that firmware, and has
+  no such line elsewhere. The allocator's self-test keeps a frame of its
+  own choosing in the same way at every boot, and wants it out of use,
+  empty, and not handed out. A boot that runs out of time now says where
+  its processor was, with the picture of its screen (tools/boottest.sh,
+  build/monitor-<name>.log). And the notes had CI on Ubuntu 24.04, with
+  QEMU 8.2, where it has been on 26.04 and QEMU 10.2 since its first
+  run: the container that stands in for it is of that release now
+  (CLAUDE.md). What was measured and tried is in this entry's group
+  below.
+
 Infrastructure, for sessions with budget left over:
 
 - Read the UART base from ACPI (SPCR or DBG2) instead of assuming
@@ -2673,7 +2710,12 @@ M17a to M17c, the three together, what checking them found:
   logs (tools/boottest.sh), since the serial port says nothing of a
   machine that stands still: the next time that picture tells a
   firmware that did not start the system from a system that reported a
-  fault, and both from a machine that never went down.
+  fault, and both from a machine that never went down. (What the second
+  one was is known since 2026-11-22, when main showed it twice running:
+  the firmware of Ubuntu 26.04, which CI has and that container did not,
+  reading a page frame that the system had written to. These slices had
+  not brought it about; a world that grows has more of its heap low in
+  memory. "A page frame that the firmware reads", above and below.)
 - What the three cost CI. The first run that passed took 13m18s where
   main's last had 12m21s, and its stress boot 281 s of its 900 where it
   had 251; the next took 20m18s, and its stress boot 549 s. The runner
@@ -3154,6 +3196,88 @@ M20a, M20b and M20c, objects, what they left:
   13m14s and 261 s. The new boot took 33 s there.
 - UTM is untried, like everything else there, and so is the object
   system on a machine with more than the tests' half gigabyte of memory.
+
+A page frame that the firmware reads, what finding it took:
+
+- What CI runs on. `ubuntu-latest` has been Ubuntu 26.04 since the first
+  run of this repository, 2026-11-13: clang 21.1, QEMU 10.2.1, and OVMF
+  2025.11-3ubuntu7.3, which is EDK2's release of November 2025. A run's
+  log says so in its first lines (`Image: ubuntu-26.04`), and nobody had
+  read them: the notes said 24.04, clang 18 and QEMU 8.2, and the
+  container that stood in for CI on the Mac was of 24.04, in every entry
+  of this file that names one. That container's OVMF is of February
+  2024, and Homebrew's QEMU 11 brings a firmware that is not of the three
+  months either: neither can stand still this way, and both passed as
+  often as they were asked.
+- How often. On CI, three times in the thirty-six runs that had that
+  boot: once on a runner of the quick kind, whose x86_64 boot took 37 s,
+  and twice on the slowest, 55 s and 63 s. In a container of Ubuntu 26.04
+  on the Mac, which emulates x86_64 at the pace of the slow ones, the
+  boot that upgrades stood still 37 times in 65 with 0.0.43, eight of
+  them running at once, and 0 times in 48 with 0.0.44 under the same
+  load. It is
+  always the second start of that boot: the first is made from a world
+  that was saved, and the second from one that was made from the files,
+  whose heap has that frame.
+- What a stalled machine said, once the boot test asked: a screen of 640
+  by 480 that says `Guest has not initialized the display (yet)`, which
+  is a machine that went down and whose firmware has not come to its
+  screen; and a processor in long mode with page tables at 0x1f801000,
+  outside the kernel's image. Its memory, saved with `pmemsave 0
+  0x20000000 "file"` in QEMU's monitor (the name in quotes, or the
+  monitor divides by it), had the rest. The processor was in the
+  firmware's core, the image at the top of RAM, in the function that
+  looks an address up in the map of the address space
+  (CoreSearchGcdMapEntry, by the signature `gcdm` that it compares),
+  asked for 0x10000000000, the first address that 40 bits do not have,
+  by the driver of the PCI host bridge (the image with `phbg` in it), in
+  the loop of AddMemoryMappedIoSpace that goes from one piece of the map
+  to the next and never ends when a piece is not found. The window that
+  it was checking began at 0x200000800000000; the firmware's own notes of
+  the machine, a block of the hand-off that begins with the GUID
+  dec9b486-1f16-47c7-8f68-df1a41888ba5, had that base and the size of
+  32 GiB that goes with the old way of placing it; and the copy that the
+  firmware keeps of QEMU's table of memory (`etc/e820`, 40 bytes) was
+  whole and right. So the base had come from somewhere else, and EDK2's
+  source says from where: PlatformIgvmMemoryMapFind
+  (OvmfPkg/Library/PlatformInitLib/Igvm.c). The frame at 0x812000 held
+  0x20000017a5d0, 0x268, 0 and then more words of a Lisp heap, freed
+  ones among them, and the firmware's arithmetic done again on those
+  words gives 0x20000017a838000 for the end of RAM and
+  0x200000800000000 for the window, to the digit.
+- The firmware by itself. QEMU can write words into a machine's memory
+  at every reset, the first one included, which shows the fault without
+  a system: `-device loader,addr=0x812000,data=0x20000017a5d0,data-len=8
+  -device loader,addr=0x812008,data=0x268,data-len=8` on a machine with
+  no disk. Ubuntu 26.04's firmware then says nothing on its serial port
+  for as long as it is left, and comes to its boot manager in two
+  seconds without the two devices; Ubuntu 24.04's and Homebrew's come to
+  it in two seconds either way.
+- Why one start in two, and not all or none. The words have to pass for
+  the first entry of a map: 24 bytes of which the second word is not 0,
+  the third has nothing in its bits 4 to 15, and its upper half is 0.
+  Whether the heap's object at the start of that frame is of that shape
+  goes with what the world allocated before it, and that with the pace
+  of the machine, since threads take turns by the clock. The pattern
+  that the allocator writes over boot-services memory before it frees it
+  does not pass, and neither does a frame of zeroes, which is what a
+  machine has at 0x812000 when it is switched on.
+- Mistakes that were planted in the allocator, one at a time, and that
+  its self-test stopped the boot at: a frame kept and not cleared (`was
+  kept with 7777777737773777 still in it`), cleared and not taken out of
+  use, taken out of use and still counted as free, and a frame that is
+  in use kept all the same (each `was not kept, or was kept twice`).
+  What no self-test can see is whether the frame that is kept is the one
+  that this firmware reads. That was tried the other way round: with the
+  two calls that keep it taken out of 0.0.44, and nothing else changed,
+  the boot that upgrades stood still 13 times in 24 in that container.
+- A ClaraOS before 0.0.44 on that firmware can still stand still at the
+  restart that takes it to a newer one, since it is the old system that
+  leaves the frame as it is. The manual says what to do then: end QEMU
+  and start the machine once more, which starts with empty memory, and
+  the newer system is tried at that start.
+- Ubuntu's package is as it was, and nobody there has been told: issue
+  #79. The stall itself was issue #78.
 
 No milestone yet, to be picked up when they start to matter:
 
@@ -3748,7 +3872,9 @@ No milestone yet, to be picked up when they start to matter:
   the console and the listener have no self-test at boot but the
   session.
 - CI has SBCL 2.6.0, the Mac 2.6.10, and the Ubuntu 24.04 container that
-  stands in for CI on the Mac 2.2.9. The stress boot, a collection at every
+  stood in for CI on the Mac until 0.0.44 has 2.2.9 (CI was never of that
+  release: "A page frame that the firmware reads"). The stress boot, a
+  collection at every
   safe point, takes 18 s on the Mac, two minutes there when AArch64 is
   emulated, and between two and five on CI, 132 s to 294 s on four runs of
   nearly the same kernel, of the ten that the boot test gives it. With the
@@ -3925,9 +4051,10 @@ No milestone yet, to be picked up when they start to matter:
 - When ExitBootServices fails for good, the handoff says so through the
   firmware's console, which the specification no longer promises will work
   by then.
-- CI covers Ubuntu only, with clang 18 and QEMU 8.2 where the Mac has
-  clang 23 and QEMU 11, and fsck.fat for the checker of volumes where the
-  Mac has fsck_msdos. Nothing builds or boots on macOS except by hand.
+- CI covers Ubuntu only, 26.04, with clang 21 and QEMU 10.2 where the Mac
+  has clang 23 and QEMU 11, another build of the firmware, and fsck.fat
+  for the checker of volumes where the Mac has fsck_msdos. Nothing builds
+  or boots on macOS except by hand.
   The boot with a collection at every safe point is emulated there, and
   is the longest of the nine.
 - `make image` needs macOS (hdiutil), so CI neither builds nor boots the
