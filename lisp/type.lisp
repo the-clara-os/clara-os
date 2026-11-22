@@ -1,0 +1,1053 @@
+;;;; type.lisp: outline fonts
+;;;;
+;;;; Letters as shapes. A font of this kind is a file that holds, for each
+;;;; of its characters, the outline of the character's glyph: closed lines,
+;;;; straight ones and curves, in units of the font's own. A glyph is drawn
+;;;; at any size by scaling its outline and working out, for every pixel
+;;;; that the shape touches, how much of the pixel it covers. That is the
+;;;; pixel's shade, and the pixel takes that much of the colour of the text
+;;;; (CLARA.DRAW:DRAW-SHADES): an edge that goes through pixels at a slant
+;;;; comes out smooth, where a picture of one bit to the pixel has steps.
+;;;;
+;;;; The files are TrueType's: tables in a file, numbers with their highest
+;;;; byte first, outlines of straight lines and of curves of the second
+;;;; degree. What is read of one is which glyph a character has (the table
+;;;; "cmap", in its formats 4 and 12), how far a glyph moves on ("hmtx"),
+;;;; its outline ("glyf"), also when it is put together of other glyphs, and
+;;;; where the lines of a font lie ("hhea", "post", "OS/2"). What is not
+;;;; read: the programs in a font that fit an outline to the pixels of a
+;;;; small size, kerning, and outlines of the other kind (CFF), whose files
+;;;; are refused.
+;;;;
+;;;; A font, here, is such a file at a size: (font "Sans" 16) is one, and
+;;;; CLARA.DRAW:DRAW-TEXT and TEXT-WIDTH take it. "Sans" is a family, the
+;;;; names of four files: upright, bold, italic and both. The files of the
+;;;; two families that come with the system, the Go fonts (fonts/README.md),
+;;;; are among the system's own that the handoff read into memory, so they
+;;;; are there on a machine with no disk that is known here; any other name
+;;;; is that of a file, which is read from its volume.
+;;;;
+;;;; The picture of a glyph is made the first time its character is drawn
+;;;; in a font and kept with the font. It is a vector of shades in the heap,
+;;;; not page frames, so the collector takes it when its font is gone. A
+;;;; font comes back with a world that was saved; the bytes of its file do
+;;;; not, and START, at every boot, forgets where they were and lets go of
+;;;; the pictures that were made of them. The file is found again, and its
+;;;; glyphs are made again, when the font is next used.
+;;;;
+;;;; This file loads under SBCL as well, where lisp/host/ stands in for the
+;;;; machine, and the tests there hold the shades against areas that they
+;;;; work out with fractions.
+
+(defpackage "CLARA.TYPE"
+  (:use "COMMON-LISP")
+  (:export "START" "FONT" "FONT-P" "FONT-NAME" "FONT-SIZE" "FONT-HEIGHT" "FONT-ASCENT" "FONT-DESCENT"
+           "FAMILIES" "DEFINE-FAMILY" "FORGET"))
+(in-package "CLARA.TYPE")
+
+(defconstant +smallest+ 4)      ; a font is from this many pixels to the em
+(defconstant +largest+ 400)     ; to this many
+(defconstant +pixels+ 1048576)  ; the most that the picture of one glyph has
+(defconstant +cells+ 1048576)   ; the most shades that the fonts keep between them, before they are all let go
+(defconstant +work+ 16384)      ; the most points and parts that the outline of one glyph is put together of
+(defconstant +depth+ 8)         ; how deep a glyph may be made of glyphs that are made of glyphs
+
+;; A file of outlines, as it was read at this start.
+(defstruct face
+  file      ; its name, as it was asked for
+  memory    ; where its bytes are,
+  size      ; how many of them there are,
+  pages     ; and the page frames that they were read into, for FORGET to give back; NIL for a file of the system's
+  start     ; *START*, as it was when the file was read
+  units     ; how many of the font's units make an em
+  glyphs    ; how many glyphs it has
+  ascent    ; how far the letters reach above the baseline, in units,
+  descent   ; how far below, a negative number,
+  gap       ; and how much is left between two lines
+  under     ; where a line under the text lies, from the baseline: its middle, negative below,
+  stroke    ; and how thick it is
+  through   ; where a line through the text lies: its top, above the baseline,
+  cut       ; and how thick that is
+  metrics   ; how many glyphs have an advance of their own; the ones after them have the last one's
+  hmtx      ; where in the file the advances are,
+  loca      ; the places of the glyphs,
+  long      ; which are four bytes each, or two,
+  glyf      ; the outlines,
+  outlines  ; how many bytes of them,
+  map       ; and the table that says which glyph a character has,
+  kind)     ; whose format is 4 or 12
+
+;; A file at a size. What was read and made for it is not in it but beside
+;; it (*MADE*), so that a font which is printed at a prompt is a line, and
+;; not the pictures of all its glyphs.
+(defstruct font
+  name      ; what it was asked for by: a family's name, or a file's
+  file      ; the file that it is read from
+  size      ; in pixels to the em
+  underline ; a line is drawn under its text,
+  strike    ; or through it
+  up        ; in pixels: from the top of a line of text to its baseline,
+  down      ; from there to its bottom,
+  gap       ; and from there to the top of the next line
+  under     ; where the line under the text begins, in rows below the baseline, and how thick it is
+  stroke
+  over      ; where the line through the text begins, in rows above the baseline, and how thick it is
+  cut)
+
+;; What is kept for a font at one start of the machine.
+(defstruct kept
+  face      ; its file, as it was read
+  glyphs    ; the glyphs of the characters whose codes are below 256, where they were made, or NIL
+  others)   ; and of the others: (code . glyph)
+
+;; What a character looks like in a font.
+(defstruct glyph
+  advance   ; how far the next character is to the right, in pixels
+  left      ; the picture's upper left corner, from the place on the baseline where the character begins
+  top
+  width     ; the picture, in pixels
+  height
+  step      ; the shades of a row are this many items after those of the row above
+  shades)   ; a vector of them, or NIL for a glyph that shows nothing, a space
+
+(defvar *start* (list 'start))  ; stands for this start of the machine
+(defvar *lock* (clara:make-lock "fonts")) ; one file is read at a time
+(defvar *faces* nil)            ; the files that were read at this start
+(defvar *fonts* nil)            ; the fonts that were made, each once
+(defvar *made* nil)             ; ((font . kept) ...): what was read and made for the ones that were used at this start
+(defvar *cells* 0)              ; how many shades are kept there
+
+;; The families: a name, and the files of its upright, bold, italic and
+;; bold italic.
+(defvar *families*
+  (list (list "Sans" "Go-Regular.ttf" "Go-Bold.ttf" "Go-Italic.ttf" "Go-Bold-Italic.ttf")
+        (list "Mono" "Go-Mono.ttf" "Go-Mono-Bold.ttf" "Go-Mono-Italic.ttf" "Go-Mono-Bold-Italic.ttf")))
+
+;;; Numbers
+
+;; N divided by D, to the nearest whole number.
+(defun nearest (n d)
+  (if (< d 0)
+      (floor (- 0 n n d) (- 0 d d))
+      (floor (+ n n d) (+ d d))))
+
+;; N divided by D, a whole number that is not less.
+(defun at-least (n d)
+  (- 0 (floor (- 0 n) d)))
+
+;;; The bytes of a file
+;;;
+;;; A file is whatever somebody put on a volume, so nothing in it is taken
+;;; on trust: every byte is asked for by its place in the file, and a place
+;;; past the end is an error, not somebody else's memory.
+
+(defun u8 (face at)
+  (if (and (<= 0 at) (< at (face-size face)))
+      (clara.unsafe:memory-8 (+ (face-memory face) at))
+      (error "the font ~A ends before its byte ~D" (face-file face) at)))
+
+(defun u16 (face at)
+  (if (and (<= 0 at) (< (+ at 1) (face-size face)))
+      (let ((address (+ (face-memory face) at)))
+        (+ (* 256 (clara.unsafe:memory-8 address)) (clara.unsafe:memory-8 (+ address 1))))
+      (error "the font ~A ends before its byte ~D" (face-file face) (+ at 1))))
+
+(defun i8 (face at)
+  (let ((n (u8 face at)))
+    (if (< n 128) n (- n 256))))
+
+(defun i16 (face at)
+  (let ((n (u16 face at)))
+    (if (< n 32768) n (- n 65536))))
+
+(defun u32 (face at)
+  (+ (* 65536 (u16 face at)) (u16 face (+ at 2))))
+
+;; The four letters that a table is known by, as the number that they are
+;; in a file.
+(defun tag (name)
+  (+ (* 16777216 (char-code (char name 0))) (* 65536 (char-code (char name 1)))
+     (* 256 (char-code (char name 2))) (char-code (char name 3))))
+
+;;; A file, read
+;;;
+;;; A file begins with a list of its tables: for each its four letters,
+;;; where it begins, and how long it is.
+
+;; Where the table of that name begins in the file, and how long it is; NIL
+;; when the file has none. One that is shorter than LEAST bytes, or that
+;; goes on past the end of the file, is an error.
+(defun table (face name least)
+  (let ((wanted (tag name)) (count (u16 face 4)) (found nil) (length 0))
+    (dotimes (i count)
+      (let ((entry (+ 12 (* 16 i))))
+        (when (= (u32 face entry) wanted)
+          (setq found (u32 face (+ entry 8))
+                length (u32 face (+ entry 12)))
+          (return))))
+    (cond ((null found)
+           nil)
+          ((or (< length least) (> (+ found length) (face-size face)))
+           (error "the table ~A of the font ~A is cut short" name (face-file face)))
+          (t
+           (values found length)))))
+
+(defun needed (face name least)
+  (multiple-value-bind (at length) (table face name least)
+    (unless at
+      (error "~A has no table ~A, and a font with outlines of this kind has one" (face-file face) name))
+    (values at length)))
+
+;; The table of a font's characters has several, for the kinds of codes
+;; that there were before there was one. The ones read here are by the
+;; codes of Unicode: of the form 12, which has every code, when there is
+;; one, and of the form 4, which has the first 65536, otherwise.
+(defun find-map (face)
+  (let* ((cmap (needed face "cmap" 4)) (count (u16 face (+ cmap 2))) (best 0))
+    (dotimes (i count)
+      (let* ((entry (+ cmap 4 (* 8 i)))
+             (platform (u16 face entry))
+             (encoding (u16 face (+ entry 2)))
+             (at (+ cmap (u32 face (+ entry 4))))
+             (form (u16 face at))
+             (worth (cond ((not (or (= platform 0) (and (= platform 3) (or (= encoding 1) (= encoding 10))))) 0)
+                          ((= form 12) 2)
+                          ((= form 4) 1)
+                          (t 0))))
+        (when (> worth best)
+          (setq best worth)
+          (setf (face-map face) at
+                (face-kind face) form))))
+    (when (= best 0)
+      (error "~A has no table of its characters by their codes in Unicode" (face-file face)))))
+
+;; What a file says of itself, before any glyph is asked for.
+(defun read-tables (face)
+  (let ((kind (u32 face 0)))
+    (cond ((= kind (tag "OTTO"))
+           (error "~A has outlines of the other kind (CFF), which is not read here" (face-file face)))
+          ((= kind (tag "ttcf"))
+           (error "~A is a collection of fonts, and one font to a file is what is read here" (face-file face)))
+          ((not (or (= kind 65536) (= kind (tag "true"))))
+           (error "~A is not a file of outlines: it does not begin as one" (face-file face)))))
+  (let ((head (needed face "head" 54)) (maxp (needed face "maxp" 6)) (hhea (needed face "hhea" 36)))
+    (setf (face-units face) (u16 face (+ head 18))
+          (face-long face) (not (= 0 (i16 face (+ head 50))))
+          (face-glyphs face) (u16 face (+ maxp 4))
+          (face-ascent face) (i16 face (+ hhea 4))
+          (face-descent face) (i16 face (+ hhea 6))
+          (face-gap face) (i16 face (+ hhea 8))
+          (face-metrics face) (u16 face (+ hhea 34)))
+    (unless (and (= (u32 face (+ head 12)) 1594834165) ; 5F0F3CF5, which every such table has
+                 (<= 16 (face-units face) 16384)
+                 (<= 1 (face-metrics face) (face-glyphs face)))
+      (error "the font ~A says of itself what no font is: ~D units to the em, ~D glyphs, ~D of them with an advance"
+             (face-file face) (face-units face) (face-glyphs face) (face-metrics face))))
+  (setf (face-hmtx face) (needed face "hmtx" (+ (* 4 (face-metrics face)) (* 2 (- (face-glyphs face) (face-metrics face)))))
+        (face-loca face) (needed face "loca" (* (if (face-long face) 4 2) (+ (face-glyphs face) 1))))
+  (multiple-value-bind (glyf length) (needed face "glyf" 0)
+    (setf (face-glyf face) glyf
+          (face-outlines face) length))
+  (find-map face)
+  ;; Where its lines lie. A font that does not say has them where most do.
+  (let ((post (table face "post" 12)) (os2 (table face "OS/2" 30)) (units (face-units face)))
+    (setf (face-under face) (if post (i16 face (+ post 8)) (- 0 (floor units 10)))
+          (face-stroke face) (if post (i16 face (+ post 10)) (floor units 20))
+          (face-cut face) (if os2 (i16 face (+ os2 26)) (floor units 20))
+          (face-through face) (if os2 (i16 face (+ os2 28)) (floor units 4))))
+  face)
+
+;; Where the bytes of a file are, how many there are, and the page frames
+;; that they were read into: none for a file that came with the kernel,
+;; which is in memory already.
+(defun bytes-of (file)
+  (multiple-value-bind (memory size) (clara.unsafe:system-file file)
+    (if memory
+        (values memory size nil)
+        (clara.fat:read-file file))))
+
+(defun read-face (file)
+  (multiple-value-bind (memory size pages) (bytes-of file)
+    (let ((face (make-face :file file :memory memory :size size :pages pages :start *start*))
+          (read nil))
+      (unwind-protect
+           (progn
+             (read-tables face)
+             (setq read t)
+             face)
+        (unless (or read (null pages))
+          (clara.unsafe:free-memory memory pages))))))
+
+;; The file of that name, read once at every start, however many fonts are
+;; made of it.
+(defun face-of (file)
+  (clara:with-lock-held (*lock*)
+    (or (find-if (lambda (face) (string= (face-file face) file)) *faces*)
+        (let ((face (read-face file)))
+          (setq *faces* (cons face *faces*))
+          face))))
+
+;;; Which glyph a character has
+
+(defun index-4 (face map code)
+  (let* ((twice (u16 face (+ map 6)))    ; the ranges of codes, counted twice
+         (ends (+ map 14))               ; the last code of each, in rising order,
+         (starts (+ ends twice 2))       ; the first of each,
+         (deltas (+ starts twice))       ; what is added to a code to make it a glyph,
+         (ranges (+ deltas twice))       ; and, where that is not all, how far from here the glyphs of the range are listed
+         (low 0) (high (- (floor twice 2) 1)))
+    (if (or (> code 65535) (< high 0))
+        0
+        (progn
+          ;; The first range that ends at the code or after it.
+          (loop
+            (when (>= low high)
+              (return))
+            (let ((middle (floor (+ low high) 2)))
+              (if (< (u16 face (+ ends (* 2 middle))) code)
+                  (setq low (+ middle 1))
+                  (setq high middle))))
+          (let ((first (u16 face (+ starts (* 2 low)))))
+            (if (or (< (u16 face (+ ends (* 2 low))) code) (> first code))
+                0
+                (let ((delta (u16 face (+ deltas (* 2 low))))
+                      (range (u16 face (+ ranges (* 2 low)))))
+                  (if (= range 0)
+                      (mod (+ code delta) 65536)
+                      (let ((glyph (u16 face (+ ranges (* 2 low) range (* 2 (- code first))))))
+                        (if (= glyph 0) 0 (mod (+ glyph delta) 65536)))))))))))
+
+(defun index-12 (face map code)
+  (let ((low 0) (high (- (u32 face (+ map 12)) 1)) (groups (+ map 16)))
+    (if (< high 0)
+        0
+        (progn
+          ;; The first group that ends at the code or after it.
+          (loop
+            (when (>= low high)
+              (return))
+            (let ((middle (floor (+ low high) 2)))
+              (if (< (u32 face (+ groups (* 12 middle) 4)) code)
+                  (setq low (+ middle 1))
+                  (setq high middle))))
+          (let ((group (+ groups (* 12 low))))
+            (if (or (< (u32 face (+ group 4)) code) (> (u32 face group) code))
+                0
+                (+ (u32 face (+ group 8)) (- code (u32 face group)))))))))
+
+;; The number of the glyph that the character of a code has in the file: 0,
+;; the glyph for a character that the font does not have, when it has none.
+(defun index (face code)
+  (let ((glyph (if (= (face-kind face) 12)
+                   (index-12 face (face-map face) code)
+                   (index-4 face (face-map face) code))))
+    (if (< glyph (face-glyphs face)) glyph 0)))
+
+;; How far the glyph of that number moves on, in the font's units. The
+;; table has that and a second number for each of the first glyphs, and
+;; the second number alone for the rest, which move on as far as the last
+;; of the first.
+(defun advance (face glyph)
+  (let ((metrics (face-metrics face)))
+    (u16 face (+ (face-hmtx face) (* 4 (if (< glyph metrics) glyph (- metrics 1)))))))
+
+;; The second number: how far to the right of where its character begins
+;; the glyph's left edge lies.
+(defun bearing (face glyph)
+  (let ((metrics (face-metrics face)))
+    (i16 face (+ (face-hmtx face)
+                 (if (< glyph metrics)
+                     (+ (* 4 glyph) 2)
+                     (+ (* 4 metrics) (* 2 (- glyph metrics))))))))
+
+;;; Outlines
+;;;
+;;; The outline of a glyph is a list of its contours, the closed lines that
+;;; it is made of. A contour is a vector with three items for each of its
+;;; points: where the point is, across and up, and whether the contour goes
+;;; through it. A point that it does not go through pulls a curve towards
+;;; itself, from the point before it to the one after.
+
+;; What goes with an outline from part to part while a glyph is put
+;; together is a cons, BUDGET. Its CAR is how many points and parts may
+;; still be taken for the glyph. Its CDR, once a glyph has been read, says
+;; how that glyph lies and moves on: (move . advance), how far its points
+;; are to be moved across to lie where the file says, and how far it moves
+;; on, both in the font's units.
+(defun spend (face budget count)
+  (when (> count (car budget))
+    (error "a glyph of the font ~A is put together of more than ~D points and parts" (face-file face) +work+))
+  (setf (car budget) (- (car budget) count)))
+
+;; Where in the file the glyph of that number is described; NIL for one
+;; that has no outline, as a space has none.
+(defun where (face glyph)
+  (unless (< -1 glyph (face-glyphs face))
+    (error "the font ~A has no glyph ~D" (face-file face) glyph))
+  (let* ((loca (face-loca face))
+         (from (if (face-long face) (u32 face (+ loca (* 4 glyph))) (* 2 (u16 face (+ loca (* 2 glyph))))))
+         (to (if (face-long face) (u32 face (+ loca (* 4 glyph) 4)) (* 2 (u16 face (+ loca (* 2 glyph) 2))))))
+    (cond ((>= from to)
+           nil)
+          ((> to (face-outlines face))
+           (error "the glyph ~D of the font ~A lies past the end of the outlines" glyph (face-file face)))
+          (t
+           (+ (face-glyf face) from)))))
+
+;; A glyph that is its own outline: after the count of its contours and the
+;; rectangle around it, the number of the last point of each contour, the
+;; program that would fit it to pixels, which is passed over, then a byte of
+;; flags for every point, and then where the points are, all the places
+;; across and then all the places up, each as the way from the point before.
+(defun plain-outline (face at contours budget)
+  (let* ((ends (+ at 10))
+         (points (if (= contours 0) 0 (+ 1 (u16 face (+ ends (* 2 (- contours 1)))))))
+         (place (+ ends (* 2 contours) 2 (u16 face (+ ends (* 2 contours)))))
+         (flags (make-array points))
+         (across (make-array points))
+         (up (make-array points))
+         (i 0))
+    (spend face budget points)
+    ;; The flags: one that has the bit 8 is followed by how often it is meant again.
+    (loop
+      (when (>= i points)
+        (return))
+      (let ((flag (u8 face place)) (again 0))
+        (setq place (+ place 1))
+        (unless (= 0 (logand flag 8))
+          (setq again (u8 face place)
+                place (+ place 1)))
+        (loop
+          (setf (svref flags i) flag)
+          (setq i (+ i 1))
+          (when (or (= again 0) (>= i points))
+            (return))
+          (setq again (- again 1)))))
+    ;; A way across is a byte, with its sign in the flag's bit 16, when the
+    ;; flag has the bit 2; else nothing at all, with the bit 16, and two bytes
+    ;; without. The ways up are the same with the bits 4 and 32.
+    (let ((x 0))
+      (dotimes (k points)
+        (let ((flag (svref flags k)))
+          (cond ((not (= 0 (logand flag 2)))
+                 (setq x (if (= 0 (logand flag 16)) (- x (u8 face place)) (+ x (u8 face place)))
+                       place (+ place 1)))
+                ((= 0 (logand flag 16))
+                 (setq x (+ x (i16 face place))
+                       place (+ place 2)))))
+        (setf (svref across k) x)))
+    (let ((y 0))
+      (dotimes (k points)
+        (let ((flag (svref flags k)))
+          (cond ((not (= 0 (logand flag 4)))
+                 (setq y (if (= 0 (logand flag 32)) (- y (u8 face place)) (+ y (u8 face place)))
+                       place (+ place 1)))
+                ((= 0 (logand flag 32))
+                 (setq y (+ y (i16 face place))
+                       place (+ place 2)))))
+        (setf (svref up k) y)))
+    (let ((outline nil) (first 0))
+      (dotimes (c contours)
+        (let ((last (u16 face (+ ends (* 2 c)))))
+          (unless (and (<= first last) (< last points))
+            (error "a contour of the font ~A ends before it begins" (face-file face)))
+          (let ((contour (make-array (* 3 (- (+ last 1) first)))) (to 0))
+            (do ((k first (+ k 1)))
+                ((> k last))
+              (setf (svref contour to) (svref across k)
+                    (svref contour (+ to 1)) (svref up k)
+                    (svref contour (+ to 2)) (not (= 0 (logand (svref flags k) 1))))
+              (setq to (+ to 3)))
+            (setq outline (cons contour outline)
+                  first (+ last 1)))))
+      (nreverse outline))))
+
+;; The point of that number in an outline, counted through its contours:
+;; where it is, across and up, as a cons.
+(defun point-of (face outline number)
+  (dolist (contour outline (error "a glyph of the font ~A is to be laid on a point that it does not have" (face-file face)))
+    (let ((points (floor (length contour) 3)))
+      (when (< number points)
+        (return (cons (svref contour (* 3 number)) (svref contour (+ (* 3 number) 1)))))
+      (setq number (- number points)))))
+
+;; A glyph that is put together of others, an accented letter of the letter
+;; and the accent: for each part the number of its glyph, where it goes, and
+;; perhaps how it is made larger, smaller or slanted on the way, four
+;; numbers in 16384ths. Where it goes is a way across and up, or two points
+;; that are to lie on each other, one of what is there so far and one of the
+;; part.
+(defun joined-outline (face at depth budget)
+  (let ((place (+ at 10)) (outline nil) (metrics nil))
+    (loop
+      (let* ((flags (u16 face place))
+             (part (u16 face (+ place 2)))
+             (words (not (= 0 (logand flags 1))))
+             (ways (not (= 0 (logand flags 2))))
+             (one 0) (two 0)
+             (a 16384) (b 0) (c 0) (d 16384))
+        (spend face budget 1)
+        (setq place (+ place 4))
+        (cond (words
+               (setq one (if ways (i16 face place) (u16 face place))
+                     two (if ways (i16 face (+ place 2)) (u16 face (+ place 2)))
+                     place (+ place 4)))
+              (t
+               (setq one (if ways (i8 face place) (u8 face place))
+                     two (if ways (i8 face (+ place 1)) (u8 face (+ place 1)))
+                     place (+ place 2))))
+        (cond ((not (= 0 (logand flags 8)))        ; one number for both ways
+               (setq a (i16 face place)
+                     d a
+                     place (+ place 2)))
+              ((not (= 0 (logand flags 64)))       ; one for each
+               (setq a (i16 face place)
+                     d (i16 face (+ place 2))
+                     place (+ place 4)))
+              ((not (= 0 (logand flags 128)))      ; four: across from across and from up, up from across and from up
+               (setq a (i16 face place)
+                     b (i16 face (+ place 2))
+                     c (i16 face (+ place 4))
+                     d (i16 face (+ place 6))
+                     place (+ place 8))))
+        (let ((contours (outline face part (+ depth 1) budget)))
+          (unless (= 0 (logand flags 512))       ; the whole glyph lies and moves on as this part does by itself
+            (setq metrics (cdr budget)))
+          (unless (and (= a 16384) (= b 0) (= c 0) (= d 16384))
+            (dolist (contour contours)
+              (let ((i 0) (end (length contour)))
+                (loop
+                  (when (>= i end)
+                    (return))
+                  (let ((x (svref contour i)) (y (svref contour (+ i 1))))
+                    (setf (svref contour i) (nearest (+ (* a x) (* c y)) 16384)
+                          (svref contour (+ i 1)) (nearest (+ (* b x) (* d y)) 16384)))
+                  (setq i (+ i 3))))))
+          (unless ways
+            (let ((there (point-of face outline one)) (its (point-of face contours two)))
+              (setq one (- (car there) (car its))
+                    two (- (cdr there) (cdr its)))))
+          (dolist (contour contours)
+            (let ((i 0) (end (length contour)))
+              (loop
+                (when (>= i end)
+                  (return))
+                (setf (svref contour i) (+ (svref contour i) one)
+                      (svref contour (+ i 1)) (+ (svref contour (+ i 1)) two))
+                (setq i (+ i 3)))))
+          (setq outline (append outline contours)))
+        (when (= 0 (logand flags 32))            ; no part follows this one
+          (return))))
+    (setf (cdr budget) metrics)
+    outline))
+
+;; The outline of the glyph of that number, in the font's units, the
+;; baseline at 0 and up counted upwards. The vectors are new ones, for
+;; whoever asked to change. A glyph lies where the file says that its left
+;; edge is, from the place where its character begins; its points need not
+;; be written from there, so a glyph that is asked for by itself, and not
+;; as a part of another, has them moved by what the file says less where
+;; the leftmost of them is, which its description begins with. A glyph of
+;; parts lies and moves on as the part does that it names for that, when it
+;; names one.
+(defun outline (face glyph depth budget)
+  (let ((at (where face glyph)))
+    (setf (cdr budget) (cons 0 (advance face glyph)))
+    (when at
+      (let* ((count (i16 face at))
+             (own (cons (- (bearing face glyph) (i16 face (+ at 2))) (advance face glyph)))
+             (contours (cond ((>= count 0)
+                              (plain-outline face at count budget))
+                             ((< depth +depth+)
+                              (joined-outline face at depth budget))
+                             (t
+                              (error "a glyph of the font ~A is made of glyphs that are made of glyphs, more than ~D deep"
+                                     (face-file face) +depth+)))))
+        (when (or (>= count 0) (null (cdr budget)))
+          (setf (cdr budget) own))
+        (when (and (= depth 0) (not (= (car (cdr budget)) 0)))
+          (let ((move (car (cdr budget))))
+            (dolist (contour contours)
+              (let ((i 0) (end (length contour)))
+                (loop
+                  (when (>= i end)
+                    (return))
+                  (setf (svref contour i) (+ (svref contour i) move))
+                  (setq i (+ i 3)))))))
+        contours))))
+
+;;; Shades
+;;;
+;;; How much of each pixel a shape covers. The places of an outline are in
+;;; 256ths of a pixel from the upper left corner of the picture, counted
+;;; across and down. Every straight piece of it is followed through the
+;;; pixels that it crosses, and leaves two numbers in each: by how much the
+;;; shape begins or ends to the right of the piece within that pixel, and
+;;; by how much it does in every pixel further to the right, which is put
+;;; into the next cell. A piece that goes down adds and one that goes up
+;;; takes away, so a shape that is closed leaves nothing behind it, and
+;;; summing a row from the left gives, in each cell, what the shape covers
+;;; of that pixel: 131072, which is 2 times 256 times 256, for all of it.
+;;;
+;;; A row of the picture has a cell more than it has pixels, for what the
+;;; last pixel passes on.
+
+;; The part of a piece that lies in one pixel, going D down, with TWICE the
+;; sum of how far across the pixel it begins and ends.
+(defun note (cells at d twice)
+  (setf (svref cells at) (+ (svref cells at) (* d (- 512 twice))))
+  (setf (svref cells (+ at 1)) (+ (svref cells (+ at 1)) (* d twice))))
+
+;; The part of a piece that lies in one row of pixels, whose cells begin at
+;; AT: from XA and YA to XB and YB. Where it leaves a pixel for the next is
+;; worked out from its two ends each time, so that the parts add up to the
+;; whole however they are rounded.
+(defun across (cells at xa ya xb yb)
+  (let ((d (- yb ya)))
+    (cond ((= xa xb)
+           (let ((column (ash xa -8)))
+             (note cells (+ at column) d (* 2 (- xa (* 256 column))))))
+          ((< xa xb)
+           (let ((column (ash xa -8)) (last (ash (- xb 1) -8)) (x xa) (y ya) (xe 0) (ye 0) (edge 0))
+             (loop
+               (setq edge (* 256 column))
+               (if (= column last)
+                   (setq xe xb
+                         ye yb)
+                   (setq xe (+ edge 256)
+                         ye (+ ya (nearest (* (- xe xa) d) (- xb xa)))))
+               (note cells (+ at column) (- ye y) (+ (- x edge) (- xe edge)))
+               (when (= column last)
+                 (return))
+               (setq x xe
+                     y ye
+                     column (+ column 1)))))
+          (t
+           (let ((column (ash (- xa 1) -8)) (last (ash xb -8)) (x xa) (y ya) (xe 0) (ye 0) (edge 0))
+             (loop
+               (setq edge (* 256 column))
+               (if (= column last)
+                   (setq xe xb
+                         ye yb)
+                   (setq xe edge
+                         ye (+ ya (nearest (* (- xe xa) d) (- xb xa)))))
+               (note cells (+ at column) (- ye y) (+ (- x edge) (- xe edge)))
+               (when (= column last)
+                 (return))
+               (setq x xe
+                     y ye
+                     column (- column 1))))))))
+
+;; A straight piece of an outline, from X0 and Y0 to X1 and Y1. One that
+;; runs along a row covers nothing to its right.
+(defun cover (cells step x0 y0 x1 y1)
+  (unless (= y0 y1)
+    (let ((dx (- x1 x0)) (dy (- y1 y0)) (xa x0) (ya y0) (xb 0) (yb 0))
+      (if (< y0 y1)
+          (let ((row (ash y0 -8)) (last (ash (- y1 1) -8)))
+            (loop
+              (if (= row last)
+                  (setq xb x1
+                        yb y1)
+                  (setq yb (* 256 (+ row 1))
+                        xb (+ x0 (nearest (* (- yb y0) dx) dy))))
+              (across cells (* row step) xa ya xb yb)
+              (when (= row last)
+                (return))
+              (setq xa xb
+                    ya yb
+                    row (+ row 1))))
+          (let ((row (ash (- y0 1) -8)) (last (ash y1 -8)))
+            (loop
+              (if (= row last)
+                  (setq xb x1
+                        yb y1)
+                  (setq yb (* 256 row)
+                        xb (+ x0 (nearest (* (- yb y0) dx) dy))))
+              (across cells (* row step) xa ya xb yb)
+              (when (= row last)
+                (return))
+              (setq xa xb
+                    ya yb
+                    row (- row 1))))))))
+
+;; A curve from X0 and Y0 to X1 and Y1 that the point at CX and CY pulls
+;; towards itself, as so many straight pieces that none of them is further
+;; from the curve than a sixty-fourth of a pixel, across or down: how far
+;; the curve is from the straight line between its ends is a quarter of how
+;; far its middle is pulled, and for a piece of an nth of the curve it is
+;; that divided by n times n. The pieces lie inside the curve, so a round
+;; shape comes out lighter than it is by what they cut off; at a sixteenth
+;; of a pixel, which is what others allow, that was a pixel in sixty.
+(defun bend (cells step x0 y0 cx cy x1 y1)
+  (let* ((pull-x (- (+ x0 x1) cx cx))
+         (pull-y (- (+ y0 y1) cy cy))
+         (far (let ((a (if (< pull-x 0) (- 0 pull-x) pull-x))
+                    (b (if (< pull-y 0) (- 0 pull-y) pull-y)))
+                (if (< a b) b a)))
+         (pieces 1)
+         (x x0) (y y0))
+    (loop
+      (when (>= (* pieces pieces 16) far)
+        (return))
+      (setq pieces (+ pieces 1)))
+    (let ((whole (* pieces pieces)))
+      (dotimes (k pieces)
+        (let* ((i (+ k 1))
+               (j (- pieces i))
+               (to-x (if (= j 0) x1 (nearest (+ (* x0 j j) (* 2 cx i j) (* x1 i i)) whole)))
+               (to-y (if (= j 0) y1 (nearest (+ (* y0 j j) (* 2 cy i j) (* y1 i i)) whole))))
+          (cover cells step x y to-x to-y)
+          (setq x to-x
+                y to-y))))))
+
+;; A contour, whose places are from LEFT and TOP on, which are taken off
+;; them. It begins at its first point when it goes through that one, else
+;; at its last, else halfway between the two; and where two points in a row
+;; pull at it, it goes through the place halfway between them.
+(defun follow (cells step contour left top)
+  (let ((points (floor (length contour) 3)))
+    (when (> points 1)
+      (let* ((end (* 3 (- points 1)))
+             (from 0) (to points)
+             (start-x 0) (start-y 0))
+        (cond ((svref contour 2)
+               (setq start-x (svref contour 0)
+                     start-y (svref contour 1)
+                     from 1))
+              ((svref contour (+ end 2))
+               (setq start-x (svref contour end)
+                     start-y (svref contour (+ end 1))
+                     to (- points 1)))
+              (t
+               (setq start-x (ash (+ (svref contour 0) (svref contour end)) -1)
+                     start-y (ash (+ (svref contour 1) (svref contour (+ end 1))) -1))))
+        (setq start-x (- start-x left)
+              start-y (- start-y top))
+        (let ((x start-x) (y start-y) (pulled nil) (pull-x 0) (pull-y 0))
+          (do ((i from (+ i 1)))
+              ((>= i to))
+            (let ((to-x (- (svref contour (* 3 i)) left))
+                  (to-y (- (svref contour (+ (* 3 i) 1)) top)))
+              (cond ((svref contour (+ (* 3 i) 2))
+                     (if pulled
+                         (bend cells step x y pull-x pull-y to-x to-y)
+                         (cover cells step x y to-x to-y))
+                     (setq x to-x
+                           y to-y
+                           pulled nil))
+                    (pulled
+                     (let ((middle-x (ash (+ pull-x to-x) -1)) (middle-y (ash (+ pull-y to-y) -1)))
+                       (bend cells step x y pull-x pull-y middle-x middle-y)
+                       (setq x middle-x
+                             y middle-y
+                             pull-x to-x
+                             pull-y to-y)))
+                    (t
+                     (setq pulled t
+                           pull-x to-x
+                           pull-y to-y)))))
+          (if pulled
+              (bend cells step x y pull-x pull-y start-x start-y)
+              (cover cells step x y start-x start-y)))))))
+
+;; What the pieces left becomes shades: each cell of a row the sum of the
+;; ones up to it, whichever way round the shape was drawn, as so many 255ths
+;; of a pixel, to the nearest. Where two shapes lie over each other a pixel
+;; is covered more than once, and is no darker for it.
+(defun shade (cells step width height)
+  (dotimes (row height)
+    (let ((at (* row step)) (sum 0) (covered 0))
+      (dotimes (column width)
+        (setq sum (+ sum (svref cells (+ at column)))
+              covered (if (< sum 0) (- 0 sum) sum))
+        (setf (svref cells (+ at column))
+              (if (< covered 131072) (ash (+ (* covered 255) 65536) -17) 255)))
+      (setf (svref cells (+ at width)) 0)))
+  cells)
+
+;; The picture of a shape whose contours are given in 256ths of a pixel,
+;; across and down from anywhere: a glyph that moves nothing on, or NIL for
+;; a shape without a point. The picture begins at the pixel that the
+;; leftmost and the topmost point lie in, and has a pixel for every one that
+;; a point lies in or on the edge of.
+(defun render (contours)
+  (let ((left nil) (top 0) (right 0) (bottom 0))
+    (dolist (contour contours)
+      (let ((i 0) (end (length contour)))
+        (loop
+          (when (>= i end)
+            (return))
+          (let ((x (svref contour i)) (y (svref contour (+ i 1))))
+            (cond ((null left)
+                   (setq left x
+                         right x
+                         top y
+                         bottom y))
+                  (t
+                   (when (< x left)
+                     (setq left x))
+                   (when (> x right)
+                     (setq right x))
+                   (when (< y top)
+                     (setq top y))
+                   (when (> y bottom)
+                     (setq bottom y)))))
+          (setq i (+ i 3)))))
+    (when left
+      (let* ((x (ash left -8))
+             (y (ash top -8))
+             (width (+ 1 (- (ash right -8) x)))
+             (height (+ 1 (- (ash bottom -8) y)))
+             (step (+ width 1)))
+        (when (> (* width height) +pixels+)
+          (error "a glyph of ~D by ~D pixels is more than is drawn here" width height))
+        (let ((cells (make-array (* step height) :initial-element 0)))
+          (dolist (contour contours)
+            (follow cells step contour (* 256 x) (* 256 y)))
+          (shade cells step width height)
+          (make-glyph :advance 0 :left x :top y :width width :height height :step step :shades cells))))))
+
+;;; Glyphs
+
+;; Every font lets go of the glyphs that were made for it: they are made
+;; again when they are next drawn.
+(defun shed ()
+  (setq *made* nil
+        *cells* 0))
+
+;; The glyph of a character in a font, made: its outline brought to the
+;; font's size, in 256ths of a pixel, and turned over, since a font counts
+;; upwards from its baseline and a picture downwards from its top; and the
+;; picture of that. An outline that cannot be read is a glyph that shows
+;; nothing, and is no error: a window still has its other letters.
+(defun shape (font face code)
+  (let* ((number (index face code))
+         (size (font-size font))
+         (units (face-units face))
+         (budget (list +work+))
+         (contours (handler-case (outline face number 0 budget)
+                     (error ()
+                       (setf (cdr budget) nil))))
+         (advance (if (cdr budget) (cdr (cdr budget)) (advance face number))))
+    (dolist (contour contours)
+      (let ((i 0) (end (length contour)))
+        (loop
+          (when (>= i end)
+            (return))
+          (setf (svref contour i) (nearest (* (svref contour i) size 256) units)
+                (svref contour (+ i 1)) (nearest (* (- 0 (svref contour (+ i 1))) size 256) units))
+          (setq i (+ i 3)))))
+    (let ((glyph (or (handler-case (render contours)
+                       (error () nil))
+                     (make-glyph :left 0 :top 0 :width 0 :height 0 :step 0 :shades nil))))
+      (setf (glyph-advance glyph) (nearest (* advance size) units))
+      glyph)))
+
+;; Where the lines of FONT lie, in pixels, by what FACE says, which is its
+;; file. A line of text is high enough for whatever the font says its
+;; letters reach.
+(defun fit (font face)
+  (let* ((size (font-size font))
+         (units (face-units face))
+         (stroke (max 1 (nearest (* (face-stroke face) size) units)))
+         (cut (max 1 (nearest (* (face-cut face) size) units))))
+    (setf (font-up font) (max 1 (at-least (* (face-ascent face) size) units))
+          (font-down font) (max 0 (at-least (* (- 0 (face-descent face)) size) units))
+          (font-gap font) (max 0 (nearest (* (face-gap face) size) units))
+          (font-stroke font) stroke
+          (font-under font) (max 1 (floor (* (- 0 (face-under face) (floor (face-stroke face) 2)) size) units))
+          (font-cut font) cut
+          (font-over font) (max cut (nearest (* (face-through face) size) units)))
+    face))
+
+;; What is kept for FONT at this start: its file, as this start has read
+;; it, and the glyphs that were made of it since. A font that was made at
+;; an earlier start, in a world that was saved, finds its file again here.
+(defun live (font)
+  (unless (font-p font)
+    (error "~S is not a font" font))
+  (let ((found (assoc font *made*)))
+    (if (and found (eq (face-start (kept-face (cdr found))) *start*))
+        (cdr found)
+        (let* ((face (face-of (font-file font)))
+               (kept (make-kept :face face)))
+          (fit font face)
+          (setq *made* (cons (cons font kept) *made*))
+          kept))))
+
+(defun glyph (font code)
+  (when (> *cells* +cells+)
+    (shed))
+  (let* ((kept (live font))
+         (face (kept-face kept)))
+    (flet ((made ()
+             (let ((glyph (shape font face code)))
+               (setq *cells* (+ *cells* (length (glyph-shades glyph))))
+               glyph)))
+      (cond ((< code 256)
+             (unless (kept-glyphs kept)
+               (setf (kept-glyphs kept) (make-array 256 :initial-element nil)))
+             (or (svref (kept-glyphs kept) code)
+                 (setf (svref (kept-glyphs kept) code) (made))))
+            (t
+             (let ((found (assoc code (kept-others kept))))
+               (if found
+                   (cdr found)
+                   (let ((glyph (made)))
+                     (setf (kept-others kept) (cons (cons code glyph) (kept-others kept)))
+                     glyph))))))))
+
+;;; Fonts
+
+(defun families ()
+  (mapcar #'car *families*))
+
+;; A family of the name NAME from here on: the files of its upright, bold,
+;; italic and bold italic. Where there is no file for one, the nearest that
+;; there is stands in.
+(defun define-family (name regular &key bold italic bold-italic)
+  (dolist (file (list name regular (or bold "") (or italic "") (or bold-italic "")))
+    (unless (stringp file)
+      (error "a family is a name and the names of its files, in strings, and ~S is not one" file)))
+  (setq *families*
+        (append (remove-if (lambda (family) (string-equal (car family) name)) *families*)
+                (list (list name regular (or bold regular) (or italic regular) (or bold-italic bold italic regular)))))
+  name)
+
+;; The file of a font that is asked for by NAME: the family's, or the name
+;; itself when no family has it.
+(defun file-of (name bold italic)
+  (let ((family (find-if (lambda (family) (string-equal (car family) name)) *families*)))
+    (cond ((null family) name)
+          ((and bold italic) (nth 4 family))
+          (italic (cadddr family))
+          (bold (caddr family))
+          (t (cadr family)))))
+
+;; The font of that name at SIZE pixels to the em: the same one every time
+;; that the same is asked for. NAME is a family, "Sans" or "Mono" or one
+;; that DEFINE-FAMILY made, of which BOLD and ITALIC pick the file, or it is
+;; the name of a file of outlines. With UNDERLINE a line is drawn under its
+;; text, and with STRIKE one through it.
+(defun font (name size &key bold italic underline strike)
+  (unless (stringp name)
+    (error "a font is asked for by the name of a family or of a file, in a string, and ~S is not one" name))
+  (unless (and (integerp size) (<= +smallest+ size +largest+))
+    (error "the size of a font is a whole number of pixels from ~D to ~D, and ~S is not" +smallest+ +largest+ size))
+  (let* ((file (file-of name bold italic))
+         (underline (and underline t))
+         (strike (and strike t))
+         (font (or (find-if (lambda (font)
+                              (and (string= (font-file font) file) (= (font-size font) size)
+                                   (eq (font-underline font) underline) (eq (font-strike font) strike)))
+                            *fonts*)
+                   (make-font :name name :file file :size size :underline underline :strike strike))))
+    ;; The file is read here, when nobody has read it yet, and what is no font is refused.
+    (handler-case (live font)
+      (error (condition)
+        (error "~A is not a font that can be had here: ~A" name condition)))
+    (unless (member font *fonts*)
+      (setq *fonts* (cons font *fonts*)))
+    font))
+
+(defun font-ascent (font)
+  (live font)
+  (font-up font))
+
+(defun font-descent (font)
+  (live font)
+  (font-down font))
+
+;; From the top of one line of text to the top of the next.
+(defun font-height (font)
+  (live font)
+  (+ (font-up font) (font-down font) (font-gap font)))
+
+;;; Text
+
+;; How many pixels wide STRING is in FONT: every glyph moves on by a whole
+;; number of them.
+(defun width (string font)
+  (let ((width 0))
+    (dotimes (i (length string) width)
+      (setq width (+ width (glyph-advance (glyph font (char-code (char string i)))))))))
+
+;; STRING in FONT, the upper left corner of its line at X and Y, in COLOR.
+;; With BACKGROUND the line is filled with that first, as wide as the text
+;; and as high as the font. Says whether anything of it was drawn.
+(defun draw (surface x y string color background font)
+  (live font)
+  (let* ((baseline (+ y (font-up font)))
+         (wide (width string font))
+         (pen x)
+         (drew nil))
+    (when (and background (> wide 0))
+      (when (clara.draw:fill-rectangle surface x y wide (+ (font-up font) (font-down font)) background)
+        (setq drew t)))
+    (dotimes (i (length string))
+      (let ((glyph (glyph font (char-code (char string i)))))
+        (when (glyph-shades glyph)
+          (when (clara.draw:draw-shades surface (+ pen (glyph-left glyph)) (+ baseline (glyph-top glyph))
+                                        (glyph-shades glyph) (glyph-width glyph) (glyph-height glyph) color
+                                        (glyph-step glyph))
+            (setq drew t)))
+        (setq pen (+ pen (glyph-advance glyph)))))
+    (when (and (font-underline font) (> wide 0))
+      (when (clara.draw:fill-rectangle surface x (+ baseline (font-under font)) wide (font-stroke font) color)
+        (setq drew t)))
+    (when (and (font-strike font) (> wide 0))
+      (when (clara.draw:fill-rectangle surface x (- baseline (font-over font)) wide (font-cut font) color)
+        (setq drew t)))
+    drew))
+
+;;; The machine
+
+;; The files that were read are let go of, and the glyphs that were made of
+;; them: a file that has changed on its volume is read anew when a font of
+;; it is next used.
+(defun forget ()
+  (clara:with-lock-held (*lock*)
+    (dolist (face *faces*)
+      (when (face-pages face)
+        (clara.unsafe:free-memory (face-memory face) (face-pages face))))
+    (setq *faces* nil
+          *start* (list 'start)))
+  (shed)
+  nil)
+
+;; NAMES with commas between them and "and" before the last.
+(defun listed (names)
+  (cond ((null (cdr names)) (car names))
+        ((null (cddr names)) (concatenate 'string (car names) " and " (cadr names)))
+        (t (concatenate 'string (car names) ", " (listed (cdr names))))))
+
+;; What this file knew of a machine is forgotten: in a world that was saved
+;; and has started again, the files that were read are memory of the
+;; machine before, which is this start's to hand out again, and not given
+;; back. Says which of the families have files that came with the system.
+(defun start ()
+  (setq *start* (list 'start)
+        *faces* nil
+        *lock* (clara:make-lock "fonts"))
+  (shed)
+  (let ((files 0) (names nil))
+    (dolist (family *families*)
+      (let ((seen nil) (here 0))
+        (dolist (file (cdr family))
+          (unless (member file seen :test #'string=)
+            (setq seen (cons file seen))
+            (when (clara.unsafe:system-file file)
+              (setq here (+ here 1)))))
+        (when (> here 0)
+          (setq files (+ files here)
+                names (cons (car family) names)))))
+    (if names
+        (format t "type: ~D files of outlines came with the system, for the fonts ~A~%" files (listed (nreverse names)))
+        (format t "type: no file of outlines came with the system, and the letters are the console's~%"))
+    (and names t)))
+
+;; What draws takes it from here when it is handed a font.
+(clara.draw:provide-fonts (lambda (string font) (width string font))
+                          (lambda (surface x y string color background font)
+                            (draw surface x y string color background font)))

@@ -309,6 +309,74 @@ LISP_PRIMITIVE(lisp_p_copy_rectangle_32)
     return NIL;
 }
 
+/* (blend-shades-32 address pitch shades start step rows width color red
+ * green blue): a colour is laid over 32-bit pixels, and each pixel takes
+ * as much of it as its shade says, from 0, none of it, to 255, all of it.
+ * The shades are items of the vector shades, one to the pixel: those of
+ * the first row from start on, and those of each row after it step items
+ * further on. Red, green and blue are the bits of a pixel that hold each
+ * part of a colour. Each part of a pixel becomes what lies as far as the
+ * shade says on the way from what it was to the colour's, to the nearest
+ * whole number, and the bits of a pixel that are none of the three stay
+ * as they are. This is how a letter of an outline font gets on the screen
+ * (lisp/type.lisp): the edge of a shape goes through pixels, and a pixel
+ * that the shape covers a part of takes that part of the colour. Nothing
+ * is drawn unless every shade is one. */
+LISP_PRIMITIVE(lisp_p_blend_shades_32)
+{
+    uint64_t addr, pitch, width, rows, start, step, color, mask[3], all;
+    const struct lisp_vector *shades = lisp_as_vector(argv[2]);
+
+    (void)argc;
+    if (!lisp_is(argv[2], LISP_VECTOR))
+        return lisp_wants("a vector of shades", argv[2]);
+    if (!number(argv[3], &start) || !number(argv[4], &step) || !fits(argv[7], 4, &color) ||
+        !fits(argv[8], 4, &mask[0]) || !fits(argv[9], 4, &mask[1]) || !fits(argv[10], 4, &mask[2]) ||
+        !rectangle(argv[0], argv[1], argv[6], argv[5], &addr, &pitch, &width, &rows))
+        return NIL;
+    if (!rows || !width)
+        return NIL;
+    if (step > PITCH_LIMIT || start > lisp_length(shades->header) ||
+        start + (rows - 1) * step + width > lisp_length(shades->header))
+        return lisp_fail("the vector has ~A shades, not ~A rows of ~A from ~A on", lisp_fixnum((int64_t)lisp_length(shades->header)),
+                         argv[5], argv[6], argv[3]);
+    for (uint64_t r = 0; r < rows; r++)
+        for (uint64_t x = 0; x < width; x++) {
+            lisp shade = shades->items[start + r * step + x];
+
+            if (!lisp_is_fixnum(shade) || lisp_fixnum_value(shade) < 0 || lisp_fixnum_value(shade) > 255)
+                return lisp_fail("~S is not a shade: an integer from 0 to 255", shade);
+        }
+    all = (mask[0] | mask[1] | mask[2]) & 0xffffffff;
+    for (uint64_t r = 0; r < rows; r++) {
+        volatile uint32_t *at = (volatile uint32_t *)(uintptr_t)(addr + r * pitch);
+        const lisp *row = shades->items + start + r * step;
+
+        for (uint64_t x = 0; x < width; x++) {
+            uint64_t shade = (uint64_t)lisp_fixnum_value(row[x]), old, new;
+
+            if (!shade)
+                continue;
+            old = at[x];
+            new = old & ~all;
+            if (shade == 255)
+                new |= color & all;
+            else
+                for (int part = 0; part < 3; part++) {
+                    uint64_t m = mask[part] & 0xffffffff, lowest = m & (~m + 1);
+
+                    /* The part as a number is what the mask holds divided by its lowest bit. Left
+                     * where they are, the sum is that many times too large, and so is the half
+                     * that makes the division round: what comes of it has the part where it
+                     * belongs, and below it a rest that the mask takes away. */
+                    new |= ((old & m) * (255 - shade) + (color & m) * shade + 127 * lowest) / 255 & m;
+                }
+            at[x] = (uint32_t)new;
+        }
+    }
+    return NIL;
+}
+
 /* (allocate-memory pages): page frames side by side, all zeroes, for a
  * driver to share with its device; their address, which is their physical
  * address too. (free-memory address pages) gives them back, and trusts
@@ -400,6 +468,29 @@ LISP_PRIMITIVE(lisp_p_framebuffer)
     lisp_values.value[4] = lisp_fixnum(g_screen->red_mask);
     lisp_values.value[5] = lisp_fixnum(g_screen->green_mask);
     lisp_values.value[6] = lisp_fixnum(g_screen->blue_mask);
+    return lisp_values.value[0];
+}
+
+/* (system-file name): a file of this system's that the handoff read into
+ * memory before there was a driver for any disk, whatever the case of the
+ * letters of its name: where its bytes are, and how many there are. NIL
+ * when there is no such file. That memory is the kernel's, for as long as
+ * the machine runs, and nobody's to write to or to give back. A font that
+ * comes with the system is read this way (lisp/type.lisp), so that a
+ * window has its letters on a machine with no disk that is known here. */
+LISP_PRIMITIVE(lisp_p_system_file)
+{
+    const struct boot_file *file;
+
+    (void)argc;
+    if (!lisp_is(argv[0], LISP_STRING))
+        return lisp_wants("the name of a file, in a string", argv[0]);
+    file = lisp_boot_file_of(argv[0]);
+    if (!file)
+        return NIL;
+    lisp_values.count = 2;
+    lisp_values.value[0] = lisp_fixnum((int64_t)(uintptr_t)file->data);
+    lisp_values.value[1] = lisp_fixnum((int64_t)file->size);
     return lisp_values.value[0];
 }
 

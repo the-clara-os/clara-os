@@ -87,6 +87,8 @@ T
 ("from the world that came back" 1)
 > (clara.draw:fill-rectangle *canvas* 0 0 10 10 0)
 error: this surface is of a machine that was switched off: a world is saved without its pixels
+> (list (clara.type:font-p *title*) (clara.draw:text-width "saved" *title*) (eq *title* (clara.type:font "Mono" 20 :bold t)))
+(T 60 T)
 > (list (clara.windows:window-surface *window*) (clara.windows:close-window *window*))
 (NIL NIL)
 > (progn (setq *window* (clara.windows:open-window "A picture" 200 120 :x 540 :y 410))

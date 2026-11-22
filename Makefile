@@ -39,8 +39,9 @@ BOOT_FILES  := $(BUILD)/boot-files.stamp
 # was built with, and a newer system can be put beside the one that runs
 # (lisp/system.lisp).
 VERSION     := $(shell sed -n 's/^\#define CLARA_VERSION "\(.*\)"/\1/p' kernel/kernel.h)
+FONTS       := $(wildcard fonts/*.ttf)
 SYSTEM_SRCS := $(sort kernel/system.c $(COMMON_SRCS) $(HEADERS) kernel/lisp/self-test.lisp \
-                 $(wildcard kernel/arch/*/*.c kernel/arch/*/*.S lisp/*.lisp) lisp/roots.pem)
+                 $(wildcard kernel/arch/*/*.c kernel/arch/*/*.S lisp/*.lisp) lisp/roots.pem $(FONTS))
 SYSTEM      := $(VERSION)-$(shell python3 -I tools/system.py id $(SYSTEM_SRCS))
 BOOTDIR     := $(BUILD)/esp/clara/$(SYSTEM)
 
@@ -93,10 +94,10 @@ $(eval $(call ARCH_RULES,aarch64,aarch64-unknown-windows,,BOOTAA64.EFI,arm64))
 # The manifest is written last, and is what says that a system is whole.
 # A kernel that names another system than the directory it is put in would
 # look for its files somewhere else, and find none: the build stops there.
-$(BOOT_FILES): lisp $(wildcard lisp/*.lisp) lisp/roots.pem kernel/lisp/self-test.lisp $(ESP)/BOOTX64.EFI $(ESP)/BOOTAA64.EFI tools/system.py
+$(BOOT_FILES): lisp $(wildcard lisp/*.lisp) lisp/roots.pem $(FONTS) kernel/lisp/self-test.lisp $(ESP)/BOOTX64.EFI $(ESP)/BOOTAA64.EFI tools/system.py
 	rm -rf $(BUILD)/esp/clara
 	mkdir -p $(BOOTDIR)
-	cp lisp/*.lisp lisp/roots.pem kernel/lisp/self-test.lisp $(ESP)/BOOTX64.EFI $(ESP)/BOOTAA64.EFI $(BOOTDIR)/
+	cp lisp/*.lisp lisp/roots.pem $(FONTS) kernel/lisp/self-test.lisp $(ESP)/BOOTX64.EFI $(ESP)/BOOTAA64.EFI $(BOOTDIR)/
 	@for kernel in $(ESP)/BOOTX64.EFI $(ESP)/BOOTAA64.EFI; do \
 		LC_ALL=C grep -q -F "$(SYSTEM)" $$kernel || { \
 			echo "make: $$kernel was linked as another system than $(SYSTEM), which is what this build is: remove it, and make again" >&2; \
@@ -113,7 +114,7 @@ all: $(BOOT_FILES)
 $(BUILD)/system-%/stamp: $(BUILD)/system-%/esp/EFI/BOOT/BOOTX64.EFI $(BUILD)/system-%/esp/EFI/BOOT/BOOTAA64.EFI $(BOOT_FILES)
 	rm -rf $(BUILD)/system-$*/esp/clara
 	mkdir -p $(BUILD)/system-$*/esp/clara/$(VERSION)-$*
-	cp lisp/*.lisp kernel/lisp/self-test.lisp $(BUILD)/system-$*/esp/EFI/BOOT/BOOTX64.EFI \
+	cp lisp/*.lisp $(FONTS) kernel/lisp/self-test.lisp $(BUILD)/system-$*/esp/EFI/BOOT/BOOTX64.EFI \
 		$(BUILD)/system-$*/esp/EFI/BOOT/BOOTAA64.EFI $(BUILD)/system-$*/esp/clara/$(VERSION)-$*/
 	case $* in broken*) echo '(this is no Lisp' > $(BUILD)/system-$*/esp/clara/$(VERSION)-$*/boot.lisp;; esac
 	python3 -I tools/system.py manifest $(BUILD)/system-$*/esp/clara/$(VERSION)-$* $(VERSION)-$*
@@ -203,7 +204,7 @@ test: export WORK :=
 SECOND = -drive if=none,id=second,format=raw,readonly=on,file=$(BUILD)/$(1).img -device virtio-blk-pci,drive=second
 UPGRADED := EXPECT='^ClaraOS: starting the system that is to be tried;;^system: .*-other has come to its prompt;;^world: made anew by ClaraOS .*-other;;^home: /home/init.lisp is loaded, 1 form of it, and 3 were passed over:;;^home:     the stack is full;;^home:     /home/init.lisp is loaded into a new world by itself;;^home: /home/defined.lisp is loaded, [0-9]* forms[^ ]*$$;;^world:   .*\*JOBS\*;;^world:   .*\*WINDOW\*;;^world:   .*NOT-WRITTEN-DOWN;;^world: it is saved as it is now;;^home: /home/defined.lisp has 1 form that this world did not have, which is loaded now'
 POWER :=SESSION=tools/power.txt MARKER='^clara: turning the machine off' EXPECT='^lisp: the heap is an image'
-RESUME := SESSION=tools/resumed.txt EXPECT='^lisp: the heap is an image;;^lisp: and with it [0-9]* KiB of code for the processor;;^lisp:   of the functions .* and 0 are walked;;^lisp:   the processor runs [1-9][0-9]* of the compiled ones itself, .* and the machine 3[^0-9]*$$'
+RESUME := SESSION=tools/resumed.txt EXPECT='^lisp: the heap is an image;;^type: 8 files of outlines came with the system;;^lisp: and with it [0-9]* KiB of code for the processor;;^lisp:   of the functions .* and 0 are walked;;^lisp:   the processor runs [1-9][0-9]* of the compiled ones itself, .* and the machine 3[^0-9]*$$'
 test: all host-test release-test $(BUILD)/system-other/stamp $(BUILD)/system-broken/stamp
 	tools/boottest.sh x86_64
 	NAME=x86_64-resumed DISK=$(BUILD)/boot-x86_64.img $(RESUME) tools/boottest.sh x86_64

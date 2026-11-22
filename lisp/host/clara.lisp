@@ -30,6 +30,7 @@
   (:use "COMMON-LISP")
   (:export "MEMORY-8" "MEMORY-16" "MEMORY-32" "MEMORY-64"
            "FILL-MEMORY-32" "COPY-MEMORY" "EXPAND-BITS-32" "FILL-RECTANGLE-32" "COPY-RECTANGLE-32"
+           "BLEND-SHADES-32" "SYSTEM-FILE"
            "ALLOCATE-MEMORY" "FREE-MEMORY"
            "PORT-8" "PORT-16" "PORT-32"
            "INTERRUPT-EVENT" "FRAMEBUFFER" "SERIAL-DEVICE" "SERIAL-BYTE" "SERIAL-BREAK"
@@ -44,7 +45,7 @@
 
 (defpackage "CLARA.HOST"
   (:use "COMMON-LISP")
-  (:export "RESET-MACHINE" "+MEMORY-BASE+" "MAP-DEVICE" "MAP-PORTS"
+  (:export "RESET-MACHINE" "+MEMORY-BASE+" "MAP-DEVICE" "MAP-PORTS" "PUT-SYSTEM-FILE"
            "SET-FRAMEBUFFER" "SET-SERIAL-DEVICE" "SET-SCREEN-CURSOR" "GIVEN-SCREEN"
            "TYPE-BYTES" "RAISE-INTERRUPT" "SERIAL-BREAK-P"
            "SET-PCI-CONFIGURATION" "SEND-MESSAGE" "MESSAGE-INTERRUPTS" "KEYBOARD-BREAKS"
@@ -294,6 +295,7 @@
   (make-array (floor +memory-size+ 4096) :element-type 'bit :initial-element 0))
 (defvar *pages-lock* (sb-thread:make-mutex :name "pages")) ; threads here run at the same time, as they do not on ClaraOS
 (defvar *devices* nil)       ; (first last read write mapped): registers in memory
+(defvar *system-files* nil)  ; (name address bytes): the files that the handoff is said to have read
 (defvar *mapped* nil)        ; (first . last): what MAP-MEMORY was called for
 (defvar *pci-configuration* nil) ; what PCI-CONFIGURATION gives, as a list, or NIL
 (defvar *messages* nil)      ; (device event address data): what MESSAGE-INTERRUPT has handed out, the last first
@@ -319,6 +321,7 @@
   (fill *memory* 0)
   (fill *pages* 0)
   (setf clara::*files* nil)
+  (setq *system-files* nil)
   (setq *devices* nil *ports* nil *framebuffer* nil *serial-device* nil
         *screen-cursor* nil *given-screen* nil *typed* nil *interrupts* nil *serial-break* t
         *mapped* nil *pci-configuration* nil *messages* nil *keyboard-breaks* 0
@@ -335,6 +338,18 @@
 
 (defun map-ports (port count read write)
   (push (list port (+ port count -1) read write) *ports*))
+
+;; A file that the handoff read into memory, as the kernel has those of its
+;; system: BYTES, a vector of them, under NAME, for CLARA.UNSAFE:SYSTEM-FILE
+;; to find. Its memory is page frames of the machine's that nobody gives
+;; back.
+(defun put-system-file (name bytes)
+  (let* ((pages (max 1 (ceiling (length bytes) 4096)))
+         (address (clara.unsafe:allocate-memory pages)))
+    (replace *memory* bytes :start1 (- address +memory-base+))
+    (setq *system-files* (cons (list name address (length bytes))
+                               (remove name *system-files* :key #'first :test #'string-equal)))
+    address))
 
 (defun set-framebuffer (address width height pitch red green blue)
   (setq *framebuffer* (list address width height pitch red green blue)))
@@ -994,6 +1009,39 @@
         (setf (memory-32 (+ to (* row to-pitch) (* 4 x))) (aref pixels (+ (* row width) x))))))
   nil)
 
+;; A colour laid over pixels, each taking as much of it as its shade says,
+;; of 255. The parts of a pixel are the bits that the three masks have, and
+;; each part is a number that goes that far towards the colour's, to the
+;; nearest; the bits that are no part stay.
+(defun blend-shades-32 (address pitch shades start step rows width color red green blue)
+  (check-rectangle pitch width rows)
+  (unless (vectorp shades)
+    (error "CLARA.UNSAFE:BLEND-SHADES-32 wants a vector of shades, and ~S is not one" shades))
+  (when (and (plusp rows) (plusp width))
+    (unless (<= (+ start (* (1- rows) step) width) (length shades))
+      (error "the vector has ~D shades, not ~D rows of ~D from ~D on" (length shades) rows width start))
+    (dotimes (row rows)
+      (dotimes (x width)
+        (let ((shade (aref shades (+ start (* row step) x))))
+          (unless (and (integerp shade) (<= 0 shade 255))
+            (error "~S is not a shade: an integer from 0 to 255" shade)))))
+    (dotimes (row rows)
+      (dotimes (x width)
+        (let ((shade (aref shades (+ start (* row step) x)))
+              (at (+ address (* row pitch) (* 4 x))))
+          (unless (zerop shade)
+            (let* ((old (memory-32 at))
+                   (new (logandc2 old (logior red green blue))))
+              (dolist (mask (list red green blue))
+                (unless (zerop mask)
+                  (let* ((place (1- (integer-length (logand mask (- mask))))) ; how far up the part begins
+                         (size (integer-length (ash mask (- place))))
+                         (was (ldb (byte size place) old))
+                         (to (ldb (byte size place) color)))
+                    (setq new (dpb (round (+ (* was (- 255 shade)) (* to shade)) 255) (byte size place) new)))))
+              (setf (memory-32 at) new)))))))
+  nil)
+
 ;; Page frames side by side, all zeroes, the lowest that are free: and
 ;; what is given back has to have come from here, once.
 (defun allocate-memory (pages)
@@ -1023,6 +1071,13 @@
 
 (defun framebuffer ()
   (values-list clara.host::*framebuffer*))
+
+;; A file that came with the kernel: where it is and how long, or NIL.
+(defun system-file (name)
+  (unless (stringp name)
+    (error "CLARA.UNSAFE:SYSTEM-FILE wants the name of a file, in a string, and ~S is not one" name))
+  (let ((file (find name clara.host::*system-files* :key #'first :test #'string-equal)))
+    (and file (values (second file) (third file)))))
 
 (defun serial-device ()
   (values-list clara.host::*serial-device*))

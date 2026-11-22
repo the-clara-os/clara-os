@@ -314,10 +314,10 @@ error: /EFI/BOOT is a directory, and not a file
       (clara.draw:fill-rectangle s 0 0 200 120 (clara.draw:color 45 41 66))
       (clara.draw:fill-rectangle s 0 0 200 20 sun)
       (clara.draw:draw-rectangle s 0 0 200 120 ink)
-      (clara.draw:draw-text s 8 2 "ClaraOS" (clara.draw:color 30 27 46))
+      (clara.draw:draw-text s 8 2 "ClaraOS" (clara.draw:color 30 27 46) nil (clara.type:font "Sans" 13 :bold t))
       (dotimes (i 5)
         (clara.draw:fill-rectangle s (+ 12 (* i 36)) 36 28 28 (clara.draw:color (* i 60) 120 (- 255 (* i 60)))))
-      (clara.draw:draw-text s 12 84 "drawn in Lisp" ink)))
+      (clara.draw:draw-text s 12 82 "drawn in Lisp" ink nil (clara.type:font "Sans" 16 :italic t))))
 PICTURE
 > (list (picture *canvas*) (clara.draw:damage *canvas*))
 (T ((0 0 200 120)))
@@ -338,6 +338,24 @@ PICTURE
 > (let ((spare (clara.draw:allocate-surface 16 16)))
     (list (clara.draw:free-surface spare) (handler-case (clara.draw:pixel spare 0 0) (error (c) (princ-to-string c)))))
 (NIL "this surface was freed")
+> (list (clara.type:families)
+        (let ((font (clara.type:font "Sans" 24)))
+          (list (clara.type:font-height font) (clara.draw:text-width "Hello, world" font))))
+(("Sans" "Mono") (29 127))
+> (let ((s (clara.draw:allocate-surface 60 40)) (white (clara.draw:color 255 255 255)) (full 0) (part 0))
+    (clara.draw:draw-text s 4 2 "Hi" white nil (clara.type:font "Sans" 30))
+    (dotimes (y 40)                       ; the letters: pixels that are white, and at their edges pixels that are less
+      (dotimes (x 60)
+        (let ((p (clara.draw:pixel s x y)))
+          (cond ((= p white) (setq full (+ full 1)))
+                ((> p 0) (setq part (+ part 1)))))))
+    (clara.draw:free-surface s)
+    (list full part))
+(130 156)
+> (progn (defvar *title* (clara.type:font "Mono" 20 :bold t)) 'kept)
+KEPT
+> (clara.draw:text-width "saved" *title*)
+60
 > (defmacro until (test)
     `(dotimes (i 400 'never) (when ,test (return 'ok)) (clara:wait-event (clara.input:pointer-changed) 50)))
 UNTIL

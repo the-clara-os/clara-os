@@ -19,7 +19,7 @@ on:
       - 'lisp/**'
       - 'tools/**'
       - 'Makefile'
-      - 'fonts/spleen-8x16.bdf'
+      - 'fonts/**'
       - '.github/workflows/site.yml'
   workflow_dispatch:
 

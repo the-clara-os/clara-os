@@ -539,6 +539,7 @@ extern struct lisp_machine lisp_machine;
 
 void lisp_eval_init(const struct boot_file *files); /* the files that LOAD can find */
 int  lisp_boot_file(const char *name);              /* is there one of that name among them? */
+const struct boot_file *lisp_boot_file_of(lisp name); /* the one of that name, a string, or NULL */
 void lisp_eval_start(void);                 /* for a thread that has just been given the runtime: how deep it may go */
 lisp lisp_eval(lisp form, lisp env);        /* env is NIL outside every binding */
 lisp lisp_compiler(void);                   /* the function that compiles a form and runs it, or NIL: no compiler yet */
@@ -677,6 +678,8 @@ LISP_PRIMITIVE(lisp_p_copy_memory);
 LISP_PRIMITIVE(lisp_p_expand_bits_32);
 LISP_PRIMITIVE(lisp_p_fill_rectangle_32);
 LISP_PRIMITIVE(lisp_p_copy_rectangle_32);
+LISP_PRIMITIVE(lisp_p_blend_shades_32);
+LISP_PRIMITIVE(lisp_p_system_file);
 LISP_PRIMITIVE(lisp_p_allocate_memory);
 LISP_PRIMITIVE(lisp_p_free_memory);
 LISP_PRIMITIVE(lisp_p_port_8);
