@@ -23,7 +23,7 @@
           identity cadr cddr caar cdar caddr cdddr cadddr
           first rest second third fourth endp nthcdr nth last
           reverse nreverse copy-list mapcar mapc mapcan
-          member assoc remove-if remove-if-not remove find-if find position
+          member assoc remove-if remove-if-not remove find-if find position-if position
           every some reduce sort getf get
           zerop plusp minusp evenp oddp abs max min expt
           char= char< char-code-limit concatenate make-string make-array macroexpand
@@ -311,18 +311,61 @@
 (defun remove (item list &key (test #'eql))
   (remove-if (lambda (other) (funcall test item other)) list))
 
-(defun find-if (predicate list)
-  (dolist (item list)
-    (if (funcall predicate item) (return item))))
+;; FIND, FIND-IF, POSITION and POSITION-IF look into a list, a string or a
+;; vector: at the elements from START up to END, for the first that passes,
+;; or for the last when FROM-END is true. %SEEK is the four of them. An
+;; element passes when TEST is true of ITEM and the element, and when there
+;; is no TEST, when ITEM, a predicate then, is true of it; KEY says what of
+;; the element is looked at. It gives the element when ELEMENT is true and
+;; the element's place otherwise. The test is written into its three loops
+;; and is no function: a call for every element is what a long list costs.
+(defmacro %passes (item test key element)
+  `(if ,test
+       (funcall ,test ,item (if ,key (funcall ,key ,element) ,element))
+       (funcall ,item (if ,key (funcall ,key ,element) ,element))))
 
-(defun find (item list &key (test #'eql))
-  (find-if (lambda (other) (funcall test item other)) list))
+;; Where the part ends that START and END name, which have to name one.
+(defun %part-end (sequence start end)
+  (let ((length (length sequence)))
+    (if (and (integerp start) (or (null end) (integerp end))
+             (<= 0 start (or end length) length))
+        (or end length)
+        (error "~S has no part from ~S to ~S" sequence start (or end length)))))
 
-(defun position (item list &key (test #'eql))
-  (let ((index 0))
-    (dolist (other list)
-      (if (funcall test item other) (return index))
-      (setq index (1+ index)))))
+(defun %seek (name item test sequence start end from-end key element)
+  (cond ((listp sequence)
+         ;; A whole list is walked once, and its length is nobody's business.
+         (let ((end (if (and (eq start 0) (null end)) nil (%part-end sequence start end)))
+               (index 0) (found nil) (found-at nil))
+           (do ((rest sequence (cdr rest)))
+               ((or (atom rest) (and end (>= index end))))
+             (when (and (>= index start) (%passes item test key (car rest)))
+               (setq found (car rest) found-at index)
+               (unless from-end (return)))
+             (setq index (1+ index)))
+           (if element found found-at)))
+        ((or (stringp sequence) (vectorp sequence))
+         (let ((end (%part-end sequence start end)))
+           (if from-end
+               (do ((index (1- end) (1- index))) ((< index start) nil)
+                 (when (%passes item test key (aref sequence index))
+                   (return (if element (aref sequence index) index))))
+               (do ((index start (1+ index))) ((>= index end) nil)
+                 (when (%passes item test key (aref sequence index))
+                   (return (if element (aref sequence index) index)))))))
+        (t (error "~A looks into a list, a string or a vector, and ~S is none" name sequence))))
+
+(defun find-if (predicate sequence &key (start 0) end key from-end)
+  (%seek 'find-if predicate nil sequence start end from-end key t))
+
+(defun find (item sequence &key (test #'eql) (start 0) end key from-end)
+  (%seek 'find item test sequence start end from-end key t))
+
+(defun position-if (predicate sequence &key (start 0) end key from-end)
+  (%seek 'position-if predicate nil sequence start end from-end key nil))
+
+(defun position (item sequence &key (test #'eql) (start 0) end key from-end)
+  (%seek 'position item test sequence start end from-end key nil))
 
 (defun every (predicate list)
   (dolist (item list t)

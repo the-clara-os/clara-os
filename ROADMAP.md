@@ -1015,6 +1015,38 @@ Infrastructure, done:
   (CLAUDE.md). What was measured and tried is in this entry's group
   below.
 
+- **POSITION-IF, and FIND with :START** (2026-11-22, version 0.0.45).
+  FIND, FIND-IF and POSITION took a list and `:test`; they and
+  POSITION-IF, which is new (issue #63), now look into a list, a string
+  or a vector, at the part that `:start` and `:end` name, for the first
+  element that passes or with `:from-end` for the last, and at what
+  `:key` makes of each element. The four are one function in
+  lisp/boot.lisp, `%seek`, which walks a list once and asks for its
+  length only when a part of it is named, and which has its test written
+  into its loops and not called, since a call for every element is what
+  a long list would cost. A part that is not there is an error in the
+  words of SUBSEQ's, also where what is looked for comes before the end
+  that was named: that one case SBCL lets pass for a list, and the manual
+  says that it is an error here. The answers of the evaluator's
+  self-test are SBCL's, taken from a list of 63 forms that was typed at
+  both, which the kernel answered as SBCL did the first time it was
+  booted, the errors apart: eleven texts, which every boot from the files
+  also compiles and translates. The manual shows the four at the prompt,
+  where `make test` types them. What asked for it is a calculator of
+  Julio's, which looks for the last sign in what was typed and for a
+  point behind it: its file was loaded from a copy of his disk and that
+  function called, on this system. Mistakes that were planted, one at a
+  time, and that a boot noticed by a text that gave another answer,
+  twenty-one of them: an end past the length let through; a start that is
+  no number; a start or an end one place late, in a list and in a string;
+  the first taken for the last, and the last for the first; the place
+  given for the element, and the element for the place; a search from the
+  end that begins past it, or stops one short; no `:key` for an item, or
+  for a predicate; the arguments of the test the other way round; a
+  list's end not looked at when its start is 0; a string's end taken on
+  trust; anything at all looked into; no test when none is named; and the
+  name left out of what boot.lisp exports.
+
 Infrastructure, for sessions with budget left over:
 
 - Read the UART base from ACPI (SPCR or DBG2) instead of assuming
@@ -3825,7 +3857,9 @@ No milestone yet, to be picked up when they start to matter:
   FORMAT knows `~A ~S ~D ~%` and `~~`. The functions on sequences take
   lists only, SUBSEQ strings as well, and of their keyword arguments
   `:test`, with `:key` for MEMBER and ASSOC and `:initial-value` for
-  REDUCE. SETF knows the places that boot.lisp lists with DEFSETF and the
+  REDUCE; FIND, FIND-IF, POSITION and POSITION-IF take strings and
+  vectors too, with `:start`, `:end`, `:key` and `:from-end`, since
+  0.0.45. SETF knows the places that boot.lisp lists with DEFSETF and the
   ones DEFSTRUCT adds. `eq` and `eql` are one function, `char=` and
   `char<` take two characters. A file in lisp/ that needs one of these
   loads under SBCL and not here: only a boot tells.
