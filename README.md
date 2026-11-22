@@ -49,7 +49,11 @@ everything that was defined, and loads no Lisp. Lisp draws: a rasterizer
 what a surface has of them, copies one surface to another, and shows on
 the screen what has changed of a picture that was made out of sight,
 `(clara.draw:fill-rectangle (clara.draw:screen) 40 40 200 120 (clara.draw:color 255 184 108))`
-for a start. And there is a window manager (lisp/windows.lisp):
+for a start. Text is drawn in the console's font or in a font of outlines,
+at any size (lisp/type.lisp): `(clara.type:font "Sans" 24)` is one, of
+the Go fonts that come with the system, read from their TrueType files
+and made into pictures in which a pixel at the edge of a letter takes a
+part of the colour. And there is a window manager (lisp/windows.lisp):
 `(clara.windows:start)` takes the screen from the console and puts windows
 on it, each a surface that its program draws on, with the focus, the keys
 and the pointer going to the one that is picked, a launcher along the top,
@@ -175,10 +179,11 @@ Layout:
     kernel/lisp/     the Lisp runtime: objects and the heap, symbols and packages, the reader, the printer,
                      the evaluator, and the machine that compiled code runs on (vm.c)
     lisp/            Lisp sources: the language's own part, the compiler, the console, drawing, the drivers, the
-                     file system, the network, the listener, the window manager and the terminal in a window, which the kernel loads as it starts, and
+                     file system, the fonts, the network, the listener, the window manager and the terminal in a window, which the kernel loads as it starts, and
                      the two applications, editor.lisp and files.lisp, which the launcher loads when they are picked;
                      the build copies them to the system's directory on the ESP, \clara\<its name>, read at boot
-    fonts/           the console font, Spleen 8x16, which tools/bdf2c.py turns into kernel/font.c
+    fonts/           the console font, Spleen 8x16, which tools/bdf2c.py turns into kernel/font.c, and the
+                     fonts of outlines, the Go fonts, which go onto the boot volume as they are
     site/            the website: the front page and the user manual (manual.html), filled in from the
                      repository and held against it by site/build.py (`make site`)
     tools/           run.sh (QEMU), mkdisk.py (the disk a machine boots from), system.py (the name of a build
@@ -187,7 +192,8 @@ Layout:
                      back, at a new world and at one that was saved), power.txt, upgrade.txt, at-once.txt,
                      trial.txt and network.txt (the same for shutting down and for upgrades), serve.py (the
                      web server that a boot fetches from), release.py (a key, a signature, and a system
-                     laid out as a release), mkimage.sh (UTM disk)
+                     laid out as a release), mkimage.sh (UTM disk), fontcheck.c (what FreeType says of a
+                     font file, for the tests of lisp/type.lisp; built by hand, and no part of `make test`)
 
 ## Running in UTM
 
@@ -232,4 +238,6 @@ steps. `utmctl start ClaraOS` starts the VM from the terminal.
 
 GPL-3.0, see [LICENSE](LICENSE). The console font is Spleen by Frederic
 Cambus, under the BSD 2-Clause license in
-[fonts/LICENSE.spleen](fonts/LICENSE.spleen).
+[fonts/LICENSE.spleen](fonts/LICENSE.spleen). The fonts of outlines are
+the Go fonts by Bigelow & Holmes, under the BSD 3-Clause license in
+[fonts/LICENSE.go](fonts/LICENSE.go).

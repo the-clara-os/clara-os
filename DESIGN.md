@@ -764,7 +764,9 @@ architectures (kernel/vm.c).
 - The text that can be drawn is the console's font, in its one size. There
   are no lines but those along a row or a column, which are rectangles, no
   curves, no scaling, and nothing between a pixel that is drawn and one
-  that is not. Each waits for the first thing that needs it.
+  that is not. Each waits for the first thing that needs it. (Text was
+  the first: "Fonts of outlines" has letters at any size, and with them a
+  pixel that takes a part of a colour.)
 - It is tested where it can be seen. Under SBCL the tests draw on surfaces
   of a machine that is made up and look at every pixel, against what the
   pixel should be by a rule that the tests write down themselves:
@@ -1774,6 +1776,17 @@ architectures (kernel/vm.c).
   nobody can guess, when the machine has one (lisp/random.lisp). They
   were worked out from the clock, which somebody who wants to put a
   word in from outside can do as well.
+- A port that a connection spoke from rests for two minutes before
+  another speaks from it (added with M18a, 2026-11-21, which found the
+  need). The other side remembers a connection that is over for a while,
+  by the two addresses and the two ports, so that a piece of it which
+  comes late is not taken for something new; a beginning from the same
+  port is such a piece to it, and gets no answer. A port that is picked
+  by chance comes up a second time sooner than it seems: one time in ten
+  among fifty connections to one place. Two minutes is what the other
+  side's memory is at its longest in the systems that are met, and of
+  16384 ports a hundred and thirty connections a second can be begun
+  with that.
 - The machine keeps its address by asking the server that gave it,
   from half the time on for which it was given. When the time is over
   without an answer, the address is given up, and whatever wants the
@@ -1882,6 +1895,114 @@ architectures (kernel/vm.c).
   way, with the checksums put right for the other addresses both times.
   What only IPv6 has, a router's word, the neighbours' questions and
   ICMPv6, is written there as itself.
+
+## Fonts of outlines (decided in M18a and M18b, 2026-11-21)
+
+- A letter is a shape, and its picture is worked out when it is wanted. A
+  font file has the outline of every glyph, in units of its own;
+  lisp/type.lisp brings an outline to a size and gives every pixel a
+  shade, how much of the pixel the shape covers, and the pixel takes that
+  much of the colour of the text. So there is one font for every size,
+  and an edge that slants is smooth. The console keeps its pictures of 8
+  by 16: it is the first thing that works and the last that should stop,
+  and it needs no file.
+- The files are TrueType's: tables in a file, outlines of straight lines
+  and of curves of the second degree. Fonts of that kind are to be had
+  freely, in small files, and a curve of the second degree is cut into
+  straight pieces with a handful of multiplications. Files of the other
+  kind of outline are refused, in words. The programs in a file that fit
+  a glyph to the pixels of a small size are passed over: the machine that
+  runs them is more than everything else that is read of a file, and what
+  it buys, sharper letters at a dozen pixels, is left for when that is
+  what hurts most.
+- What a shape covers of a pixel is worked out, and not sampled. Every
+  straight piece of an outline is followed through the pixels that it
+  crosses, and leaves in each how much of it the shape begins or ends
+  there, with a sign for the way the piece runs; the sum along a row is
+  each pixel's share. A piece is cut where it leaves a row and where it
+  leaves a pixel, and each cut is worked out from the two ends of the
+  piece, never from the cut before it: so the parts of a piece add up to
+  the piece whatever the rounding, a closed shape leaves nothing behind
+  it, and no row has a streak to the right of a letter, which is what a
+  sum that is off by one gives.
+- All of it is in whole numbers, the language having no others. A place
+  is a count of 256ths of a pixel, and a pixel that is covered is 131072,
+  twice 256 times 256, so the arithmetic of a letter of 400 pixels stays
+  far inside a fixnum. A place is rounded once, to the nearest 256th, the
+  upper of two that are as near.
+- A curve is cut into as many pieces as it takes for none to lie further
+  than a sixty-fourth of a pixel from it, across or down. FreeType allows
+  a sixteenth. The pieces lie inside the curve, so what they cut off
+  makes a round letter lighter than it is: at a sixteenth that was a
+  pixel in sixty of a round shape, at a sixty-fourth it is one in two
+  hundred and fifty, for twice the pieces.
+- The substrate lays the colour on, and Lisp says how much of it. One
+  function was added to the three of "Drawing"
+  (`clara.unsafe:blend-shades-32`): a colour over a rectangle of pixels,
+  by a vector of shades, with the bits of a pixel that hold each part of
+  a colour as arguments, so that it is right on any screen and can be
+  tried without one. Everything else is Lisp, which the processor runs
+  (M16b): ninety-five glyphs at 13 pixels are made in less than a tick of
+  the clock where the processor is the computer's own.
+- The picture of a glyph is a vector in the heap, an item to the shade,
+  made when its character is first drawn in a font and kept for the
+  font: beside it and not in it, so that a font which is the value of a
+  form at a prompt prints as a line, its name, its file, its size and
+  where its lines lie. It is not page frames, as a surface's pixels are:
+  the pictures are many and small, and the collector takes the ones that
+  are let go of. The price is a word for a number below 256. What the
+  pictures were made from, the bytes of the file, is memory of one start.
+  So a font comes back with a world that was saved, and the pictures of
+  its glyphs are let go of at the next start, since the file may be
+  another by then: the font holds the name of its file, finds the file
+  again when it is next used, and makes its glyphs again.
+- The fonts that come with the system are files of the system's
+  directory, and the handoff reads them into memory with the system's
+  Lisp, where `clara.unsafe:system-file` finds them. The window manager
+  writes its letters when it starts, which in a world that was saved is
+  before the system has asked which volume the machine was started from;
+  and a machine with no disk that is known here has its letters all the
+  same. Any other font is a file, read through the file system when a
+  font is first made of it.
+- They are the Go fonts, which Bigelow & Holmes drew for the Go project:
+  a sans and a font of fixed width, each upright, bold, italic and bold
+  italic, with Latin, Greek and Cyrillic letters, made for screens and
+  for reading code, under a BSD license like the console's Spleen. And
+  they are small, eight files in 1.3 MiB where the eight of DejaVu are
+  four: a system is copied whole when a machine takes a newer one, and
+  lies on its volume twice for a moment. There is no font with serifs.
+- A font is a file at a size, in whole pixels, and a glyph moves on by a
+  whole number of pixels, its own way rounded. So a letter looks the same
+  wherever it stands, one picture of it serves, and the width of a string
+  is a sum. The price is spacing that is the designer's only to the half
+  pixel.
+- There is one way to draw text. `clara.draw:draw-text` and `text-width`
+  take a font as one more argument, and are what they were without it:
+  lisp/type.lisp hands them its two functions when it is loaded, since
+  lisp/draw.lisp is loaded before there are files to read a font from.
+- The window manager writes the bar, the list and the titles in such a
+  font, Sans at 13 pixels, whose line is 16 pixels high like the
+  console's, so nothing else on the screen moved. Which font is a
+  variable of the world's. On a machine whose system has no such file the
+  letters are the console's, and it says so once: a font that cannot be
+  read must not cost anybody the screen. For the same reason a glyph that
+  cannot be read shows nothing and is no error, while a file that is no
+  font is refused when a font is first made of it, where the refusal has
+  somebody to go to.
+- A file is somebody else's, so nothing in it is trusted. Every byte is
+  asked for by its place and held against the file's length; every table
+  against the file before anything is read from it; how many points and
+  parts a glyph is put together of, how deep it is made of other glyphs,
+  and how many pixels its picture has, against limits.
+- It is tested against what it did not make. The pictures of shapes,
+  against areas that the host tests work out with fractions, by cutting a
+  polygon down to the square of each pixel. The reader, against font
+  files that the tests put together byte by byte, right ones and wrong
+  ones, of outlines that the tests know because they wrote them. And the
+  files that come with the system, against what FreeType reads of them,
+  to every point of every outline, in a table that a program printed
+  (tools/fontcheck.c); FreeType's pictures were held against these by
+  hand, and ROADMAP.md says what came of it.
 
 ## Shutting down (decided in M15e, 2026-11-20)
 

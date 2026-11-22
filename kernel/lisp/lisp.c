@@ -889,6 +889,13 @@ static const struct {
       "error: CAR wants a list, and NOT-A-LIST is not one, in the form at line 15 of self-test.lisp" },
     { "(list (package-name *package*) clara.loaded::*reached*)",
       "(\"CLARA.SELF-TEST\" CLARA.LOADED::THE-FORM-BEFORE)" },
+    /* the same file as the bytes that the handoff read: it begins with a comment */
+    { "(multiple-value-bind (at bytes) (clara.unsafe:system-file \"SELF-TEST.lisp\")"
+      " (list (code-char (clara.unsafe:memory-8 at)) (< 100 bytes 10000)))",
+      "(#\\; T)" },
+    { "(list (clara.unsafe:system-file \"no such file\") (clara.unsafe:system-file \"self-test\")"
+      " (clara.unsafe:system-file \"self-test.lisp.\"))",
+      "(NIL NIL NIL)" },
     /* the same file by its whole name: what the handoff read is what \clara held */
     { "(cl::%load \"/Clara/self-test.lisp\")",
       "error: CAR wants a list, and NOT-A-LIST is not one, in the form at line 15 of self-test.lisp" },
@@ -1274,6 +1281,23 @@ static const struct {
     { "(progn (clara.unsafe:copy-rectangle-32 (+ *page* 4096) 8 (+ *page* 36) 16 2 2)" /* into rows of another length */
       " (mapcar (lambda (at) (clara.unsafe:memory-32 (+ *page* 4096 at))) '(0 4 8 12 16)))",
       "(4 5 13 14 0)" },
+    /* a colour laid over pixels by their shades: none of it, all of it, and what lies between, to the nearest;
+     * the fourth pixel of each row is no part of the rectangle */
+    { "(progn (clara.unsafe:fill-memory-32 *page* 8 #x102030)"
+      " (clara.unsafe:blend-shades-32 *page* 16 (vector 0 255 128 64 1 254 0 9) 0 4 2 3 #xf0e0d0 #xff0000 #xff00 #xff)"
+      " (mapcar (lambda (at) (clara.unsafe:memory-32 (+ *page* at))) '(0 4 8 12 16 20 24 28)))",
+      "(1056816 15786192 8421504 1056816 1122609 15720399 1056816 1056816)" },
+    /* parts of a pixel that are no bytes, bits of it that are no part of a colour, which stay, and shades from the second on */
+    { "(progn (clara.unsafe:fill-memory-32 *page* 4 #xabcd1234)"
+      " (clara.unsafe:blend-shades-32 *page* 16 (vector 7 255 128 64 1) 1 0 1 4 #xffff #xf800 #x07e0 #x001f)"
+      " (mapcar (lambda (at) (clara.unsafe:memory-32 (+ *page* at))) '(0 4 8 12)))",
+      "(2882404351 2882374938 2882358199 2882343476)" },
+    { "(clara.unsafe:blend-shades-32 *page* 16 (vector 0 256) 0 2 1 2 0 255 0 0)",
+      "error: 256 is not a shade: an integer from 0 to 255" },
+    { "(clara.unsafe:blend-shades-32 *page* 16 (vector 0 0 0) 0 2 2 2 0 255 0 0)",
+      "error: the vector has 3 shades, not 2 rows of 2 from 0 on" },
+    { "(handler-case (clara.unsafe:blend-shades-32 4096 16 (vector 1) 0 1 1 1 0 255 0 0) (error () 'nothing-there))",
+      "NOTHING-THERE" },
     { "(clara.unsafe:fill-rectangle-32 *page* 8 3 1 0)",
       "error: 1 rows of 3 pixels, 8 bytes from one row to the next, are not a rectangle of 32-bit pixels" },
     { "(clara.unsafe:fill-rectangle-32 4096 16 4 1 0)", "error: nothing is mapped at #x1000" },
@@ -2125,7 +2149,8 @@ static void new_world(void)
 {
     static const char *const world[] = { "compiler.lisp", "native.lisp",   "font.lisp",    "console.lisp",
                                          "draw.lisp",     "pci.lisp",      "virtio.lisp",  "input.lisp",
-                                         "disk.lisp",     "fat.lisp",      "random.lisp",   "net.lisp",      "listener.lisp",
+                                         "disk.lisp",     "fat.lisp",      "type.lisp",     "random.lisp",   "net.lisp",
+                                         "listener.lisp",
                                          "windows.lisp",  "terminal.lisp", "system.lisp",   "tls.lisp" };
     uint64_t before[LISP_TYPES], after[LISP_TYPES], ticks, collections;
     char processor[16] = { 0 };
@@ -2303,6 +2328,11 @@ static void lisp_main(void)
     if (!lisp_evaluate(own_form("(let ((draw (find-package \"CLARA.DRAW\")))"
                                 "  (if draw (funcall (intern \"START\" draw))))")))
         panic("lisp: drawing did not start");
+    /* The fonts of outlines forget where the files were that an earlier start read: the window
+     * manager draws its letters in one, so this comes before it. */
+    if (!lisp_evaluate(own_form("(let ((type (find-package \"CLARA.TYPE\")))"
+                                "  (if type (funcall (intern \"START\" type))))")))
+        panic("lisp: the fonts did not start");
     /* The window manager, in a world that was saved while it ran: it takes
      * the screen, the keyboard and the pointer again, and opens a listener
      * in a window. That is the world's to say and not the substrate's, so

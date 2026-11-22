@@ -780,6 +780,18 @@ Rules:
   read a word or two and go back to sleep, and it sleeps as long as it
   can: `take` wakes once a second on a machine without an address, and
   whoever gives it more to look after signals its event.
+- A port that a connection spoke from rests for two minutes
+  (`card-spoken`, `next-port`, `forget`): the other side remembers a
+  connection that is over, by its addresses and ports, and says nothing
+  to a new beginning from the same port. Picked at random with nothing
+  but the connections of the moment looked at, a port came up twice in
+  fifty connections to one place one time in ten, and `aarch64-network`
+  failed some runs in a hundred with "does not answer at its port" where
+  nothing was wrong with the other side. When a boot fails with those
+  words at a server of the test's own, that is where to look first; a
+  machine made to speak from one port twice shows it at once
+  (`(setf (symbol-function 'clara.net::next-port) (lambda (card) 50123))`
+  and two fetches).
 - `card-answering`, the card's note of where the packet came from that
   it is looking at, is the card's thread's, and `answering-card` is the
   one place that reads it, once. Whatever the card's thread writes that
@@ -1038,8 +1050,8 @@ Rules:
   in the order of `world` in lisp.c (the compiler, then native and the file
   of the machine's own processor, arm64.lisp or x86-64.lisp, whose name
   is the machine's in `*features*`, and then the console, draw, pci,
-  virtio, input, disk, fat, random, net, the listener, windows, terminal,
-  system and tls), and
+  virtio, input, disk, fat, type, random, net, the listener, windows,
+  terminal, system and tls), and
   lisp/host/tests.lisp loads the same files: a new one goes into both, and what its package exports goes into
   a list of names in the manual, or `make site` stops. A file that is an
   application is not in `world`, and the launcher loads it (below). What `lisp_main`
@@ -1083,6 +1095,80 @@ Rules:
   website, so the last forms of that session, and what it types into the
   listener's window, are what the front page shows. The console does not draw with this file, and writes over what is
   shown.
+- Fonts of outlines (lisp/type.lisp, the package CLARA.TYPE; DESIGN.md has
+  what was decided). A font is a TrueType file at a size. Every byte of a
+  file is asked for by its place, through `u8` and `u16`, which hold the
+  place against the file's length: nothing there reads memory by an
+  address of its own making, since a file is somebody else's. A file that
+  is no font is refused when a font is first made of it (`read-tables`
+  holds every table against the file), and a glyph that cannot be read
+  shows nothing and is no error (`shape`), so that a window keeps its
+  other letters. Places are whole numbers of 256ths of a pixel; `nearest`
+  rounds a half upwards, and the tests round the same way (`nearest-of`).
+  Where a piece of an outline leaves a row or a pixel (`cover`, `across`)
+  is worked out from the piece's two ends each time and never from the
+  cut before it: that is what makes the parts add up to the whole, and a
+  sum that is off by one is a streak across the row. A change to how a
+  place is rounded, or to how fine a curve is cut (the 16 in `bend`), is
+  a change to `at-size` and `pieces-of` of the tests in the same commit.
+  The loops there call nothing but the twenty functions that have an
+  instruction of their own (`+`, `-`, `*`, the comparisons, `svref`):
+  `abs`, `min`, `max` and `zerop` are calls, and are written out.
+- START is called at every boot, by `lisp_main`, before the window
+  manager's RESUME, which writes its letters in a font: it forgets where
+  the files were. A font that came back with a world that was saved finds
+  its file again when it is next used (`live`), and makes its glyphs
+  again. What is read and made for a font is kept beside it and not in it
+  (`*made*`, a `kept` for each font that was used): a structure prints
+  with all that it holds, and a font that held the pictures of its glyphs
+  filled the listener's window when it was the value of a form. The
+  fonts that come with the system are `fonts/*.ttf`, which the
+  Makefile puts into the system's directory (`FONTS`, and so into
+  `SYSTEM_SRCS`) and the handoff reads into memory with the system's Lisp
+  files; `clara.unsafe:system-file` gives the place of one. A font that
+  is added gets its license beside it, its family in
+  `clara.type::*families*`, and its row in `*font-facts*` of
+  lisp/host/tests.lisp, which fail when a file of fonts/ has none.
+- The tests of the fonts (lisp/host/tests.lisp, "Fonts of outlines").
+  What a shape covers of a pixel is worked out there with fractions
+  (`covered-of`, `shade-of`), and `furthest` says by how many shades a
+  picture is off: 0 for straight edges on whole pixels, 1 at the most
+  otherwise. `font-file` puts a font file together, with `plain-glyph`
+  and `joined-glyph` for its glyphs, and with options for what is wrong
+  with it; `*made-outlines*` says what each glyph of the tests' own font
+  is, and a glyph that is added there is added to both lists.
+  `put-watched` puts a file among the system's with a device behind its
+  last byte that fails the run when it is read: a test of a file that is
+  cut short uses it. `*font-facts*` is what FreeType says of each file of
+  fonts/, units, lines and three sums over every character, advance and
+  point; `label-rule` is what a string of the window manager's shows, in
+  either kind of letters, and `new-desk :letters t` a desk whose letters
+  are outlines.
+- tools/fontcheck.c is FreeType's word on a font file, the one piece of
+  those tests that nobody here wrote. It is built by hand, on a computer
+  that has FreeType, and is no part of `make test`:
+  `cc -o build/fontcheck tools/fontcheck.c -I/opt/homebrew/opt/freetype/include/freetype2 -L/opt/homebrew/opt/freetype/lib -lfreetype`.
+  `build/fontcheck facts fonts/*.ttf` prints the rows of `*font-facts*`.
+  After a change to the reader, hold it against FreeType on fonts that
+  have what the Go fonts lack, glyphs of parts above all: `fontcheck
+  points <file>` prints a sum for each glyph, the same sums are a dozen
+  lines of Lisp over `clara.type::outline`, and macOS has such fonts in
+  /System/Library/Fonts/Supplemental (Arial, Times New Roman). That is how
+  two rules were found that no test of ours had asked for: where a
+  glyph's left edge lies, and which part a glyph of parts takes its place
+  from. After a change to the pictures, `fontcheck shades` prints
+  FreeType's, to hold these against pixel by pixel; ROADMAP.md has the
+  figures to expect. Finer pieces of a curve make the difference from
+  FreeType larger, not smaller: FreeType's are the coarser.
+- `clara.unsafe:blend-shades-32` (unsafe.c) lays a colour over pixels by
+  their shades. The numbers in its texts of the self-test, and in the host
+  test that draws on a screen of five, six and five bits, were worked out
+  by a script from the rule, each part to the nearest: they are the same
+  numbers in both places, so the function in C and its stand-in in
+  lisp/host/clara.lisp are held to one answer. tools/session.txt counts
+  the pixels of two letters, `(130 156)`: a change to the pictures that
+  is meant changes that line on all three machines, and the same form
+  under SBCL has to give the same.
 - Windows (lisp/windows.lisp, the package CLARA.WINDOWS). Nothing there
   draws on the screen: what changes what the screen should show calls
   `damaged` with the rectangle, and `settle` puts the dirty rectangles
@@ -1102,7 +1188,13 @@ Rules:
   manager when `*running*` was true in the world that was saved. A
   terminal (lisp/terminal.lisp) is a window with cells and a stream; the
   listener in a window is its application, the first that is defined,
-  which START launches. Ctrl-C there is `clara:interrupt-thread`.
+  which START launches. Ctrl-C there is `clara:interrupt-thread`. What
+  the bar, the list and the titles say goes through `label`, which writes
+  halfway up a strip in the window manager's letters: the font that
+  `clara.windows:*font*` names, which START makes (`*letters*`), or the
+  console's when that is NIL or the font cannot be had. The strips keep
+  their heights, so a rule of the tests for a new piece of text takes its
+  place from `label-rule`.
 - With the window manager running, the keyboard is the window's and not
   the console's. So a session types into a window with a line `^T text`,
   which echoes nothing on the serial port, and sees what came of it in the
@@ -1416,3 +1508,7 @@ Rules:
   that begins with `rm build/*x*` and goes on to `make test` and a `grep`
   of its log then shows the log of the run before. build/ itself must not be
   shared with the container: the objects in it come from another compiler.
+  Have the container print what a failed boot differed in before it ends
+  (the lines of test.log from the boot's command on, and the end of its
+  build/boot-<name>.log), or start it without `--rm`: a boot that failed
+  once and passed twelve times afterwards left nothing to read.

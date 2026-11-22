@@ -6,6 +6,9 @@
 ;;;; framebuffer, and any number of others can be made, in page frames: a
 ;;;; picture is put together on one of those, out of sight, and copied to
 ;;;; the screen when it is whole, so that nobody watches it being drawn.
+;;;; Text is drawn in the console's font, a picture of one bit to the pixel
+;;;; for each character, or in a font of outlines, at any size, which is the
+;;;; business of lisp/type.lisp.
 ;;;;
 ;;;; Whatever is drawn is cut to what the surface has of it, and to the part
 ;;;; of the surface that drawing is kept to for the time being (WITH-CLIP):
@@ -14,9 +17,9 @@
 ;;;; SHOW copies to the screen what has changed and nothing else.
 ;;;;
 ;;;; The pixels themselves are written by the substrate, a rectangle to the
-;;;; call (CLARA.UNSAFE:FILL-RECTANGLE-32, COPY-RECTANGLE-32 and
-;;;; EXPAND-BITS-32): an interpreter takes too long over every pixel. What
-;;;; is here is the rest: which pixels.
+;;;; call (CLARA.UNSAFE:FILL-RECTANGLE-32, COPY-RECTANGLE-32, EXPAND-BITS-32
+;;;; and BLEND-SHADES-32): an interpreter takes too long over every pixel.
+;;;; What is here is the rest: which pixels.
 ;;;;
 ;;;; This file loads under SBCL as well, where lisp/host/ stands in for the
 ;;;; machine, and the tests there look at every pixel.
@@ -25,7 +28,8 @@
   (:use "COMMON-LISP")
   (:export "START" "SCREEN" "COLOR"
            "ALLOCATE-SURFACE" "FREE-SURFACE" "SURFACE-P" "SURFACE-WIDTH" "SURFACE-HEIGHT" "PIXEL"
-           "FILL-RECTANGLE" "DRAW-RECTANGLE" "COPY-RECTANGLE" "DRAW-BITMAP" "DRAW-TEXT" "TEXT-WIDTH"
+           "FILL-RECTANGLE" "DRAW-RECTANGLE" "COPY-RECTANGLE" "DRAW-BITMAP" "DRAW-SHADES" "DRAW-TEXT" "TEXT-WIDTH"
+           "PROVIDE-FONTS"
            "WITH-CLIP" "DAMAGE" "ADD-DAMAGE" "TAKE-DAMAGE" "SHOW"))
 (in-package "CLARA.DRAW")
 
@@ -60,6 +64,7 @@
 (defvar *red* '(16 . 8))           ; where red is in a pixel: how far up its bits begin, and how many there are
 (defvar *green* '(8 . 8))
 (defvar *blue* '(0 . 8))
+(defvar *fonts* nil)               ; what lisp/type.lisp handed over: (width . draw), two functions, or NIL
 
 ;; SURFACE, when it is one that can be drawn on.
 (defun live (surface)
@@ -291,17 +296,54 @@
                                    (- right left) color background (- (+ x width) right))
       (drawn surface left top right bottom))))
 
-;; How many pixels wide STRING is when it is drawn; it is
-;; CLARA.FONT:+HEIGHT+ high.
-(defun text-width (string)
-  (* clara.font:+width+ (length string)))
+;; A picture in shades: SHADES is a vector with an item for each of its
+;; pixels, the rows one after the other, each WIDTH long and STEP items
+;; after the one before it. An item says how much of COLOR its pixel takes,
+;; from 0, none, to 255, all of it: the pixel becomes what lies that far
+;; between what it was and COLOR, in each of its three parts. That is what
+;; the smooth edge of a shape is made of.
+(defun draw-shades (surface x y shades width height color &optional (step width))
+  (multiple-value-bind (left top right bottom) (inside surface x y width height)
+    (when left
+      (clara.unsafe:blend-shades-32 (at surface left top) (surface-pitch surface) shades
+                                    (+ (* (- top y) step) (- left x)) step (- bottom top) (- right left) color
+                                    (bits *red*) (bits *green*) (bits *blue*))
+      (drawn surface left top right bottom))))
 
-;; STRING, in the console's font, its first character's upper left corner
-;; at X and Y, all on one line. A character that the font has no glyph for
-;; shows as the box that comes after the last glyph. The glyphs are drawn
-;; in COLOR, and what is around them in their cells in BACKGROUND, or not
+;; The bits of a pixel that hold a part of a colour, from where they are.
+(defun bits (part)
+  (ash (- (ash 1 (cdr part)) 1) (car part)))
+
+;; Text in a font that is not the console's is drawn by lisp/type.lisp, which
+;; is loaded after this file and hands over two functions: how wide a
+;; string is in a font, and the string drawn.
+(defun provide-fonts (width draw)
+  (setq *fonts* (cons width draw))
+  t)
+
+(defun fonts ()
+  (or *fonts*
+      (error "there is nothing here that draws in a font: lisp/type.lisp is not loaded")))
+
+;; How many pixels wide STRING is when it is drawn: in the console's font,
+;; in which it is CLARA.FONT:+HEIGHT+ high, or in FONT, one of
+;; CLARA.TYPE:FONT's.
+(defun text-width (string &optional font)
+  (if font
+      (funcall (car (fonts)) string font)
+      (* clara.font:+width+ (length string))))
+
+;; STRING, its first character's upper left corner at X and Y, all on one
+;; line: in the console's font, or in FONT. A character that the font has no
+;; glyph for shows as the glyph that the font has for those, a box. The
+;; glyphs are drawn in COLOR, and what is around them in BACKGROUND, or not
 ;; at all without one.
-(defun draw-text (surface x y string color &optional background)
+(defun draw-text (surface x y string color &optional background font)
+  (if font
+      (funcall (cdr (fonts)) surface x y string color background font)
+      (draw-cells surface x y string color background)))
+
+(defun draw-cells (surface x y string color background)
   (multiple-value-bind (left top right bottom) (inside surface x y (text-width string) clara.font:+height+)
     (when left
       (let ((row (+ (surface-address surface) (* top (surface-pitch surface))))

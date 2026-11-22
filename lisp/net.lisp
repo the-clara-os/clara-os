@@ -98,6 +98,8 @@
   echoes                ; ((identifier number . answer) ...): the pings that wait for their answers
   known                 ; ((name until . address) ...): the names that were asked for, and until when each holds
   connections           ; the TCP connections that there are
+  spoken                ; ((port . until) ...): the ports that a connection spoke from which is no more, each with
+                        ; the time until which no other connection speaks from it
   inside                ; ((place . bytes) ...): the packets that this machine has sent to itself, each in a page frame
   trouble               ; what last went wrong in what time brings about, as text: nobody was there to be told
   (count 1)             ; a number that no packet of this start has had yet
@@ -151,6 +153,7 @@
 
 (defvar *card* nil)          ; the network card that START found and opened, or NIL
 (defvar *up-lock* (clara:make-lock "network")) ; one thread at a time asks which address this machine has
+(defconstant +rest+ 120000)  ; how many milliseconds a port rests after a connection spoke from it
 (defvar *patience* 10000)    ; how many milliseconds the other side may take over an answer
 (defvar *again* 1000)        ; and after how many of them a question that has no answer yet is asked again
 (defvar *name-server* nil)   ; who is asked for names instead of the ones that the network named: an address, as text
@@ -1085,11 +1088,24 @@
 
 ;; A port to speak from, which nothing of this machine's speaks from at the
 ;; moment: one of the sixteen thousand that are nobody's by right (RFC
-;; 6335, 6), and nobody can say which.
+;; 6335, 6), and nobody can say which. Nor is it one that a connection
+;; spoke from a short while ago. The other side remembers a connection
+;; that is over for a time, by the two addresses and the two ports, so
+;; that a piece of it which comes late is not taken for something new
+;; (RFC 9293, 3.6.1), and a beginning from the same port to the same place
+;; is such a piece to it: it says nothing, and the connection is never
+;; begun. A machine that fetches fifty files from one place, each over a
+;; connection of its own, would pick a port twice one time in ten.
 (defun next-port (card)
+  (let ((time (now)))
+    (clara:with-lock-held ((card-book card))
+      (let ((resting (remove-if (lambda (spoken) (>= time (cdr spoken))) (card-spoken card))))
+        ;; More ports than half of those there are do not rest at once: the ones that have rested longest are let go.
+        (setf (card-spoken card) (if (> (length resting) 8192) (subseq resting 0 4096) resting)))))
   (loop
     (let ((port (+ 49152 (logand (fresh card) 16383))))
       (unless (or (assoc port (card-listeners card))
+                  (assoc port (card-spoken card))
                   (find-if (lambda (connection) (= (connection-port connection) port)) (card-connections card)))
         (return port)))))
 
@@ -1870,6 +1886,9 @@
 (defun forget (connection)
   (let ((card (connection-card connection)))
     (clara:with-lock-held ((card-book card))
+      (when (member connection (card-connections card))
+        ;; Its port rests: see NEXT-PORT.
+        (setf (card-spoken card) (cons (cons (connection-port connection) (+ (now) +rest+)) (card-spoken card))))
       (setf (card-connections card) (remove connection (card-connections card))))
     (clara:with-lock-held ((connection-lock connection))
       (when (member (connection-state connection) '(:open :answered))

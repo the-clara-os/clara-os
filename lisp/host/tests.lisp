@@ -78,6 +78,7 @@
 (load-source "lisp/input.lisp")
 (load-source "lisp/disk.lisp")
 (load-source "lisp/fat.lisp")
+(load-source "lisp/type.lisp")
 (load-source "lisp/random.lisp")
 (load-source "lisp/net.lisp")
 (load-source "lisp/listener.lisp")
@@ -1450,6 +1451,76 @@
          "...4........"
          "............")
        (picture *canvas*))
+
+;; A picture in shades. Each pixel takes as much of the colour as its
+;; shade says, of 255: each of its three parts goes that far from what it
+;; was towards the colour's, to the nearest whole number, and what is no
+;; part of a colour stays.
+(defun mix (old color shade &optional (parts '((16 . 8) (8 . 8) (0 . 8))))
+  (let ((new old))
+    (dolist (part parts new)
+      (let ((place (byte (cdr part) (car part))))
+        (setq new (dpb (round (+ (* (ldb place old) (- 255 shade)) (* (ldb place color) shade)) 255) place new))))))
+
+;; What a file of the repository holds, as bytes.
+(defun file-octets (name)
+  (with-open-file (in (source name) :element-type '(unsigned-byte 8))
+    (let ((bytes (make-array (file-length in) :element-type '(unsigned-byte 8))))
+      (read-sequence bytes in)
+      bytes)))
+
+;; Three rows of three, in a vector whose rows begin four items apart, so
+;; that every fourth item is no shade and is never looked at.
+(defvar *patch* (vector 0 255 128 999  64 1 254 999  200 100 50 999))
+
+(let ((wrong 0) (ink #xf0e0d0) (ground #x102030))
+  (sweep (lambda (x y)
+           (clara.draw:fill-rectangle *canvas* 0 0 12 8 ground)
+           (clara.draw:take-damage *canvas*)
+           (let ((drew (clara.draw:draw-shades *canvas* x y *patch* 3 3 ink 4)))
+             (dotimes (py 8)
+               (dotimes (px 12)
+                 (unless (= (word-at *canvas* px py)
+                            (if (and (<= x px (+ x 2)) (<= y py (+ y 2)))
+                                (mix ground ink (aref *patch* (+ (* 4 (- py y)) (- px x))))
+                                ground))
+                   (incf wrong))))
+             (unless (and (eq drew (and (< -3 x 12) (< -3 y 8)))
+                          (equal (clara.draw:damage *canvas*)
+                                 (and drew (list (list (max x 0) (max y 0) (- (min (+ x 3) 12) (max x 0))
+                                                       (- (min (+ y 3) 8) (max y 0)))))))
+               (incf wrong)))))
+  (check '(shades 0) (list 'shades wrong)))
+(check (list #x102030 #xf0e0d0 #x808080 #x112131 #xefdfcf)
+       (mapcar (lambda (shade) (mix #x102030 #xf0e0d0 shade)) '(0 255 128 1 254)))
+;; Rows that follow each other in the vector, when nothing else is said; a
+;; picture kept to a part of the surface; and what is no picture.
+(clear *canvas*)
+(check t (clara.draw:draw-shades *canvas* 1 1 (vector 255 0 0 255 255 255) 2 3 7))
+(check '(7 0 0 7 7 7) (list (word-at *canvas* 1 1) (word-at *canvas* 2 1) (word-at *canvas* 1 2) (word-at *canvas* 2 2)
+                            (word-at *canvas* 1 3) (word-at *canvas* 2 3)))
+(clear *canvas*)
+(clara.draw:with-clip (*canvas* 2 1 1 1)
+  (check t (clara.draw:draw-shades *canvas* 1 1 (vector 255 255 255 255) 2 2 7))
+  (check nil (clara.draw:draw-shades *canvas* 3 1 (vector 255 255 255 255) 2 2 7)))
+(check (expected 12 8 (lambda (px py) (if (and (= px 2) (= py 1)) 7 0))) (picture *canvas*))
+(check nil (clara.draw:draw-shades *canvas* 0 0 (vector) 0 0 7))
+(check '("256 is not a shade: an integer from 0 to 255" "the vector has 3 shades, not 2 rows of 2 from 0 on"
+         "CLARA.UNSAFE:BLEND-SHADES-32 wants a vector of shades, and (255) is not one")
+       (list (condition-text (lambda () (clara.draw:draw-shades *canvas* 0 0 (vector 0 256) 2 1 7)))
+             (condition-text (lambda () (clara.draw:draw-shades *canvas* 0 0 (vector 0 0 0) 2 2 7)))
+             (condition-text (lambda () (clara.draw:draw-shades *canvas* 0 0 (list 255) 1 1 7)))))
+(check (expected 12 8 (lambda (px py) (if (and (= px 2) (= py 1)) 7 0))) (picture *canvas*)) ; and nothing of them was drawn
+;; On a screen whose pixels have their parts elsewhere, and in other
+;; lengths, a shade is so much of each part: these are the numbers that the
+;; kernel's own test of its function has, which neither made.
+(new-drawing :width 20 :red #xf800 :green #x07e0 :blue #x001f)
+(setq *canvas* (clara.draw:allocate-surface 4 1))
+(clara.draw:fill-rectangle *canvas* 0 0 4 1 #xabcd1234)
+(clara.draw:draw-shades *canvas* 0 0 (vector 255 128 64 1) 4 1 #xffff)
+(check '(2882404351 2882374938 2882358199 2882343476) (loop for x below 4 collect (word-at *canvas* x 0)))
+(new-drawing :width 20)
+(setq *canvas* (clara.draw:allocate-surface 12 8))
 
 ;; Text, in the console's font. A character is a cell of 8 by 16 pixels,
 ;; and a character that the font has no glyph for is the box after its
@@ -3989,9 +4060,18 @@
 
 ;; A machine with a screen, what draws started on it, and the window manager
 ;; as a world has it that never ran one.
-(defun new-desk (&key (width 200) (height 140) applications commands (start t) (machine t))
+(defun new-desk (&key (width 200) (height 140) applications commands (start t) (machine t) letters (files t))
   (when machine
     (clara.host:reset-machine))
+  ;; The letters of the bar, the list and the titles are the console's,
+  ;; unless LETTERS asks for the font of outlines, whose file is then among
+  ;; the system's, unless FILES says that it is not.
+  (when (and letters files)
+    (clara.host:put-system-file "Go-Regular.ttf" (file-octets "fonts/Go-Regular.ttf")))
+  (with-output-to-string (*standard-output*)
+    (clara.type:start))
+  (setq clara.windows:*font* (cond ((consp letters) letters)
+                                   (letters (list "Sans" 13))))
   (setq *desk-width* width
         *desk-height* height
         *pitch* (* 4 (+ width 2))
@@ -4013,6 +4093,37 @@
   (clara.windows:resume)
   (and start (clara.windows:start)))
 
+;; What a string of the bar's, the list's or a title's puts at a place, DX
+;; and DY from where it begins in a strip of STRIP rows, halfway up which it
+;; is written; NIL where it leaves what is there. In the console's letters
+;; that is COLOR where a glyph has a bit. In letters of outlines it is what
+;; lies between UNDER, which is there, and COLOR, by the shades of the
+;; glyphs, each as far to the right as the ones before it moved on.
+(defun label-rule (string dx dy strip color under)
+  (let ((font clara.windows::*letters*))
+    (if (null font)
+        (and (text-p string dx (- dy (floor (- strip 16) 2))) color)
+        (let* ((up (clara.type:font-ascent font))
+               (baseline (+ (floor (- strip up (clara.type:font-descent font)) 2) up))
+               (pixel under) (pen 0))
+          (loop for character across string
+                do (let ((glyph (clara.type::glyph font (char-code character))))
+                     (setq pixel (mix pixel color (glyph-shade glyph (- dx pen) (- dy baseline))))
+                     (incf pen (clara.type::glyph-advance glyph))))
+          (and (/= pixel under) pixel)))))
+
+(defun label-wide (string)
+  (clara.draw:text-width string clara.windows::*letters*))
+
+;; The shade that the picture of a glyph has for a place, from where its
+;; character begins on the baseline: 0 outside the picture.
+(defun glyph-shade (glyph x y)
+  (let ((dx (- x (clara.type::glyph-left glyph))) (dy (- y (clara.type::glyph-top glyph))))
+    (if (and (clara.type::glyph-shades glyph) (< -1 dx (clara.type::glyph-width glyph))
+             (< -1 dy (clara.type::glyph-height glyph)))
+        (svref (clara.type::glyph-shades glyph) (+ (* dy (clara.type::glyph-step glyph)) dx))
+        0)))
+
 ;; What a window puts at a place on the screen, or NIL when it is not there.
 (defun window-rule (window x y lit)
   (let* ((wx (clara.windows::window-x window)) (wy (clara.windows::window-y window))
@@ -4025,17 +4136,16 @@
            nil)
           ((>= y wy) frame)                   ; the line down each side and along the bottom
           ((and (<= (+ wx 3) x) (< x (- (+ wx width) 3 (if box 16 0)))
-                (text-p (clara.windows:window-title window) (- x wx 3) (- y (- wy 19))))
-           text)
-          ((and box (glyph-p #\x (- x (- (+ wx width) 12)) (- y (- wy 19)))) text)
+                (label-rule (clara.windows:window-title window) (- x wx 3) (- y (- wy 21)) 21 text frame)))
+          ((and box (label-rule "x" (- x (- (+ wx width) (floor (+ 16 (label-wide "x")) 2))) (- y (- wy 21)) 21 text frame)))
           (t frame))))
 
 (defun bar-rule (x y)
   (let* ((name (format nil "~A ~A" (lisp-implementation-type) (lisp-implementation-version)))
-         (at (- *desk-width* 8 (* 8 (length name)))))
+         (at (- *desk-width* 8 (label-wide name))))
     (cond ((>= y 20) nil)
-          ((text-p "Applications" (- x 8) (- y 2)) +ink+)
-          ((and (>= at 112) (text-p name (- x at) (- y 2))) +ink+)
+          ((label-rule "Applications" (- x 8) y 20 +ink+ +paper+))
+          ((and (>= at 112) (label-rule name (- x at) y 20 +ink+ +paper+)))
           (t +paper+))))
 
 ;; The launcher's list: the applications and under them the commands, with
@@ -4043,12 +4153,12 @@
 (defun menu-rule (x y)
   (let* ((applications (clara.windows:applications))
          (names (append applications (clara.windows:commands)))
-         (width (reduce #'max (mapcar (lambda (name) (+ 16 (* 8 (length name)))) names) :initial-value 112))
+         (width (reduce #'max (mapcar (lambda (name) (+ 16 (label-wide name))) names) :initial-value 112))
          (height (* 20 (length names))))
     (cond ((not (and clara.windows::*menu* (< -1 x width) (<= 20 y (+ 19 height)))) nil)
           ((or (= x 0) (= x (1- width)) (= y 20) (= y (+ 19 height))) +ink+)
           ((and applications (clara.windows:commands) (= y (+ 20 (* 20 (length applications))))) +ink+)
-          ((text-p (nth (floor (- y 20) 20) names) (- x 8) (- (mod (- y 20) 20) 2)) +ink+)
+          ((label-rule (nth (floor (- y 20) 20) names) (- x 8) (mod (- y 20) 20) 20 +ink+ +paper+))
           (t +paper+))))
 
 (defun pointer-rule (x y)
@@ -4462,6 +4572,1059 @@
   (check '(160 0) (list steps wrong)))
 (dolist (window (clara.windows:windows))
   (clara.windows:close-window window))
+(clara.windows:stop)
+
+;;; Fonts of outlines (lisp/type.lisp). Three things are held against
+;;; something that the file under test did not make. The pictures of
+;;; shapes, against areas that are worked out here with fractions: what a
+;;; polygon covers of a pixel is the polygon cut down to the pixel's square.
+;;; The reading of a file, against files that are put together here byte by
+;;; byte, of outlines that the tests know because they wrote them. And the
+;;; files that come with the system, against what FreeType says of them,
+;;; which tools/fontcheck.c printed and nobody typed.
+
+;; A machine with those files of fonts/ among the ones that the handoff
+;; read, and the fonts started on it: what START said.
+(defun start-type ()
+  (with-output-to-string (*standard-output*)
+    (clara.type:start)))
+
+(defun new-type (&rest files)
+  (new-disks)                               ; a machine with no disk, and so with no file that is not the system's
+  (said-by #'clara.disk:start)
+  (said-by #'clara.fat:start)
+  (said-by #'clara.draw:start)
+  (dolist (file files)
+    (clara.host:put-system-file file (file-octets (concatenate 'string "fonts/" file))))
+  (start-type))
+
+;; N divided by D to the nearest whole number, the upper of two that are as
+;; near: how the file under test is said to round.
+(defun nearest-of (n d)
+  (floor (+ (* 2 n) d) (* 2 d)))
+
+;; A file among the system's whose bytes end where the file ends: the byte
+;; after its last, and the rest of that page, fail the run when they are
+;; read.
+(defun put-watched (name bytes)
+  (let ((address (clara.host:put-system-file name bytes)))
+    (clara.host:map-device (+ address (length bytes)) (- 4096 (mod (length bytes) 4096))
+                           (lambda (offset size)
+                             (declare (ignore size))
+                             (failed "a byte was read ~D past the end of the font ~A" offset name)
+                             0)
+                           (lambda (offset size value)
+                             (declare (ignore size value))
+                             (failed "a byte was written ~D past the end of the font ~A" offset name)))
+    address))
+
+;;; Shapes. A polygon here is a list of (x . y), in pixels, fractions and
+;;; all, and what it covers of the pixel at PX and PY is the area of what
+;;; is left of it when everything outside that square is cut away, one side
+;;; of the square at a time. The area has a sign, which says which way
+;;; round the polygon goes, so a hole in a shape takes away what the shape
+;;; around it added.
+
+(defun crossing (a b across-p at)
+  (if across-p
+      (cons at (+ (cdr a) (* (- (cdr b) (cdr a)) (/ (- at (car a)) (- (car b) (car a))))))
+      (cons (+ (car a) (* (- (car b) (car a)) (/ (- at (cdr a)) (- (cdr b) (cdr a))))) at)))
+
+(defun cut-away (points inside-p across-p at)
+  (let ((kept nil))
+    (loop for (a b) on (append points (list (first points)))
+          while b
+          do (let ((a-in (funcall inside-p a)) (b-in (funcall inside-p b)))
+               (cond ((and a-in b-in) (push b kept))
+                     (a-in (push (crossing a b across-p at) kept))
+                     (b-in (push (crossing a b across-p at) kept)
+                           (push b kept)))))
+    (nreverse kept)))
+
+(defun covered-of (polygon px py)
+  (let ((points polygon))
+    (dolist (side (list (list (lambda (p) (>= (car p) px)) t px)
+                        (list (lambda (p) (<= (car p) (1+ px))) t (1+ px))
+                        (list (lambda (p) (>= (cdr p) py)) nil py)
+                        (list (lambda (p) (<= (cdr p) (1+ py))) nil (1+ py))))
+      (when points
+        (setq points (cut-away points (first side) (second side) (third side)))))
+    (if (< (length points) 3)
+        0
+        (/ (loop for (a b) on (append points (list (first points)))
+                 while b
+                 sum (- (* (car a) (cdr b)) (* (car b) (cdr a))))
+           2))))
+
+;; The shade that the pixel at PX and PY should have for the shape that
+;; POLYGONS make between them.
+(defun shade-of (polygons px py)
+  (round (* 255 (min 1 (abs (loop for polygon in polygons sum (covered-of polygon px py)))))))
+
+;; How far the picture of a glyph is from what POLYGONS cover: the largest
+;; difference of any pixel, in shades, looked for in the picture and a
+;; pixel around it. A pixel outside the picture has no shade.
+(defun furthest (glyph polygons)
+  (let ((worst 0)
+        (left (if glyph (clara.type::glyph-left glyph) 0)) (top (if glyph (clara.type::glyph-top glyph) 0))
+        (width (if glyph (clara.type::glyph-width glyph) 0)) (height (if glyph (clara.type::glyph-height glyph) 0)))
+    (dolist (polygon polygons)
+      (dolist (point polygon)
+        (setq left (min left (1- (floor (car point))))
+              top (min top (1- (floor (cdr point))))
+              width (max width (- (+ 2 (floor (car point))) left))
+              height (max height (- (+ 2 (floor (cdr point))) top)))))
+    (loop for y from (1- top) to (+ top height)
+          do (loop for x from (1- left) to (+ left width)
+                   do (setq worst (max worst (abs (- (if glyph (glyph-shade glyph x y) 0) (shade-of polygons x y)))))))
+    worst))
+
+;; A polygon of the tests' as RENDER takes a contour: its places in 256ths
+;; of a pixel, whole numbers of them, each a point that the contour goes
+;; through.
+(defun contour-of (polygon)
+  (coerce (loop for (x . y) in polygon append (list (* 256 x) (* 256 y) t)) 'vector))
+
+(defun rendered (&rest polygons)
+  (clara.type::render (mapcar #'contour-of polygons)))
+
+;; Squares that lie on the pixels are all or nothing, and the picture
+;; begins where the shape does.
+(let ((glyph (rendered '((2 . 3) (7 . 3) (7 . 6) (2 . 6)))))
+  (check '(2 3 6 4 7) (list (clara.type::glyph-left glyph) (clara.type::glyph-top glyph) (clara.type::glyph-width glyph)
+                            (clara.type::glyph-height glyph) (clara.type::glyph-step glyph)))
+  (check '((255 255 255 255 255 0) (255 255 255 255 255 0) (255 255 255 255 255 0) (0 0 0 0 0 0))
+         (loop for y from 3 to 6 collect (loop for x from 2 to 7 collect (glyph-shade glyph x y)))))
+;; One that lies across them covers a half here and a quarter there, the
+;; same whichever way round it is drawn and wherever it begins.
+(dolist (polygon '(((5/2 . 1/2) (9/2 . 1/2) (9/2 . 3/2) (5/2 . 3/2)) ((5/2 . 1/2) (5/2 . 3/2) (9/2 . 3/2) (9/2 . 1/2))
+                   ((9/2 . 3/2) (5/2 . 3/2) (5/2 . 1/2) (9/2 . 1/2))))
+  (let ((glyph (rendered polygon)))
+    (check '((64 128 64) (64 128 64)) (loop for y from 0 to 1 collect (loop for x from 2 to 4 collect (glyph-shade glyph x y))))
+    ;; Every item of the picture is a shade, the one at the end of each row too, which is no pixel's.
+    (check '(8 t) (list (length (clara.type::glyph-shades glyph))
+                        (every (lambda (shade) (<= 0 shade 255)) (clara.type::glyph-shades glyph))))))
+(check nil (clara.type::render nil))
+(check nil (clara.type::render (list (vector))))
+;; A shape with a hole, a shape of two parts, a line that is no shape, and
+;; places below and to the left of nothing.
+(check 0 (furthest (rendered '((1 . 1) (9 . 1) (9 . 9) (1 . 9)) '((3 . 3) (3 . 7) (7 . 7) (7 . 3)))
+                   '(((1 . 1) (9 . 1) (9 . 9) (1 . 9)) ((3 . 3) (3 . 7) (7 . 7) (7 . 3)))))
+(check 0 (furthest (rendered '((0 . 0) (2 . 0) (2 . 2) (0 . 2)) '((5 . 4) (8 . 4) (8 . 6) (5 . 6)))
+                   '(((0 . 0) (2 . 0) (2 . 2) (0 . 2)) ((5 . 4) (8 . 4) (8 . 6) (5 . 6)))))
+(check 0 (furthest (rendered '((1 . 1) (6 . 4))) '(((1 . 1) (6 . 4)))))
+(check 0 (furthest (rendered '((-7 . -9) (-3 . -9) (-3 . -4) (-7 . -4))) '(((-7 . -9) (-3 . -9) (-3 . -4) (-7 . -4)))))
+;; Edges at every slant: none is further from the area than what rounding
+;; a place to a 256th of a pixel can make of it.
+(let ((worst 0))
+  (dolist (polygon '(((0 . 0) (10 . 3) (4 . 9))                                   ; a triangle
+                     ((1/2 . 1/4) (37/4 . 5/16) (9 . 71/8) (3/4 . 9))             ; nearly a square, on no pixel's edge
+                     ((5 . 0) (10 . 5) (5 . 10) (0 . 5))                          ; a diamond
+                     ((0 . 0) (20 . 5/16) (0 . 11/16))                            ; a sliver, thinner than a pixel
+                     ((5/16 . 0) (11/16 . 20) (1/2 . 0))                          ; and one that stands
+                     ((6 . 0) (15/2 . 9/2) (12 . 9/2) (17/2 . 15/2) (10 . 12)     ; a star, which turns inwards
+                      (6 . 9) (2 . 12) (7/2 . 15/2) (0 . 9/2) (9/2 . 9/2))
+                     ((0 . 0) (3 . 0) (3 . 3) (6 . 3) (6 . 6) (0 . 6))            ; an L, along the edges of pixels
+                     ((37/16 . 11/256) (37/16 . 1203/256) (117/16 . 1203/256) (117/16 . 11/256)))) ; a rectangle between the edges
+    (setq worst (max worst (furthest (rendered polygon) (list polygon)))))
+  (check t (<= worst 1)))
+(let ((seed 3) (worst 0))
+  (flet ((pick (n) (setq seed (mod (+ (* seed 1103515245) 12345) 2147483648)) (mod (floor seed 65536) n)))
+    (dotimes (round 150)
+      (let ((polygon (loop repeat (+ 3 (pick 3)) collect (cons (/ (pick 4096) 256) (/ (pick 4096) 256)))))
+        (when (= (length polygon) 3)       ; more corners may cross each other, which is another question
+          (setq worst (max worst (furthest (rendered polygon) (list polygon))))))))
+  (check t (<= worst 1)))
+;; Two shapes that lie over each other cover a pixel once.
+(let ((glyph (rendered '((0 . 0) (6 . 0) (6 . 6) (0 . 6)) '((3 . 3) (9 . 3) (9 . 9) (3 . 9)))))
+  (check '(255 255 255 0) (list (glyph-shade glyph 1 1) (glyph-shade glyph 4 4) (glyph-shade glyph 7 7) (glyph-shade glyph 7 1))))
+;; A picture of more pixels than one glyph is given is refused.
+(check-condition error (rendered '((0 . 0) (2000 . 0) (2000 . 2000))))
+
+;;; Curves. A point that a contour does not go through pulls a curve
+;;; towards itself. What the curve is cut into is worked out here once
+;;; more, with fractions: as many straight pieces as it takes for none to
+;;; be more than a sixty-fourth of a pixel from the curve, across or down.
+
+(defun pieces-of (from pull to)
+  (let ((far (max (abs (- (+ (car from) (car to)) (* 2 (car pull)))) (abs (- (+ (cdr from) (cdr to)) (* 2 (cdr pull)))))))
+    (loop for pieces from 1
+          when (>= (* pieces pieces 16) (* 256 far)) return pieces)))
+
+(defun curve-points (from pull to)
+  (let ((pieces (pieces-of from pull to)))
+    (loop for i from 1 to pieces
+          collect (let ((s (/ i pieces)) (r (- 1 (/ i pieces))))
+                    (cons (+ (* r r (car from)) (* 2 r s (car pull)) (* s s (car to)))
+                          (+ (* r r (cdr from)) (* 2 r s (cdr pull)) (* s s (cdr to))))))))
+
+;; The polygon that a contour of a glyph comes to. POINTS are (x y on), in
+;; pixels. It begins at the first point when the contour goes through that
+;; one, else at the last, else halfway between the two; and between two
+;; points in a row that pull, it goes through the place halfway.
+(defun polygon-of (points)
+  (let* ((first (first points)) (last (car (last points)))
+         (place (lambda (point) (cons (first point) (second point))))
+         (middle (lambda (a b)                 ; halfway, on the 256th of a pixel that is there or just before
+                   (cons (/ (floor (* 256 (+ (car a) (car b))) 2) 256) (/ (floor (* 256 (+ (cdr a) (cdr b))) 2) 256))))
+         (start (cond ((third first) (funcall place first))
+                      ((third last) (funcall place last))
+                      (t (funcall middle (funcall place first) (funcall place last)))))
+         (rest (cond ((third first) (rest points))
+                     ((third last) (butlast points))
+                     (t points)))
+         (at start) (pull nil) (polygon (list start)))
+    (flet ((curve-to (to)
+             (setq polygon (append polygon (curve-points at pull to))
+                   at to))
+           (line-to (to)
+             (setq polygon (append polygon (list to))
+                   at to)))
+      (dolist (point rest)
+        (let ((to (funcall place point)))
+          (cond ((third point)
+                 (if pull (curve-to to) (line-to to))
+                 (setq pull nil))
+                (pull
+                 (curve-to (funcall middle pull to))
+                 (setq pull to))
+                (t
+                 (setq pull to)))))
+      (if pull (curve-to start) (line-to start)))
+    polygon))
+
+(defun curved (&rest contours)
+  (clara.type::render (mapcar (lambda (points)
+                                (coerce (loop for (x y on) in points append (list (* 256 x) (* 256 y) on)) 'vector))
+                              contours)))
+
+(let ((worst 0))
+  (dolist (contour '(((2 0 t) (12 0 t) (7 10 nil))                         ; a line and a curve back
+                     ((7 10 nil) (2 0 t) (12 0 t))                         ; the same, begun at the point that pulls
+                     ((12 0 t) (7 10 nil) (2 0 t))
+                     ((0 0 nil) (12 0 nil) (12 12 nil) (0 12 nil))         ; none that it goes through: a round shape
+                     ((6 0 t) (12 0 nil) (12 12 nil) (0 12 nil) (0 0 nil)) ; one, and four that pull in a row
+                     ((0 0 t) (40 1 nil) (80 0 t) (40 30 nil))             ; long and flat, in many pieces
+                     ((1/2 3/8 t) (3/2 3/8 nil) (3/2 11/8 t) (1/2 11/8 nil)) ; smaller than two pixels
+                     ((3 3 nil) (9 3 t) (9 9 nil) (3 9 t))))
+    (setq worst (max worst (furthest (curved contour) (list (polygon-of contour))))))
+  (check t (<= worst 1)))
+;; A curve is cut finer the more it bends, and the pieces stay near it: the
+;; area of the round shape of four points that pull, twelve pixels across,
+;; is 120 pixels, a square with its corners taken off by four curves, and
+;; what the picture covers is less than a pixel short of that.
+(check '(2 4 10 29) (list (pieces-of '(0 . 0) '(1/8 . 1/8) '(1/4 . 0)) (pieces-of '(0 . 0) '(1/2 . 1/2) '(1 . 0))
+                         (pieces-of '(0 . 0) '(3 . 3) '(6 . 0)) (pieces-of '(0 . 0) '(25 . 25) '(50 . 0))))
+(let* ((glyph (curved '((0 0 nil) (12 0 nil) (12 12 nil) (0 12 nil))))
+       (covered (/ (loop for y from 0 below 13 sum (loop for x from 0 below 13 sum (glyph-shade glyph x y))) 255.0)))
+  (check t (< 119.2 covered 120.0)))
+
+;;; Files. A font file is put together here: its glyphs, each how far it
+;;; moves on and its description in bytes, and which glyph a character has.
+
+(defun two-bytes (n)
+  (list (ldb (byte 8 8) n) (ldb (byte 8 0) n)))
+
+(defun four-bytes (n)
+  (list (ldb (byte 8 24) n) (ldb (byte 8 16) n) (ldb (byte 8 8) n) (ldb (byte 8 0) n)))
+
+;; A glyph that is its own outline: CONTOURS are lists of points, each
+;; (x y on). With TIGHT every way from one point to the next is written as
+;; shortly as a file may, and a flag that comes again is written once.
+(defun plain-glyph (contours &key tight)
+  (let ((points (apply #'append contours)) (ends nil) (count -1)
+        (flags nil) (across nil) (up nil) (x 0) (y 0))
+    (dolist (contour contours)
+      (push (incf count (length contour)) ends))
+    (dolist (point points)
+      (let ((dx (- (first point) x)) (dy (- (second point) y)) (flag (if (third point) 1 0)))
+        (cond ((and tight (zerop dx)) (setq flag (logior flag 16)))
+              ((and tight (< (abs dx) 256)) (setq flag (logior flag 2 (if (plusp dx) 16 0)))
+                                            (push (list (abs dx)) across))
+              (t (push (two-bytes dx) across)))
+        (cond ((and tight (zerop dy)) (setq flag (logior flag 32)))
+              ((and tight (< (abs dy) 256)) (setq flag (logior flag 4 (if (plusp dy) 32 0)))
+                                            (push (list (abs dy)) up))
+              (t (push (two-bytes dy) up)))
+        (push flag flags)
+        (setq x (first point)
+              y (second point))))
+    (setq flags (nreverse flags))
+    (append (two-bytes (length contours))
+            ;; the rectangle around it: its leftmost, lowest, rightmost and highest point
+            (if points
+                (append (two-bytes (reduce #'min points :key #'first)) (two-bytes (reduce #'min points :key #'second))
+                        (two-bytes (reduce #'max points :key #'first)) (two-bytes (reduce #'max points :key #'second)))
+                (make-list 8 :initial-element 0))
+            (mapcan #'two-bytes (reverse ends))
+            (two-bytes 3) (list 1 2 3)          ; a program of three bytes, which nobody runs
+            (if tight
+                (loop while flags
+                      append (let* ((flag (first flags))
+                                    (run (min 256 (or (position flag flags :test #'/=) (length flags)))))
+                               (setq flags (nthcdr run flags))
+                               (if (> run 1) (list (logior flag 8) (1- run)) (list flag))))
+                flags)
+            (apply #'append (reverse across))
+            (apply #'append (reverse up)))))
+
+;; A glyph that is put together of others: each part is the number of its
+;; glyph and then, by keywords, where it goes, across and up or by two
+;; points that are to meet, how it is changed on the way, and whether the
+;; whole glyph is to lie and to move on as this part does (MINE).
+(defun joined-glyph (&rest parts)
+  (append (two-bytes -1) (two-bytes 0) (two-bytes 0) (two-bytes 0) (two-bytes 0)
+          (loop for (part . more) on parts
+                append (destructuring-bind (glyph &key (across 0) (up 0) points scale scales matrix words mine) part
+                         (let* ((one (if points (first points) across))
+                                (two (if points (second points) up))
+                                (fits (if points
+                                          (and (<= 0 one 255) (<= 0 two 255))
+                                          (and (<= -128 one 127) (<= -128 two 127))))
+                                (words (or words (not fits))))
+                           (append (two-bytes (logior (if words 1 0) (if points 0 2) (if scale 8 0) (if scales 64 0)
+                                                      (if matrix 128 0) (if more 32 0) (if mine 512 0)))
+                                   (two-bytes glyph)
+                                   (if words
+                                       (append (two-bytes one) (two-bytes two))
+                                       (list (ldb (byte 8 0) one) (ldb (byte 8 0) two)))
+                                   (cond (scale (two-bytes scale))
+                                         (scales (append (two-bytes (first scales)) (two-bytes (second scales))))
+                                         (matrix (loop for n in matrix append (two-bytes n))))))))))
+
+;; Which glyph a character has, in the form 4: ranges of codes, each with
+;; what is added to a code to make it a glyph, or, with RANGES, with where
+;; its glyphs are listed one by one. The last range is the code 65535 by
+;; itself, which every such table ends with, unless UNENDED says that this
+;; one does not.
+(defun map-4 (characters ranges &optional unended)
+  (let* ((characters (sort (copy-list characters) #'< :key #'car))
+         (runs (if ranges
+                   (let ((runs nil))
+                     (dolist (character characters (nreverse (mapcar #'nreverse runs)))
+                       (if (and runs (= (car character) (1+ (car (first (first runs))))))
+                           (push character (first runs))
+                           (push (list character) runs))))
+                   (mapcar #'list characters)))
+         (count (+ (length runs) (if unended 0 1)))
+         (listed 0))
+    (let ((ends nil) (starts nil) (deltas nil) (offsets nil) (glyphs nil) (i 0))
+      (dolist (run runs)
+        (push (car (car (last run))) ends)
+        (push (car (first run)) starts)
+        (cond (ranges
+               (push 0 deltas)
+               (push (+ (* 2 (- count i)) (* 2 listed)) offsets)
+               (dolist (character run)
+                 (push (cdr character) glyphs)
+                 (incf listed)))
+              (t
+               (push (mod (- (cdr (first run)) (car (first run))) 65536) deltas)
+               (push 0 offsets)))
+        (incf i))
+      (unless unended
+        (push 65535 ends)
+        (push 65535 starts)
+        (push 1 deltas)
+        (push 0 offsets))
+      (let ((body (append (mapcan #'two-bytes (reverse ends))
+                          (two-bytes 0)
+                          (mapcan #'two-bytes (reverse starts))
+                          (mapcan #'two-bytes (reverse deltas))
+                          (mapcan #'two-bytes (reverse offsets))
+                          (mapcan #'two-bytes (reverse glyphs)))))
+        (append (two-bytes 4) (two-bytes (+ 14 (length body))) (two-bytes 0)
+                (two-bytes (* 2 count)) (two-bytes 0) (two-bytes 0) (two-bytes 0)
+                body)))))
+
+;; The same in the form 12, which has codes past 65535: groups of
+;; characters whose codes follow each other and whose glyphs do too, each
+;; group its first code, its last, and the glyph of the first.
+(defun map-12 (characters)
+  (let ((groups nil))
+    (loop for (code . glyph) in (sort (copy-list characters) #'< :key #'car)
+          do (let ((group (first groups)))
+               (if (and group (= code (1+ (second group))) (= glyph (+ (third group) (- code (first group)))))
+                   (setf (second group) code)
+                   (push (list code code glyph) groups))))
+    (setq groups (nreverse groups))
+    (append (two-bytes 12) (two-bytes 0) (four-bytes (+ 16 (* 12 (length groups)))) (four-bytes 0)
+            (four-bytes (length groups))
+            (loop for (first last glyph) in groups
+                  append (append (four-bytes first) (four-bytes last) (four-bytes glyph))))))
+
+;; A file of GLYPHS, each (advance . bytes) with no bytes for a glyph that
+;; shows nothing, and of CHARACTERS, each (code . glyph). The rest says
+;; what the file says of itself, and what is wrong with it.
+(defun font-file (glyphs characters &key (units 1000) (ascent 800) (descent -200) (gap 0) (form 4) ranges plain
+                                         long metrics lines (under -100) (stroke 50) (through 250) (cut 50)
+                                         (kind #x00010000) (magic #x5F0F3CF5) without short (platform 3) glyph-count
+                                         astray bearings last unended)
+  (let* ((count (length glyphs))
+         (metrics (or metrics count))
+         (places nil) (outlines nil) (at 0)
+         (tables nil))
+    (dolist (glyph glyphs)
+      (push at places)
+      (let ((bytes (cdr glyph)))
+        (when (oddp (length bytes))
+          (setq bytes (append bytes (list 0))))
+        (setq outlines (append outlines bytes))
+        (incf at (length bytes))))
+    (push (if astray (+ at 100000) at) places)   ; ASTRAY: the last glyph is said to end far past the outlines
+    (setq places (nreverse places))
+    (flet ((table (name bytes)
+             (unless (member name without :test #'string=)   ; WITHOUT: tables that the file does not have
+               (push (cons name (if (member name short :test #'string=) (butlast bytes 4) bytes)) ; SHORT: and ones cut short
+                     tables))))
+      (table "head" (append (four-bytes #x00010000) (four-bytes 0) (four-bytes 0) (four-bytes magic) (two-bytes 0)
+                            (two-bytes units) (make-list 16 :initial-element 0) (make-list 8 :initial-element 0)
+                            (two-bytes 0) (two-bytes 8) (two-bytes 2) (two-bytes (if long 1 0)) (two-bytes 0)))
+      (table "maxp" (append (four-bytes #x00005000) (two-bytes (or glyph-count count))))
+      (table "hhea" (append (four-bytes #x00010000) (two-bytes ascent) (two-bytes descent) (two-bytes gap)
+                            (make-list 24 :initial-element 0) (two-bytes metrics)))
+      ;; How far each glyph moves on, and where its left edge lies: where its leftmost point is, which
+      ;; its description begins with, unless BEARINGS says otherwise for the glyph of a number.
+      (table "hmtx" (append (loop for glyph in glyphs
+                                  for i from 0
+                                  append (let* ((bytes (cdr glyph))
+                                                (edge (if bytes (+ (* 256 (third bytes)) (fourth bytes)) 0))
+                                                (bearing (two-bytes (or (cdr (assoc i bearings))
+                                                                        (if (< edge 32768) edge (- edge 65536))))))
+                                           (if (< i metrics)
+                                               (append (two-bytes (car glyph)) bearing)
+                                               bearing)))))
+      (table "loca" (loop for place in places
+                          append (if long (four-bytes place) (two-bytes (floor place 2)))))
+      (table "glyf" outlines)
+      (table "cmap" (let* ((first (if (eql form 12) (map-12 characters) (map-4 (if (eq form :both) plain characters) ranges unended)))
+                           (second (and (eq form :both) (map-12 characters)))
+                           (records (if second 2 1)))
+                      (append (two-bytes 0) (two-bytes records)
+                              (two-bytes platform) (two-bytes (if (eql form 12) 10 1)) (four-bytes (+ 4 (* 8 records)))
+                              (and second (append (two-bytes 3) (two-bytes 10) (four-bytes (+ 4 (* 8 records) (length first)))))
+                              first second)))
+      (when lines
+        (table "post" (append (four-bytes #x00030000) (four-bytes 0) (two-bytes under) (two-bytes stroke)
+                              (make-list 20 :initial-element 0)))
+        (table "OS/2" (append (make-list 26 :initial-element 0) (two-bytes cut) (two-bytes through)
+                              (make-list 48 :initial-element 0)))))
+    (setq tables (sort tables #'string< :key #'car))
+    (when last                                   ; LAST: the table that the file ends with
+      (setq tables (append (remove last tables :key #'car :test #'string=)
+                           (remove last tables :key #'car :test-not #'string=))))
+    (let ((directory nil) (body nil) (at (+ 12 (* 16 (length tables)))))
+      (dolist (table tables)
+        (let* ((bytes (cdr table)) (padding (mod (- (length bytes)) 4)))
+          (setq directory (append directory (map 'list #'char-code (car table)) (four-bytes 0) (four-bytes at)
+                                  (four-bytes (length bytes)))
+                body (append body bytes (make-list padding :initial-element 0)))
+          (incf at (+ (length bytes) padding))))
+      (coerce (append (four-bytes kind) (two-bytes (length tables)) (two-bytes 0) (two-bytes 0) (two-bytes 0) directory body)
+              '(vector (unsigned-byte 8))))))
+
+;; The glyphs of the font that the tests made up, and what each is, for
+;; the tests to say what it should look like: a list of contours, their
+;; points in the font's units. An em is 1000 of them.
+(defparameter *box* '(((50 0 t) (450 0 t) (450 700 t) (50 700 t)) ((100 50 t) (100 650 t) (400 650 t) (400 50 t))))
+(defparameter *square* '(((100 0 t) (600 0 t) (600 500 t) (100 500 t))))
+(defparameter *round* '(((100 0 nil) (500 0 nil) (500 400 nil) (100 400 nil))))
+(defparameter *hill* '(((0 0 t) (300 600 nil) (600 0 t))))
+(defparameter *hill-again* '(((300 600 nil) (600 0 t) (0 0 t))))
+(defparameter *wave* '(((0 0 t) (100 300 nil) (200 300 nil) (300 0 t) (300 -100 t) (0 -100 t))))
+
+;; A part of a glyph, moved and changed: what the four numbers of a part,
+;; in 16384ths, and its way make of every point.
+(defun moved (contours &key (across 0) (up 0) (matrix '(16384 0 0 16384)))
+  (destructuring-bind (a b c d) matrix
+    (mapcar (lambda (contour)
+              (mapcar (lambda (point)
+                        (list (+ across (nearest-of (+ (* a (first point)) (* c (second point))) 16384))
+                              (+ up (nearest-of (+ (* b (first point)) (* d (second point))) 16384))
+                              (third point)))
+                      contour))
+            contours)))
+
+(defparameter *made-glyphs*
+  (list (cons 500 (plain-glyph *box*))                                            ; 0: for a character that the font does not have
+        (cons 300 nil)                                                            ; 1: a space
+        (cons 700 (plain-glyph *square*))                                         ; 2
+        (cons 600 (plain-glyph *round* :tight t))                                 ; 3
+        (cons 600 (plain-glyph *hill* :tight t))                                  ; 4
+        (cons 600 (plain-glyph *hill-again*))                                     ; 5
+        (cons 700 (joined-glyph '(2) '(4 :across 200 :up 520 :scale 8192)))       ; 6: the square with half a hill on it
+        (cons 700 (joined-glyph '(6 :across 300) '(3 :across -50 :up -100 :scales (8192 4096)))) ; 7: of one that is itself joined
+        (cons 700 (joined-glyph '(8)))                                            ; 8: of itself, which has no end
+        (cons 700 (joined-glyph '(2) '(2 :points (2 0))))                         ; 9: a second square with its first corner on the third of the first
+        (cons 700 (joined-glyph '(4 :across 1000 :matrix (0 16384 -16384 0))))    ; 10: the hill turned a quarter round
+        (cons 400 (plain-glyph *wave* :tight t))                                  ; 11
+        (cons 0 (plain-glyph nil))                                                ; 12: no contour at all
+        (cons 900 (plain-glyph *square*))))                                       ; 13: the last, whose advance some files leave out
+
+(defparameter *made-outlines*
+  (list *box* nil *square* *round* *hill* *hill-again*
+        (append *square* (moved *hill* :across 200 :up 520 :matrix '(8192 0 0 8192)))
+        (append (moved *square* :across 300) (moved *hill* :across 500 :up 520 :matrix '(8192 0 0 8192))
+                (moved *round* :across -50 :up -100 :matrix '(8192 0 0 4096)))
+        nil
+        (append *square* (moved *square* :across 500 :up 500))
+        (moved *hill* :across 1000 :matrix '(0 16384 -16384 0))
+        *wave* nil *square*))
+
+(defparameter *made-characters*
+  '((32 . 1) (65 . 2) (66 . 3) (67 . 4) (68 . 5) (69 . 6) (70 . 7) (71 . 8) (72 . 9) (73 . 10) (74 . 11) (75 . 12)
+    (193 . 6) (955 . 3) (8364 . 13) (65535 . 2)))
+
+(defun made-font (&rest options)
+  (apply #'font-file *made-glyphs* *made-characters* options))
+
+;; A machine with a file that the tests made up among the system's, under
+;; the name "made.ttf".
+(defun new-made (&rest options)
+  (new-type)
+  (clara.host:put-system-file "made.ttf" (apply #'made-font options)))
+
+;; What a contour of the font's units comes to at a size: its points in
+;; pixels, counted downwards, each to the nearest 256th of a pixel, which is
+;; how the file under test is said to place them.
+(defun at-size (contours size units)
+  (mapcar (lambda (contour)
+            (polygon-of (mapcar (lambda (point)
+                                  (list (/ (nearest-of (* (first point) size 256) units) 256)
+                                        (/ (nearest-of (* (- (second point)) size 256) units) 256)
+                                        (third point)))
+                                contour)))
+          contours))
+
+;; Every glyph of the made-up font at several sizes, whichever way its
+;; file is written: what the font draws for a character is what the
+;; outline that the tests wrote covers of each pixel.
+(dolist (options '(() (:long t) (:ranges t) (:form 12) (:units 2048 :long t :ranges t)))
+  (apply #'new-made options)
+  (let ((worst 0) (units (or (getf options :units) 1000)))
+    (dolist (size '(7 20 25 64))
+      (let ((font (clara.type:font "made.ttf" size)))
+        (loop for (code . number) in *made-characters*
+              do (let ((glyph (clara.type::glyph font code)))
+                   (setq worst (max worst (furthest glyph (at-size (nth number *made-outlines*) size units))))))))
+    (check (list options t) (list options (<= worst 1)))))
+;; The square, 500 units of 1000 from 100 on, at 20 pixels to the em: ten
+;; pixels by ten that begin two to the right, all of them covered. And how
+;; far each glyph moves on, to the nearest pixel.
+(new-made)
+(let* ((font (clara.type:font "made.ttf" 20))
+       (glyph (clara.type::glyph font 65)))
+  (check '(14 2 -10 11 11) (list (clara.type::glyph-advance glyph) (clara.type::glyph-left glyph) (clara.type::glyph-top glyph)
+                                 (clara.type::glyph-width glyph) (clara.type::glyph-height glyph)))
+  (check t (loop for y from -10 below 0 always (loop for x from 2 below 12 always (= 255 (glyph-shade glyph x y)))))
+  (check '(0 0) (list (glyph-shade glyph 12 -5) (glyph-shade glyph 5 0)))
+  (check '(6 14 12 12 12 0 18) (mapcar (lambda (code) (clara.type::glyph-advance (clara.type::glyph font code)))
+                                       '(32 65 66 67 68 75 8364)))
+  ;; At 25 pixels to the em the space would move on seven and a half, and the square seventeen and a half.
+  (check '(8 18 15) (mapcar (lambda (code) (clara.type::glyph-advance (clara.type::glyph (clara.type:font "made.ttf" 25) code)))
+                            '(32 65 66)))
+  ;; A space shows nothing, and neither does a glyph without a contour.
+  (check '(nil nil) (list (clara.type::glyph-shades (clara.type::glyph font 32)) (clara.type::glyph-shades (clara.type::glyph font 75))))
+  ;; A character that the font does not have has its first glyph, the box, and so does one past every code that it lists.
+  (check '(t t t) (mapcar (lambda (code) (zerop (furthest (clara.type::glyph font code) (at-size *box* 20 1000))))
+                          '(90 0 70000)))
+  ;; A glyph is made once, and is the same object the second time.
+  (check t (eq glyph (clara.type::glyph font 65)))
+  (check t (eq (clara.type::glyph font 955) (clara.type::glyph font 955)))
+  ;; The hill is the same shape wherever its description begins.
+  (check t (equalp (clara.type::glyph-shades (clara.type::glyph font 67)) (clara.type::glyph-shades (clara.type::glyph font 68))))
+  ;; A glyph that is made of itself comes to nothing, and is no error.
+  (check '(14 nil) (list (clara.type::glyph-advance (clara.type::glyph font 71)) (clara.type::glyph-shades (clara.type::glyph font 71)))))
+;; A glyph lies where the file says that its left edge is, and not where
+;; its points happen to be written from: the square, whose leftmost points
+;; are 100 units across, said to begin 300 across, and 40 to the left of
+;; where its character begins.
+(new-made :bearings '((2 . 300)))
+(check 0 (furthest (clara.type::glyph (clara.type:font "made.ttf" 20) 65)
+                   (at-size (moved *square* :across 200) 20 1000)))
+(new-made :bearings '((2 . -40)) :metrics 1)
+(check 0 (furthest (clara.type::glyph (clara.type:font "made.ttf" 20) 65)
+                   (at-size (moved *square* :across -140) 20 1000)))
+;; A glyph of parts lies and moves on as the part does that it names for
+;; that, whatever the file says of the glyph itself; one that names none
+;; goes by what is said of itself. Here both are two squares, said to move
+;; on 111 units and to begin 250 across. The square that they are made of
+;; moves on 900 and is said to begin 400 across, which is 300 further than
+;; its points are written: that moves the square when it is asked for by
+;; itself, the glyph that names it, as a whole, and no part of the other.
+(new-type)
+(put-watched "made.ttf"
+             (font-file (list (cons 500 (plain-glyph *box*))
+                              (cons 900 (plain-glyph *square*))
+                              (cons 111 (joined-glyph '(1 :mine t) '(1 :across 500 :up 500)))
+                              (cons 111 (joined-glyph '(1) '(1 :across 500 :up 500))))
+                        '((65 . 1) (66 . 2) (67 . 3)) :bearings '((1 . 400) (2 . 250) (3 . 250))))
+(let ((font (clara.type:font "made.ttf" 20))
+      (squares (append *square* (moved *square* :across 500 :up 500))))
+  (check '(18 0 18 0 2 0)
+         (list (clara.type::glyph-advance (clara.type::glyph font 65))
+               (furthest (clara.type::glyph font 65) (at-size (moved *square* :across 300) 20 1000))
+               (clara.type::glyph-advance (clara.type::glyph font 66))
+               (furthest (clara.type::glyph font 66) (at-size (moved squares :across 300) 20 1000))
+               (clara.type::glyph-advance (clara.type::glyph font 67))
+               (furthest (clara.type::glyph font 67) (at-size (moved squares :across 250) 20 1000)))))
+;; A table of characters that does not end as such a table should, with a
+;; range for the last code there is: a code past its last range has the
+;; box, and not the glyph that the range before would have come to. And a
+;; character that is said to have a glyph which the file does not have has
+;; the box too.
+(new-type)
+(put-watched "made.ttf" (font-file *made-glyphs* '((65 . 2) (66 . 999) (100 . 4)) :unended t))
+(let ((font (clara.type:font "made.ttf" 20)))
+  (check '(0 0 t 0 0)
+         (list (furthest (clara.type::glyph font 65) (at-size *square* 20 1000))
+               (furthest (clara.type::glyph font 66) (at-size *box* 20 1000))
+               (<= (furthest (clara.type::glyph font 100) (at-size *hill* 20 1000)) 1)
+               (furthest (clara.type::glyph font 101) (at-size *box* 20 1000))   ; the range before would make it the glyph 5
+               (furthest (clara.type::glyph font 9000) (at-size *box* 20 1000)))))
+;; A file that says how far its first glyphs move on, and leaves it at the
+;; last of them for the rest.
+(new-made :metrics 3)
+(let ((font (clara.type:font "made.ttf" 20)))
+  (check '(6 14 14 14 14) (mapcar (lambda (code) (clara.type::glyph-advance (clara.type::glyph font code))) '(32 65 66 74 8364))))
+;; A file with both tables of its characters is read by the one that has
+;; every code: here the other knows only a box for everything.
+(new-type)
+(clara.host:put-system-file "made.ttf" (font-file *made-glyphs* (cons '(128512 . 4) *made-characters*) :form :both
+                                                  :plain '((65 . 0) (66 . 0))))
+(let ((font (clara.type:font "made.ttf" 20)))
+  (check '(0 t 0) (list (furthest (clara.type::glyph font 65) (at-size *square* 20 1000))
+                        (<= (furthest (clara.type::glyph font 128512) (at-size *hill* 20 1000)) 1)
+                        (furthest (clara.type::glyph font 128513) (at-size *box* 20 1000)))))
+
+;; Where the lines of a font lie, in pixels: a line of text is as high as
+;; the font says its letters reach, upwards and downwards, each to the next
+;; whole pixel, and the line under the text and the one through it are at
+;; least a pixel thick.
+(new-made :lines t)
+(check '((16 4 20) (13 4 17) (15 4 19) (80 20 100) (4 1 5))
+       (mapcar (lambda (size)
+                 (let ((font (clara.type:font "made.ttf" size)))
+                   (list (clara.type:font-ascent font) (clara.type:font-descent font) (clara.type:font-height font))))
+               '(20 16 18 100 5)))
+(check '((1 1 5 1) (7 5 25 5))
+       (mapcar (lambda (size)
+                 (let ((font (clara.type:font "made.ttf" size :underline t :strike t)))
+                   (list (clara.type::font-under font) (clara.type::font-stroke font)
+                         (clara.type::font-over font) (clara.type::font-cut font))))
+               '(20 100)))
+(new-made :ascent 750 :descent -250 :gap 90)
+(check '(15 5 22) (let ((font (clara.type:font "made.ttf" 20)))
+                    (list (clara.type:font-ascent font) (clara.type:font-descent font) (clara.type:font-height font))))
+
+;; What is no font, and what is wrong with one that is nearly one, in the
+;; words of the refusal.
+(defun refusal (bytes)
+  (new-type)
+  (clara.host:put-system-file "made.ttf" bytes)
+  (condition-text (lambda () (clara.type:font "made.ttf" 20))))
+
+(check '("made.ttf is not a font that can be had here: made.ttf has outlines of the other kind (CFF), which is not read here"
+         "made.ttf is not a font that can be had here: made.ttf is a collection of fonts, and one font to a file is what is read here"
+         "made.ttf is not a font that can be had here: made.ttf is not a file of outlines: it does not begin as one"
+         "made.ttf is not a font that can be had here: made.ttf is not a file of outlines: it does not begin as one"
+         "made.ttf is not a font that can be had here: the font made.ttf ends before its byte 1")
+       (list (refusal (made-font :kind #x4F54544F)) (refusal (made-font :kind #x74746366)) (refusal (made-font :kind 0))
+             (refusal (coerce (map 'list #'char-code "(defun not-a-font () nil)") '(vector (unsigned-byte 8))))
+             (refusal (vector))))
+(check '("made.ttf has no table head, and a font with outlines of this kind has one"
+         "made.ttf has no table maxp, and a font with outlines of this kind has one"
+         "made.ttf has no table hhea, and a font with outlines of this kind has one"
+         "made.ttf has no table hmtx, and a font with outlines of this kind has one"
+         "made.ttf has no table loca, and a font with outlines of this kind has one"
+         "made.ttf has no table glyf, and a font with outlines of this kind has one"
+         "made.ttf has no table cmap, and a font with outlines of this kind has one")
+       (mapcar (lambda (name)
+                 (subseq (refusal (made-font :without (list name))) (length "made.ttf is not a font that can be had here: ")))
+               '("head" "maxp" "hhea" "hmtx" "loca" "glyf" "cmap")))
+(check '("the font made.ttf says of itself what no font is: 1000 units to the em, 14 glyphs, 14 of them with an advance"
+         "the font made.ttf says of itself what no font is: 8 units to the em, 14 glyphs, 14 of them with an advance"
+         "the font made.ttf says of itself what no font is: 1000 units to the em, 14 glyphs, 15 of them with an advance"
+         "the font made.ttf says of itself what no font is: 1000 units to the em, 14 glyphs, 0 of them with an advance"
+         "made.ttf has no table of its characters by their codes in Unicode"
+         "the table hmtx of the font made.ttf is cut short"
+         "the table loca of the font made.ttf is cut short"
+         "the table hmtx of the font made.ttf is cut short"
+         "the table head of the font made.ttf is cut short")
+       (mapcar (lambda (bytes)
+                 (subseq (refusal bytes) (length "made.ttf is not a font that can be had here: ")))
+               (list (made-font :magic 1) (made-font :units 8) (made-font :metrics 15) (made-font :metrics 0)
+                     (made-font :platform 1)
+                     (made-font :glyph-count 20)                   ; more glyphs than it says how far they move on
+                     (made-font :short '("loca")) (made-font :short '("hmtx")) (made-font :short '("head")))))
+;; A file that ends too early, wherever that is, is refused, in words: its
+;; tables are held against its length before anything else is read. And
+;; never is a byte read that is not the file's.
+(let* ((whole (made-font)) (said nil) (had 0))
+  (loop for length in (append (loop for n from 0 below 220 collect n)          ; its list of tables, to the byte,
+                              (loop for n from 220 below (length whole) by 7 collect n)) ; and then every seventh
+        do (new-type)
+           (put-watched "made.ttf" (subseq whole 0 length))
+           (handler-case (progn (clara.type:font "made.ttf" 20)
+                                (incf had))
+             (error (condition)
+               (pushnew (let ((text (princ-to-string condition)))
+                          (subseq text (length "made.ttf is not a font that can be had here: ")
+                                  (position-if #'digit-char-p text)))
+                        said :test #'string=))))
+  (check '(0 ("the font made.ttf ends before its byte " "the table head of the font made.ttf is cut short"
+              "the table maxp of the font made.ttf is cut short"))
+         (list had (sort said #'string<))))
+;; A glyph that says it has more points than the file has bytes left, in a
+;; file whose outlines come last: it shows nothing, the others are as they
+;; were, and no byte past the file is read for it.
+(new-type)
+(put-watched "made.ttf"
+             (font-file (list (cons 500 (plain-glyph *box*))
+                              (cons 500 (plain-glyph *square*))
+                              (cons 500 (append (two-bytes 1) (make-list 8 :initial-element 0) (two-bytes 999) (two-bytes 0)
+                                                (list 1 1 1 1))))
+                        '((65 . 1) (66 . 2)) :last "glyf"))
+(let ((font (clara.type:font "made.ttf" 20)))
+  (check '(0 nil 10) (list (furthest (clara.type::glyph font 65) (at-size *square* 20 1000))
+                           (clara.type::glyph-shades (clara.type::glyph font 66)) (clara.type::glyph-advance (clara.type::glyph font 66)))))
+;; A glyph whose description lies past the outlines, one with more points
+;; than a glyph is given, and one that is to meet a point that is not
+;; there: each shows nothing, and the others are as they were.
+(new-type)
+(put-watched
+ "made.ttf"
+ (font-file (list (cons 500 (plain-glyph *box*))
+                  (cons 500 (plain-glyph (list (loop for i below 17000 collect (list (mod i 50) (floor i 50) t)))))
+                  (cons 500 (joined-glyph '(0) '(0 :points (99 0))))
+                  (cons 500 (plain-glyph *square*))
+                  (cons 500 (plain-glyph *square*)))
+            '((65 . 1) (66 . 2) (67 . 3) (68 . 4)) :long t :astray t))
+(let ((font (clara.type:font "made.ttf" 20)))
+  (check '(nil nil 0 nil 10)
+         (list (clara.type::glyph-shades (clara.type::glyph font 65)) (clara.type::glyph-shades (clara.type::glyph font 66))
+               (furthest (clara.type::glyph font 67) (at-size *square* 20 1000))
+               (clara.type::glyph-shades (clara.type::glyph font 68)) (clara.type::glyph-advance (clara.type::glyph font 68)))))
+;; A glyph of twenty parts, each a glyph of twenty parts, seven deep, and
+;; at the bottom a glyph without a point: more than a thousand million
+;; parts, none of which is too deep or has a point too many. It shows
+;; nothing, and says so before the day is out, since parts are counted too.
+(new-type)
+(put-watched "made.ttf"
+             (font-file (append (list (cons 500 (plain-glyph *box*)))
+                                (loop for next from 2 to 8
+                                      collect (cons 500 (apply #'joined-glyph (loop repeat 20 collect (list next)))))
+                                (list (cons 500 (plain-glyph nil))))
+                        '((65 . 1) (66 . 8))))
+(let ((font (clara.type:font "made.ttf" 20)))
+  (check '(nil 10 nil) (list (clara.type::glyph-shades (clara.type::glyph font 65)) (clara.type::glyph-advance (clara.type::glyph font 65))
+                             (clara.type::glyph-shades (clara.type::glyph font 66)))))
+
+;;; Fonts
+
+;; A font is asked for by a family, of which BOLD and ITALIC pick the
+;; file, or by a file. The same is given every time that the same is asked
+;; for, and no two that differ are the same.
+(new-type "Go-Regular.ttf" "Go-Bold.ttf" "Go-Italic.ttf" "Go-Bold-Italic.ttf" "Go-Mono.ttf")
+(check '("Sans" "Mono") (clara.type:families))
+(let ((sans (clara.type:font "Sans" 16)))
+  (check '(t "Sans" 16 nil nil) (list (clara.type:font-p sans) (clara.type:font-name sans) (clara.type:font-size sans)
+                                      (clara.type:font-p "Sans") (clara.type:font-p nil)))
+  (check '(t t t nil nil nil nil nil)
+         (list (eq sans (clara.type:font "Sans" 16)) (eq sans (clara.type:font "sans" 16)) (eq sans (clara.type:font "Go-Regular.ttf" 16))
+               (eq sans (clara.type:font "Sans" 17)) (eq sans (clara.type:font "Sans" 16 :bold t)) (eq sans (clara.type:font "Sans" 16 :italic t))
+               (eq sans (clara.type:font "Sans" 16 :underline t)) (eq sans (clara.type:font "Sans" 16 :strike t))))
+  (check '("Go-Regular.ttf" "Go-Bold.ttf" "Go-Italic.ttf" "Go-Bold-Italic.ttf" "Go-Mono.ttf")
+         (mapcar #'clara.type::font-file
+                 (list sans (clara.type:font "Sans" 16 :bold t) (clara.type:font "Sans" 16 :italic t)
+                       (clara.type:font "Sans" 16 :bold t :italic t) (clara.type:font "Mono" 16))))
+  ;; The files of a family that are not there: the font is refused, in words that name the file.
+  (check "Mono is not a font that can be had here: there are no files: no disk has a volume that is known here"
+         (condition-text (lambda () (clara.type:font "Mono" 16 :bold t))))
+  ;; One file is read once for all the fonts of it, and all the files that this machine has are there.
+  (clara.type:font "Sans" 40)
+  (check 5 (length clara.type::*faces*))
+  ;; A font that is printed is a line, also when it has drawn: what was read and made for it is not in it.
+  (clara.draw:text-width "The quick brown fox jumps" sans)
+  (check '(t t) (list (< (length (prin1-to-string sans)) 300) (> (length (clara.type::kept-glyphs (clara.type::live sans))) 100)))
+  ;; What a font is not asked for by, and the sizes that there are.
+  (check '("a font is asked for by the name of a family or of a file, in a string, and SANS is not one"
+           "the size of a font is a whole number of pixels from 4 to 400, and 3 is not"
+           "the size of a font is a whole number of pixels from 4 to 400, and 401 is not"
+           "the size of a font is a whole number of pixels from 4 to 400, and 12.5 is not"
+           "5 is not a font" "5 is not a font")
+         (list (condition-text (lambda () (clara.type:font 'sans 16))) (condition-text (lambda () (clara.type:font "Sans" 3)))
+               (condition-text (lambda () (clara.type:font "Sans" 401))) (condition-text (lambda () (clara.type:font "Sans" 12.5)))
+               (condition-text (lambda () (clara.type:font-height 5))) (condition-text (lambda () (clara.draw:text-width "a" 5)))))
+  (check '(t t) (list (clara.type:font-p (clara.type:font "Sans" 4)) (clara.type:font-p (clara.type:font "Sans" 400))))
+  ;; A family of the user's, whose missing files are stood in for by the nearest that it has; and one under a
+  ;; name that is taken, which takes the name.
+  (check "Plain" (clara.type:define-family "Plain" "Go-Mono.ttf" :bold "Go-Bold.ttf"))
+  (check '("Sans" "Mono" "Plain") (clara.type:families))
+  (check '("Go-Mono.ttf" "Go-Bold.ttf" "Go-Mono.ttf" "Go-Bold.ttf")
+         (mapcar (lambda (style) (clara.type::font-file (apply #'clara.type:font "plain" 12 style)))
+                 '(() (:bold t) (:italic t) (:bold t :italic t))))
+  (clara.type:define-family "PLAIN" "Go-Italic.ttf")
+  (check '(("Sans" "Mono" "PLAIN") "Go-Italic.ttf")
+         (list (clara.type:families) (clara.type::font-file (clara.type:font "Plain" 12 :bold t))))
+  (check-condition error (clara.type:define-family "Plain" 'go))
+  (setq clara.type::*families* (butlast clara.type::*families*)))
+
+;; What START says, of the files that came with the system.
+(check (format nil "type: no file of outlines came with the system, and the letters are the console's~%") (new-type))
+(check (format nil "type: 1 files of outlines came with the system, for the fonts Mono~%") (new-type "Go-Mono-Bold.ttf"))
+(check (format nil "type: 8 files of outlines came with the system, for the fonts Sans and Mono~%")
+       (new-type "Go-Regular.ttf" "Go-Bold.ttf" "Go-Italic.ttf" "Go-Bold-Italic.ttf" "Go-Mono.ttf" "Go-Mono-Bold.ttf"
+                 "Go-Mono-Italic.ttf" "Go-Mono-Bold-Italic.ttf"))
+(check '("a" "a and b" "a, b and c") (mapcar #'clara.type::listed '(("a") ("a" "b") ("a" "b" "c"))))
+
+;; The files that come with the system, each held against what FreeType
+;; says of it (tools/fontcheck.c, which printed these rows): how many units
+;; make an em and how many glyphs there are, where the lines lie, and three
+;; sums, over the glyph of every character from 0 to 65535, over how far
+;; every glyph moves on, and over every point of every outline. A file in
+;; fonts/ that has no row here fails the run.
+(defparameter *font-facts*
+  '(("Go-Bold-Italic.ttf" 2048 712 1935 -432 0 -300 100 512 102 967746671 337441057 634850756)
+    ("Go-Bold.ttf" 2048 712 1935 -432 0 -250 100 512 102 967746671 331232792 161428814)
+    ("Go-Italic.ttf" 2048 712 1935 -432 0 -275 50 512 102 967746671 425405616 434109530)
+    ("Go-Mono-Bold-Italic.ttf" 2048 712 1935 -432 0 -275 100 512 102 967746671 249473842 564812262)
+    ("Go-Mono-Bold.ttf" 2048 712 1935 -432 0 -275 100 512 102 967746671 249473842 912261539)
+    ("Go-Mono-Italic.ttf" 2048 712 1935 -432 0 -275 50 512 102 967746671 249473842 696651842)
+    ("Go-Mono.ttf" 2048 712 1935 -432 0 -275 50 512 102 967746671 249473842 849821356)
+    ("Go-Regular.ttf" 2048 712 1935 -432 0 -275 50 512 102 967746671 985691166 486208896)))
+
+(defun sum-of (so-far number)
+  (mod (+ (* so-far 1000003) number 100000) 1000000007))
+
+(check (sort (mapcar #'first *font-facts*) #'string<)
+       (sort (mapcar #'file-namestring (directory (source "fonts/*.ttf"))) #'string<))
+(dolist (facts *font-facts*)
+  (new-type (first facts))
+  (let* ((face (clara.type::face-of (first facts)))
+         (characters 0) (advances 0) (outlines 0))
+    (dotimes (code 65536)
+      (setq characters (sum-of characters (clara.type::index face code))))
+    (dotimes (glyph (clara.type::face-glyphs face))
+      (setq advances (sum-of advances (clara.type::advance face glyph)))
+      (let ((outline (clara.type::outline face glyph 0 (list 100000))))
+        (setq outlines (sum-of outlines (length outline)))
+        (dolist (contour outline)
+          (setq outlines (sum-of outlines (floor (length contour) 3)))
+          (loop for i from 0 below (length contour) by 3
+                do (setq outlines (sum-of (sum-of (sum-of outlines (svref contour i)) (svref contour (+ i 1)))
+                                          (if (svref contour (+ i 2)) 1 0)))))))
+    (check facts
+           (list (first facts) (clara.type::face-units face) (clara.type::face-glyphs face) (clara.type::face-ascent face)
+                 (clara.type::face-descent face) (clara.type::face-gap face) (clara.type::face-under face)
+                 (clara.type::face-stroke face) (clara.type::face-through face) (clara.type::face-cut face)
+                 characters advances outlines))))
+
+;; Every family that the system defines has its four files in fonts/, so
+;; that no style of one is stood in for by another.
+(check t (every (lambda (family) (every (lambda (file) (probe-file (source (concatenate 'string "fonts/" file)))) (cdr family)))
+                clara.type::*families*))
+
+;;; Text in a font, on a surface. What a pixel should be is worked out
+;;; from the pictures of the glyphs, which the tests above have looked at:
+;;; where each lies, from the baseline and from the character before it,
+;;; and what a pixel takes of the colour when a glyph has a shade for it.
+
+(defun font-pixel (font string x y px py color background ground)
+  (let* ((up (clara.type:font-ascent font)) (down (clara.type:font-descent font))
+         (wide (clara.draw:text-width string font))
+         (pixel (if (and background (<= x px (+ x wide -1)) (<= y py (+ y up down -1))) background ground))
+         (pen x))
+    (loop for character across string
+          do (let ((glyph (clara.type::glyph font (char-code character))))
+               (setq pixel (mix pixel color (glyph-shade glyph (- px pen) (- py y up))))
+               (incf pen (clara.type::glyph-advance glyph))))
+    (when (and (clara.type::font-underline font) (<= x px (+ x wide -1))
+               (<= (+ y up (clara.type::font-under font)) py (+ y up (clara.type::font-under font) (clara.type::font-stroke font) -1)))
+      (setq pixel color))
+    (when (and (clara.type::font-strike font) (<= x px (+ x wide -1))
+               (<= (- (+ y up) (clara.type::font-over font)) py (+ (- (+ y up) (clara.type::font-over font)) (clara.type::font-cut font) -1)))
+      (setq pixel color))
+    pixel))
+
+(new-type "Go-Regular.ttf" "Go-Bold-Italic.ttf")
+(setq *canvas* (clara.draw:allocate-surface 60 40))
+(let ((ink #xf0e0d0) (ground #x102030) (paper #x405060))
+  (dolist (font (list (clara.type:font "Sans" 13) (clara.type:font "Sans" 22 :bold t :italic t :underline t)
+                      (clara.type:font "Sans" 9 :strike t :underline t)))
+    (dolist (background (list nil paper))
+      (let ((wrong 0) (string (coerce (list #\A #\g #\j (code-char 955) #\Space #\f #\!) 'string)))
+        (loop for x from -70 to 64 by 9
+              do (loop for y from -30 to 44 by 7
+                       do (clara.draw:fill-rectangle *canvas* 0 0 60 40 ground)
+                          (clara.draw:take-damage *canvas*)
+                          (let ((drew (clara.draw:draw-text *canvas* x y string ink background font))
+                                (changed nil))
+                            (dotimes (py 40)
+                              (dotimes (px 60)
+                                (let ((shown (word-at *canvas* px py)))
+                                  (unless (= shown (font-pixel font string x y px py ink background ground))
+                                    (incf wrong))
+                                  (unless (= shown ground)
+                                    (setq changed t)
+                                    ;; what changed lies in the damage
+                                    (unless (some (lambda (r) (and (<= (first r) px (+ (first r) (third r) -1))
+                                                                   (<= (second r) py (+ (second r) (fourth r) -1))))
+                                                  (clara.draw:damage *canvas*))
+                                      (incf wrong))))))
+                            ;; it says that it drew whenever a pixel changed
+                            (when (and changed (not drew))
+                              (incf wrong)))))
+        (check (list (clara.type:font-size font) (and background t) 0)
+               (list (clara.type:font-size font) (and background t) wrong))))))
+;; Something of the text is on the surface, and its edges are neither the
+;; colour nor the ground: they lie between.
+(clara.draw:fill-rectangle *canvas* 0 0 60 40 #x000000)
+(check t (clara.draw:draw-text *canvas* 2 2 "Round" #xffffff nil (clara.type:font "Sans" 22 :bold t :italic t)))
+(let ((between 0) (white 0))
+  (dotimes (y 40)
+    (dotimes (x 60)
+      (let ((pixel (word-at *canvas* x y)))
+        (cond ((= pixel #xffffff) (incf white))
+              ((/= pixel 0) (incf between))))))
+  (check '(t t) (list (> white 100) (> between 100))))
+;; How wide a string is: the sum of how far its glyphs move on, and
+;; nothing for no characters. In the font of fixed width every character is
+;; as wide as every other.
+(let ((sans (clara.type:font "Sans" 13)))
+  (check '(0 t t) (list (clara.draw:text-width "" sans)
+                        (= (clara.draw:text-width "Hello" sans)
+                           (loop for character across "Hello" sum (clara.draw:text-width (string character) sans)))
+                        (< (clara.draw:text-width "iii" sans) (clara.draw:text-width "mmm" sans))))
+  (check '(nil nil) (list (clara.draw:draw-text *canvas* 0 0 "" 1 nil sans) (clara.draw:draw-text *canvas* 0 100 "below" 1 nil sans)))
+  ;; Kept to a part of the surface, like everything that is drawn.
+  (clara.draw:fill-rectangle *canvas* 0 0 60 40 0)
+  (clara.draw:with-clip (*canvas* 10 5 8 6)
+    (clara.draw:draw-text *canvas* 2 2 "MMMMMMMM" #xffffff #x0000ff sans))
+  (check t (loop for y below 40
+                 always (loop for x below 60
+                              always (or (and (<= 10 x 17) (<= 5 y 10)) (zerop (word-at *canvas* x y)))))))
+(new-type "Go-Mono.ttf")
+(let ((mono (clara.type:font "Mono" 15)))
+  (check '(9 9 9 27) (mapcar (lambda (string) (clara.draw:text-width string mono)) '("i" "M" " " "iM "))))
+;; Without the file that draws in fonts, a font cannot be handed to what
+;; draws: there is none.
+(let ((clara.draw::*fonts* nil))
+  (check "there is nothing here that draws in a font: lisp/type.lisp is not loaded"
+         (condition-text (lambda () (clara.draw:text-width "a" 5)))))
+
+;;; A world that was saved, and the machine after it. The fonts and the
+;;; pictures of their glyphs are in the heap and come back; the bytes of
+;;; the files are somewhere else on the new machine, and START forgets
+;;; where they were.
+(new-type "Go-Regular.ttf")
+(let* ((font (clara.type:font "Sans" 18))
+       (before (clara.type::glyph font 82))
+       (face (clara.type::kept-face (clara.type::live font)))
+       (shades (copy-seq (clara.type::glyph-shades before))))
+  (clara.host:reset-machine)
+  (clara.unsafe:allocate-memory 3)                      ; so that the file lies somewhere else this time
+  (clara.host:put-system-file "Go-Regular.ttf" (file-octets "fonts/Go-Regular.ttf"))
+  (start-type)
+  (let ((after (clara.type::glyph font 82)))
+    (check '(nil nil t t)
+           (list (eq face (clara.type::kept-face (clara.type::live font))) (eq before after)
+                 (equalp shades (clara.type::glyph-shades after))
+                 (eq font (clara.type:font "Sans" 18)))))
+  ;; On a machine that does not have the file any more, the font says so when it is used.
+  (new-type)
+  (check "there are no files: no disk has a volume that is known here"
+         (condition-text (lambda () (clara.draw:text-width "a" font)))))
+
+;; A font from a file on a volume: the file is read into page frames, once,
+;; and FORGET gives them back. A file that is no font is given back at once.
+(start-files (fat-bytes (make-fat-volume 16 (list (list "fonts" (list (list "made.ttf" (made-font))
+                                                                     (list "broken.ttf" (made-font :kind 0))))
+                                                 (list "readme.txt" "no font")))))
+(said-by #'clara.draw:start)
+(start-type)
+(let* ((pages (clara.host:allocated-pages))
+       (font (clara.type:font "/fonts/made.ttf" 20))
+       (taken (- (clara.host:allocated-pages) pages)))
+  (check '(t 0) (list (> taken 0) (furthest (clara.type::glyph font 65) (at-size *square* 20 1000))))
+  (clara.type:font "/fonts/made.ttf" 30)
+  (check taken (- (clara.host:allocated-pages) pages))
+  (check '("/fonts/broken.ttf is not a font that can be had here: /fonts/broken.ttf is not a file of outlines: it does not begin as one"
+           "/readme.txt is not a font that can be had here: /readme.txt is not a file of outlines: it does not begin as one"
+           "/fonts/none.ttf is not a font that can be had here: there is no file /fonts/none.ttf")
+         (mapcar (lambda (name) (condition-text (lambda () (clara.type:font name 20))))
+                 '("/fonts/broken.ttf" "/readme.txt" "/fonts/none.ttf")))
+  (check taken (- (clara.host:allocated-pages) pages))
+  (check nil (clara.type:forget))
+  (check 0 (- (clara.host:allocated-pages) pages))
+  ;; It is read again when it is next drawn in, and its glyphs are made again.
+  (check '(0 t) (list (furthest (clara.type::glyph font 65) (at-size *square* 20 1000))
+                      (= taken (- (clara.host:allocated-pages) pages))))
+  (clara.type:forget))
+
+;; The fonts keep the pictures of their glyphs only up to a point: past it
+;; they all let go, and a glyph is made again when it is next drawn.
+(new-made)
+(let* ((font (clara.type:font "made.ttf" 64))
+       (glyph (clara.type::glyph font 65)))
+  (check t (> clara.type::*cells* 0))
+  (setq clara.type::*cells* (1+ clara.type::+cells+))
+  (let ((again (clara.type::glyph font 66)))
+    (check '(t nil t) (list (< clara.type::*cells* clara.type::+cells+) (eq glyph (clara.type::glyph font 65))
+                            (eq again (clara.type::glyph font 66))))))
+(new-type)
+
+;;; The window manager in a font of outlines: the bar, the list and the
+;;; titles. The rule for what the screen should show is the one above, with
+;;; letters that have shades.
+(new-desk :letters t :applications (list (cons "Listener" (lambda () nil)) (cons "Files" (lambda () nil))
+                                         (cons "An application with a long name" (lambda () nil)))
+          :commands (list (cons "Shut Down" (lambda () nil))))
+(check '(t 0) (list (clara.type:font-p clara.windows::*letters*) (wrong-pixels)))
+(defvar *lettered* (clara.windows:open-window "Outlines, and a title that is too long for its band" 120 40 :x 30 :y 50
+                                              :close (lambda () nil)))
+(check 0 (wrong-pixels))
+(clara.windows:open-window "Second" 70 30 :x 60 :y 70)
+(check 0 (wrong-pixels))
+(clara.windows:raise-window *lettered*)
+(check 0 (wrong-pixels))
+(clara.windows:pointer-moved 5 5 1)                    ; the launcher's list, over both
+(clara.windows:pointer-moved 5 5 0)
+(check '(t 0) (list clara.windows::*menu* (wrong-pixels)))
+(clara.windows:pointer-moved 150 120 0)
+(check 0 (wrong-pixels))
+;; The letters are not the console's: the bar has pixels that are neither
+;; its paper nor its ink.
+(check t (loop for x from 8 below 90
+               thereis (loop for y from 2 below 18
+                             thereis (not (member (pixel-at x y) (list +paper+ +ink+))))))
+(dolist (window (clara.windows:windows))
+  (clara.windows:close-window window))
+(clara.windows:stop)
+;; Letters of another size are halfway up the bar and the bands, which are
+;; as high as they were.
+(new-desk :letters (list "Sans" 11))
+(clara.windows:open-window "Smaller" 90 40 :x 30 :y 50 :close (lambda () nil))
+(check '(14 0) (list (clara.windows::label-height) (wrong-pixels)))
+(clara.windows:pointer-moved 5 5 1)
+(clara.windows:pointer-moved 5 5 0)
+(check 0 (wrong-pixels))
+(dolist (window (clara.windows:windows))
+  (clara.windows:close-window window))
+(clara.windows:stop)
+;; A font that is asked for and cannot be had is said, and the letters are
+;; the console's; and so they are when none is asked for.
+(new-type)
+(let ((said (with-output-to-string (*standard-output*)
+              (new-desk :letters t :machine nil :files nil))))
+  (check '(nil 0 t) (list clara.windows::*letters* (wrong-pixels)
+                          (and (search "windows: Sans is not a font that can be had here" said)
+                               (search "so the letters are the console's" said) t))))
+(clara.windows:stop)
+(setq clara.windows:*font* (list "Sans" 13))
+(check "" (with-output-to-string (*standard-output*)
+            (new-desk)))
+(check '(nil nil 0) (list clara.windows:*font* clara.windows::*letters* (wrong-pixels)))
 (clara.windows:stop)
 
 ;;; A console in a window: a terminal, whose cells are looked at on the
@@ -8518,6 +9681,33 @@
          (:get "/hello.txt"))
        (reverse (remove :get (network-heard *network*) :key #'car :test-not #'eq)))
 (check '(80 80 8080) (subseq (reverse (mapcar #'second (remove :connect (network-heard *network*) :key #'car :test-not #'eq))) 0 3))
+;; A port that a connection spoke from rests for two minutes, and no other
+;; connection speaks from it: the other side remembers a connection that
+;; is over for a while, by its two ports, and takes a beginning from the
+;; same port for a piece of the old one that has come late. Eight
+;; connections were opened above, each from a port of its own. Here the
+;; device that makes numbers is made to say the number of a port that
+;; rests, twice, then that of another, and then a new one.
+(let* ((card clara.net::*card*)
+       (resting (and (eventually (lambda () (= (length (clara.net::card-spoken card)) 8)))
+                     (clara.net::card-spoken card)))
+       (ports (mapcar #'car resting))
+       (fresh (symbol-function 'clara.net::fresh)))
+  (check '(8 t t t)
+         (list (length resting) (every (lambda (port) (<= 49152 port 65535)) ports) (= (length (remove-duplicates ports)) 8)
+               (every (lambda (spoken) (< 100000 (- (cdr spoken) (clara.net::now)) 120001)) resting)))
+  (unwind-protect
+       (progn
+         (let ((answers (list (- (first ports) 49152) (- (first ports) 49152) (+ 16384 (- (second ports) 49152)) 40007)))
+           (setf (symbol-function 'clara.net::fresh) (lambda (card) (declare (ignore card)) (pop answers)))
+           (check '(56391 nil) (list (clara.net::next-port card) answers)))
+         ;; When its time is over a port is anybody's again, and is no longer kept.
+         (setf (clara.net::card-spoken card) (list (cons 50001 (+ (clara.net::now) 60000)) (cons 50000 (- (clara.net::now) 1))))
+         (let ((answers (list (- 50001 49152) (- 50000 49152))))
+           (setf (symbol-function 'clara.net::fresh) (lambda (card) (declare (ignore card)) (pop answers)))
+           (check '(50000 (50001)) (list (clara.net::next-port card) (mapcar #'car (clara.net::card-spoken card))))))
+    (setf (symbol-function 'clara.net::fresh) fresh)
+    (setf (clara.net::card-spoken card) nil)))
 ;; A long file comes whole, in a hundred and more pieces, over numbers that go round to zero on the way.
 (check t (equal *long* (fetched "http://releases.test/long")))
 (check t (equal *long* (fetched "http://releases.test/unsized-long")))

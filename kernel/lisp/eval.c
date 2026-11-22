@@ -1793,6 +1793,22 @@ int lisp_boot_file(const char *name)
     return 0;
 }
 
+/* The file of that name among them, the name a string of Lisp's, or NULL. */
+const struct boot_file *lisp_boot_file_of(lisp name)
+{
+    const struct lisp_string *s = lisp_as_string(name);
+
+    for (const struct boot_file *f = g_files; f; f = f->next) {
+        uint64_t i = 0;
+
+        while (i < lisp_length(s->header) && f->name[i] && fold(s->chars[i]) == fold((uint8_t)f->name[i]))
+            i++;
+        if (i == lisp_length(s->header) && !f->name[i])
+            return f;
+    }
+    return NULL;
+}
+
 lisp lisp_load(lisp name)
 {
     const struct boot_file *f = g_files;

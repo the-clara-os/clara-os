@@ -703,8 +703,52 @@ The network:
   that kind is a list of eight numbers in the language, which has no
   number of 128 bits.
 
-Later, in no order: outline fonts; sound; CLOS; a USB keyboard and mouse,
-which is what UTM gives a machine that is not told otherwise.
+Fonts:
+
+- [x] **M18a outline fonts** (2026-11-21, version 0.0.36). Letters as
+  shapes, at any size, where there was one font of 8 by 16 pixels.
+  lisp/type.lisp reads a font file of the kind that most are, TrueType:
+  which glyph a character has, how far a glyph moves on, its outline of
+  straight lines and curves, also where it is put together of other
+  glyphs, and where the lines of a font lie. A glyph is drawn by bringing
+  its outline to the size, cutting its curves into straight pieces, and
+  working out for every pixel how much of it the shape covers, in whole
+  numbers, the language having no others. That is the pixel's shade, and
+  the pixel takes that much of the colour of the text, so an edge that
+  slants or bends comes out smooth. Laying a colour over pixels by their
+  shades is the one thing that the substrate was given for it
+  (`clara.unsafe:blend-shades-32`), and `clara.draw:draw-shades` draws any
+  such picture. `(clara.type:font "Sans" 24)` is a font;
+  `clara.draw:draw-text` and `text-width` take one as their last argument,
+  and are what they were without. Two families come with the system, Sans
+  and Mono, each upright, bold, italic and bold italic: the Go fonts of
+  Bigelow & Holmes, eight files of 1.3 MiB between them, under a BSD
+  license like the console's Spleen. `:bold` and `:italic` pick the file,
+  `:underline` and `:strike` draw a line, and a name that is no family's
+  is the name of a file, so a font of the user's own is drawn in from the
+  disk that it lies on. The system's own are among the files that the
+  handoff reads into memory, like its Lisp (`clara.unsafe:system-file`),
+  so they are there on a machine with no disk that is known. The picture
+  of a glyph is made when its character is first drawn in a font, and
+  kept; a font comes back with a world that was saved, and finds its file
+  again. All of it is held against three things that this code did not
+  make: areas that the host tests work out in fractions, for shapes and
+  for every glyph of font files that they put together byte by byte; what
+  FreeType reads of the eight files, to every point of every outline; and
+  FreeType's own pictures, from which these differ by a shade in 255 on
+  the average.
+- [x] **M18b the window manager's letters** (2026-11-21, version 0.0.37).
+  The bar along the top of the screen, the list of the applications and
+  the titles of the windows are written in the font Sans, at 13 pixels, in
+  the places and at the heights that they had. `clara.windows:*font*` says
+  which font it is, or NIL for the console's letters; and those are what a
+  machine has whose system came without the files, with a line that says
+  so. What is inside a window is its program's to draw, and the listener,
+  the editor and the file browser draw the console's letters in their
+  cells, as they did.
+
+Later, in no order: sound; CLOS; a USB keyboard and mouse, which is what
+UTM gives a machine that is not told otherwise.
 
 The website, <https://claraos.org>, is built from this file by
 site/build.py: the milestone list above, with its version numbers, is what
@@ -2541,6 +2585,186 @@ M17a to M17c, the three together, what checking them found:
   the job; 549 s and 20m18s are the most that either has been seen to
   take, and neither would have been without the thread.
 
+M18a and M18b, fonts, what they left:
+
+- Nothing fits an outline to the pixels. A font file has programs for
+  that, one for each glyph, which are passed over, and nothing stands in
+  for them: a stem lands between two columns of pixels as often as on
+  one, so at 9 to 13 pixels the letters are softer than the console's,
+  and two stems of one letter can differ in weight. What would mend it is
+  the machine that runs those programs, some two hundred instructions and
+  the tables that they use, or a rule of this system's own that moves
+  the stems and the lines of a font onto whole pixels.
+- No kerning: the Go fonts have no table of it (`kern`), and the newer
+  table that most fonts have (`GPOS`) is not read. Every glyph moves on
+  by a whole number of pixels, its own way rounded, so a line is not as
+  wide as the font's units add up to, by half a pixel a letter at the
+  most; letters at places between two pixels would want a picture of each
+  glyph for each such place.
+- One glyph to the character, in the order of the string: letters are not
+  joined (ligatures), an accent that is a character of its own is not
+  put on the letter before it, and nothing is written from right to left.
+  Of the tables that say which glyph a character has, the forms 4 and 12
+  are read and no other; a font that has only others is refused.
+- Files of the other kind of outline (CFF, curves of the third degree,
+  which most files have whose names end in `.otf`) are refused, and so
+  are collections of several fonts in one file. A font whose outlines can
+  be varied (`gvar`) is read as its plain self.
+- A glyph of parts: a part's way across and up is taken as it is written,
+  also where the file says that it is to be changed with the part
+  (`SCALED_COMPONENT_OFFSET`); and where two parts lie over each other
+  and go round opposite ways, which a part that is mirrored does, they
+  leave a hole, since what a shape covers is summed with its sign, as
+  FreeType sums it. The Go fonts have no such glyph, and none of parts at
+  all: that half of the reader is held against the tests' own files, and
+  was held once, by hand, against FreeType on fonts of the Mac's that do
+  (below).
+- A shade is laid over a pixel on the numbers as the pixel has them, not
+  on the light that they stand for, so light letters on dark come out
+  thinner than dark ones on light. And a pixel has one shade: the three
+  parts of a pixel on a flat screen, which lie side by side, are not
+  shaded each by itself.
+- The pictures of the glyphs are in the heap, a word of 8 bytes for every
+  shade, and a world that is saved holds the ones that were made by then,
+  although the next start lets go of them: 7000 shades in six fonts when
+  the first session of `make test` saves its world, 54 KiB. All fonts
+  together keep 1048576 shades at the most, and then all of them let go.
+  A vector of bytes would be an eighth of that, when the language has
+  one. The world itself is larger by what lisp/type.lisp is, 163
+  functions, most of them the readers and writers of its four
+  structures: a world that the first session saves is 4604 KiB where
+  main's is 3895, with 1444 KiB of code for the processor where that has
+  1334, and is loaded from the files in 270 to 300 ms where that takes
+  230.
+- The system's fonts are read into memory by the handoff at every start,
+  1.3 MiB of them, whether anything is drawn in them or not, and a system
+  is that much more to copy or to fetch when a machine takes a newer one
+  (the manifest holds every file against its sum). No boot of `make
+  test` took longer for it on the Mac that could be told from one run to
+  the next; "What the two cost CI", below, has what was measured.
+- A family that has no file for a style gives the nearest that it has:
+  nothing makes a bold or an italic of an upright. Sizes are whole
+  pixels, from 4 to 400, and a glyph of more than a million pixels shows
+  nothing.
+- `clara.windows:*font*` is read when the window manager starts, so a
+  change shows after STOP and START, which ends the applications. The
+  bar, the list and the bands of the windows keep their heights, 20 and
+  21 pixels: a font of more than 16 pixels is cut off there, and no font
+  makes them lower. A terminal, the editor and the file browser are grids
+  of the console's cells: Julio's issue #51, styles and sizes in the
+  applications, is that work, and this is what it would stand on. The
+  console itself, before the window manager and in a fault report, keeps
+  its pictures of 8 by 16: it is the first thing that works and the last
+  that should stop.
+- A file is read once at a start, with a lock, and a font of it can be
+  made by two threads at once, which then both make the same glyph: the
+  second one's is kept, and nothing else is lost. A program that draws
+  in one font from two threads at the moment when the fonts let go of
+  their glyphs makes some of them twice.
+- What was only checked by hand, with tools/fontcheck.c, which is not a
+  part of `make test` because it needs FreeType on the computer. (1)
+  FreeType's pictures against these, pixel by pixel, with nothing fitted
+  to the pixels on either side: every character from 32 to 1279, which is
+  Latin, Greek and Cyrillic, of all eight files at 9, 13, 16, 24 and 64
+  pixels, some ten million pixels. They differ by 0.3 to 1.8 shades of
+  255 on the average, by 23 at the worst, and by more than 16 in one
+  pixel of ten thousand; no glyph moves on by another number of pixels
+  than FreeType's own way rounded. The differences are where curves are:
+  FreeType cuts a curve into pieces that lie up to a sixteenth of a pixel
+  from it, and these lie within a sixty-fourth, which is why making them
+  finer made the difference larger and not smaller. (2) The reader
+  against FreeType on eight fonts of macOS that have glyphs of parts,
+  Arial, Times New Roman, Verdana, Georgia, Courier New, Trebuchet MS,
+  Comic Sans MS and Andale Mono, some 14 000 glyphs: every point of every
+  outline is the same. That comparison found two rules that the first
+  version did not have, and each has its test now: a glyph's points are
+  moved to where the file says that its left edge lies, and a glyph of
+  parts lies and moves on as the part does that it names for that. The
+  fonts of macOS are not ours to put into the tests; the Go fonts, whose
+  every outline the host tests hold against FreeType's sums, have neither
+  case but for one glyph of the italics.
+- Planted mistakes, 143 of them, each in a copy of the tree, with the
+  host tests after it or, for the functions in C, a build and a boot: 115
+  in lisp/type.lisp, 7 in what lisp/draw.lisp gained, 10 in
+  lisp/windows.lisp and 11 in the substrate. 122 were noticed at once,
+  and one did not build, was planted another way and was noticed. Twelve
+  of the rest became tests: a number of two bytes that is read across the
+  end of a file (a file is now cut at every length of its list of tables,
+  with a device behind its last byte that fails the run when it is read);
+  a table of characters without its last range; groups of more than one
+  character in the form 12; a character whose glyph the file does not
+  have; a part that lies elsewhere when it is drawn by itself; a line of
+  text whose height is no whole number of pixels, and a glyph that moves
+  on by a half; the cell that a row of a picture has to spare; a glyph of
+  more parts than can be counted, none of them too deep; letters of
+  another height in the window manager, and a name in its list that is
+  wider than the button; and a kernel that does not start the fonts when
+  it starts from a saved world, which every session passes by luck, the
+  handoff having read the files to the same place as before, and which the
+  report's line `type:` now tells. Eight change nothing that can be seen:
+  four that have a piece go on into a row or a pixel that it only
+  touches, where it adds nothing; a code past 65535 in the form 4, which
+  the table's own last range answers; a font that keeps its glyphs when
+  its file is read again, which START and FORGET have let go of by then;
+  and two that take a check away where the bytes of the file, held
+  against its length, refuse the same glyph a moment later.
+- A fault of M17a's, found here and mended here, because eight more
+  files to fetch made it show: a connection spoke from a port that was
+  picked among 16384 with nothing asked but whether a connection of this
+  machine's has it now. So a machine that opens many connections to one
+  place, one after the other, sooner or later speaks from a port that a
+  connection which is just over spoke from; the other side still
+  remembers that one, takes the new beginning for a piece of it that has
+  come late, and says nothing, and ten seconds later the machine says
+  that the other side does not answer at its port. `aarch64-network`
+  takes a system of 46 files from a web server over 55 connections, and
+  failed that way on the Mac while it was being watched, at the last file
+  but one. A machine that was made to speak from one port twice in a row
+  gets no answer the second time, every time; and of 300 files fetched by
+  HTTPS one after the other, main's kernel lost one in three runs of
+  four, and this one none in four. A port now rests for two minutes after
+  a connection spoke from it (`next-port`, `forget`, and a host test that
+  has the device that makes numbers say the same number twice, which
+  notices either half of the change taken out again). Over
+  plain HTTP the same 300 lost none on either kernel: the test's web
+  server lets go of such a connection at once, and of one that is kept
+  closed a moment later.
+- One run of `make test` in the Ubuntu container, of three, failed in
+  `aarch64-network` before that was mended, while the Mac ran its own
+  `make test` beside it. By where the difference lay, the machine did not
+  say within the time that it gives itself that 10.0.2.2 takes no
+  connection at its port 1; the log of that run went with its container,
+  so that is read off the last line of what was printed and no more, and
+  whether it was the same fault is not known. The same boot then passed
+  twelve times there, ten of them one after the other with the Mac loaded
+  in the same way. M17's group has that boot standing still once in the
+  container on a loaded Mac: it is put down here because it was seen in
+  this work, and not as chance.
+- What the two cost CI. The system's directory is 3400 KiB where it was
+  2012, and every boot reads it. The stress boot, where the machine is
+  emulated, on the Mac, main and this at the same time: 190 s and 203 s.
+  What that boot does before its session takes what it took, to the
+  second but for seven more texts of the self-test, and the session,
+  which is typed with a collection at every safe point in a world that
+  is larger by lisp/type.lisp, takes the rest: a fifteenth. On CI the
+  first run took 16m3s of the job's thirty minutes, and its stress boot
+  365 s of its 900, on a runner between the two kinds that there are: its
+  x86_64 boot took 48 s and its `aarch64-network` 53, where the fast kind
+  has 44 and 40 to 45 and the slow 55 and 57. Main's stress boot has been
+  seen at 251 to 263 s on the fast kind and at 435 to 466 on the slow, so
+  365 s on one between them says no more than the Mac's two figures do,
+  and nothing against them. No other boot took longer there than main's
+  last run had it, which was on the slow kind. The second run was on the
+  slow kind itself, its x86_64 boot 56 s as main's last: 19m38s, and the
+  stress boot 502 s where main's had 466, a thirteenth more, which is
+  what the Mac says. `aarch64-network` took 61 s where it had 57, for
+  eight more files to fetch, and no other boot more than three seconds
+  longer. That leaves the stress boot at more than half of its 900 s on
+  a slow runner, as it was before this (466 s, and 549 s once in M17's
+  runs), and the job at two thirds of its thirty minutes: nothing was
+  done about either here, and "What a translated world costs CI" is
+  still where the time of that boot is to be taken out.
+
 No milestone yet, to be picked up when they start to matter:
 
 - Code for the processor, what it is still long and slow by. An
@@ -2807,11 +3031,12 @@ No milestone yet, to be picked up when they start to matter:
   is written to after it was given back. The window manager keeps a
   window's surface to the thread that opened the window for that reason.
   What can be drawn is rectangles, outlines a pixel thick, text
-  in the one font and its one size, pictures of one bit to the pixel that
-  are 62 pixels wide at most, and copies. There are no lines but along a
-  row or a column, no curves, no scaling, and nothing between a pixel that
-  is drawn and one that is not: no colour lets what is under it show
-  through. Text is drawn a glyph to the call of the substrate. A surface is
+  in the console's font and, since M18a, in fonts of outlines at any size,
+  pictures of one bit to the pixel that are 62 pixels wide at most,
+  pictures in shades, and copies. There are no lines but along a row or a
+  column, no curves but a letter's, and no scaling of a picture. A colour
+  lets what is under it show through only by the shades of such a
+  picture. Text is drawn a glyph to the call of the substrate. A surface is
   page frames side by side, 469 of them for a screen of 800 by 600, and
   needs that many free in a row; it is never made larger or smaller. The
   collector knows nothing of that memory: a surface that nobody holds any
@@ -3294,9 +3519,12 @@ No milestone yet, to be picked up when they start to matter:
   (README.md). Without them, and without a serial device, there is
   nowhere to type. Its drive has to be on the VirtIO interface for the
   kernel to see a disk, and to save a world on it.
-- The screen has glyphs for ASCII only (kernel/font.c). A character
-  outside it takes one cell, with the font's sign for a glyph it does not
-  have.
+- The console has glyphs for ASCII only (kernel/font.c), and so has
+  whatever is written in its cells: a terminal, the editor and the file
+  browser. A character outside it takes one cell, with the font's sign
+  for a glyph it does not have. The fonts of outlines (M18a) have Latin,
+  Greek and Cyrillic letters, and nothing draws in them yet where text is
+  typed.
 - A string takes 32 bits for every character, whatever the characters
   are.
 - On AArch64 `arch_early_init` switches the PL011's FIFOs on, and leaves

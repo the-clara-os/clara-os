@@ -10,7 +10,9 @@
 ;;;; is defined in the world, or it is a file that is loaded when it is
 ;;;; first picked, and can be unloaded again. Under the applications the
 ;;;; list has the commands: things that are done and open no window, such
-;;;; as shutting the machine down (lisp/system.lisp).
+;;;; as shutting the machine down (lisp/system.lisp). What the bar, the list
+;;;; and the titles say is written in a font of outlines (lisp/type.lisp),
+;;;; and in the console's letters on a machine that has no such font.
 ;;;;
 ;;;; Nothing here draws on the screen. What the screen is to show is put
 ;;;; together on a surface of the same size, out of sight: the desk, the
@@ -44,7 +46,7 @@
            "MOVE-WINDOW" "RAISE-WINDOW" "RENAME-WINDOW" "NEXT-EVENT" "WINDOWS" "FOCUSED-WINDOW"
            "DEFINE-APPLICATION" "INSTALL-APPLICATION" "UNLOAD-APPLICATION" "REMOVE-APPLICATION"
            "APPLICATIONS" "LAUNCH" "*APPLICATION-DIRECTORY*" "DEFINE-COMMAND" "REMOVE-COMMAND" "COMMANDS"
-           "UNFINISHED"
+           "UNFINISHED" "*FONT*"
            "KEY-TYPED" "POINTER-MOVED"))
 (in-package "CLARA.WINDOWS")
 
@@ -94,6 +96,9 @@
 (defvar *pointer-y* 0)
 (defvar *buttons* 0)        ; and its buttons
 (defvar *name* "")          ; the system and its version, for the right-hand end of the bar
+(defvar *font* (list "Sans" 13)) ; what the bar, the list and the titles are written in: the name of a font of outlines
+                            ;   and its size, as CLARA.TYPE:FONT takes them, or NIL for the console's letters. START reads it.
+(defvar *letters* nil)      ; that font, as START found it, or NIL: the console's letters
 
 ;; Pixels, which are the screen's to say: made of colours by START.
 (defvar *desk* 0)   ; behind everything
@@ -156,15 +161,40 @@
 
 ;;; Putting the screen together
 
+;; The font that *FONT* asks for, or NIL, which is the console's letters:
+;; when none is asked for, and when the one that is cannot be had, which is
+;; said once.
+(defun letters ()
+  (and (consp *font*)
+       (handler-case (clara.type:font (car *font*) (cadr *font*))
+         (error (condition)
+           (format t "windows: ~A, so the letters are the console's~%" condition)
+           nil))))
+
+;; How wide STRING is in the letters of the bar, the list and the titles,
+;; and how high a line of them.
+(defun label-width (string)
+  (clara.draw:text-width string *letters*))
+
+(defun label-height ()
+  (if *letters*
+      (+ (clara.type:font-ascent *letters*) (clara.type:font-descent *letters*))
+      clara.font:+height+))
+
+;; STRING in those letters, from X on, halfway up the strip of HEIGHT rows
+;; that begins at TOP.
+(defun label (x top height string color)
+  (clara.draw:draw-text *back* x (+ top (floor (- height (label-height)) 2)) string color nil *letters*))
+
 (defun paint-desk ()
   (let ((width (clara.draw:surface-width *back*)))
     (clara.draw:fill-rectangle *back* 0 +bar+ width (- (clara.draw:surface-height *back*) +bar+) *desk*)
     (clara.draw:fill-rectangle *back* 0 0 width +bar+ *paper*)
-    (clara.draw:draw-text *back* 8 2 "Applications" *ink*)
+    (label 8 0 +bar+ "Applications" *ink*)
     ;; What this system is, where there is room to say so.
-    (let ((x (- width 8 (clara.draw:text-width *name*))))
+    (let ((x (- width 8 (label-width *name*))))
       (when (>= x +button+)
-        (clara.draw:draw-text *back* x 2 *name* *ink*)))))
+        (label x 0 +bar+ *name* *ink*)))))
 
 ;; A window: its frame, lit when it has the focus, its title, cut short
 ;; where the close box begins, the box, and its inside, as its program
@@ -177,9 +207,9 @@
     (clara.draw:fill-rectangle *back* (+ x width) y 1 height frame)
     (clara.draw:fill-rectangle *back* (1- x) (+ y height) (+ width 2) 1 frame)
     (clara.draw:with-clip (*back* (+ x 3) (- y +band+) (- width 6 (if (window-close window) +box+ 0)) +band+)
-      (clara.draw:draw-text *back* (+ x 3) (- y 19) (window-title window) text))
+      (label (+ x 3) (- y +band+) +band+ (window-title window) text))
     (when (window-close window)
-      (clara.draw:draw-text *back* (- (+ x width) 12) (- y 19) "x" text))
+      (label (- (+ x width) (floor (+ +box+ (label-width "x")) 2)) (- y +band+) +band+ "x" text))
     (clara.draw:copy-rectangle (window-surface window) 0 0 width height *back* x y)))
 
 ;; The launcher's list: the applications, one to a line, under the bar,
@@ -190,7 +220,7 @@
 (defun menu-width ()
   (let ((width +button+))
     (dolist (name (menu-names) width)
-      (setq width (max width (+ 16 (clara.draw:text-width name)))))))
+      (setq width (max width (+ 16 (label-width name)))))))
 
 (defun menu-damaged ()
   (damaged 0 +bar+ (menu-width) (+ +bar+ (* +item+ (length (menu-names))))))
@@ -200,7 +230,7 @@
     (clara.draw:fill-rectangle *back* 0 +bar+ width height *paper*)
     (clara.draw:draw-rectangle *back* 0 +bar+ width height *ink*)
     (dolist (name names)
-      (clara.draw:draw-text *back* 8 (+ y 2) name *ink*)
+      (label 8 y +item+ name *ink*)
       (setq y (+ y +item+)))
     (when (and *applications* *commands*)
       (clara.draw:fill-rectangle *back* 0 (+ +bar+ (* +item+ (length *applications*))) width 1 *ink*))))
@@ -806,6 +836,7 @@
                 *dim* (clara.draw:color 74 68 102)
                 *dark* (clara.draw:color 0 0 0)
                 *name* (concatenate 'string (lisp-implementation-type) " " (lisp-implementation-version))
+                *letters* (letters)
                 *windows* nil
                 *dirty* nil
                 *launched* nil
