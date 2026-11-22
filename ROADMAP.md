@@ -2922,7 +2922,24 @@ M19a, M19b and M19c, sound, what they left:
   instant in which something new is played, which no test can bring
   about on purpose. In the round after that, two more words about that
   last period, which had been added between the rounds, turned out to
-  say nothing either, and went.
+  say nothing either, and went, and so did two conditions in the card's
+  thread that could not be otherwise. Planted once more in the code as
+  it is, 182 of them by then, those three get through and no other.
+- What the three cost CI. The world has 1913 functions where it had
+  1790, and the system's directory is 3370 KiB where it was 3326. The
+  stress boot, where the machine is emulated, on the Mac, main and this
+  at the same time: 184 s and 193 s. What that boot does before the
+  world is loaded takes what it took, and its session, typed with a
+  collection at every safe point in a world that is larger by
+  lisp/sound.lisp, takes the rest, a twentieth. The card's thread does
+  not wake by itself, so a boot that plays nothing pays nothing for it.
+  The first session plays some two seconds of sound, and on the Mac its
+  machines take a second longer for it, 24 s where main has 23. On CI
+  the first run took 13m33s of the job's thirty minutes, on a runner of
+  the fast kind, its x86_64 boot 45 s and its `aarch64-network` 44, and
+  its stress boot 270 s of its 900, where main's has been seen at 251 to
+  263 s on that kind: what the Mac's two figures say. In the Ubuntu
+  container on the Mac the stress boot took 204 s.
 
 No milestone yet, to be picked up when they start to matter:
 
