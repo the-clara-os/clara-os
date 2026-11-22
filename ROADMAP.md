@@ -2630,11 +2630,12 @@ M18a and M18b, fonts, what they left:
   the first session of `make test` saves its world, 54 KiB. All fonts
   together keep 1048576 shades at the most, and then all of them let go.
   A vector of bytes would be an eighth of that, when the language has
-  one. The world itself is larger by what lisp/type.lisp is, 158
-  functions, most of them the readers and writers of its three
-  structures: a world that the first session saves is 4521 KiB where
-  main's is 3895, with 1440 KiB of code for the processor where that has
-  1334, and is loaded from the files in 270 ms where that takes 230.
+  one. The world itself is larger by what lisp/type.lisp is, 163
+  functions, most of them the readers and writers of its four
+  structures: a world that the first session saves is 4604 KiB where
+  main's is 3895, with 1444 KiB of code for the processor where that has
+  1334, and is loaded from the files in 270 to 300 ms where that takes
+  230.
 - The system's fonts are read into memory by the handoff at every start,
   1.3 MiB of them, whether anything is drawn in them or not, and a system
   is that much more to copy or to fetch when a machine takes a newer one
@@ -2739,13 +2740,21 @@ M18a and M18b, fonts, what they left:
   in the same way. M17's group has that boot standing still once in the
   container on a loaded Mac: it is put down here because it was seen in
   this work, and not as chance.
-- What the two cost CI. The system's directory is 3396 KiB where it was
+- What the two cost CI. The system's directory is 3400 KiB where it was
   2012, and every boot reads it. The stress boot, where the machine is
   emulated, on the Mac, main and this at the same time: 190 s and 203 s.
   What that boot does before its session takes what it took, to the
   second but for seven more texts of the self-test, and the session,
   which is typed with a collection at every safe point in a world that
-  is larger by lisp/type.lisp, takes the rest: a fifteenth.
+  is larger by lisp/type.lisp, takes the rest: a fifteenth. On CI the
+  first run took 16m3s of the job's thirty minutes, and its stress boot
+  365 s of its 900, on a runner between the two kinds that there are: its
+  x86_64 boot took 48 s and its `aarch64-network` 53, where the fast kind
+  has 44 and 40 to 45 and the slow 55 and 57. Main's stress boot has been
+  seen at 251 to 263 s on the fast kind and at 435 to 466 on the slow, so
+  365 s on one between them says no more than the Mac's two figures do,
+  and nothing against them. No other boot took longer there than main's
+  last run had it, which was on the slow kind.
 
 No milestone yet, to be picked up when they start to matter:
 
