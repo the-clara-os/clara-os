@@ -59,7 +59,7 @@ enum {
 };
 
 /* What a frame of an environment holds: its second item. */
-enum { VARIABLES, FUNCTIONS, BLOCK, TAGS };
+enum { VARIABLES, FUNCTIONS, BLOCK, TAGS, SYMBOL_MACROS };
 
 /* The running thread's words that code for the processor reads and writes
  * too (lisp.h): the top of the value stack, the exit that is under way,
@@ -573,6 +573,38 @@ static lisp *lookup(lisp env, int kind, lisp name)
     return NULL;
 }
 
+/* The same for the name of a variable, which SYMBOL-MACROLET can have
+ * given a form to stand for. When the nearest frame with the name is one
+ * of those, what is kept there is a cons with the form in its CAR, for
+ * eval_car, and the address that comes back says so by its lowest bit,
+ * which no address of a word has: is_form and form_cell take it apart.
+ * That costs the evaluator no word of its frame, of which every form
+ * inside a form has one. */
+static lisp *lookup_variable(lisp env, lisp name)
+{
+    for (; env != LISP_NIL; env = lisp_as_vector(env)->items[0]) {
+        struct lisp_vector *frame = lisp_as_vector(env);
+        lisp kind = frame->items[1];
+
+        if (kind != lisp_fixnum(VARIABLES) && kind != lisp_fixnum(SYMBOL_MACROS))
+            continue;
+        for (uint64_t i = 2; i < lisp_length(frame->header); i += 2)
+            if (frame->items[i] == name)
+                return (lisp *)((uintptr_t)&frame->items[i + 1] | (kind == lisp_fixnum(SYMBOL_MACROS)));
+    }
+    return NULL;
+}
+
+static inline int is_form(const lisp *found)
+{
+    return (uintptr_t)found & 1;
+}
+
+static inline lisp form_cell(const lisp *found)
+{
+    return *(const lisp *)((uintptr_t)found & ~(uintptr_t)1);
+}
+
 /* A variable gets its value. A special one is bound there and then. Any
  * other waits on the value stack, name and value, for flush to put it in
  * a frame with the ones around it. */
@@ -1006,10 +1038,23 @@ static lisp sf_setq(lisp args, lisp env)
             return lisp_fail("SETQ has no value for ~S", symbol);
         if (!lisp_is_symbol(symbol) || constant(symbol))
             return lisp_fail("~S cannot be set: it is not a variable", symbol);
+        local = special(symbol) ? NULL : lookup_variable(env, symbol);
+        if (is_form(local)) {
+            /* The name stands for a form, and setting it is (SETF form value). */
+            lisp *base = g_sp;
+            lisp place = lisp_as_cons(form_cell(local))->car, form = lisp_as_cons(lisp_as_cons(args)->cdr)->car;
+
+            if (!lisp_push(lisp_cons(lisp_cons(S.setf, lisp_cons(place, lisp_cons(form, LISP_NIL))), LISP_NIL)))
+                return LISP_NIL;
+            value = eval_car(*base, env);
+            g_sp = base;
+            if (g_unwind.to)
+                return LISP_NIL;
+            continue;
+        }
         value = eval_car(lisp_as_cons(args)->cdr, env);
         if (g_unwind.to)
             return LISP_NIL;
-        local = special(symbol) ? NULL : lookup(env, VARIABLES, symbol);
         if (local)
             *local = value;
         else
@@ -1180,6 +1225,37 @@ static lisp sf_labels(lisp args, lisp env)
 static lisp sf_macrolet(lisp args, lisp env)
 {
     return local_functions(args, env, LISP_MACRO, 0);
+}
+
+/* (symbol-macrolet ((name form)...) body...): in the body each name stands
+ * for its form, where it is evaluated and where it is set, until something
+ * binds the name as a variable. The form is kept in a cons of its own, so
+ * that the evaluator has a place for what a macro makes of it. */
+static lisp sf_symbol_macrolet(lisp args, lisp env)
+{
+    lisp frame, value = LISP_NIL, body;
+    uint64_t n = 0, i = 2;
+
+    for (lisp d = car(args); lisp_is_cons(d); d = lisp_as_cons(d)->cdr)
+        n++;
+    frame = make_frame(env, SYMBOL_MACROS, n);
+    *g_sp++ = frame;
+    for (lisp d = car(args); lisp_is_cons(d); d = lisp_as_cons(d)->cdr, i += 2) {
+        lisp definition = lisp_as_cons(d)->car, name = car(definition);
+
+        if (!lisp_is_symbol(name) || constant(name) || special(name)) {
+            lisp_fail("~S cannot be the name of a symbol macro", name);
+            goto out;
+        }
+        lisp_as_vector(frame)->items[i] = name;
+        lisp_as_vector(frame)->items[i + 1] = lisp_cons(car(cdr(definition)), LISP_NIL);
+    }
+    body = declarations(cdr(args));
+    if (!g_unwind.to)
+        value = progn(body, frame);
+out:
+    g_sp--;
+    return value;
 }
 
 /* (multiple-value-call function form...): the function gets every value
@@ -1561,6 +1637,7 @@ static const struct special {
     { "FLET", sf_flet, 1, LISP_MANY, 1 },
     { "LABELS", sf_labels, 1, LISP_MANY, 1 },
     { "MACROLET", sf_macrolet, 1, LISP_MANY, 1 },
+    { "SYMBOL-MACROLET", sf_symbol_macrolet, 1, LISP_MANY, 1 },
     { "MULTIPLE-VALUE-CALL", sf_multiple_value_call, 1, LISP_MANY, 1 },
     { "MULTIPLE-VALUE-PROG1", sf_multiple_value_prog1, 1, LISP_MANY, 1 },
     { "MULTIPLE-VALUE-BIND", sf_multiple_value_bind, 2, LISP_MANY, 1 },
@@ -1610,7 +1687,9 @@ static lisp eval_car(lisp cell, lisp env)
 
     lisp_values.count = 1;
     if (lisp_is_symbol(form)) {
-        local = special(form) ? NULL : lookup(env, VARIABLES, form);
+        local = special(form) ? NULL : lookup_variable(env, form);
+        if (is_form(local))
+            return eval_car(form_cell(local), env); /* the form that SYMBOL-MACROLET gave the name */
         f = local ? *local : lisp_as_symbol(form)->value;
         return f == LISP_UNBOUND ? unbound_variable(form) : f;
     }
@@ -1994,6 +2073,7 @@ void lisp_eval_init(const struct boot_file *files)
     S.no_error = lisp_symbol_in(lisp_roots.keyword, "NO-ERROR", 1);
     S.condition = lisp_symbol_in(cl, "%CONDITION", 0);
     S.compiler = lisp_symbol_in(cl, "%COMPILER", 0);
+    S.setf = lisp_symbol_in(cl, "SETF", 1);
     for (unsigned i = 0; i < sizeof specials / sizeof specials[0]; i++) {
         symbol = lisp_symbol_in(cl, specials[i].name, specials[i].fn != sf_quasiquote);
         if (lisp_as_symbol(symbol)->function == LISP_UNBOUND)

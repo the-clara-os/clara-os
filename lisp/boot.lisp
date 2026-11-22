@@ -447,15 +447,38 @@
 (defmacro defsetf (reader writer)
   `(progn (%put ',reader '%writer ',writer) ',reader))
 
+;; A place that begins with a name which has no such writer, and is no
+;; macro's, is written by the function (SETF name): it is given the new
+;; value before the other arguments, and is what a generic function of
+;; that name is (lisp/clos.lisp). The function lives in a symbol of its
+;; own, which the name keeps. When it is there as the SETF is expanded,
+;; the form calls it; when it is not, the form looks for it as it runs,
+;; so a function can be written before the class whose accessor it sets.
+(defun %setf-name (name)
+  (or (get name '%setf)
+      (%put name '%setf (make-symbol (%string-append "(SETF " (symbol-name name) ")")))))
+
+(defun %setf-function (name place)
+  (let ((symbol (get name '%setf)))
+    (if (and symbol (fboundp symbol))
+        (symbol-function symbol)
+        (error "SETF does not know the place ~S" place))))
+
 (defun %setf (place value)
   (cond ((symbolp place) `(setq ,place ,value))
         ((atom place) (error "SETF cannot store into ~S" place))
+        ((not (symbolp (car place))) (error "SETF does not know the place ~S" place))
         ((get (car place) '%writer)
          `(,(get (car place) '%writer) ,@(cdr place) ,value))
         (t (multiple-value-bind (expansion expanded) (macroexpand-1 place)
              (if expanded
                  (%setf expansion value)
-                 (error "SETF does not know the place ~S" place))))))
+                 (multiple-value-bind (bindings read) (%place place)
+                   (let ((symbol (get (car place) '%setf)))
+                     `(let* ,bindings
+                        ,(if (and symbol (fboundp symbol))
+                             `(,symbol ,value ,@(cdr read))
+                             `(funcall (%setf-function ',(car place) ',place) ,value ,@(cdr read)))))))))))
 
 (defmacro setf (&rest pairs)
   (cond ((null pairs) nil)
@@ -572,6 +595,7 @@
          (type (cons name names))
          (index -1))
     `(progn
+       (%put ',name '%structure ',type) ; for whoever asks what the name is the type of (lisp/clos.lisp)
        (defun ,(%symbol "MAKE-" text)
            (&key ,@(mapcar (lambda (slot)
                              (if (consp slot) (list (car slot) (cadr slot)) slot))

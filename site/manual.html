@@ -74,6 +74,7 @@ td:first-child { white-space: nowrap; }
     <li><a href="#start">Starting it</a></li>
     <li><a href="#prompt">The prompt</a></li>
     <li><a href="#language">The language</a></li>
+    <li><a href="#objects">Objects</a></li>
     <li><a href="#compiler">The compiler</a></li>
     <li><a href="#files">Files</a></li>
     <li><a href="#image">Saving the world</a></li>
@@ -270,7 +271,7 @@ T
 DEPTH
 &gt; (list (let ((*depth* 1)) (depth)) (depth))
 (1 0)</pre>
-    <p>A function takes its arguments in the ways Common Lisp has: required ones, <code>&amp;optional</code> ones with their defaults, the rest as a list, and by keyword. A macro can take a list apart in its own list of parameters. A variable that <code>defvar</code> or <code>defparameter</code> made is special: binding it with <code>let</code> changes what every function sees until the <code>let</code> is over, as <code>*depth*</code> shows above.</p>
+    <p>A function takes its arguments in the ways Common Lisp has: required ones, <code>&amp;optional</code> ones with their defaults, the rest as a list, and by keyword. A macro can take a list apart in its own list of parameters. A variable that <code>defvar</code> or <code>defparameter</code> made is special: binding it with <code>let</code> changes what every function sees until the <code>let</code> is over, as <code>*depth*</code> shows above. <code>macrolet</code> makes macros for the forms inside it, and <code>symbol-macrolet</code> names that stand for forms there: inside <code>(symbol-macrolet ((head (car pair))) ...)</code>, <code>head</code> is read and set as <code>(car pair)</code> is.</p>
 
     <h3 id="data">Numbers, text and lists</h3>
 <pre class="session">&gt; (fact 21)
@@ -351,13 +352,175 @@ error: the stack is full: the forms are nested too deep, or a function calls its
       <li><code>make-string</code> takes <code>:initial-element</code> and not <code>:element-type</code>: there is one kind of character, and one kind of string.</li>
       <li><code>defstruct</code> takes a name and slots, and none of its options.</li>
       <li>Conditions are handled by <code>handler-case</code>. There is no <code>handler-bind</code>, no restart and no debugger.</li>
-      <li>There are no hash tables, no classes and generic functions, and no <code>typep</code>.</li>
+      <li>There are no hash tables. Classes and generic functions are there, and <a href="#objects-short">their chapter</a> says what of them is not.</li>
       <li>A package can be made, used when it is made, exported from, and deleted when no other uses it. Nothing is imported or shadowed afterwards.</li>
       <li><code>eq</code> and <code>eql</code> are the same function. Letters change case as far as ASCII has them: <code>(string-upcase "é")</code> is <code>"é"</code>.</li>
       <li>A function can call itself some six thousand calls deep. Past that it is the error above, and not the end of the machine.</li>
       <li><code>(declare (special ...))</code> and <code>&amp;environment</code> are refused, and so are the reader's <code>#.</code>, <code>#S</code> and <code>#P</code>.</li>
     </ul>
     <p><a href="#names">Everything that is defined</a>, at the end of this manual, is the whole list, by subject.</p>
+  </section>
+
+  <section id="objects">
+    <h2>{{spleen:Objects}}</h2>
+    <p>Common Lisp's object system is here, the part of it that programs are written with. A class says what its instances hold, their slots, and which classes it is a kind of. A generic function is a function whose behaviour is put together from methods, each written for arguments of some classes, and a call runs the methods that fit the arguments it was given. It is written in this Lisp, like the compiler, and the system's own types are classes in it: you can write a method for an integer, a string, a structure or a condition as well as for an instance of a class of yours.</p>
+
+    <h3 id="classes">Classes and instances</h3>
+<pre class="session">&gt; (defclass account ()
+    ((owner :initarg :owner :reader owner)
+     (balance :initarg :balance :initform 0 :accessor balance)))
+#&lt;STANDARD-CLASS ACCOUNT&gt;
+&gt; (defvar *account* (make-instance 'account :owner "Clara" :balance 100))
+*ACCOUNT*
+&gt; (list (owner *account*) (balance *account*))
+("Clara" 100)
+&gt; (setf (balance *account*) 150)
+150
+&gt; (incf (balance *account*) 25)
+175
+&gt; (slot-value *account* 'balance)
+175
+&gt; (with-slots (owner balance) *account* (setq balance (* 2 balance)) (list owner balance))
+("Clara" 350)
+&gt; *account*
+#&lt;ACCOUNT&gt;
+&gt; (make-instance 'account :ownr "Clara")
+error: an instance of ACCOUNT cannot be made with :OWNR: no slot is filled by it, and no method takes it
+&gt; (owner (make-instance 'account))
+error: the slot OWNER of #&lt;ACCOUNT&gt; has no value</pre>
+    <p><code>defclass</code> takes a name, the classes that the new one is a kind of, and the slots. A slot is a name, or a name with what is said about it: <code>:initarg</code>, the keyword that fills it when an instance is made; <code>:initform</code>, a form for the value that it begins with otherwise, evaluated for each instance; <code>:reader</code>, <code>:writer</code> and <code>:accessor</code>, the names of functions that read it, write it, or both, an accessor being written with <code>setf</code>; and <code>:allocation :class</code> for a slot that the instances have between them. After the slots, <code>(:default-initargs :balance 10)</code> gives <code>make-instance</code> the arguments that a caller leaves out.</p>
+    <p><code>make-instance</code> takes the name of a class and keywords with their values. A keyword that fills no slot is refused, which is how a keyword that was typed wrongly is found. A slot that got no value has none: reading it is an error, <code>slot-boundp</code> asks, and <code>slot-makunbound</code> takes a value away again. <code>slot-value</code> reads a slot by its name and <code>setf</code> writes it, <code>slot-exists-p</code> says whether an instance has such a slot, and inside <code>with-slots</code> the names of slots stand for the slots themselves, as the names that <code>with-accessors</code> gives stand for calls of the functions that read them.</p>
+
+    <h3 id="kinds">A class that is a kind of another</h3>
+<pre class="session">&gt; (defclass savings (account) ((rate :initarg :rate :initform 2 :reader rate)))
+#&lt;STANDARD-CLASS SAVINGS&gt;
+&gt; (defvar *savings* (make-instance 'savings :owner "Julio" :balance 1000))
+*SAVINGS*
+&gt; (list (owner *savings*) (balance *savings*) (rate *savings*))
+("Julio" 1000 2)
+&gt; (list (typep *savings* 'savings) (typep *savings* 'account) (typep *account* 'savings) (type-of *savings*))
+(T T NIL SAVINGS)</pre>
+    <p>An instance of a class has the slots of every class above it, and is an instance of each of them. A class can be a kind of several, <code>(defclass amphibian (boat car) ())</code>. The classes above a class are then put in one order, its precedence list, in which a class comes before the ones it is a kind of and those come in the order in which they were written. When two definitions ask for orders that cannot both be had, the class is refused. The classes that it names have to be there already.</p>
+
+    <h3 id="generic">Generic functions and methods</h3>
+<pre class="session">&gt; (defgeneric withdraw (account amount))
+#&lt;STANDARD-GENERIC-FUNCTION WITHDRAW (0)&gt;
+&gt; (defmethod withdraw ((account account) amount)
+    (when (&gt; amount (balance account))
+      (error "~A has only ~D" (owner account) (balance account)))
+    (decf (balance account) amount))
+#&lt;STANDARD-METHOD WITHDRAW (ACCOUNT T)&gt;
+&gt; (withdraw *account* 50)
+300
+&gt; (withdraw *account* 1000)
+error: Clara has only 300
+&gt; (defmethod withdraw :before ((account savings) amount)
+    (when (&gt; amount 500) (error "no more than 500 at a time comes out of savings")))
+#&lt;STANDARD-METHOD WITHDRAW :BEFORE (SAVINGS T)&gt;
+&gt; (withdraw *savings* 600)
+error: no more than 500 at a time comes out of savings
+&gt; (withdraw *savings* 100)
+900
+&gt; (defmethod withdraw :around ((account account) (amount (eql 0))) 'nothing-to-do)
+#&lt;STANDARD-METHOD WITHDRAW :AROUND (ACCOUNT (EQL 0))&gt;
+&gt; (withdraw *savings* 0)
+NOTHING-TO-DO
+&gt; (defgeneric describe-account (account)
+    (:method ((account account)) (list (owner account) (balance account)))
+    (:method ((account savings)) (append (call-next-method) (list :rate (rate account)))))
+#&lt;STANDARD-GENERIC-FUNCTION DESCRIBE-ACCOUNT (2)&gt;
+&gt; (list (describe-account *account*) (describe-account *savings*))
+(("Clara" 300) ("Julio" 900 :RATE 2))</pre>
+    <p>A method says, for each parameter that must get an argument, which arguments it is for: <code>(account account)</code> is a parameter for an instance of that class or of a class below it, <code>(amount (eql 0))</code> one for that very object, and a bare name one for anything. A call runs the most specific method that fits. Inside it, <code>(call-next-method)</code> calls the next one that fits and gives its values, with the same arguments or with others, and <code>(next-method-p)</code> says whether there is one. When several parameters are for classes, the first one in which two methods differ decides which is the more specific.</p>
+    <p>A word between the name and the parameters says when a method runs. The <code>:before</code> methods run first, the most specific first, and the <code>:after</code> methods last, the most specific last; neither has a say in the value. An <code>:around</code> method runs before all of them and in place of them, unless it calls <code>(call-next-method)</code>, which is the rest. <code>defgeneric</code> says what the parameters are and can hold methods of its own; a <code>defmethod</code> for a name that has no generic function makes one. A method that is defined again, for the same classes and with the same word, takes the place of the one before.</p>
+<pre class="session">&gt; (defgeneric size (thing)
+    (:method ((thing string)) (length thing))
+    (:method ((thing list)) (length thing))
+    (:method ((thing integer)) thing)
+    (:method ((thing point)) 2)
+    (:method ((thing low-fuel)) (fuel-left thing))
+    (:method ((thing account)) (balance thing)))
+#&lt;STANDARD-GENERIC-FUNCTION SIZE (6)&gt;
+&gt; (mapcar #'size (list "four" '(1 2 3) 5 nil (make-point :x 1) (make-condition 'low-fuel :left 7) *account*))
+(4 3 5 0 2 7 300)
+&gt; (size #\a)
+error: SIZE has no method for the arguments (#\a)</pre>
+    <p>The classes that the language begins with: <code>t</code>, which everything is; <code>number</code>, <code>real</code>, <code>rational</code> and <code>integer</code>; <code>character</code>; <code>symbol</code>; <code>sequence</code>, <code>list</code>, <code>cons</code> and <code>null</code>, which is the class of <code>nil</code>, a symbol and a list at once; <code>array</code>, <code>vector</code> and <code>string</code>; <code>function</code>, <code>package</code> and <code>stream</code>. A type that <code>defstruct</code> made is a class, below <code>structure-object</code>, and so is a type of condition.</p>
+    <p>A function that <code>setf</code> writes with is a generic function of the name <code>(setf balance)</code>, which gets the new value before its other arguments: <code>:accessor</code> makes one, and <code>(defmethod (setf balance) :after (value (account account)) ...)</code> adds to it like to any other.</p>
+
+    <h3 id="made">When an instance is made</h3>
+<pre class="session">&gt; (defclass audited (account) ((entries :initform nil :accessor entries)))
+#&lt;STANDARD-CLASS AUDITED&gt;
+&gt; (defmethod initialize-instance :after ((account audited) &amp;key)
+    (push (list 'opened (balance account)) (entries account)))
+#&lt;STANDARD-METHOD INITIALIZE-INSTANCE :AFTER (AUDITED)&gt;
+&gt; (defmethod withdraw :after ((account audited) amount)
+    (push (list 'withdrew amount) (entries account)))
+#&lt;STANDARD-METHOD WITHDRAW :AFTER (AUDITED T)&gt;
+&gt; (let ((account (make-instance 'audited :owner "Gray" :balance 10)))
+    (withdraw account 4)
+    (entries account))
+((WITHDREW 4) (OPENED 10))</pre>
+    <p><code>make-instance</code> makes the instance and calls <code>initialize-instance</code> with it and the arguments, which fills the slots; a method of yours for it, <code>:after</code> most often, does what else a new instance needs. A keyword that such a method takes is one that <code>make-instance</code> takes for the class. <code>shared-initialize</code> is the part that fills slots, and <code>reinitialize-instance</code> fills slots of an instance that is there. What goes wrong is a generic function too, for a class to give its own answer: <code>slot-unbound</code>, <code>slot-missing</code>, <code>no-applicable-method</code> and <code>no-next-method</code>.</p>
+
+    <h3 id="written">How an instance is written</h3>
+<pre class="session">&gt; (defmethod print-object ((account account) stream)
+    (print-unreadable-object (account stream :type t)
+      (format stream "~A ~D" (owner account) (balance account))))
+#&lt;STANDARD-METHOD PRINT-OBJECT (ACCOUNT T)&gt;
+&gt; (list *account* *savings*)
+(#&lt;ACCOUNT Clara 300&gt; #&lt;SAVINGS Julio 900&gt;)
+&gt; (format nil "~A is its owner's" *account*)
+"#&lt;ACCOUNT Clara 300&gt; is its owner's"
+&gt; (defstruct coin value)
+COIN
+&gt; (defmethod print-object ((coin coin) stream) (format stream "a coin of ~D" (coin-value coin)))
+#&lt;STANDARD-METHOD PRINT-OBJECT (COIN T)&gt;
+&gt; (list (make-coin :value 5) (make-point :x 1))
+(a coin of 5 #S(POINT :X 1 :Y 0))</pre>
+    <p>An instance is written as its class between <code>#&lt;</code> and <code>&gt;</code>, which says that there is no text to read it back from. A method of <code>print-object</code> for its class writes it as you like, wherever it is written: at the prompt, by <code>format</code>, inside a list. It is given the object and a stream, and <code>print-unreadable-object</code> writes the <code>#&lt;</code> and the <code>&gt;</code> around what its body writes, with the name of the class first when <code>:type</code> says so. The same goes for the structures of a type that you write such a method for.</p>
+
+    <h3 id="again">A class that is defined again</h3>
+<pre class="session">&gt; (defclass account ()
+    ((owner :initarg :owner :reader owner)
+     (balance :initarg :balance :initform 0 :accessor balance)
+     (currency :initarg :currency :initform 'euros :accessor currency)))
+#&lt;STANDARD-CLASS ACCOUNT&gt;
+&gt; (list (currency *account*) (currency *savings*) (balance *savings*) *account*)
+(EUROS EUROS 900 #&lt;ACCOUNT Clara 300&gt;)</pre>
+    <p>A class can be defined again, as a function can, and what is there follows: the classes below it, and every instance, which has the slots of the new definition the next time it is used. A slot that it had keeps its value, a new one begins as the class says, and one that is gone is dropped. The methods stay, apart from the ones that the old definition made for its slots. A world that is <a href="#image">saved</a> keeps its classes, its methods and its instances, and what you type of them is <a href="#home">kept as text</a> like any definition:</p>
+<pre class="session again">&gt; (list *account* (withdraw *savings* 100) (currency *savings*))
+(#&lt;ACCOUNT Clara 300&gt; 800 EUROS)</pre>
+
+    <h3 id="types">Types</h3>
+<pre class="session">&gt; (list (typep 5 'integer) (typep "five" 'sequence) (typep nil 'list) (typep 5 '(or string symbol)))
+(T T T NIL)
+&gt; (defun kind (thing)
+    (typecase thing
+      (integer 'a-number)
+      ((or string symbol) 'a-name)
+      (account 'an-account)
+      (t 'something-else)))
+KIND
+&gt; (mapcar #'kind (list 1 "one" 'one *savings* #\1))
+(A-NUMBER A-NAME A-NAME AN-ACCOUNT SOMETHING-ELSE)
+&gt; (list (class-of 5) (class-of "five") (class-of *savings*) (class-of (make-point)) (find-class 'low-fuel))
+(#&lt;BUILT-IN-CLASS INTEGER&gt; #&lt;BUILT-IN-CLASS STRING&gt; #&lt;STANDARD-CLASS SAVINGS&gt; #&lt;STRUCTURE-CLASS POINT&gt; #&lt;BUILT-IN-CLASS LOW-FUEL&gt;)
+&gt; (list (class-name (class-of 'five)) (type-of 5) (type-of nil))
+(SYMBOL INTEGER NULL)</pre>
+    <p>A class is a type. <code>typep</code> asks whether an object is of one, by the name of a class or by the class itself, which <code>find-class</code> gives for a name and <code>class-of</code> for an object; <code>type-of</code> is the name of an object's class. It also knows the names <code>atom</code>, <code>keyword</code>, <code>fixnum</code> and <code>boolean</code>, and the types that are put together of others: <code>(or integer string)</code>, <code>(and ...)</code>, <code>(not ...)</code>, <code>(member a b c)</code>, <code>(eql 5)</code> and <code>(satisfies evenp)</code>. <code>typecase</code> takes the first clause whose type its object is of, and <code>etypecase</code> is the same with an error when none is.</p>
+
+    <h3 id="objects-short">Where it stops short</h3>
+    <ul>
+      <li>Methods are put together in the one way that is described above, the standard one. There is no <code>define-method-combination</code>, and <code>defgeneric</code> takes <code>:method</code>, <code>:documentation</code> and nothing else.</li>
+      <li>There is no <code>change-class</code>, and no metaobject protocol: a class is of the class <code>standard-class</code>, and <code>:metaclass</code> is refused. Only a class that <code>defclass</code> made can have a class below it.</li>
+      <li>A function <code>(setf name)</code> is made by <code>defgeneric</code>, <code>defmethod</code>, <code>:accessor</code> or <code>:writer</code>. <code>(defun (setf name) ...)</code> and <code>#'(setf name)</code> are not there.</li>
+      <li>What <code>defgeneric</code> gives back says what the generic function is, and cannot be called: the function is <code>#'withdraw</code>, as for any name, and to <code>class-of</code> it is a <code>function</code>.</li>
+      <li>The keywords that a generic function is called with are not held against the ones its methods take, as they are when an instance is made.</li>
+      <li>An instance is written without a number of its own: two instances of a class look alike unless a method of <code>print-object</code> tells them apart. A condition is written as before, whatever method is written for it.</li>
+      <li><code>typep</code> knows the types above and no others: not <code>(integer 0 9)</code>, not <code>(unsigned-byte 8)</code>. There is no <code>subtypep</code>, <code>check-type</code>, <code>deftype</code> or <code>coerce</code>.</li>
+      <li>A function of the system's cannot be made a generic function: <code>(defmethod car ...)</code> is refused.</li>
+    </ul>
   </section>
 
   <section id="compiler">
@@ -472,7 +635,7 @@ NIL</pre>
 &gt; (clara.system:system-file "boot.lisp")
 "/clara/{{version}}-8f3a1c2e/boot.lisp"</code></pre>
 <pre class="session">&gt; (clara.fat:names (clara.system:system-file ""))
-("arm64.lisp" "boot.lisp" "BOOTAA64.EFI" "BOOTX64.EFI" "compiler.lisp" "console.lisp" "disk.lisp" "draw.lisp" "editor.lisp" "fat.lisp" "files.lisp" "font.lisp" "Go-Bold-Italic.ttf" "Go-Bold.ttf" "Go-Italic.ttf" "Go-Mono-Bold-Italic.ttf" "Go-Mono-Bold.ttf" "Go-Mono-Italic.ttf" "Go-Mono.ttf" "Go-Regular.ttf" "input.lisp" "listener.lisp" "manifest" "native.lisp" "net.lisp" "pci.lisp" "random.lisp" "roots.pem" "self-test.lisp" "sound.lisp" "system.lisp" "terminal.lisp" "tls.lisp" "type.lisp" "virtio.lisp" "windows.lisp" "x86-64.lisp")</pre>
+("arm64.lisp" "boot.lisp" "BOOTAA64.EFI" "BOOTX64.EFI" "clos.lisp" "compiler.lisp" "console.lisp" "disk.lisp" "draw.lisp" "editor.lisp" "fat.lisp" "files.lisp" "font.lisp" "Go-Bold-Italic.ttf" "Go-Bold.ttf" "Go-Italic.ttf" "Go-Mono-Bold-Italic.ttf" "Go-Mono-Bold.ttf" "Go-Mono-Italic.ttf" "Go-Mono.ttf" "Go-Regular.ttf" "input.lisp" "listener.lisp" "manifest" "native.lisp" "net.lisp" "pci.lisp" "random.lisp" "roots.pem" "self-test.lisp" "sound.lisp" "system.lisp" "terminal.lisp" "tls.lisp" "type.lisp" "virtio.lisp" "windows.lisp" "x86-64.lisp")</pre>
     <p>Those are the system's Lisp files: the language's part that is written in Lisp, the compiler, the console, the drivers, the file system, the window manager and what sees to <a href="#stop">the machine as a whole</a>, and two that are not loaded until they are wanted, the <a href="#applications">applications</a> <code>editor.lisp</code> and <code>files.lisp</code>. <code>native.lisp</code> is what <a href="#processor">translates for the processor</a>, with a file for each kind of processor, <code>arm64.lisp</code> and <code>x86-64.lisp</code>, of which a machine loads its own. Beside them are a second copy of the kernels and <code>manifest</code>, the list of what the system is made of, which is what <a href="#upgrade">another machine reads</a> when it takes this system from this disk. The eight files whose names end in <code>.ttf</code> are the system's <a href="#fonts">fonts</a>, and <code>roots.pem</code> is the list of whom it <a href="#https">trusts</a>. Everything outside <code>/clara</code> and <code>/EFI</code> is yours, and no system writes there but for one file in <code>/home</code>.</p>
 
     <h3 id="reading">Reading and loading</h3>
@@ -674,8 +837,8 @@ AREA
   ;; of a rectangle
   (* width height))</code></pre>
     <ul>
-      <li>A form is written down when it was typed at a prompt, in any listener, on the serial port or in a window; when it stands by itself, and not inside a <code>progn</code> or a <code>let</code>; when it went well; and when its first word says that it defines something. That is a word of the language's own, <code>defun</code>, <code>defmacro</code>, <code>defvar</code>, <code>defparameter</code>, <code>defstruct</code>, <code>defpackage</code>, <code>define-condition</code>; a macro of yours whose name begins with <code>def</code>; and anything whose name begins with <code>define-</code>, as <code>clara.windows:define-application</code>, and with it <code>clara.windows:install-application</code>. Any other call of a function is not written down, whatever the function is called. A <code>load</code> is, since what a file defined is in none of the forms that were typed, unless it is one of the two files of <code>/home</code> that is loaded.</li>
-      <li>A form that defines a name again takes the place of the form that defined it before, so the file has every definition once, in the order in which each was first made.</li>
+      <li>A form is written down when it was typed at a prompt, in any listener, on the serial port or in a window; when it stands by itself, and not inside a <code>progn</code> or a <code>let</code>; when it went well; and when its first word says that it defines something. That is a word of the language's own, <code>defun</code>, <code>defmacro</code>, <code>defvar</code>, <code>defparameter</code>, <code>defstruct</code>, <code>defpackage</code>, <code>define-condition</code>, <code>defclass</code>, <code>defgeneric</code>, <code>defmethod</code>; a macro of yours whose name begins with <code>def</code>; and anything whose name begins with <code>define-</code>, as <code>clara.windows:define-application</code>, and with it <code>clara.windows:install-application</code>. Any other call of a function is not written down, whatever the function is called. A <code>load</code> is, since what a file defined is in none of the forms that were typed, unless it is one of the two files of <code>/home</code> that is loaded.</li>
+      <li>A form that defines a name again takes the place of the form that defined it before, so the file has every definition once, in the order in which each was first made. The <a href="#generic">methods</a> of a generic function are so many definitions: each <code>defmethod</code> is in the file, and one takes the place of another when it is the same method, for the same classes and with the same word before its parameters.</li>
       <li>Forms that were read in another package than the ones before them have a line <code>(cl:in-package "NAME")</code> before them.</li>
       <li>What is not a definition is not written down. A variable that was changed after its <code>defvar</code> is in the file with the value that the <code>defvar</code> gives it, and a world that is made of the text alone has that one; an upgrade <a href="#across">carries the value that it had come to</a> as well. What a <code>defvar</code> did to get its value, it does again. And what <kbd>Ctrl-E</kbd> evaluated in the <a href="#editor">editor</a> is in the editor's file, and not here.</li>
       <li>Nothing else that takes a definition back is written down: after <code>(delete-package "PLAY")</code> the forms that made the package, and what was defined in it, are still in the file. The file is text, and yours: read it, and take out of it what you no longer want, in the editor. What the system cannot read of it any more it leaves as it is, and goes on after it.</li>
@@ -1488,6 +1651,8 @@ error: nothing is mapped at #x0</pre>
       <tr><td>Nothing is heard, and what plays gives <code>NIL</code>.</td><td>The machine has no sound card that ClaraOS has a driver for, and the report said <code>sound: no sound card that has a driver here</code>. Under QEMU, start it without <code>SOUND=</code>. In UTM, give it the card of <a href="#utm">In UTM</a>.</td></tr>
       <tr><td>Nothing is heard, and what plays gives <code>T</code>.</td><td>The card has what was asked for. Look at how loud it was to be: <code>clara.sound:*volume*</code>, the <code>:volume</code> of the call, and the volume of your own computer, which the machine's sound goes through.</td></tr>
       <tr><td><code>sound: the sound card ... has not played what it was given</code>, or a line like it</td><td>The card stopped answering while something was played, and is asked nothing more: <code>(clara.sound:card)</code> says so too. The machine goes on without sound until it is started again.</td></tr>
+      <tr><td><code>error: ... has no method for the arguments ...</code></td><td>A <a href="#generic">generic function</a> was called with arguments that none of its methods is for. Write a method for their classes, or for a class above them: one whose parameters name no class is for anything.</td></tr>
+      <tr><td>An instance shows as <code>#&lt;STANDARD-OBJECT&gt;</code> in the text of an error.</td><td>The error is one of the system's own, which cannot ask a method of <code>print-object</code> how the instance is written: <code>error: CAR wants a list, and #&lt;STANDARD-OBJECT&gt; is not one</code>. It is an instance of some class, where a list, a number or a string was wanted.</td></tr>
       <tr><td><code>error: the heap is full</code></td><td>A computation used the memory there is. It has been stopped, what it held is free again, and the prompt is back. A machine with more memory holds more.</td></tr>
       <tr><td><code>error: the stack is full</code></td><td>Forms nested too deep, or a function that calls itself without end.</td></tr>
       <tr><td>Boxes on the screen where characters should be.</td><td>The screen's font has the characters of ASCII. The characters themselves are right, and show on the serial port.</td></tr>
@@ -1518,7 +1683,7 @@ error: nothing is mapped at #x0</pre>
     <p class="aside">The last two are names that the reader knows and the evaluator refuses.</p>
 
     <h3>Control</h3>
-    <p class="names"><code>quote</code> <code>if</code> <code>when</code> <code>unless</code> <code>cond</code> <code>case</code> <code>ecase</code> <code>otherwise</code> <code>and</code> <code>or</code> <code>not</code> <code>progn</code> <code>prog1</code> <code>let</code> <code>let*</code> <code>setq</code> <code>psetq</code> <code>setf</code> <code>incf</code> <code>decf</code> <code>push</code> <code>pop</code> <code>block</code> <code>return</code> <code>return-from</code> <code>tagbody</code> <code>go</code> <code>catch</code> <code>throw</code> <code>unwind-protect</code> <code>do</code> <code>do*</code> <code>dolist</code> <code>dotimes</code> <code>loop</code> <code>flet</code> <code>labels</code> <code>macrolet</code> <code>locally</code> <code>the</code> <code>eval-when</code></p>
+    <p class="names"><code>quote</code> <code>if</code> <code>when</code> <code>unless</code> <code>cond</code> <code>case</code> <code>ecase</code> <code>otherwise</code> <code>and</code> <code>or</code> <code>not</code> <code>progn</code> <code>prog1</code> <code>let</code> <code>let*</code> <code>setq</code> <code>psetq</code> <code>setf</code> <code>incf</code> <code>decf</code> <code>push</code> <code>pop</code> <code>block</code> <code>return</code> <code>return-from</code> <code>tagbody</code> <code>go</code> <code>catch</code> <code>throw</code> <code>unwind-protect</code> <code>do</code> <code>do*</code> <code>dolist</code> <code>dotimes</code> <code>loop</code> <code>flet</code> <code>labels</code> <code>macrolet</code> <code>symbol-macrolet</code> <code>locally</code> <code>the</code> <code>eval-when</code></p>
 
     <h3>Functions and values</h3>
     <p class="names"><code>funcall</code> <code>apply</code> <code>identity</code> <code>functionp</code> <code>compiled-function-p</code> <code>compile</code> <code>disassemble</code> <code>function-lambda-expression</code> <code>fboundp</code> <code>symbol-function</code> <code>eval</code> <code>macroexpand</code> <code>macroexpand-1</code> <code>values</code> <code>values-list</code> <code>multiple-value-bind</code> <code>destructuring-bind</code> <code>multiple-value-call</code> <code>multiple-value-list</code> <code>multiple-value-prog1</code> <code>multiple-value-setq</code> <code>nth-value</code></p>
@@ -1537,6 +1702,11 @@ error: nothing is mapped at #x0</pre>
 
     <h3>Conditions</h3>
     <p class="names"><code>error</code> <code>warn</code> <code>signal</code> <code>handler-case</code> <code>ignore-errors</code> <code>make-condition</code> <code>condition</code> <code>serious-condition</code> <code>warning</code> <code>storage-condition</code> <code>simple-condition</code> <code>simple-error</code> <code>simple-warning</code> <code>simple-condition-format-control</code> <code>simple-condition-format-arguments</code> <code>type-error</code> <code>type-error-datum</code> <code>type-error-expected-type</code> <code>program-error</code> <code>control-error</code> <code>cell-error</code> <code>cell-error-name</code> <code>unbound-variable</code> <code>undefined-function</code> <code>arithmetic-error</code> <code>division-by-zero</code> <code>stream-error</code> <code>end-of-file</code> <code>parse-error</code> <code>reader-error</code></p>
+
+    <h3>Objects</h3>
+    <p class="names"><code>defclass</code> <code>make-instance</code> <code>initialize-instance</code> <code>shared-initialize</code> <code>reinitialize-instance</code> <code>slot-value</code> <code>slot-boundp</code> <code>slot-makunbound</code> <code>slot-exists-p</code> <code>with-slots</code> <code>with-accessors</code> <code>slot-unbound</code> <code>slot-missing</code> <code>unbound-slot</code> <code>unbound-slot-instance</code> <code>defgeneric</code> <code>defmethod</code> <code>call-next-method</code> <code>next-method-p</code> <code>no-applicable-method</code> <code>no-next-method</code> <code>print-object</code> <code>print-unreadable-object</code> <code>class-of</code> <code>find-class</code> <code>class-name</code> <code>typep</code> <code>type-of</code> <code>typecase</code> <code>etypecase</code> <code>satisfies</code></p>
+    <p class="names"><code>standard-object</code> <code>structure-object</code> <code>class</code> <code>standard-class</code> <code>built-in-class</code> <code>structure-class</code> <code>generic-function</code> <code>standard-generic-function</code> <code>method</code> <code>standard-method</code> <code>number</code> <code>real</code> <code>rational</code> <code>integer</code> <code>fixnum</code> <code>character</code> <code>symbol</code> <code>keyword</code> <code>boolean</code> <code>sequence</code> <code>array</code> <code>package</code> <code>stream</code></p>
+    <p class="aside">The second list is names of classes and of types, which <code>defmethod</code>, <code>typep</code> and <code>find-class</code> take. <code>list</code>, <code>cons</code>, <code>null</code>, <code>vector</code>, <code>string</code>, <code>function</code>, <code>atom</code>, <code>t</code> and the types of conditions are such names too, and stand in the lists of what else they are.</p>
 
     <h3>Printing and reading</h3>
     <p class="names"><code>format</code> <code>print</code> <code>prin1</code> <code>princ</code> <code>prin1-to-string</code> <code>princ-to-string</code> <code>write-string</code> <code>write-char</code> <code>write-line</code> <code>terpri</code> <code>fresh-line</code> <code>finish-output</code> <code>force-output</code> <code>read-line</code> <code>read-from-string</code> <code>*standard-output*</code> <code>*standard-input*</code> <code>streamp</code> <code>make-string-output-stream</code> <code>get-output-stream-string</code> <code>with-output-to-string</code> <code>make-string-input-stream</code></p>

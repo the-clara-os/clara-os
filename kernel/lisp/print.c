@@ -9,6 +9,19 @@
  * #<TYPE "what it says">. lisp_princ writes for a person: no quotes, no
  * bars, no package, and of a condition what it says and no more.
  *
+ * A structure of a type whose name has %PRINTED on its property list is
+ * not the printer's to write: it is an instance of a class, or of a type
+ * that a method of PRINT-OBJECT was written for (lisp/clos.lisp), and what
+ * it looks like is for Lisp to say. The printer cannot call Lisp in the
+ * middle of its work, which is done twice over, once to count and once to
+ * store. So lisp_print_asking is told how far things have come: with
+ * `found` it leaves such a structure out and notes it there; with `texts`
+ * it writes the next text of that list in its place, which is what Lisp
+ * said when the caller asked (kernel/lisp/builtin.c). With neither, as
+ * lisp_print and lisp_princ are, it writes the name of the type between
+ * #< and >, which is all that can be said where nobody can be asked: in
+ * what an error of the substrate's says, for one.
+ *
  * Lists nest by recursion in C here too: below LISP_DEPTH a list is
  * printed as #. Nothing looks out for a list that leads back into itself,
  * which RPLACD can make; the printer stops after LIMIT objects with three
@@ -23,6 +36,8 @@ struct printer {
     int escape;    /* lisp_print: write what reads back */
     unsigned depth;
     unsigned left; /* objects it may still print */
+    struct lisp_printing *ask; /* what to do about a structure that Lisp writes, or NULL */
+    lisp printed;  /* the symbol %PRINTED, once it has been looked for */
 };
 
 static void print_object(struct printer *p, lisp x);
@@ -211,12 +226,48 @@ static void print_function(struct printer *p, lisp x)
     put_char(p, '>');
 }
 
+/* Is this a structure that Lisp writes? Its type's name says so, with
+ * %PRINTED on its property list. */
+static int written_by_lisp(struct printer *p, lisp name)
+{
+    if (!lisp_is_symbol(name))
+        return 0;
+    if (!p->printed)
+        p->printed = lisp_symbol_in(lisp_roots.common_lisp, "%PRINTED", 0);
+    for (lisp l = lisp_as_symbol(name)->plist; lisp_is_cons(l) && lisp_is_cons(lisp_as_cons(l)->cdr);
+         l = lisp_as_cons(lisp_as_cons(l)->cdr)->cdr)
+        if (lisp_as_cons(l)->car == p->printed)
+            return lisp_as_cons(lisp_as_cons(l)->cdr)->car != LISP_NIL;
+    return 0;
+}
+
 /* #S(NAME :SLOT value ...): the names come from the structure's type. */
 static void print_structure(struct printer *p, lisp x)
 {
     const struct lisp_structure *s = lisp_as_structure(x);
     lisp names = s->type;
 
+    if (lisp_is_cons(names) && written_by_lisp(p, lisp_as_cons(names)->car)) {
+        lisp text = LISP_NIL;
+
+        if (p->ask && p->ask->found) {
+            *p->ask->found = lisp_cons(x, *p->ask->found); /* to be asked for: nothing of it is written this time */
+            return;
+        }
+        if (p->ask && p->ask->texts && lisp_is_cons(*p->ask->texts)) {
+            text = lisp_as_cons(*p->ask->texts)->car;
+            *p->ask->texts = lisp_as_cons(*p->ask->texts)->cdr;
+        }
+        if (lisp_is(text, LISP_STRING)) /* what Lisp said */
+            for (uint64_t i = 0; i < lisp_length(lisp_as_string(text)->header); i++)
+                put_char(p, lisp_as_string(text)->chars[i]);
+        else { /* nobody was asked, or nothing was said */
+            put_text(p, "#<");
+            print_name(p, lisp_as_symbol(lisp_as_cons(names)->car)->name);
+            put_char(p, '>');
+        }
+        return;
+    }
     put_text(p, "#S(");
     print_object(p, lisp_as_cons(names)->car);
     for (uint64_t i = 0; i < lisp_length(s->header) && p->left; i++) {
@@ -348,16 +399,19 @@ static void print_object(struct printer *p, lisp x)
     }
 }
 
-void lisp_print(lisp x, void (*put)(void *to, char c), void *to)
+void lisp_print_asking(lisp x, int escape, void (*put)(void *to, char c), void *to, struct lisp_printing *ask)
 {
-    struct printer p = { put, to, 1, 0, LIMIT };
+    struct printer p = { put, to, escape, 0, LIMIT, ask, 0 };
 
     print_nested(&p, x);
 }
 
+void lisp_print(lisp x, void (*put)(void *to, char c), void *to)
+{
+    lisp_print_asking(x, 1, put, to, NULL);
+}
+
 void lisp_princ(lisp x, void (*put)(void *to, char c), void *to)
 {
-    struct printer p = { put, to, 0, 0, LIMIT };
-
-    print_nested(&p, x);
+    lisp_print_asking(x, 0, put, to, NULL);
 }

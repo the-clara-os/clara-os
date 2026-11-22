@@ -102,8 +102,9 @@
 (defstruct tb fn barrier (dynamic nil) (tag nil) (count 0) (places nil) (depth 0) (records 0) (bound 0))
 
 ;; What is in sight where a form stands: the variables and the functions by
-;; their names, a function being a variable too or (:MACRO . function) for
-;; one of MACROLET; the blocks; the tags, each as (tag tagbody number); the
+;; their names, a variable being (:SYMBOL-MACRO . form) when it is a name of
+;; SYMBOL-MACROLET's, and a function being a variable too or (:MACRO .
+;; function) for one of MACROLET; the blocks; the tags, each as (tag tagbody number); the
 ;; function that the form is part of; and the barrier, which is another
 ;; object wherever a jump out would leave something undone.
 (defstruct env (variables nil) (functions nil) (blocks nil) (tags nil) (fn nil) (barrier nil))
@@ -157,8 +158,9 @@
   (cond ((or (null name) (eq name t) (keywordp name)) (list :const name))
         ((clara:variable-kind name) (list :special name))
         (t (let ((found (assoc name (env-variables env))))
-             (cond (found (use (cdr found) env) (list :ref (cdr found)))
-                   (t (list :special name)))))))
+             (cond ((null found) (list :special name))
+                   ((consp (cdr found)) (convert (cddr found) env)) ; the form that SYMBOL-MACROLET gave the name
+                   (t (use (cdr found) env) (list :ref (cdr found))))))))
 
 (defun count-parts (list)
   (let ((count 0))
@@ -390,13 +392,16 @@
           (problem :error "SETQ has no value for ~S" name))
         (unless (and (symbolp name) (not (eq (clara:variable-kind name) :constant)))
           (problem :error "~S cannot be set: it is not a variable" name))
-        (let ((value (convert (cadr rest) env))
-              (found (if (clara:variable-kind name) nil (assoc name (env-variables env)))))
-          (cond (found
-                 (use (cdr found) env)
-                 (setf (var-assigned (cdr found)) t)
-                 (push (list :setq (cdr found) value) nodes))
-                (t (push (list :set-special name value) nodes))))))
+        (let ((found (if (clara:variable-kind name) nil (assoc name (env-variables env)))))
+          (cond ((and found (consp (cdr found)))
+                 ;; a name of SYMBOL-MACROLET's: the form that it stands for is the place
+                 (push (convert (list 'setf (cddr found) (cadr rest)) env) nodes))
+                (found
+                 (let ((value (convert (cadr rest) env)))
+                   (use (cdr found) env)
+                   (setf (var-assigned (cdr found)) t)
+                   (push (list :setq (cdr found) value) nodes)))
+                (t (push (list :set-special name (convert (cadr rest) env)) nodes))))))
     (if nodes
         (list :progn (reverse nodes))
         (list :const nil))))
@@ -517,6 +522,19 @@
                            (clara.unsafe:make-compiled-function
                             (generate (convert-expander name (cadr definition) (cddr definition) outside))))
                     (env-functions inner)))))
+    (convert-progn (body-forms (cddr form)) inner)))
+
+;; SYMBOL-MACROLET: each name stands for its form in the body, where it is
+;; evaluated and where it is set. Nothing is made for it: the name is in
+;; sight as a variable that is a form, until something binds it again.
+(defun c-symbol-macrolet (form env)
+  (let ((inner (copy-env env)))
+    (dolist (binding (cadr form))
+      (let ((name (if (consp binding) (car binding) nil)))
+        (unless (and (symbolp name) (not (clara:variable-kind name)))
+          (problem :error "~S cannot be the name of a symbol macro" name))
+        (setf (env-variables inner)
+              (cons (list* name :symbol-macro (cadr binding)) (env-variables inner)))))
     (convert-progn (body-forms (cddr form)) inner)))
 
 ;; Where the stack is as deep as the values of a form are many, no jump
@@ -773,7 +791,8 @@
             (list 'setq 0 nil 'c-setq) (list 'block 1 nil 'c-block) (list 'return-from 1 2 'c-return-from)
             (list 'tagbody 0 nil 'c-tagbody) (list 'go 1 1 'c-go) (list 'catch 1 nil 'c-catch)
             (list 'throw 2 2 'c-throw) (list 'flet 1 nil 'c-flet) (list 'labels 1 nil 'c-labels)
-            (list 'macrolet 1 nil 'c-macrolet) (list 'multiple-value-call 1 nil 'c-multiple-value-call)
+            (list 'macrolet 1 nil 'c-macrolet) (list 'symbol-macrolet 1 nil 'c-symbol-macrolet)
+            (list 'multiple-value-call 1 nil 'c-multiple-value-call)
             (list 'multiple-value-prog1 1 nil 'c-multiple-value-prog1)
             (list 'multiple-value-bind 2 nil 'c-multiple-value-bind)
             (list 'destructuring-bind 2 nil 'c-destructuring-bind) (list 'eval-when 1 nil 'c-eval-when)

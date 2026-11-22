@@ -210,6 +210,288 @@
   (unless (or (string= name "QUASIQUOTE") (external-p name "COMMON-LISP"))
     (failed "the evaluator has the special form ~A, which Common Lisp does not have" name)))
 
+;;; The object system (lisp/clos.lisp). It is the second file that SBCL
+;;; cannot load as it stands: the names that it exports from COMMON-LISP on
+;;; the kernel are SBCL's own here. So it is read a form at a time into
+;;; CLARA.CLOS with those names hidden behind symbols of that package, and
+;;; what it asks of the substrate is answered by lisp/host/objects.lisp.
+;;; That leaves two object systems side by side, this one and SBCL's, and
+;;; the second is the one piece of these tests that nobody here wrote:
+;;; whatever is asked of the one is asked of the other, and the answers
+;;; have to be the same.
+
+(defvar *object-names* nil)
+
+(defun load-objects ()
+  (with-open-file (stream (source "lisp/clos.lisp") :external-format :utf-8)
+    (let* ((*package* (find-package "CLARA.TESTS"))
+           (first (read stream)) (second (read stream)) (third (read stream)) (fourth (read stream)))
+      (unless (and (equal first '(in-package "COMMON-LISP")) (eq (car second) 'export)
+                   (eq (car third) 'defpackage) (equal fourth '(in-package "CLARA.CLOS")))
+        (failed "lisp/clos.lisp does not begin with the four forms that the tests take it by"))
+      (setq *object-names* (mapcar #'symbol-name (cadr (cadr second))))
+      (eval third)
+      (shadow *object-names* "CLARA.CLOS")
+      (load-source "lisp/host/objects.lisp")
+      (let ((*package* (find-package "CLARA.CLOS")))
+        (loop
+          (let ((form (read stream nil stream)))
+            (when (eq form stream)
+              (return))
+            (handler-bind ((warning (lambda (condition)
+                                      (unless (typep condition 'style-warning)
+                                        (failed "lisp/clos.lisp: ~A" condition))
+                                      (muffle-warning condition))))
+              (eval form))))))))
+
+(load-objects)
+(dolist (name '("STANDARD-OBJECT" "CLASS" "STANDARD-GENERIC-FUNCTION" "STANDARD-METHOD"))
+  (clara.clos::printed-by-method (find-symbol name "CLARA.CLOS")))
+
+;; A name that the file exports has to be Common Lisp's, and one that the
+;; language had before it: such a name the file may call, and here it would
+;; be calling a symbol of its own that nothing defines.
+(let ((had (append (exports (section (lines (file-text "lisp/boot.lisp")) nil "(in-package \"CLARA\")"))
+                   (table-names "kernel/lisp/builtin.c") (table-names "kernel/lisp/eval.c"))))
+  (check t (> (length *object-names*) 50))
+  (dolist (name *object-names*)
+    (incf *checks*)
+    (cond ((not (external-p name "COMMON-LISP"))
+           (failed "clos.lisp exports ~A from COMMON-LISP, which Common Lisp does not have" name))
+          ((member name had :test #'string=)
+           (failed "clos.lisp exports ~A from COMMON-LISP, which the language has without it" name)))))
+
+;; A transcript, as tools/boottest.sh types one at a kernel: the lines
+;; that begin with "> ", and with two spaces for a form that goes on, are
+;; typed, and the lines after them are the answer.
+(defun transcript (name)
+  (let ((entries nil) (typed nil) (answer nil))
+    (flet ((entry ()
+             (when typed
+               (push (list typed (reverse answer)) entries))
+             (setq typed nil answer nil)))
+      (dolist (line (lines (file-text name)))
+        (cond ((starts-with "> " line)
+               (entry)
+               (setq typed (subseq line 2)))
+              ((and typed (null answer) (starts-with "  " line))
+               (setq typed (format nil "~A~%~A" typed (subseq line 2))))
+              ((and typed (plusp (length line)))
+               (push line answer))))
+      (entry))
+    (reverse entries)))
+
+;; What a listener answers to a text that is read in PACKAGE, as
+;; lisp/listener.lisp does it: what the forms write, the values of each on
+;; a line of its own, or the error; and whether there was an error. What
+;; SBCL's compiler has to say of a form that is meant to fail goes nowhere.
+(defun answer-of (text package)
+  (let ((*package* package) (*print-pretty* nil) (error nil) (*error-output* (make-broadcast-stream)))
+    (values (remove "" (lines (with-output-to-string (*standard-output*)
+                                (handler-case
+                                    (handler-bind ((warning #'muffle-warning))
+                                      (let ((start 0))
+                                        (loop
+                                          (multiple-value-bind (form position)
+                                              (read-from-string text nil text :start start)
+                                            (when (eq form text)
+                                              (return))
+                                            (setq start position)
+                                            (dolist (value (multiple-value-list (eval form)))
+                                              (fresh-line)
+                                              (prin1 value))
+                                            (fresh-line)))))
+                                  (serious-condition (condition)
+                                    (setq error t)
+                                    (fresh-line)
+                                    (format t "error: ~A" condition)))))
+                    :test #'string=)
+            error)))
+
+;; The two worlds: OBJECTS.SBCL has Common Lisp as SBCL has it, and
+;; OBJECTS.CLARA the same with the names of lisp/clos.lisp in place of
+;; SBCL's.
+(defvar *theirs* (make-package "OBJECTS.SBCL" :use '("COMMON-LISP")))
+(defvar *ours* (make-package "OBJECTS.CLARA" :use '("COMMON-LISP")))
+(shadowing-import (mapcar (lambda (name) (find-symbol name "CLARA.CLOS")) *object-names*) *ours*)
+
+;; tools/objects.txt is typed at a kernel by `make test`, which holds the
+;; kernel to its answers. Here the same forms are given to lisp/clos.lisp
+;; under SBCL, which has to give those answers to the letter, and to SBCL's
+;; own object system, which has to give them too: where the answer is an
+;; error it has to fail, in whatever words, and where the answer shows an
+;; object that has no text to read back, a #<, it has to go well. So a form
+;; of that file says nothing that the two systems put differently, and
+;; every error in it is one that lisp/clos.lisp words itself.
+(let ((entries (transcript "tools/objects.txt")))
+  (check t (> (length entries) 150))
+  (dolist (entry entries)
+    (destructuring-bind (text expected) entry
+      (incf *checks*)
+      (let ((ours (answer-of text *ours*)))
+        (unless (equal ours expected)
+          (failed "~A~%   lisp/clos.lisp answers ~S~%   and tools/objects.txt has ~S" text ours expected)))
+      (multiple-value-bind (theirs error) (answer-of text *theirs*)
+        (cond ((some (lambda (line) (starts-with "error: " line)) expected)
+               (unless error
+                 (failed "~A~%   SBCL answers ~S~%   where tools/objects.txt has an error" text theirs)))
+              ((some (lambda (line) (search "#<" line)) expected)
+               (when error
+                 (failed "~A~%   SBCL answers ~S" text theirs)))
+              ((not (equal theirs expected))
+               (failed "~A~%   SBCL answers ~S~%   and tools/objects.txt has ~S" text theirs expected)))))))
+
+;; Where lisp/clos.lisp is not SBCL on purpose, it is asked alone. The class
+;; of an object of the language's own is the standard's, where SBCL has
+;; classes of its own below those: a 5 is an INTEGER here, and a FIXNUM
+;; there.
+(flet ((ours (text)
+         (answer-of text *ours*)))
+  (check '("(INTEGER CHARACTER SYMBOL NULL CONS STRING VECTOR FUNCTION PACKAGE)")
+         (ours "(mapcar (lambda (x) (class-name (class-of x)))
+                        (list 5 #\\a 'a nil '(1) \"s\" (vector 1) #'car (find-package \"KEYWORD\")))"))
+  (check '("((NULL SYMBOL LIST SEQUENCE T) (STRING VECTOR ARRAY SEQUENCE T) (INTEGER RATIONAL REAL NUMBER T) (CONS LIST SEQUENCE T))")
+         (ours "(mapcar (lambda (name) (mapcar #'class-name (clara.clos::class-precedence-list (find-class name))))
+                        '(null string integer cons))"))
+  ;; A function that is defined under the name of a generic function is an ordinary function from then
+  ;; on, and a method for the name makes a new generic function, with none of the old one's methods.
+  ;; SBCL refuses the method.
+  (ours "(defgeneric morph (thing) (:method ((thing integer)) 'generic) (:method ((thing symbol)) 'a-symbol))")
+  (check '("MORPH" "PLAIN") (ours "(defun morph (thing) thing 'plain) (morph 1)"))
+  (check '("AGAIN" "error: MORPH has no method for the arguments (A)")
+         (ours "(progn (defmethod morph ((thing integer)) 'again) (morph 1)) (morph 'a)"))
+  ;; A class that cannot be defined again as it is asked stays what it was, with the classes below it:
+  ;; A would be a kind of D, which is a kind of it. SBCL leaves such a class half done.
+  (check '("REFUSED" "((B C) (D B C A STANDARD-OBJECT T) (X))")
+         (ours "(handler-case (defclass a (d) ()) (error () 'refused))
+                (let ((d (make-instance 'd)))
+                  (list (list (x d) (y d)) (mapcar #'class-name (clara.clos::class-precedence-list (find-class 'd)))
+                        (mapcar #'clara.clos::slot-name (clara.clos::class-direct-slots (find-class 'a)))))")))
+
+;; The same text in both worlds, which have to answer alike: both with an
+;; error, or both with the same values, as far as a value has a text that
+;; reads back.
+(defun both (control &rest arguments)
+  (let ((text (apply #'format nil control arguments)))
+    (incf *checks*)
+    (multiple-value-bind (ours our-error) (answer-of text *ours*)
+      (multiple-value-bind (theirs their-error) (answer-of text *theirs*)
+        (cond ((or our-error their-error)
+               (unless (and our-error their-error)
+                 (failed "~A~%   lisp/clos.lisp answers ~S~%   and SBCL ~S" text ours theirs)))
+              ((some (lambda (line) (search "#<" line)) ours))
+              ((not (equal ours theirs))
+               (failed "~A~%   lisp/clos.lisp answers ~S~%   and SBCL ~S" text ours theirs)))
+        (values (not our-error) ours)))))
+
+;; Numbers that are the same at every run.
+(defvar *chance* 20261122)
+(defun chance (below)
+  (setq *chance* (mod (+ (* *chance* 1103515245) 12345) 2147483648))
+  (mod (floor *chance* 65536) below))
+
+;; Classes made at random, each a kind of up to three of the ones before
+;; it, in an order that chance picks: 300 of them, of which a good part
+;; cannot be put in an order at all. The two systems have to refuse the
+;; same ones, and to put the others in the same order to the last class.
+;; SBCL says so when the class is first needed, and here it is said as the
+;; class is defined; a class that was refused is not built on, and SBCL,
+;; which keeps such a class, is told that it is a kind of nothing.
+(defvar *made-classes* nil)
+(dotimes (i 300)
+  (let ((above nil))
+    (dotimes (j (chance 4))
+      (when *made-classes*
+        (pushnew (nth (chance (min 12 (length *made-classes*))) *made-classes*) above)))
+    (incf *checks*)
+    (let* ((definition (format nil "(defclass rc~D (~{rc~D~^ ~}) ())" i above))
+           (ours (nth-value 1 (answer-of definition *ours*)))
+           (theirs (nth-value 1 (answer-of (format nil "(progn ~A (sb-mop:finalize-inheritance (find-class 'rc~D)))"
+                                                   definition i)
+                                           *theirs*))))
+      (cond ((not (eq ours theirs))
+             (failed "~A: lisp/clos.lisp ~:[takes~;refuses~] it, and SBCL ~:[takes~;refuses~] it"
+                     definition ours theirs))
+            (ours
+             (answer-of (format nil "(defclass rc~D () ())" i) *theirs*))
+            (t
+             (push i *made-classes*)
+             (let ((ours (answer-of (format nil "(mapcar #'class-name (clara.clos::class-precedence-list (find-class 'rc~D)))" i)
+                                    *ours*))
+                   (theirs (answer-of (format nil "(remove 'sb-pcl::slot-object (mapcar #'class-name (sb-mop:class-precedence-list (find-class 'rc~D))))" i)
+                                      *theirs*)))
+               (unless (equal ours theirs)
+                 (failed "the classes above RC~D (~{RC~D~^ ~}):~%   lisp/clos.lisp has ~A~%   and SBCL ~A"
+                         i above ours theirs))))))))
+(check t (> (length *made-classes*) 150))
+(check t (< (length *made-classes*) 290))
+
+;; Methods at random for pairs of those classes, each of which says its
+;; number and calls on when there is a next one, and then calls with
+;; instances of pairs of classes at random: which methods run, and in which
+;; order, has to be the same in both systems, call for call.
+(both "(defgeneric rg (one other))")
+(both "(defmethod rg (one other) (list 'last))")
+(dotimes (i 120)
+  (both "(progn (defmethod rg ((one rc~D) (other rc~D)) (cons ~D (if (next-method-p) (call-next-method) '(none)))) ~D)"
+        (nth (chance (length *made-classes*)) *made-classes*)
+        (nth (chance (length *made-classes*)) *made-classes*)
+        i i)
+  (dotimes (j 4)
+    (both "(rg (make-instance 'rc~D) (make-instance 'rc~D))"
+          (nth (chance (length *made-classes*)) *made-classes*)
+          (nth (chance (length *made-classes*)) *made-classes*))))
+
+;; The same with the words that go before a method's parameters, and for
+;; one argument: what runs before, around and after, and in which order.
+(both "(defvar *ran* nil)")
+(both "(defgeneric rq (thing))")
+(both "(defmethod rq (thing) (push 'last *ran*) 'value)")
+(dotimes (i 80)
+  (let ((class (nth (chance (length *made-classes*)) *made-classes*)))
+    (case (chance 4)
+      (0 (both "(progn (defmethod rq ((thing rc~D)) (push ~D *ran*) (call-next-method)) ~D)" class i i))
+      (1 (both "(progn (defmethod rq :before ((thing rc~D)) (push '(before ~D) *ran*)) ~D)" class i i))
+      (2 (both "(progn (defmethod rq :after ((thing rc~D)) (push '(after ~D) *ran*)) ~D)" class i i))
+      (3 (both "(progn (defmethod rq :around ((thing rc~D)) (push '(around ~D) *ran*) (list ~D (call-next-method))) ~D)"
+               class i i i))))
+  (dotimes (j 3)
+    (both "(progn (setq *ran* nil) (list (rq (make-instance 'rc~D)) (reverse *ran*)))"
+          (nth (chance (length *made-classes*)) *made-classes*))))
+
+;; Classes that are defined again, at random. They are a second family,
+;; each a kind of up to three of the ones before it with the newest first,
+;; which is an order that can always be had: SBCL keeps a class that it
+;; refused among the ones below the classes it was to be a kind of, and
+;; trips over it when one of those is defined again. Each has an instance,
+;; and some have a method. Then, thirty times over, one of them is defined
+;; again with other classes above it, with or without the slot that it
+;; had, and with a new one; and after each of those every third instance is
+;; asked what it holds, what it is, and which methods run for it. The
+;; instances have to follow, and the two systems to agree.
+(defun older (i)
+  (let ((above nil))
+    (dotimes (j (chance 4))
+      (when (plusp i)
+        (pushnew (chance i) above)))
+    (sort above #'>)))
+
+(both "(defgeneric rs (thing) (:method ((thing t)) nil))")
+(dotimes (i 30)
+  (both "(progn (defclass rd~D (~{rd~D~^ ~}) ((own~D :initarg :own :initform ~D :accessor own~D))) ~D)"
+        i (older i) i i i i)
+  (both "(defvar *rd~D* (make-instance 'rd~D :own '(given ~D)))" i i i)
+  (when (zerop (chance 2))
+    (both "(progn (defmethod rs ((thing rd~D)) (cons ~D (call-next-method))) ~D)" i i i)))
+(dotimes (step 30)
+  (let ((i (chance 30)))
+    (both "(progn (defclass rd~D (~{rd~D~^ ~}) (~:[~*~*~*~;(own~D :initarg :own :initform ~D :accessor own~D) ~](more~D :initform '(more ~D) :accessor more~D))) ~D)"
+          i (older i) (zerop (chance 2)) i i i i step i step)
+    (dotimes (j 30)
+      (when (= (mod (+ j step) 3) 0)
+        (both "(list (rs *rd~D*) (handler-case (own~D *rd~D*) (error () 'gone)) (handler-case (more~D *rd~D*) (error () 'none)) (typep *rd~D* 'rd~D) (typep *rd~D* 'rd~D))"
+              j j j i j j i j (chance 30))))))
+
 ;;; Whatever the compiler makes from here on is translated for the two
 ;;; processors as well (lisp/native.lisp), each function for both, and the
 ;;; code is looked at as far as that can be done without a processor to
@@ -517,6 +799,15 @@
  ;; macros
  (macrolet ((twice (x) (list '* 2 x))) (twice 21))
  (macrolet ((twice (x) (list '* 2 x))) (flet ((twice (x) (+ x 1))) (twice 21)))
+ ;; names that stand for forms
+ (let ((pair (cons 1 2))) (symbol-macrolet ((head (car pair))) (list head (let ((head 5)) head))))
+ (let ((x 1)) (symbol-macrolet ((x (car (list 5)))) (list x (let ((x 7)) x) ((lambda (x) x) 9) (flet ((f (x) x)) (f 8)))))
+ (symbol-macrolet ((x 1)) (symbol-macrolet ((y (+ x 1))) (let ((x 10)) (list x y))))
+ (funcall (symbol-macrolet ((x (car y))) (let ((y (list 3))) (lambda () x))))
+ (multiple-value-list (symbol-macrolet ((x 1)) (declare (ignorable x)) (values x 2)))
+ (let ((pair (cons 1 2))) (symbol-macrolet ((head (car pair)) (tail (cdr pair))) (setq head 10 tail 20) (list head tail pair)))
+ (symbol-macrolet ((nil 1)) 2)
+ (symbol-macrolet ((*cv* 1)) 2)
  (flet ((twice (x) (+ x 1))) (macrolet ((twice (x) (list '* 2 x))) (twice 21)))
  (progn (defmacro cm-twice (x) (list '* 2 x)) (flet ((cm-twice (x) (+ x 1))) (cm-twice 5)))
  (macrolet ((pair ((a b) &body body) (list* 'let (list (list a 1) (list b 2)) body))) (pair (x y) (list y x)))
@@ -7346,7 +7637,35 @@
                         (defvar one 'a-variable-of-the-name-of-a-function)~%"
                    clara.system::*first-lines*)
            (on-disk *machine-disk* "/home/defined.lisp"))
+    ;; The methods of a generic function are so many forms that begin alike: each is written down, and
+    ;; one takes the place of another only when it is the same method, by the words before its parameters
+    ;; and by what each parameter is for.
+    (typed "(defmethod area ((s square)) 1)" "COMMON-LISP-USER")
+    (typed "(defmethod area ((s circle)) 2)" "COMMON-LISP-USER")
+    (typed "(defmethod area :before ((s square)) 3)" "COMMON-LISP-USER")
+    (typed "(defmethod area ((shape square)) 4)" "COMMON-LISP-USER")
+    (typed "(defmethod (setf area) (value (s square)) 5)" "COMMON-LISP-USER")
+    (typed "(defmethod (setf area) (new (s square)) 6)" "COMMON-LISP-USER")
+    (let ((text (on-disk *machine-disk* "/home/defined.lisp")))
+      (check '(nil t t t nil t)
+             (mapcar (lambda (form) (and (search form text) t))
+                     '("(defmethod area ((s square)) 1)" "(defmethod area ((s circle)) 2)"
+                       "(defmethod area :before ((s square)) 3)" "(defmethod area ((shape square)) 4)"
+                       "(defmethod (setf area) (value (s square)) 5)" "(defmethod (setf area) (new (s square)) 6)")))
+      ;; and the one that took another's place stands where that one stood
+      (check t (< (search "((shape square)) 4)" text) (search "((s circle)) 2)" text))))
     (check (list pages t) (list (clara.host:allocated-pages) (in-order-p *machine-disk*)))))
+(flet ((key (text)
+         (clara.system::key-of (read-from-string text) *package*)))
+  (check '(t t nil nil nil nil t)
+         (list (equal (key "(defmethod area ((s square)) 1)") (key "(defmethod area ((shape square)) (* 2 2))"))
+               (equal (key "(defmethod area :before ((s square) &optional (x 1)) 1)")
+                      (key "(defmethod area :before ((s square) &optional y) 2)"))
+               (equal (key "(defmethod area ((s square)) 1)") (key "(defmethod area ((s circle)) 1)"))
+               (equal (key "(defmethod area ((s square)) 1)") (key "(defmethod area :before ((s square)) 1)"))
+               (equal (key "(defmethod area ((s square) (n (eql 1))) 1)") (key "(defmethod area ((s square) (n (eql 2))) 1)"))
+               (equal (key "(defmethod area ((s square)) 1)") (key "(defmethod area ((s square) n) 1)"))
+               (equal (key "(defmethod area (s) 1)") (key "(defmethod area ((s t)) 1)")))))
 ;; It goes to the disk that the machine was started from, wherever names
 ;; are looked up at the moment; and what cannot be written is said, and is
 ;; nobody's error.
