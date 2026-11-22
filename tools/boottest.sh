@@ -45,6 +45,12 @@
 #                 which is {{secure}} in the session: the certificates that
 #                 the server shows are the ones in that directory, which
 #                 tools/certs.py makes)
+#        SOUND=capture (what the machine plays is written into
+#                 build/sound-<name>.wav and nothing is heard: the default.
+#                 Where the session says what is to be heard, in lines that
+#                 begin with ^H, that file has to hold it, by tools/heard.py.
+#                 Anything else is for tools/run.sh, as it stands: SOUND= is a
+#                 machine with no sound card)
 #        plus what tools/run.sh reads
 set -eu
 arch=${1:?usage: tools/boottest.sh <arch> [qemu args]}
@@ -67,8 +73,16 @@ typing=build/typing-$name
 heard=build/session-$name.txt
 scratch=build/scratch-$name.img
 boot=build/boot-$name.img
+wav=build/sound-$name.wav
 mkdir -p build
-rm -f "$shot" "$sock" "$keys" "$orders" "$heard" "$typing".* "$scratch"
+rm -f "$shot" "$sock" "$keys" "$orders" "$heard" "$typing".* "$scratch" "$wav"
+
+# What the machine plays goes into a file, at the pace that its card plays
+# at, so that the file has the numbers that the machine sent and no others.
+case "${SOUND-capture}" in
+capture) SOUND="-audiodev wav,id=sound,path=$wav,out.frequency=48000 -device virtio-sound-pci,audiodev=sound,streams=1" ;;
+esac
+export SOUND
 : > "$log"
 
 # A machine that is to fetch something gets somewhere to fetch it from,
@@ -164,6 +178,10 @@ dd if=/dev/zero of="$scratch" bs=1024 count=1024 2> /dev/null
 #   ^W pattern  wait until the kernel has printed a line that the pattern
 #               fits, grep's kind of pattern, before what follows: a ^M that
 #               is for a kernel which says nothing more by itself.
+#   ^H words    what the machine is to have played by the end, a line for
+#               every stretch of sound in the order they were played, as
+#               tools/heard.py says it: "500 ms, 220 turns, 8192 left, 8192
+#               right". Nothing is typed for it.
 # So the session is typed in parts, and a part waits for a line of the
 # kernel's: a Ctrl-C or a command, and what follows them, until the kernel
 # has echoed the line before, which it is evaluating by then; a line for
@@ -204,6 +222,7 @@ LC_ALL=C awk -v out="$typing" -v goes="$goes" '
     /^\^K$/     { begin_part(before); keyboard = 1; next }
     /^\^R$/     { part++; boots++; print boots + 1 > (out "." part ".boots"); commands = 0; next }
     /^\^W /     { part++; print substr($0, 4) > (out "." part ".grep"); commands = 0; next }
+    /^\^H /     { next }
     /^[> ] /    { if (keyboard) {
                       for (i = 3; i <= length($0); i++)
                           print "sendkey " keyname(substr($0, i, 1)) > (out "." part ".monitor")
@@ -336,6 +355,16 @@ check_volume() {
     [ -z "$work" ] || volume="its volumes are in order"
 }
 
+# What the machine played, when the session says what that was to be: the
+# file that QEMU wrote of it, as tools/heard.py describes it, against the
+# lines of the session that begin with ^H.
+check_sound() {
+    [ -n "$session" ] && grep -q '^^H ' "$session" || return 0
+    sed -n 's/^^H //p' "$session" > "build/hear-$name.txt"
+    python3 -I tools/heard.py "$wav" > "build/heard-$name.txt" 2>&1 || true
+    diff -u "build/hear-$name.txt" "build/heard-$name.txt"
+}
+
 # The lines that the boot report has to have, when some were asked for.
 expected() {
     [ -n "${EXPECT:-}" ] || return 0
@@ -367,6 +396,10 @@ while [ "$i" -lt $((timeout * 4)) ]; do
             exit 1
         fi
         expected || exit 1
+        if ! check_sound; then
+            echo "boottest $name: FAILED, the machine did not play what $session says (above: -to be heard, +heard, by tools/heard.py $wav)"
+            exit 1
+        fi
         if ! check_volume; then
             echo "boottest $name: FAILED, the volume on $checked that the kernel wrote to is not in order, by $fsck:"
             cat "build/fsck-$name.log"

@@ -2150,7 +2150,7 @@ static void new_world(void)
     static const char *const world[] = { "compiler.lisp", "native.lisp",   "font.lisp",    "console.lisp",
                                          "draw.lisp",     "pci.lisp",      "virtio.lisp",  "input.lisp",
                                          "disk.lisp",     "fat.lisp",      "type.lisp",     "random.lisp",   "net.lisp",
-                                         "listener.lisp",
+                                         "sound.lisp",    "listener.lisp",
                                          "windows.lisp",  "terminal.lisp", "system.lisp",   "tls.lisp" };
     uint64_t before[LISP_TYPES], after[LISP_TYPES], ticks, collections;
     char processor[16] = { 0 };
@@ -2323,6 +2323,11 @@ static void lisp_main(void)
     if (!lisp_evaluate(own_form("(let ((net (find-package \"CLARA.NET\")))"
                                 "  (if net (funcall (intern \"START\" net))))")))
         panic("lisp: the network did not start");
+    /* The sound card, when the machine has one: it is found, opened and told what it will be given
+     * to play, and plays nothing until something asks it to. */
+    if (!lisp_evaluate(own_form("(let ((sound (find-package \"CLARA.SOUND\")))"
+                                "  (if sound (funcall (intern \"START\" sound))))")))
+        panic("lisp: sound did not start");
     /* What draws finds the screen. A world that was saved before there was
      * anything to draw with has no such package, and starts without it. */
     if (!lisp_evaluate(own_form("(let ((draw (find-package \"CLARA.DRAW\")))"

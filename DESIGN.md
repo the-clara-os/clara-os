@@ -2004,6 +2004,115 @@ architectures (kernel/vm.c).
   (tools/fontcheck.c); FreeType's pictures were held against these by
   hand, and ROADMAP.md says what came of it.
 
+## Sound (decided in M19a, M19b and M19c, 2026-11-22)
+
+- The card is virtio's (lisp/sound.lisp, over lisp/virtio.lisp), the one
+  family of devices with drivers here, and QEMU has it: what the machine
+  plays goes to the sound of the computer it runs on. UTM gives a machine
+  another card unless it is told, one of Intel's, which would be a driver
+  of another family: registers of its own, a tree of parts to be asked
+  what they are, and an interrupt by a message of the older kind, which
+  nothing here sets up. So in UTM the card is chosen by hand, as the
+  keyboard is.
+- Sound is taken, not sent. A program says what is to sound, which adds
+  a voice to a list and returns; a thread of the card's puts the next
+  hundredth of a second together out of every voice that is sounding and
+  hands it to the card, whenever the card has room for one. The card is
+  given four such periods before the first is played. The clock that
+  moves threads on ticks a hundred times a second, so a thread that
+  computes can keep the card's thread waiting for one of them, and a
+  collection for part of another; with fewer periods ahead a gap would be
+  heard, and with more a sound that is added to what plays would come
+  later than the twentieth of a second that it comes now.
+- Time is counted in frames and never read from a clock. A note is so
+  many frames long, a voice is at such a frame, and a period is the next
+  480 of them, however late the thread comes to it. So what is played is
+  the same numbers every time, on a machine that is quick and on one that
+  is emulated, and a test can hold them all against what they should be.
+- It is all Lisp, and nothing was added to the substrate. Drawing has its
+  loops over pixels in C (M11), and the fonts one more (M18a); since M16b
+  the processor runs Lisp, and here the loops are a table looked up, two
+  multiplications and some additions for each frame of a voice, of which
+  every one has an instruction of its own. A voice costs half a
+  thousandth of a second for a second of sound where the processor is the
+  computer's own, and fifteen where it is emulated, with fifty-five more
+  there, once for all voices, to write the frames where the card reads
+  them.
+- A wave is a table of 1024 numbers for one turn, gone through at the
+  pace of the pitch: a place in it is a whole number and 1048576ths, and
+  moves on by the pitch over the card's pace, to the nearest. No number
+  is made between two of the table, which leaves a tone with what is not
+  in it a thousand times fainter than itself. The sine is worked out
+  when the file is loaded, by its series, in numbers with 28 bits behind
+  the point, and every one of the 1024 is the nearest number to the real
+  sine: the tests hold them against SBCL's. Noise is no table: a number
+  held until the wave has gone round, and then the next of a row made by
+  a rule, so that it is the same noise every time.
+- A note comes up over 256 frames and goes down over its last 512, or
+  over the largest halvings of those that are a quarter and a half of a
+  short one. They are halvings so that the way up is a whole number of
+  65536ths a frame, and nothing has to be rounded on the way. There is
+  no other shape to a note: one that dies away, as a string that was
+  plucked, is an instrument, and there are none yet.
+- What the voices add up to is 67108864 times too large, a wave's number
+  times how far the note is up times how loud its side is, and is
+  brought back once for all of them, to the nearest, and kept at the ends
+  of 16 bits where it is past them. A wave at its loudest goes a quarter
+  of the way, so that four can sound together and be whole; a file at
+  its loudest is as loud as it was made.
+- How loud the machine is, is a variable of the world's
+  (`clara.sound:*volume*`), which the card's thread reads for every
+  period. So it holds for what is already sounding, and it is set and
+  not bound: a binding is the thread's that made it.
+- What is played returns at once, and `wait` is for whoever wants the
+  end. Two things that are played one after the other therefore begin as
+  far apart as the second took to be worked out, and `together` holds
+  what is played inside it back until its last form is done, and hands it
+  to the card in one piece.
+- A melody is a list, since this is Lisp: notes by their names, each for
+  a step, a list for the notes that sound together, a number at its end
+  for how many steps. The language has no fractions, so there are none in
+  a melody: the tempo is how many steps there are to the minute, and a
+  melody with shorter notes has a quicker tempo and its longer notes
+  written as several steps.
+- Stopping lets go of a note as its end would: the step is cut to where
+  it is and ten thousandths of a second more, which is its way down. So
+  nothing clicks, and nothing has to know how to fade.
+- Whatever is played ends with a period of nothing. A card that is given
+  no more may do as it likes with the last number that it had. And the
+  card is told to stop when it has been quiet for three tenths of a
+  second, not at once: what it was given last is still on its way to the
+  loudspeaker, and one sound is often followed by the next.
+- A machine without a card plays nothing, and that is not an error:
+  every function gives NIL there. A sound is seldom what a program is
+  for, and one that beeps when a key is pressed should not need to ask
+  first. What is wrong with what was asked for, a note that is none, is
+  an error on every machine. A card that stops answering is given up,
+  said once, and from then on the machine is one without a card.
+- A file of sound is a WAVE file of plain numbers, 8 or 16 bits, one
+  side or two: what every program that makes sound can write, and what
+  can be played by reading it. It is read whole into page frames, which
+  are given back when the last frame has been played, and brought to the
+  card's pace by going through its frames faster or slower than the card
+  takes them, the nearest frame before each time. Nothing in it is
+  trusted: every piece is held against the length of the file.
+- A world that is saved has the tables in it and nothing of the card:
+  the card, its thread and what it was playing are another machine's by
+  the next start, which finds the card anew.
+- It is tested against what it did not make. Under SBCL a card that the
+  tests make up keeps every number that it is given, fails the run when
+  it is asked out of order or given more than it was told to hold, and
+  can play at its own pace, say no, or say nothing; and the numbers are
+  held, every one, against a rule that works each frame out by itself,
+  in fractions, from how far the wave has gone round by then, where the
+  driver adds a step to the frame before. At a real kernel QEMU writes
+  what each machine of `make test` plays into a file, tools/heard.py says
+  what is in it, how long each stretch of sound is, how often it turns
+  and how far it goes on each side, and the session has the lines that it
+  is to say; the same forms played under SBCL give the same lines. And
+  files that macOS's own converter made of its system sounds were played
+  once, by hand, and came out of the card to the byte.
+
 ## Shutting down (decided in M15e, 2026-11-20)
 
 - Shutting down is something the system does, and not something that is

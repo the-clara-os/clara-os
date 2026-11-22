@@ -31,6 +31,15 @@
 #        RNG="-device virtio-rng-pci" (the device that makes numbers which nobody
 #        can guess, of the host's own making: the default. Nothing is fetched
 #        by HTTPS without one. RNG= gives a machine with none)
+#        SOUND="-audiodev coreaudio,id=sound -device virtio-sound-pci,audiodev=sound,streams=1"
+#        (the sound card the machine gets, and where what it plays goes: the
+#        default is a virtio card whose sound comes out of this computer, by
+#        the first way of QEMU's that there is here, CoreAudio on a Mac,
+#        PipeWire, PulseAudio or ALSA elsewhere, and into nothing when QEMU
+#        has none of them. SOUND= gives a machine with no card, which plays
+#        nothing; and
+#        SOUND="-audiodev wav,id=sound,path=heard.wav -device virtio-sound-pci,audiodev=sound,streams=1"
+#        writes what is played into a file, and nothing is heard)
 #        WORK=~/clara-work.img (a second disk, the user's own: a raw image with a
 #        FAT volume, for files that are to be apart from the machine's disk, and
 #        to outlive it. A .dmg that macOS made is such an image too, when it is
@@ -51,6 +60,19 @@ input=${INPUT--device virtio-keyboard-pci -device virtio-mouse-pci -device virti
 forward=${FORWARD:+,hostfwd=tcp:127.0.0.1:${FORWARD%%:*}-:${FORWARD##*:}}
 net=${NET--netdev user,id=net$forward -device virtio-net-pci,netdev=net}
 random=${RNG--device virtio-rng-pci}
+# What the machine plays goes out by the first of these that QEMU has
+# here; one stream, the one that plays, since nothing here records.
+if [ -z "${SOUND+set}" ]; then
+    out=none
+    for way in coreaudio pipewire pa alsa; do
+        if "qemu-system-$arch" -audiodev help 2> /dev/null | grep -qx "$way"; then
+            out=$way
+            break
+        fi
+    done
+    SOUND="-audiodev $out,id=sound -device virtio-sound-pci,audiodev=sound,streams=1"
+fi
+sound=$SOUND
 # Left to itself QEMU gives some machines a card of its own choosing, so no
 # card has to be said.
 [ -n "$net" ] || net="-nic none"
@@ -204,7 +226,7 @@ x86_64)
         -drive if=pflash,format=raw,readonly=on,file="$code" \
         -drive if=pflash,format=raw,file="$vars" \
         -drive if=none,id=esp,format=raw,file="$disk" -device virtio-blk-pci,drive=esp,bootindex=0 $input $net \
-        -serial "$serial" "$@" $random
+        -serial "$serial" "$@" $random $sound
     ;;
 aarch64)
     firmware "$share/edk2-aarch64-code.fd" "$share/edk2-arm-vars.fd" \
@@ -220,7 +242,7 @@ aarch64)
         -drive if=pflash,format=raw,readonly=on,file="$code" \
         -drive if=pflash,format=raw,file="$vars" \
         -drive if=none,id=esp,format=raw,file="$disk" -device virtio-blk-pci,drive=esp,bootindex=0 $input $net \
-        -device ramfb -serial "$serial" "$@" $random
+        -device ramfb -serial "$serial" "$@" $random $sound
     ;;
 *)
     echo "unknown arch: $arch" >&2

@@ -85,6 +85,7 @@ td:first-child { white-space: nowrap; }
     <li><a href="#fonts">Fonts</a></li>
     <li><a href="#windows">Windows</a></li>
     <li><a href="#applications">Applications</a></li>
+    <li><a href="#sound">Sound</a></li>
     <li><a href="#machine">Looking at the machine</a></li>
     <li><a href="#trouble">When something goes wrong</a></li>
     <li><a href="#names">Everything that is defined</a></li>
@@ -120,6 +121,7 @@ make run-x86_64    <span class="note"># emulated: the firmware takes a few secon
       <tr><td><code>MEM=1G make run-aarch64</code></td><td>a machine with that much memory, where it has 512 MiB otherwise</td></tr>
       <tr><td><code>WORK=~/clara-work.img make run-aarch64</code></td><td>a machine with a second disk, <a href="#work">one of your own</a></td></tr>
       <tr><td><code>NET= make run-aarch64</code></td><td>a machine without a <a href="#network">network card</a>, where it has one otherwise</td></tr>
+      <tr><td><code>SOUND= make run-aarch64</code></td><td>a machine without a <a href="#sound">sound card</a>, where it has one otherwise, whose sound comes out of your computer</td></tr>
     </table>
     <p>The machine starts from a disk image, <code>build/disk-aarch64.img</code> or <code>build/disk-x86_64.img</code>, which is made of the files in <code>build/esp</code> the first time and kept from then on. Files that you write are on it the next time, and so is a <a href="#image">world that you saved</a>. A newer build does not make the disk again: <code>make run-aarch64</code> hands the machine the build as a second disk, the system that is running takes it and starts the machine again, and the newer system comes up with your files where they were. <a href="#upgrade">A newer ClaraOS</a> says what happens there.</p>
     <table>
@@ -134,6 +136,7 @@ make run-x86_64    <span class="note"># emulated: the firmware takes a few secon
       <li>Add a Serial device, mode "Built-in Terminal". The system talks there as well as on the screen, and you can type there.</li>
       <li>For typing in the screen's own window, add a keyboard that ClaraOS has a driver for. UTM gives a machine USB devices, which it does not have one for. Under QEMU, Arguments, add two: <code>-device virtio-keyboard-pci</code> and <code>-device virtio-tablet-pci</code>. The second is the pointer, which the <a href="#windows">window manager</a> is worked with.</li>
       <li>To fetch by <a href="#https">HTTPS</a>, the machine needs a device that makes random numbers. When the system's report says <code>random: no device that makes numbers which nobody can guess</code>, add one more argument there: <code>-device virtio-rng-pci</code>.</li>
+      <li>For <a href="#sound">sound</a>, give the machine the card that ClaraOS has a driver for: in the virtual machine's settings, under Sound, the card <strong>Virtio Sound</strong> (<code>virtio-sound-pci</code>). With the card that UTM picks by itself, one of Intel's, the machine starts and plays nothing.</li>
       <li>Start.</li>
     </ol>
     <p>UTM copies the disk into the virtual machine, and that copy is the machine's from then on. To put a newer ClaraOS on it, give the machine the newer <code>build/claraos.img</code> as a second drive and tell the system to take it: <a href="#upgrade">A newer ClaraOS</a>. To go back to a system that nothing was written on, import <code>build/claraos.img</code> again in place of the drive; the files that were written on the old drive go with it, and so does a world that was saved there.</p>
@@ -148,8 +151,9 @@ make run-x86_64    <span class="note"># emulated: the firmware takes a few secon
       <tr><td>A screen</td><td>The one the firmware sets up, if there is one. Without it everything is on the serial port.</td></tr>
       <tr><td>A pointer</td><td>A virtio mouse or tablet, for the <a href="#windows">window manager</a>. Nothing else has a use for one.</td></tr>
       <tr><td>A network card</td><td>A virtio network card, for <a href="#network">fetching files</a> and <a href="#upgrade-network">a newer ClaraOS</a>. A machine without one starts and works all the same.</td></tr>
+      <tr><td>A sound card</td><td>A virtio sound card, for <a href="#sound">sound</a>. A machine without one starts and works all the same, and plays nothing.</td></tr>
     </table>
-    <p>It has no use yet for sound, for USB or for a clock.</p>
+    <p>It has no use yet for USB or for a clock.</p>
 
     <h3 id="report">What it says as it starts</h3>
     <p>The kernel reports what it finds and tests each part of itself before it uses it. On AArch64 under QEMU the report begins and ends like this:</p>
@@ -162,18 +166,19 @@ memory map: 33 regions
 threads: self-test passed, 55 switches: by the timer, by choice, on a lock, asleep, woken, stopped
 lisp: objects are tagged 64-bit words, in a heap at 0x0000400000000000 that begins with NIL
 <span class="note">...</span>
-pci: 7 devices, by the configuration space at #x4010000000
+pci: 8 devices, by the configuration space at #x4010000000
 <span class="note">...</span>
 input: 00:03.0 is a keyboard, QEMU Virtio Keyboard
 disk: 00:02.0 has 72081 sectors of 512 bytes, 35 MiB
 files: a FAT32 volume of 33 MiB on the disk 00:02.0, from its sector 2048 on
 net: 00:05.0 is a network card, 52:54:00:12:34:56 on the wire
+sound: 00:07.0 is a sound card: 48000 frames a second, left and right
 draw: a screen of 800 by 600 pixels
 type: 8 files of outlines came with the system, for the fonts Sans and Mono
 system: this is ClaraOS {{version}}-41d0c97b
 clara: reading the serial port and the keyboard: a form is evaluated, Ctrl-C stops it, Ctrl-D ends
 &gt; </code></pre>
-    <p>The lines that begin with <code>pci:</code>, <code>input:</code>, <code>disk:</code>, <code>files:</code>, <code>net:</code> and <code>draw:</code> say what the machine has: its devices, the keyboards and pointers among them, its disks, the volume that names of files are looked up on, its network card, and the screen that <a href="#drawing">pictures</a> are shown on. The line <code>type:</code> says which <a href="#fonts">fonts</a> the system brought with it. The line <code>system:</code> says which build of ClaraOS this is, its version and eight digits that are different for every build, and more lines follow it when <a href="#upgrade">a newer system</a> was taken. Lines that begin with <code>home:</code> say what was loaded of <a href="#home">your own text</a>, and lines that begin with <code>world:</code> what a world that was made again has of <a href="#across">the one before it</a>. A line that begins with <code>panic:</code> or <code>exception:</code> means the kernel has stopped. <a href="#trouble">When something goes wrong</a> has more about those.</p>
+    <p>The lines that begin with <code>pci:</code>, <code>input:</code>, <code>disk:</code>, <code>files:</code>, <code>net:</code>, <code>sound:</code> and <code>draw:</code> say what the machine has: its devices, the keyboards and pointers among them, its disks, the volume that names of files are looked up on, its network card, the card that <a href="#sound">sound</a> is played on, and the screen that <a href="#drawing">pictures</a> are shown on. The line <code>type:</code> says which <a href="#fonts">fonts</a> the system brought with it. The line <code>system:</code> says which build of ClaraOS this is, its version and eight digits that are different for every build, and more lines follow it when <a href="#upgrade">a newer system</a> was taken. Lines that begin with <code>home:</code> say what was loaded of <a href="#home">your own text</a>, and lines that begin with <code>world:</code> what a world that was made again has of <a href="#across">the one before it</a>. A line that begins with <code>panic:</code> or <code>exception:</code> means the kernel has stopped. <a href="#trouble">When something goes wrong</a> has more about those.</p>
 
     <h3 id="stop">Stopping it</h3>
     <p>The machine is shut down by asking it to:</p>
@@ -467,7 +472,7 @@ NIL</pre>
 &gt; (clara.system:system-file "boot.lisp")
 "/clara/{{version}}-8f3a1c2e/boot.lisp"</code></pre>
 <pre class="session">&gt; (clara.fat:names (clara.system:system-file ""))
-("arm64.lisp" "boot.lisp" "BOOTAA64.EFI" "BOOTX64.EFI" "compiler.lisp" "console.lisp" "disk.lisp" "draw.lisp" "editor.lisp" "fat.lisp" "files.lisp" "font.lisp" "Go-Bold-Italic.ttf" "Go-Bold.ttf" "Go-Italic.ttf" "Go-Mono-Bold-Italic.ttf" "Go-Mono-Bold.ttf" "Go-Mono-Italic.ttf" "Go-Mono.ttf" "Go-Regular.ttf" "input.lisp" "listener.lisp" "manifest" "native.lisp" "net.lisp" "pci.lisp" "random.lisp" "roots.pem" "self-test.lisp" "system.lisp" "terminal.lisp" "tls.lisp" "type.lisp" "virtio.lisp" "windows.lisp" "x86-64.lisp")</pre>
+("arm64.lisp" "boot.lisp" "BOOTAA64.EFI" "BOOTX64.EFI" "compiler.lisp" "console.lisp" "disk.lisp" "draw.lisp" "editor.lisp" "fat.lisp" "files.lisp" "font.lisp" "Go-Bold-Italic.ttf" "Go-Bold.ttf" "Go-Italic.ttf" "Go-Mono-Bold-Italic.ttf" "Go-Mono-Bold.ttf" "Go-Mono-Italic.ttf" "Go-Mono.ttf" "Go-Regular.ttf" "input.lisp" "listener.lisp" "manifest" "native.lisp" "net.lisp" "pci.lisp" "random.lisp" "roots.pem" "self-test.lisp" "sound.lisp" "system.lisp" "terminal.lisp" "tls.lisp" "type.lisp" "virtio.lisp" "windows.lisp" "x86-64.lisp")</pre>
     <p>Those are the system's Lisp files: the language's part that is written in Lisp, the compiler, the console, the drivers, the file system, the window manager and what sees to <a href="#stop">the machine as a whole</a>, and two that are not loaded until they are wanted, the <a href="#applications">applications</a> <code>editor.lisp</code> and <code>files.lisp</code>. <code>native.lisp</code> is what <a href="#processor">translates for the processor</a>, with a file for each kind of processor, <code>arm64.lisp</code> and <code>x86-64.lisp</code>, of which a machine loads its own. Beside them are a second copy of the kernels and <code>manifest</code>, the list of what the system is made of, which is what <a href="#upgrade">another machine reads</a> when it takes this system from this disk. The eight files whose names end in <code>.ttf</code> are the system's <a href="#fonts">fonts</a>, and <code>roots.pem</code> is the list of whom it <a href="#https">trusts</a>. Everything outside <code>/clara</code> and <code>/EFI</code> is yours, and no system writes there but for one file in <code>/home</code>.</p>
 
     <h3 id="reading">Reading and loading</h3>
@@ -1358,6 +1363,79 @@ NIL
     </ul>
   </section>
 
+  <section id="sound">
+    <h2>{{spleen:Sound}}</h2>
+    <p>The machine plays sound through its sound card, and <code>make run-aarch64</code> gives it one whose sound comes out of your computer. The functions are in the package <code>CLARA.SOUND</code>. Each of the ones that play returns at once, and what it asked for is played while you go on: the <code>T</code> says that the card has it to play.</p>
+<pre class="session">&gt; (clara.sound:beep)
+T
+&gt; (clara.sound:tone 440 500)
+T
+&gt; (clara.sound:tone 'c5 300 :wave :square :volume 40 :pan -100)
+T
+&gt; (clara.sound:wait)
+T</pre>
+    <ul>
+      <li><code>clara.sound:beep</code> is a short, high tone, for a program that has something to say and no words for it.</li>
+      <li><code>clara.sound:tone</code> takes a pitch and how long the tone lasts, in thousandths of a second, from 1 to 60000. A pitch is how many times a second the wave goes round, from 20 to 20000: 440 is the A that an orchestra tunes to, and twice the number is the same note an octave higher. The name of a <a href="#notes">note</a> is a pitch too.</li>
+      <li><code>:wave</code> is the shape of the wave, which is what gives a tone its colour. <code>:sine</code> is the plainest, and what a tone is unless you say otherwise; <code>:square</code> is hollow and loud, the sound of the first computer games; <code>:triangle</code> is soft; <code>:sawtooth</code> is sharp, like a bowed string; and <code>:noise</code> is a hiss, which is finer the higher its pitch.</li>
+      <li><code>:volume</code> is how loud, from 0 to 100, and <code>:pan</code> where between the two sides: -100 is the left side alone, 100 the right side alone, and 0, which it is unless you say otherwise, both alike.</li>
+      <li><code>clara.sound:wait</code> returns when everything has been played. <code>clara.sound:stop</code> ends what is being played: a note that is sounding is let go of, and is gone a few hundredths of a second later.</li>
+    </ul>
+
+    <h3 id="notes">Notes</h3>
+<pre class="session">&gt; (clara.sound:play '(c4 d4 e4 c4 c4 d4 e4 c4 e4 f4 (g4 2) e4 f4 (g4 2)) :tempo 480)
+T
+&gt; (clara.sound:wait)
+T
+&gt; (clara.sound:play '((c4 e4 g4 2) rest (c4 f4 a4 2) rest (c4 e4 g4 c5 4)) :wave :triangle)
+T
+&gt; (clara.sound:stop)
+T
+&gt; (clara.sound:tone 'h4 100)
+error: H4 is not a note: a note has a name like C4, F#3 or BB5, or is a number of times a second, or REST</pre>
+    <ul>
+      <li>A note is named by its letter, from <code>a</code> to <code>g</code>, and its octave, from 0 to 8. <code>c4</code> is the C in the middle of a piano, <code>a4</code> the A of 440, and an octave begins at its C. A <code>#</code> after the letter is the black key above it, as in <code>f#3</code>, and a <code>b</code> the one below, as in <code>bb5</code>; an <code>s</code> does what the <code>#</code> does. Without a number it is the octave 4. The name can be a symbol, a keyword or a string, and a number in the place of a note is a pitch, as for a tone.</li>
+      <li><code>clara.sound:play</code> takes a list of notes and plays them one after the other, each for a step. <code>:tempo</code> is how many steps there are to the minute, from 1 to 6000, and 120 unless you say otherwise.</li>
+      <li>A list in the place of a note is the notes that sound together, up to eight of them, and a number at its end is how many steps they last: <code>(g4 2)</code> is a G for two steps, <code>(c4 e4 g4)</code> three notes at once, and <code>(c4 e4 g4 2)</code> the three for two steps.</li>
+      <li><code>rest</code>, or <code>nil</code>, is a step in which nothing sounds.</li>
+      <li><code>:wave</code>, <code>:volume</code> and <code>:pan</code> are what they are for a tone, for every note of the list.</li>
+    </ul>
+    <p>A note comes up and goes down again over a few thousandths of a second, so that it does not begin or end with a click, and is as loud in between as it was asked to be. There is no instrument here whose notes die away, as a piano's do, and no note slides into the next.</p>
+
+    <h3 id="together">Several at once</h3>
+    <p>What is played while something else is still sounding is added to it, up to sixteen things at a time; one more than that is not played, and the function that asked gives <code>NIL</code>. Two calls one after the other begin as far apart as the second took to be worked out, and in music that is heard. <code>clara.sound:together</code> has everything that the forms inside it play begin at the same instant:</p>
+<pre class="session">&gt; (clara.sound:together
+    (clara.sound:play '(e4 d4 c4 d4 e4 e4 (e4 2)) :tempo 480 :wave :square :volume 40)
+    (clara.sound:play '((c3 4) (g3 4)) :tempo 480 :wave :triangle))
+T
+&gt; (clara.sound:wait)
+T</pre>
+
+    <h3 id="loud">How loud</h3>
+    <p><code>clara.sound:*volume*</code> is how loud the machine is, from 0 to 100. It holds for everything, also for what is already sounding, and it is set, with <code>SETQ</code>: a <code>LET</code> around one call changes nothing, since the sound is put together by another <a href="#threads">thread</a> than the one that asked for it.</p>
+<pre class="session">&gt; (setq clara.sound:*volume* 50)
+50
+&gt; (clara.sound:beep)
+T
+&gt; (setq clara.sound:*volume* 100)
+100</pre>
+    <p>At 100 and with the machine at 100, a wave goes a quarter as far as the card's numbers do, so that four things can sound together as loud as that and still be whole. What comes to more than the numbers hold is cut off at their ends, which is heard as a rasp.</p>
+
+    <h3 id="sound-files">Files of sound</h3>
+    <p><code>clara.sound:play-file</code> plays a file of sound of the commonest kind, a WAVE file, whose name usually ends in <code>.wav</code>: plain numbers of 8 or 16 bits, on one side or two, at any pace from 1000 to 192000 frames a second. The file is read whole before the first of it is heard. <code>:volume</code> and <code>:pan</code> are what they are for a tone, and at 100 a file is as loud as it was made.</p>
+<pre><code>&gt; (clara.sound:play-file "/home/chime.wav" :volume 60)
+T
+&gt; (clara.sound:play-file "/home/song.mp3")
+error: /home/song.mp3 is not a file of sound of the kind that is read here, a WAVE file</code></pre>
+    <p>A file gets onto the machine like any other: <a href="#work">A disk of your own</a>. On a Mac, <code>afconvert -f WAVE -d LEI16 song.mp3 song.wav</code> makes such a file of a file of another kind.</p>
+
+    <h3 id="no-card">A machine without a sound card</h3>
+    <p>On a machine that has no sound card, or none that there is a driver for, nothing is played, and that is no error: every function here gives <code>NIL</code> there and does nothing else, so a program that makes a sound when a key is pressed is the same program on such a machine. What is wrong with what was asked for, a note that is none, is an error on every machine. <code>(clara.sound:card)</code> says what plays, or <code>NIL</code>:</p>
+<pre><code>&gt; (clara.sound:card)
+"the sound card 00:07.0: 48000 frames a second, left and right"</code></pre>
+    <p>The driver is for virtio's sound card. What you play is heard a few hundredths of a second later, which is the time the numbers take through the card and through your computer. Nothing is recorded.</p>
+  </section>
+
   <section id="machine">
     <h2>{{spleen:Looking at the machine}}</h2>
     <p>The drivers are Lisp, each in a package of its own, and what they know can be asked at the prompt.</p>
@@ -1378,6 +1456,7 @@ NIL
       <tr><td><code>(clara.fat:volumes)</code></td><td>the FAT volumes on those disks. Names of files are looked up on the first, or on the one that <code>clara.fat:*volume*</code> is given: <a href="#work">a disk of your own</a>.</td></tr>
       <tr><td><code>(clara.fat:entries "/clara")</code></td><td>what a directory holds, with <code>clara.fat:entry-name</code>, <code>clara.fat:entry-size</code> and <code>clara.fat:entry-directory-p</code> for each entry</td></tr>
       <tr><td><code>(clara.input:devices)</code></td><td>the keyboards and pointers</td></tr>
+      <tr><td><code>(clara.sound:card)</code></td><td>the sound card, in a line, or <code>NIL</code> when the machine has none that there is a driver for</td></tr>
       <tr><td><code>(clara.input:pointer)</code></td><td>where the pointer is, and which of its buttons are down, as three values. Nothing draws it yet.</td></tr>
     </table>
 
@@ -1406,6 +1485,9 @@ error: nothing is mapped at #x0</pre>
       <tr><td>Nothing happens when you type in UTM's window.</td><td>The machine has no keyboard that ClaraOS has a driver for: the report says <code>input: no keyboard and no mouse that has a driver here</code>. Add the two QEMU arguments of <a href="#utm">In UTM</a>, or type in the serial terminal.</td></tr>
       <tr><td>On AArch64 in UTM, a line about the exception level, and then nothing.</td><td>The machine is emulated and not virtualized, which starts the kernel in a mode it does not handle yet. Use Virtualize on Apple silicon, or emulate x86_64.</td></tr>
       <tr><td>The titles of the windows are in the console's letters, and the window manager said <code>windows: Sans is not a font that can be had here</code>.</td><td>The <a href="#fonts">font</a> that <code>clara.windows:*font*</code> names is not there. The system's own are files of its directory, which the report's line <code>type:</code> counts; a disk that was put together by hand may lack them. Everything works without, in the letters that the console has.</td></tr>
+      <tr><td>Nothing is heard, and what plays gives <code>NIL</code>.</td><td>The machine has no sound card that ClaraOS has a driver for, and the report said <code>sound: no sound card that has a driver here</code>. Under QEMU, start it without <code>SOUND=</code>. In UTM, give it the card of <a href="#utm">In UTM</a>.</td></tr>
+      <tr><td>Nothing is heard, and what plays gives <code>T</code>.</td><td>The card has what was asked for. Look at how loud it was to be: <code>clara.sound:*volume*</code>, the <code>:volume</code> of the call, and the volume of your own computer, which the machine's sound goes through.</td></tr>
+      <tr><td><code>sound: the sound card ... has not played what it was given</code>, or a line like it</td><td>The card stopped answering while something was played, and is asked nothing more: <code>(clara.sound:card)</code> says so too. The machine goes on without sound until it is started again.</td></tr>
       <tr><td><code>error: the heap is full</code></td><td>A computation used the memory there is. It has been stopped, what it held is free again, and the prompt is back. A machine with more memory holds more.</td></tr>
       <tr><td><code>error: the stack is full</code></td><td>Forms nested too deep, or a function that calls itself without end.</td></tr>
       <tr><td>Boxes on the screen where characters should be.</td><td>The screen's font has the characters of ASCII. The characters themselves are right, and show on the serial port.</td></tr>
@@ -1501,6 +1583,10 @@ error: nothing is mapped at #x0</pre>
     <p>The two <a href="#applications">applications</a> that are files. Each package is there once its application has been launched, and gone again when it is unloaded; the one name of each is the function that <code>clara.windows:launch</code> calls.</p>
     <p class="names" data-package="CLARA.EDITOR"><code>clara.editor:edit</code></p>
     <p class="names" data-package="CLARA.FILES"><code>clara.files:browse</code></p>
+
+    <h3>The package CLARA.SOUND</h3>
+    <p><a href="#sound">Sound</a> says what each of these is for. <code>clara.sound:start</code> is what the system calls as it starts.</p>
+    <p class="names" data-package="CLARA.SOUND"><code>clara.sound:tone</code> <code>clara.sound:beep</code> <code>clara.sound:play</code> <code>clara.sound:together</code> <code>clara.sound:wait</code> <code>clara.sound:stop</code> <code>clara.sound:play-file</code> <code>clara.sound:*volume*</code> <code>clara.sound:card</code> <code>clara.sound:start</code></p>
 
     <h3>The console, the drivers and the file system</h3>
     <p>Each of these is a file of Lisp among <a href="#listing">the system's</a> with a package of its own, and these are the names that it lets the others use. Most are for the system itself: <a href="#machine">Looking at the machine</a> has the ones that tell something at the prompt. A function named <code>start</code> is what the system calls as it starts, and is not for calling again.</p>

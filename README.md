@@ -110,6 +110,13 @@ one that runs, its manifest is signed with the key that the system has
 (Ed25519, checked in the kernel), and every file is what the manifest
 says. `:from "https://.../"` names another place. What a connection is kept closed with is in the kernel too,
 each piece held against the examples of its standard at every boot.
+And the machine plays sound (lisp/sound.lisp): a driver for virtio's sound
+card, and a thread that adds up what is sounding, a hundredth of a second
+at a time. `(clara.sound:tone 440 500)` is a tone, of one of five shapes;
+`(clara.sound:play '(c4 e4 g4 (c5 2)))` plays notes by their names, one
+after the other or several together; and `(clara.sound:play-file
+"/home/chime.wav")` plays a file of sound. All of it is worked out in
+whole numbers, and all of it is Lisp.
 The same Lisp files load
 under SBCL on the host, where they are tested against a machine that is
 made up for the purpose.
@@ -179,7 +186,7 @@ Layout:
     kernel/lisp/     the Lisp runtime: objects and the heap, symbols and packages, the reader, the printer,
                      the evaluator, and the machine that compiled code runs on (vm.c)
     lisp/            Lisp sources: the language's own part, the compiler, the console, drawing, the drivers, the
-                     file system, the fonts, the network, the listener, the window manager and the terminal in a window, which the kernel loads as it starts, and
+                     file system, the fonts, the network, sound, the listener, the window manager and the terminal in a window, which the kernel loads as it starts, and
                      the two applications, editor.lisp and files.lisp, which the launcher loads when they are picked;
                      the build copies them to the system's directory on the ESP, \clara\<its name>, read at boot
     fonts/           the console font, Spleen 8x16, which tools/bdf2c.py turns into kernel/font.c, and the
@@ -192,7 +199,8 @@ Layout:
                      back, at a new world and at one that was saved), power.txt, upgrade.txt, at-once.txt,
                      trial.txt and network.txt (the same for shutting down and for upgrades), serve.py (the
                      web server that a boot fetches from), release.py (a key, a signature, and a system
-                     laid out as a release), mkimage.sh (UTM disk), fontcheck.c (what FreeType says of a
+                     laid out as a release), heard.py (what a machine played, from the file that QEMU wrote
+                     of it), mkimage.sh (UTM disk), fontcheck.c (what FreeType says of a
                      font file, for the tests of lisp/type.lisp; built by hand, and no part of `make test`)
 
 ## Running in UTM
@@ -213,14 +221,17 @@ what to do at the prompt once it is there.
    devices, which ClaraOS has no driver for, so add virtio's by hand.
    QEMU, Arguments, two new ones: `-device virtio-keyboard-pci` and
    `-device virtio-tablet-pci`.
-6. Start. The display and the serial window both show the boot report,
+6. For sound: in the machine's settings, under Sound, pick the card
+   Virtio Sound (`virtio-sound-pci`). UTM picks one of Intel's by itself,
+   which ClaraOS has no driver for.
+7. Start. The display and the serial window both show the boot report,
    which ends at a prompt. A form typed in either,
    `(mapcar #'1+ '(1 2 3))` say, is evaluated, and what it gives is printed
    on both. `(clara.fat:names (clara.system:system-file ""))` lists the
    files the system was loaded from. Ctrl-C stops a form that does not end, `(loop)` for one,
    and the prompt comes back. `(clara.windows:start)` puts the window
    manager on the display, with a prompt in a window; the tablet of step 5
-   is its pointer. `(clara.system:shut-down)` saves the world and turns
+   is its pointer. `(clara.sound:beep)` is heard with the card of step 6. `(clara.system:shut-down)` saves the world and turns
    the machine off, and so should UTM's Request power down, which presses
    the machine's power button.
 7. `(clara:save-image)` saves the world on the disk. The next start says

@@ -226,6 +226,49 @@ NIL
 (T T NIL)
 > (list (clara.net:addresses) (< -1 (clara.net:ping "fec0::2") 1000) (< -1 (clara.net:ping "::1") 1000))
 (("10.0.2.15" "fec0::5054:ff:fe12:3456" "fe80::5054:ff:fe12:3456") T T)
+> (list (stringp (clara.sound:card)) clara.sound:*volume* (clara.sound:wait) (clara.sound:stop))
+(T 100 T T)
+> (list (clara.sound:tone 440 250) (clara.sound:wait))
+(T T)
+^H 250 ms, 110 turns, 8192 left, 8192 right
+> (list (clara.sound:play '(c4 e4 (g4 c5 2) rest "bb3") :tempo 480 :wave :square :pan -100) (clara.sound:wait))
+(T T)
+^H 500 ms, 172 turns, 16384 left, 0 right
+^H 125 ms of nothing
+^H 125 ms, 29 turns, 8192 left, 0 right
+> (list (clara.sound:together
+          (clara.sound:tone 'a3 300 :wave :triangle)
+          (clara.sound:tone 2000 300 :wave :noise :volume 30 :pan 100))
+        (clara.sound:wait))
+(T T)
+^H 300 ms, 76 turns, 8192 left, 10606 right
+> (list (setq clara.sound:*volume* 50) (clara.sound:beep) (clara.sound:wait) (setq clara.sound:*volume* 100))
+(50 T T 100)
+^H 120 ms, 106 turns, 4096 left, 4096 right
+> (let ((page (clara.unsafe:allocate-memory 1)) (at 0))
+    (flet ((put (count number)
+             (dotimes (i count)
+               (setf (clara.unsafe:memory-8 (+ page at)) (logand (ash number (* -8 i)) 255))
+               (setq at (+ at 1))))
+           (say (letters)
+             (dotimes (i 4)
+               (setf (clara.unsafe:memory-8 (+ page at)) (char-code (char letters i)))
+               (setq at (+ at 1)))))
+      (say "RIFF") (put 4 836) (say "WAVE") (say "fmt ") (put 4 16) (put 2 1) (put 2 1) (put 4 8000) (put 4 8000) (put 2 1) (put 2 8)
+      (say "data") (put 4 800)
+      (dotimes (i 800) (put 1 (if (< (mod i 16) 8) 228 28)))
+      (clara.fat:write-file "/ding.wav" page at)
+      (clara.unsafe:free-memory page 1)
+      at))
+844
+> (list (clara.sound:play-file "/ding.wav" :volume 50) (clara.sound:wait) (clara.sound:play-file "/ding.wav" :pan 100) (clara.sound:wait))
+(T T T T)
+^H 100 ms, 50 turns, 12800 left, 12800 right
+^H 100 ms, 50 turns, 0 left, 25600 right
+> (clara.sound:tone 'h4 100)
+error: H4 is not a note: a note has a name like C4, F#3 or BB5, or is a number of times a second, or REST
+> (clara.sound:play-file "/clara/{{system}}/boot.lisp")
+error: /clara/{{system}}/boot.lisp is not a file of sound of the kind that is read here, a WAVE file
 > (let ((page (clara.unsafe:allocate-memory 1)))
     (flet ((at (place count) (let ((number 0)) (dotimes (i count number) (setq number (+ (* 256 number) (clara.unsafe:memory-8 (+ page place i))))))))
       (setf (clara.unsafe:memory-8 page) 97 (clara.unsafe:memory-8 (+ page 1)) 98 (clara.unsafe:memory-8 (+ page 2)) 99
