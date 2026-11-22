@@ -747,8 +747,64 @@ Fonts:
   the editor and the file browser draw the console's letters in their
   cells, as they did.
 
-Later, in no order: sound; CLOS; a USB keyboard and mouse, which is what
-UTM gives a machine that is not told otherwise.
+Sound:
+
+- [x] **M19a a sound card** (2026-11-22, version 0.0.38). The machine
+  plays sound. lisp/sound.lisp is the driver for virtio's sound card,
+  which under QEMU hands what it is given to the sound of the computer
+  that it runs on, and `make run-*` gives every machine one. Sound is
+  numbers, how far the cone of a loudspeaker is pushed out or drawn in,
+  said 48000 times a second for the left side and for the right. The
+  card takes them a hundredth of a second at a time, and a thread keeps
+  it supplied: it adds up what is sounding for the next hundredth, hands
+  that over, and sleeps until the card has room again, or, when there is
+  nothing to play, until somebody plays something. `(clara.sound:tone 440
+  500)` is a tone that goes round 440 times a second, for half a second,
+  and `(clara.sound:beep)` the sound that says "here". A tone has one of
+  five shapes, a sine, a square, a triangle, a sawtooth or noise; it is
+  as loud as it is asked to be and lies between the two sides where it
+  is asked to; and it comes up and goes down over a few thousandths of a
+  second, since a wave that is there at once is heard as a click. What
+  is played returns at once: `clara.sound:wait` waits for the end,
+  `clara.sound:stop` lets go of what is sounding, and
+  `clara.sound:*volume*` is how loud the machine is. All of it is worked
+  out in whole numbers, the language having no others, and all of it is
+  Lisp, which the processor runs: nothing was added to the substrate. A
+  machine without a sound card plays nothing and says so as it starts,
+  and every function gives NIL there, so that a program which beeps is
+  the same program on it. The tests have a card of their own making,
+  which keeps every number that it is given, and hold those against a
+  rule that works each one out by itself; and every machine of `make
+  test` has a card whose sound QEMU writes into a file, which
+  tools/heard.py describes, and which has to be what the session says.
+- [x] **M19b notes and voices** (2026-11-22, version 0.0.39). Music. A
+  note has a name, its letter and its octave: `c4` is the C in the
+  middle of a piano, `f#3` and `bb5` the black keys above an F and below
+  a B. `(clara.sound:play '(c4 d4 e4 (c4 e4 g4 2) rest))` plays a list
+  of them one after the other, each for a step, of which `:tempo` says
+  how many there are to the minute; a list in the list is the notes that
+  sound together, a number at its end how many steps they last, and REST
+  a step of nothing. From one key to the next a pitch is the twelfth
+  root of two times as much, with the A at 440, worked out to a
+  thousandth of a time a second. Up to sixteen things sound at once,
+  added up, and what comes to more than the card's numbers hold stays at
+  their ends. `clara.sound:together` has whatever is played inside it
+  begin in the same frame, which is what keeps a melody and its bass
+  together.
+- [x] **M19c files of sound** (2026-11-22, version 0.0.40).
+  `(clara.sound:play-file "/home/chime.wav")` plays a file of sound of
+  the commonest kind, a WAVE file: plain numbers of 8 or 16 bits, on one
+  side or two, at any pace from 1000 to 192000 frames a second, which is
+  brought to the card's by going through the file's frames faster or
+  slower than the card takes them. A file is somebody else's, so every
+  piece of it is held against its length, and one that is no such file
+  is refused, in words that say what it is instead. What macOS's own
+  converter makes of its system sounds comes out of the card to the
+  byte.
+
+Later, in no order: CLOS; a USB keyboard and mouse, and a driver for the
+sound card of Intel's, which are what UTM gives a machine that is not
+told otherwise.
 
 The website, <https://claraos.org>, is built from this file by
 site/build.py: the milestone list above, with its version numbers, is what
@@ -2764,6 +2820,126 @@ M18a and M18b, fonts, what they left:
   runs), and the job at two thirds of its thirty minutes: nothing was
   done about either here, and "What a translated world costs CI" is
   still where the time of that boot is to be taken out.
+
+M19a, M19b and M19c, sound, what they left:
+
+- Nobody has heard it. What reaches QEMU's card is held against a rule to
+  the last number, on three machines; and through the Mac's own sound a
+  second of it takes a second, with the machine as quiet as it can be
+  made, `clara.sound:*volume*` at 0, so that the Mac played nothing but
+  nothing. Whether a tone sounds like a tone out of a loudspeaker, how
+  loud a beep is beside whatever else the Mac is playing, and how long
+  after a key the sound of it comes, are for whoever sits in front of it:
+  `(clara.sound:beep)`, then `(clara.sound:play '(c4 e4 g4 (c5 2)))`.
+- UTM is untried, like everything else there. It gives a machine a card
+  of Intel's unless it is told otherwise, which has no driver, so the
+  manual says to pick "Virtio Sound" in the machine's settings: UTM's
+  program has that name in it, and that is all that is known. A driver
+  for Intel's card is in "Later": its registers, the tree of parts that
+  such a card has to be asked about, and an interrupt by a message of
+  the older kind (MSI), which lisp/pci.lisp does not set up.
+- One card, the first that is found, and of it the first stream that
+  plays numbers of 16 bits on two sides at 48000 or 44100 frames a
+  second. A card that has only other paces or other numbers is said and
+  not played on. What a card has to tell by itself (a plug that was
+  drawn, a period that came too late) is not asked for, and nothing is
+  recorded: the stream that records is passed over.
+- A card that gives nothing back for five seconds while it has something
+  to play is given up, and so is one that says no to a period: the
+  machine is without sound from then on, until it is started again.
+  Nothing lets go of the stream and gets it ready anew, which is how the
+  specification has a driver take back what a card holds.
+- A note has one shape in time: up over 256 frames, level, down over
+  512. Nothing dies away as a string does, nothing slides from one pitch
+  to another or wavers, and nothing is louder at its beginning. A
+  square and a sawtooth are their tables gone through at the pace of the
+  pitch, so above a few thousand times a second they have tones in them
+  that are not theirs (the corners fold back from half the card's pace);
+  and a sine is the nearest of 1024 numbers, with nothing made between
+  two of them, which leaves it with a thousandth of what is not sine.
+- Sixteen voices at once and eight notes to a chord, and the one that
+  would be one more is not played; `clara.sound:stop` stops everything,
+  since what is played has no name to stop it by; nothing is played
+  over and over without being asked each time; and there is no asking
+  whether something still sounds, short of waiting for the end.
+- What is played while something else plays begins up to four hundredths
+  of a second late, the periods that the card already has, before what
+  QEMU and the computer add. With the processor the computer's own the
+  card was never seen to run dry in three seconds of a tone while the
+  prompt counted, made lists or drew letters (a count kept by hand, of
+  the times that every period came back at once): that is three short
+  trials and no proof. Where the machine is emulated nobody looked.
+- A file is read whole every time it is played, into page frames that
+  lie side by side, and held until its last frame: nothing keeps a file
+  that is played often. It is brought to the card's pace by the nearest
+  frame before, with nothing made between two frames and nothing taken
+  out first of a file that is quicker than the card, so such a file has
+  tones in it that it did not have. Numbers of 24 or 32 bits, numbers
+  with a point, and everything that is packed (MP3 and its kind) are
+  refused.
+- The card is told to stop three tenths of a second after the last
+  sound (`clara.sound::*linger*`), on the word of QEMU's own code that
+  what it has taken by then is still played. And a machine that is shut
+  down while something plays cuts it off: `finish` in lisp/system.lisp
+  does not wait for the card.
+- Nothing in the system makes a sound by itself: no bell for a mistake
+  at a prompt, nothing in the window manager, no click for a key. That
+  is Julio's to say, and so is how loud a machine is when it starts
+  (100).
+- `tools/run.sh` picks where the sound goes from what QEMU says it has:
+  CoreAudio on a Mac, and PipeWire, PulseAudio or ALSA elsewhere, of
+  which only the Mac's was ever started. On a computer with none of them
+  the machine has a card that plays into nothing.
+- What tools/heard.py says of a boot's file is how long each stretch is,
+  how often it turns and how far it goes on each side: a fingerprint,
+  not every number. Every number is held under SBCL, and the two are
+  tied by the same forms giving the same lines in both places. The
+  manual's transcripts play as well, and only their answers are looked
+  at.
+- Mistakes that were planted in lisp/sound.lisp, one at a time, each
+  tried against the tests of the sound alone: 187 of them, in how a card
+  is asked and opened, in every table, in how a wave moves on and how a
+  note comes up and goes down, in how voices are added up and brought
+  back to 16 bits, in the card's thread, in what a note's name means, in
+  how a list of notes is read, in stopping and waiting, and in how a file
+  is read and brought to the card's pace. 170 were noticed at once.
+  Ten of the others showed something that no test asked, and each has
+  its test now: a step that ends one frame after a period does; a file
+  that is longer than a period at another pace than the card's; a wave
+  whose place in its table comes out even, which no pitch brings about
+  in less than twenty seconds; a card that sends no message and is slow
+  for it, which was given up as if it had said nothing; whoever waits
+  while the card has all of a short sound and has played none of it; a
+  card that fails with a file in hand, whose memory was kept; a card
+  that gives a request back with nothing written into it; a rest of a
+  shape that is none; a `together` inside another; and stopping when
+  nothing sounds. Four showed code that did nothing, which is gone: a
+  second look at a wave's shape, a look whether the queue of requests
+  was full, the lowest number of noise kept out, and half of the rule
+  for the period of nothing at the end. Three change nothing that can be
+  seen: pi and the turn each off by a part in a hundred million, which
+  the rounding takes back, and a card that would be told to stop in the
+  instant in which something new is played, which no test can bring
+  about on purpose. In the round after that, two more words about that
+  last period, which had been added between the rounds, turned out to
+  say nothing either, and went, and so did two conditions in the card's
+  thread that could not be otherwise. Planted once more in the code as
+  it is, 182 of them by then, those three get through and no other.
+- What the three cost CI. The world has 1913 functions where it had
+  1790, and the system's directory is 3370 KiB where it was 3326. The
+  stress boot, where the machine is emulated, on the Mac, main and this
+  at the same time: 184 s and 193 s. What that boot does before the
+  world is loaded takes what it took, and its session, typed with a
+  collection at every safe point in a world that is larger by
+  lisp/sound.lisp, takes the rest, a twentieth. The card's thread does
+  not wake by itself, so a boot that plays nothing pays nothing for it.
+  The first session plays some two seconds of sound, and on the Mac its
+  machines take a second longer for it, 24 s where main has 23. On CI
+  the first run took 13m33s of the job's thirty minutes, on a runner of
+  the fast kind, its x86_64 boot 45 s and its `aarch64-network` 44, and
+  its stress boot 270 s of its 900, where main's has been seen at 251 to
+  263 s on that kind: what the Mac's two figures say. In the Ubuntu
+  container on the Mac the stress boot took 204 s.
 
 No milestone yet, to be picked up when they start to matter:
 

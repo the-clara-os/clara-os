@@ -832,9 +832,10 @@ Rules:
   as the machine counts it: a session holds the machine's clock against
   that, to a quarter of an hour.
   tools/run.sh gives every machine a virtio network card on QEMU's
-  own network (`NET=` for none) and the device that makes numbers which
-  nobody can guess (`RNG=` for none), so every boot of `make test` has
-  both, and the first session asks for the machine's address, a number
+  own network (`NET=` for none), the device that makes numbers which
+  nobody can guess (`RNG=` for none) and a sound card (`SOUND=` for
+  none; below, under sound), so every boot of `make test` has all
+  three, and the first session asks for the machine's address, a number
   and the time on all three machines. No test goes further than this
   computer. When something is tried by hand against the Internet, it is
   the project's own website and repository and nothing else: the machine
@@ -1050,8 +1051,8 @@ Rules:
   in the order of `world` in lisp.c (the compiler, then native and the file
   of the machine's own processor, arm64.lisp or x86-64.lisp, whose name
   is the machine's in `*features*`, and then the console, draw, pci,
-  virtio, input, disk, fat, type, random, net, the listener, windows,
-  terminal, system and tls), and
+  virtio, input, disk, fat, type, random, net, sound, the listener,
+  windows, terminal, system and tls), and
   lisp/host/tests.lisp loads the same files: a new one goes into both, and what its package exports goes into
   a list of names in the manual, or `make site` stops. A file that is an
   application is not in `world`, and the launcher loads it (below). What `lisp_main`
@@ -1169,6 +1170,81 @@ Rules:
   the pixels of two letters, `(130 156)`: a change to the pictures that
   is meant changes that line on all three machines, and the same form
   under SBCL has to give the same.
+- Sound (lisp/sound.lisp, the package CLARA.SOUND; DESIGN.md has what was
+  decided). What a program asks for is a voice, which `begin` adds to the
+  card's list with the card's lock held. Everything else is the card's
+  thread's (`serve`, `turn`), the only one that speaks to the device once
+  START has opened it: a request and its answer, a period handed over, a
+  period taken back. Time is frames and never the clock: a voice is at a
+  frame, and `mix-period` works out the next 480, so a machine plays the
+  same numbers however late the thread comes to it. The boots lean on
+  that, so nothing there may go by when something happens: no fading by
+  the clock, no voice that begins "now". The loops that go round once a
+  frame (`render`, `render-noise`, `sound-file`) call nothing but what has
+  an instruction of its own, like the fonts'. And a card with nothing to
+  play costs nothing: its thread waits without a time, since every boot
+  pays for a thread that wakes by itself.
+- A change to what a frame comes to, a shape, the way up and down, how
+  loud, how a file's pace is brought to the card's, is a change to the
+  rule of the tests in the same commit (`up-at`, `wave-at`, `voice-at`,
+  `burst` in lisp/host/tests.lisp): the rule works every frame out by
+  itself, in fractions, and is what DESIGN.md says, written down a second
+  time. It also changes the lines that begin with `^H` in
+  tools/session.txt and tools/resumed.txt, and the same lines in the host
+  tests, where `said-of` says of numbers what tools/heard.py says of a
+  file: the three are held to one answer. Take the new lines from a boot
+  (`python3 -I tools/heard.py build/sound-aarch64.wav`), and look whether
+  they are what the forms should give before writing them down: a stretch
+  turns once for every time its wave goes round, so a tone turns its
+  pitch times its length.
+- The card of the tests (`add-sound`, `new-sound`) keeps what it is given
+  to play (`played`; `sounded` waits for the machine to be quiet first).
+  It fails the run when the driver asks out of the order that the
+  specification gives, tells the stream what it never offered, or hands
+  it more periods than it said it would. `:paced` has it play a period
+  when a test says so (`sound-on`, `play-out`), which is how something is
+  made to happen at a frame that the test knows: the driver has mixed
+  four periods, no more and no fewer, when the card has four. `:refuse`,
+  `:silent`, `:mute`, `:stuck`, `:verdict` and `:streams` are the ways for
+  a card to be wrong, or another card. Several things whose numbers a
+  test wants are played inside `together`: calls that are apart begin
+  when the card's thread gets to each. `stop-sound` ends the card's
+  thread before the next machine is made, as `stop-network` does, and a
+  test that makes a machine by hand after a sound waits for the card to
+  be stopped first (`vdev-stage`), or that thread asks a machine that is
+  gone, and says so in the middle of the output. `clara.sound::*linger*`
+  is 20 there, and `*patience*` is set and not bound where the card's
+  thread is to see it.
+- At a real kernel tools/boottest.sh gives every machine a card whose
+  sound QEMU writes into build/sound-<name>.wav (`SOUND=capture`, which
+  `make test` exports, so that a `SOUND=` of the environment stays out of
+  it; `SOUND= tools/boottest.sh` is a machine with no card). The file has
+  the frames that the machine sent and no others: nothing for the time in
+  which nothing is played, and no gap where the machine was late. A
+  session says what is to be heard in lines that begin with `^H`, one for
+  every stretch of sound as tools/heard.py says it, and every stretch
+  that was played has to be among them. So a session waits for the end of
+  each sound before the next (`clara.sound:wait`), since two that overlap
+  begin at a moment that no session knows; it waits before it ends, or the
+  machine is gone before the last period is; and it does not stop a sound
+  that is playing, whose length would be the moment's. What the manual
+  shows of sound is typed too, and only its answers are held.
+- Nobody hears any of this. No test plays through the computer's own
+  sound, and a check by hand that does,
+  `SOUND="-audiodev coreaudio,id=sound -device virtio-sound-pci,audiodev=sound,streams=1" tools/boottest.sh aarch64`,
+  sets `clara.sound:*volume*` to 0 in the first form of its session: the
+  computer is Julio's, and it may be the middle of his night. Such a boot
+  says whether a second of sound takes a second there and whether the
+  card runs dry while the machine is busy, and nothing about how it
+  sounds, which is his to say.
+- What QEMU's card does, found by trying it: it is there from QEMU 8.2
+  on, which is CI's; with `streams=1` it has the one stream that plays,
+  and QEMU does not complain of a microphone that the host cannot give;
+  a period comes back when QEMU has taken it, which is before it is
+  heard; the count of bytes still to play that comes back with it is 0
+  on 8.2; and the lengths in the head of the file that QEMU writes are
+  only filled in when QEMU ends by itself, so tools/heard.py goes by the
+  length of the file.
 - Windows (lisp/windows.lisp, the package CLARA.WINDOWS). Nothing there
   draws on the screen: what changes what the screen should show calls
   `damaged` with the rectangle, and `settle` puts the dirty rectangles

@@ -20,7 +20,9 @@
 # key that is made for the run, by the `make release` with which the
 # website's workflow publishes it (.github/workflows/site.yml), since that
 # workflow has its key from an environment that only main deploys to, and
-# so cannot be tried here. The
+# so cannot be tried here. Every machine has a sound card, whose sound QEMU
+# writes into a file, and what the sessions play has to be in that file as
+# they say it (tools/heard.py). The
 # runners have no hardware acceleration for QEMU, so every machine is
 # emulated. The website
 # is built as well: it reads ROADMAP.md, and stops building when a
@@ -103,4 +105,6 @@ jobs:
             build/fsck-*.log
             build/serve-*.log
             build/screen-*.png
+            build/heard-*.txt
+            build/sound-*.wav
           if-no-files-found: ignore

@@ -3,7 +3,8 @@
 # machines boot from and for the web server that one of them fetches a
 # signed release from, and the host's checker of FAT volumes for what a
 # kernel has written to one: macOS has it, fsck_msdos, and elsewhere it is
-# fsck.fat of the dosfstools.
+# fsck.fat of the dosfstools. QEMU is 8.2 or newer: that is the first to
+# have the sound card that every machine of the tests is given.
 #   macOS:  brew install llvm lld qemu sbcl
 #   Ubuntu: apt install clang lld make qemu-system-x86 qemu-system-arm ovmf qemu-efi-aarch64 netcat-openbsd sbcl
 #           python3 dosfstools
@@ -201,6 +202,7 @@ host-test:
 # `make run-*`, stays out of all of them: a machine here has the disks that
 # its line gives it.
 test: export WORK :=
+test: export SOUND := capture
 SECOND = -drive if=none,id=second,format=raw,readonly=on,file=$(BUILD)/$(1).img -device virtio-blk-pci,drive=second
 UPGRADED := EXPECT='^ClaraOS: starting the system that is to be tried;;^system: .*-other has come to its prompt;;^world: made anew by ClaraOS .*-other;;^home: /home/init.lisp is loaded, 1 form of it, and 3 were passed over:;;^home:     the stack is full;;^home:     /home/init.lisp is loaded into a new world by itself;;^home: /home/defined.lisp is loaded, [0-9]* forms[^ ]*$$;;^world:   .*\*JOBS\*;;^world:   .*\*WINDOW\*;;^world:   .*NOT-WRITTEN-DOWN;;^world: it is saved as it is now;;^home: /home/defined.lisp has 1 form that this world did not have, which is loaded now'
 POWER :=SESSION=tools/power.txt MARKER='^clara: turning the machine off' EXPECT='^lisp: the heap is an image'

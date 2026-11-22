@@ -81,6 +81,7 @@
 (load-source "lisp/type.lisp")
 (load-source "lisp/random.lisp")
 (load-source "lisp/net.lisp")
+(load-source "lisp/sound.lisp")
 (load-source "lisp/listener.lisp")
 (load-source "lisp/windows.lisp")
 (load-source "lisp/terminal.lisp")
@@ -1859,7 +1860,15 @@
   flying                   ; and the ones it is keeping: (first-descriptor address)
   numbers                  ; of a device that makes numbers which nobody can guess: a function that gives the next one,
   few                      ; how many bytes it fills at most of what it is given,
-  (asked 0))               ; and how often it was asked
+  (asked 0)                ; and how often it was asked
+  sound                    ; of a sound card: its streams, each (direction kinds paces fewest-sides most-sides),
+  stage                    ; how far its stream that plays has been taken: NIL, :SET, :READY, :RUNNING, :STOPPED, :RELEASED,
+  told                     ; what that stream was told it will be given: (stream bytes-held bytes-a-period sides kind pace),
+  paced                    ; that it plays a period only when a test says so,
+  stuck                    ; or never,
+  refuse                   ; the requests that it answers with something else than "it went well": (code . answer),
+  (verdict #x8000)         ; what it says of a period that it has played,
+  (played (make-array 0 :element-type '(signed-byte 16) :adjustable t :fill-pointer t))) ; and the numbers it has played
 
 (defun answer (vdev)
   (case (vdev-select vdev)
@@ -1971,8 +1980,14 @@
                   (t (complete vdev vq first written)))))))))
 
 (defun vdev-read (vdev offset size)
-  (let* ((n (vdev-queue vdev)) (vq (aref (vdev-queues vdev) (min n 1))))
-    (cond ((and (>= offset #x2000) (vdev-disk vdev))
+  (let* ((n (vdev-queue vdev)) (vq (aref (vdev-queues vdev) (min n (1- (length (vdev-queues vdev)))))))
+    (cond ((and (>= offset #x2000) (vdev-sound vdev))
+           ;; A sound card's own registers: how many jacks, streams and maps of sides it has, 32 bits each.
+           (ldb (byte (* 8 size) (* 8 (mod (- offset #x2000) 4)))
+                (case (floor (- offset #x2000) 4)
+                  (1 (length (sound-streams vdev)))
+                  (t 0))))
+          ((and (>= offset #x2000) (vdev-disk vdev))
            ;; A disk's own registers begin with how many sectors it has, in 64 bits.
            (ldb (byte (* 8 size) (* 8 (- offset #x2000))) (floor (length (vdev-disk vdev)) 512)))
           ((and (>= offset #x2000) (vdev-station vdev))
@@ -1999,7 +2014,7 @@
              (#x12 2)
              (#x14 (vdev-status vdev))
              (#x16 n)
-             (#x18 (if (< n 2) (vq-size vq) 0))
+             (#x18 (if (< n (length (vdev-queues vdev))) (vq-size vq) 0))
              (#x1a (vq-message vq))
              (#x1c (vq-enabled vq))
              (#x1e n)
@@ -2007,7 +2022,7 @@
 
 (defun vdev-write (vdev offset size value)
   (declare (ignore size))
-  (let* ((n (vdev-queue vdev)) (vq (aref (vdev-queues vdev) (min n 1))))
+  (let* ((n (vdev-queue vdev)) (vq (aref (vdev-queues vdev) (min n (1- (length (vdev-queues vdev)))))))
     (cond ((>= offset #x3000)
            ;; New work in a queue: its number, written to its own register, which is four bytes on
            ;; from the one before. The second queue is one that gives every chain straight back, with
@@ -2017,7 +2032,9 @@
              (serve-disk vdev))
            (when (and (= value 0) (vdev-numbers vdev))
              (serve-numbers vdev))
-           (when (= value 1)
+           (when (vdev-sound vdev)
+             (serve-sound vdev value))
+           (when (and (= value 1) (not (vdev-sound vdev)))
              (let ((vq (aref (vdev-queues vdev) 1)))
                (loop
                  (let ((first (next-available vq)))
@@ -2051,7 +2068,8 @@
                    (cond ((zerop value)
                           (setf (vdev-status vdev) 0
                                 (vdev-wanted vdev) (list 0 0)
-                                (vdev-queues vdev) (vector (make-vq) (make-vq))))
+                                (vdev-queues vdev) (map 'vector (lambda (queue) (declare (ignore queue)) (make-vq))
+                                                        (vdev-queues vdev))))
                          ((and (logbitp 3 value)
                                (not (and (vdev-agreeable vdev)
                                          (every (lambda (want offer) (zerop (logandc2 want offer)))
@@ -2179,6 +2197,166 @@
                                       (setq state (logand #xffffffff (+ (* state 1103515245) 12345)))
                                       (ldb (byte 8 16) state))
                            :few few :silent silent :mute mute :offers offers))))
+
+;; A sound card serves two of its four queues. In the first are requests:
+;; some words for the card to read, the first of them what is asked, and
+;; room for its answer, which begins with a word that says how it went. A
+;; stream is taken through its stages in an order (Virtual I/O Device
+;; specification 1.2, 5.14.6.6.1): told what it will be given, got ready,
+;; started, stopped, and let go of; a driver that asks out of order, or
+;; for what the stream never said it does, has failed the run. In the
+;; third queue are periods to play: a word that says which stream, the
+;; frames, and eight bytes for the card to write how it went. The card
+;; plays a period by keeping its numbers for the test to look at, at once
+;; unless it is one that waits to be told, and gives the period back when
+;; it has: a period for a stream that is not running is kept until the
+;; stream is started, and given back unplayed when it is stopped.
+(defvar *sound-lock* (sb-thread:make-mutex :name "sound card")) ; a test and the driver's thread both come here
+
+(defun sound-streams (vdev)
+  (if (eq (vdev-sound vdev) :none) nil (vdev-sound vdev)))
+
+(defun play-period (vdev period)
+  (destructuring-bind (first frames answer) period
+    (when (eq (vdev-stage vdev) :running)
+      (let ((index (clara.host::memory-index (first frames) (second frames))))
+        (loop for i from index below (+ index (second frames)) by 2
+              do (vector-push-extend (let ((number (le clara.host::*memory* i 2)))
+                                       (if (>= number 32768) (- number 65536) number))
+                                     (vdev-played vdev)))))
+    (poke (first answer) 4 (vdev-verdict vdev))
+    (poke (+ (first answer) 4) 4 0)
+    (complete vdev (aref (vdev-queues vdev) 2) first 8)))
+
+;; A card that waits to be told plays COUNT of the periods that it has.
+(defun sound-on (vdev &optional (count 1))
+  (sb-thread:with-recursive-lock (*sound-lock*)
+    (dotimes (i count)
+      (when (vdev-flying vdev)
+        (play-period vdev (pop (vdev-flying vdev)))))))
+
+(defun serve-sound-requests (vdev)
+  (let ((vq (aref (vdev-queues vdev) 0)))
+    (loop
+      (let ((first (next-available vq)))
+        (unless first
+          (return))
+        (let* ((buffers (chain vq first))
+               (request (first buffers)) (answer (second buffers))
+               (at (first request))
+               (code (peek at 4))
+               (went (or (cdr (assoc code (vdev-refuse vdev))) #x8000))
+               (written 4)
+               (stage (vdev-stage vdev)))
+          (unless (and (= (length buffers) 2) (not (logbitp 1 (third request)))
+                       (logbitp 1 (third answer)) (>= (second answer) 4))
+            (failed "the driver gave the sound card a request that is not one: ~S" buffers))
+          (push code (vdev-requests vdev))
+          (flet ((stream-asked ()
+                   (unless (and (= (second request) 8) (eql (first (nth (peek (+ at 4) 4) (sound-streams vdev))) 0))
+                     (failed "the driver asked the sound card #x~X of a stream ~D that does not play, in ~D bytes"
+                             code (peek (+ at 4) 4) (second request))))
+                 (from (&rest stages)
+                   (unless (member stage stages)
+                     (failed "the driver asked the sound card #x~X of a stream that is ~S" code stage))))
+            (when (eql went #x8000)
+              (case code
+                (#x100
+                 (let ((start (peek (+ at 4) 4)) (count (peek (+ at 8) 4)))
+                   (unless (and (= (second request) 16) (= (peek (+ at 12) 4) 32)
+                                (<= (+ start count) (length (sound-streams vdev)))
+                                (>= (second answer) (+ 4 (* 32 count))))
+                     (failed "the driver asked the sound card for ~D streams from ~D on, ~D bytes each, with room for ~D"
+                             count start (peek (+ at 12) 4) (second answer)))
+                   (dotimes (i count)
+                     (destructuring-bind (direction kinds paces fewest most) (nth (+ start i) (sound-streams vdev))
+                       (let ((to (+ (first answer) 4 (* 32 i))))
+                         (poke to 4 0)
+                         (poke (+ to 4) 4 0)
+                         (poke (+ to 8) 4 (ldb (byte 32 0) kinds))
+                         (poke (+ to 12) 4 (ldb (byte 32 32) kinds))
+                         (poke (+ to 16) 4 (ldb (byte 32 0) paces))
+                         (poke (+ to 20) 4 (ldb (byte 32 32) paces))
+                         (poke (+ to 24) 1 direction)
+                         (poke (+ to 25) 1 fewest)
+                         (poke (+ to 26) 1 most)
+                         (poke (+ to 27) 1 0)
+                         (poke (+ to 28) 4 0))))
+                   (setq written (+ 4 (* 32 count)))))
+                (#x101
+                 (let* ((stream (nth (peek (+ at 4) 4) (sound-streams vdev)))
+                        (held (peek (+ at 8) 4)) (period (peek (+ at 12) 4))
+                        (sides (peek (+ at 20) 1)) (kind (peek (+ at 21) 1)) (pace (peek (+ at 22) 1)))
+                   (from nil :set :ready :released)
+                   (unless (and (= (second request) 24) stream (eql (first stream) 0)
+                                (zerop (peek (+ at 16) 4)) (zerop (peek (+ at 23) 1))
+                                (logbitp kind (second stream)) (logbitp pace (third stream))
+                                (<= (fourth stream) sides (fifth stream))
+                                (plusp period) (zerop (mod period (* 2 sides))) (zerop (mod held period)))
+                     (failed "the driver told the sound card what it would never play: ~S"
+                             (list (peek (+ at 4) 4) held period (peek (+ at 16) 4) sides kind pace)))
+                   (setf (vdev-told vdev) (list (peek (+ at 4) 4) held period sides kind pace)
+                         (vdev-stage vdev) :set)))
+                (#x102 (stream-asked) (from :set :ready :released)
+                       (setf (vdev-stage vdev) :ready))
+                (#x103 (stream-asked) (from :ready :stopped)
+                       (setf (vdev-stage vdev) :released))
+                (#x104 (stream-asked) (from :ready :stopped)
+                       (setf (vdev-stage vdev) :running)
+                       (unless (or (vdev-paced vdev) (vdev-stuck vdev))
+                         (sound-on vdev (length (vdev-flying vdev)))))
+                (#x105 (stream-asked) (from :running)
+                       (setf (vdev-stage vdev) :stopped)
+                       (sound-on vdev (length (vdev-flying vdev))))
+                (t (failed "the driver asked the sound card #x~X, which is nothing that it is ever asked here" code)))))
+          ;; A card that gives a request back and has written nothing is one that a test asks for.
+          (unless (eq went :nothing)
+            (poke (first answer) 4 went))
+          (unless (vdev-silent vdev)
+            (complete vdev vq first written)))))))
+
+(defun serve-sound-periods (vdev)
+  (let ((vq (aref (vdev-queues vdev) 2)))
+    (loop
+      (let ((first (next-available vq)))
+        (unless first
+          (return))
+        (let* ((buffers (chain vq first))
+               (told (vdev-told vdev))
+               (head (first buffers)) (answer (car (last buffers)))
+               (frames (list (+ (first head) 4) (- (second head) 4))))
+          (unless (and (= (length buffers) 2) (not (logbitp 1 (third head)))
+                       (logbitp 1 (third answer)) (= (second answer) 8))
+            (failed "the driver gave the sound card a period that is not one: ~S" buffers))
+          (unless (and told (member (vdev-stage vdev) '(:ready :running))
+                       (= (peek (first head) 4) (first told))
+                       (= (second frames) (third told)))
+            (failed "the driver gave the sound card ~D bytes for its stream ~D, which is ~S and was told ~S"
+                    (second frames) (peek (first head) 4) (vdev-stage vdev) told))
+          (let ((index (clara.host::memory-index (first head) (second head))))
+            (when (find 0 clara.host::*pages* :start (floor index 4096) :end (ceiling (+ index (second head)) 4096))
+              (failed "the driver gave the sound card memory to play from that is not all its own")))
+          (setf (vdev-flying vdev) (append (vdev-flying vdev) (list (list first frames answer))))
+          (when (> (* (length (vdev-flying vdev)) (third told)) (second told))
+            (failed "the driver gave the sound card ~D periods at once, and had said that it would hold ~D bytes of ~D a period"
+                    (length (vdev-flying vdev)) (second told) (third told)))
+          (when (and (eq (vdev-stage vdev) :running) (not (vdev-paced vdev)) (not (vdev-stuck vdev)))
+            (sound-on vdev (length (vdev-flying vdev)))))))))
+
+(defun serve-sound (vdev queue)
+  (sb-thread:with-recursive-lock (*sound-lock*)
+    (case queue
+      (0 (serve-sound-requests vdev))
+      (2 (serve-sound-periods vdev)))))
+
+;; Such a card, as QEMU makes them unless a test says otherwise: one
+;; stream, which plays, numbers of 8, 16 and 32 bits with a sign and
+;; without and of the kind with a point, at every pace from 5512 to 384000
+;; frames a second, on one side or two.
+(defun add-sound (slot &key (streams (list (list 0 #xe0078 #x3fff 1 2))) paced stuck silent mute refuse (verdict #x8000))
+  (add-virtio slot #x1059 #x040100
+              (make-vdev :sound (or streams :none) :queues (vector (make-vq) (make-vq) (make-vq) (make-vq))
+                         :paced paced :stuck stuck :silent silent :mute mute :refuse refuse :verdict verdict)))
 
 ;; An input device: a keyboard, a mouse or a tablet, by the events it says
 ;; it has.
@@ -10916,6 +11094,866 @@
 (with-output-to-string (*standard-output*)
   (clara.pci:start))
 (check '(t nil) (list (and clara.random::*source* t) (progn (said-by #'clara.random:start) clara.random::*source*)))
+
+;;; Sound (lisp/sound.lisp): the driver of the sound card, against a card
+;;; that is made up (above) and keeps the numbers that it is given to play,
+;;; and what a tone, some notes and a file come to as numbers, against a
+;;; rule that is written out here: every frame by itself, from how far the
+;;; wave has gone round by then and how far the note is up, in fractions,
+;;; where the file under test adds a step to the frame before.
+
+(defvar *sound* nil)                   ; the card of the machine
+(defvar *before-sound* (length (clara:all-threads)))
+(setq clara.sound::*linger* 20)
+
+;; The thread of a card goes with its machine: one that still ran would
+;; write into the memory of the next.
+(defun stop-sound ()
+  (let ((card clara.sound::*card*))
+    (when (and card (clara.sound::card-thread card))
+      (clara:destroy-thread (clara.sound::card-thread card))
+      (eventually (lambda () (not (clara:thread-alive-p (clara.sound::card-thread card))))))
+    (setq clara.sound::*card* nil)))
+
+;; A machine with a sound card, and with a disk when it is to have FILES:
+;; what the start of the sound says.
+(defun new-sound (&rest options)
+  (let ((files (getf options :files)))
+    (remf options :files)
+    (stop-sound)
+    (new-machine)
+    (attach-bus)
+    (add-function 0 0 0 #x8086 #x29c0 #x060000)
+    (when files
+      (add-disk 3 (fat-bytes (make-fat-volume 16 files))))
+    (setq *sound* (apply #'add-sound 7 options))
+    (with-output-to-string (*standard-output*)
+      (clara.pci:start))
+    (said-by #'clara.disk:start)
+    (said-by #'clara.fat:start)
+    (said-by #'clara.sound:start)))
+
+;; What the card has played since this was last asked: numbers, left and
+;; right in turn.
+(defun played ()
+  (sb-thread:with-recursive-lock (*sound-lock*)
+    (prog1 (coerce (vdev-played *sound*) 'list)
+      (setf (fill-pointer (vdev-played *sound*)) 0))))
+
+;; The same, once the machine has nothing more to play.
+(defun sounded ()
+  (clara.sound:wait)
+  (played))
+
+;; A card that plays only when it is told is told, until the machine has
+;; nothing more for it.
+(defun play-out ()
+  (let ((card clara.sound::*card*))
+    (eventually (lambda ()
+                  (sound-on *sound* 4)
+                  (clara:with-lock-held ((clara.sound::card-lock card))
+                    (and (null (clara.sound::card-voices card)) (zerop (clara.sound::card-under-way card))))))))
+
+;; The rule. A voice of notes is (steps loud pan), with LOUD and PAN as the
+;; functions take them, and a step is (frames (shape . pitch) ...), the
+;; pitch in thousandths of a time a second. A voice of a file is (:file
+;; frames pace loud pan), its frames each (left right) in 16 bits.
+
+(defun ramp-of (frames most)
+  (loop for ramp = most then (floor ramp 2)
+        when (or (<= ramp frames) (zerop ramp)) return ramp))
+
+;; How far a step of LENGTH frames is up at its frame AT, of 65536: up over
+;; its first frames, down over its last, 256 and 512 of them or the largest
+;; halvings of those that are a quarter and a half of the step.
+(defun up-at (length at)
+  (let ((up (ramp-of (floor length 4) 256)) (down (ramp-of (floor length 2) 512)))
+    (cond ((< at up) (* at (/ 65536 up)))
+          ((>= at (- length down)) (* (- length at) (/ 65536 down)))
+          (t 65536))))
+
+;; The number that noise holds when it has gone round N times.
+(defun chance-after (n)
+  (let ((seed 20261122))
+    (dotimes (i n)
+      (setq seed (logand (+ (* seed 1103515245) 12345) #x7fffffff)))
+    (- (ash seed -15) 32768)))
+
+;; The number of a wave at a frame: it moves on by its pitch over the rate
+;; with every frame, to the nearest 1073741824th of a turn, and has the
+;; number of the 1024th of a turn that it is in.
+(defun wave-at (shape millihertz rate frame)
+  (let ((gone (* frame (floor (+ (/ (* millihertz 1073741824) (* 1000 rate)) 1/2)))))
+    (if (eq shape :noise)
+        (chance-after (floor gone 1073741824))
+        (svref (cdr (assoc shape clara.sound::*waves*)) (mod (floor gone 1048576) 1024)))))
+
+(defun sides-of (level pan volume)
+  (values (floor (* level (min 100 (- 100 pan)) volume) 10000)
+          (floor (* level (min 100 (+ 100 pan)) volume) 10000)))
+
+;; What a voice adds at a frame, on each side, 67108864 times too large.
+(defun voice-at (voice frame rate volume)
+  (if (eq (car voice) :file)
+      (destructuring-bind (frames pace loud pan) (cdr voice)
+        (multiple-value-bind (left right) (sides-of (floor (* 1024 loud) 100) pan volume)
+          (let ((at (floor (* frame (floor (+ (* pace 1048576) (floor rate 2)) rate)) 1048576)))
+            (if (< at (length frames))
+                (values (* (first (nth at frames)) 65536 left) (* (second (nth at frames)) 65536 right))
+                (values 0 0)))))
+      (destructuring-bind (steps loud pan) voice
+        (multiple-value-bind (left right) (sides-of (floor (* 256 loud) 100) pan volume)
+          (dolist (step steps (values 0 0))
+            (when (< frame (car step))
+              (let ((sum (* (up-at (car step) frame)
+                            (loop for (shape . millihertz) in (cdr step) sum (wave-at shape millihertz rate frame)))))
+                (return (values (* sum left) (* sum right)))))
+            (decf frame (car step)))))))
+
+(defun to-16 (sum)
+  (max -32768 (min 32767 (floor (+ sum 33554432) 67108864))))
+
+;; What voices that begin together come to over FRAMES frames, and what
+;; the card is given for it: that, nothing to the end of the period, and a
+;; period of nothing.
+(defun sound-rule (voices frames &key (rate 48000) (volume 100))
+  (loop for frame below frames
+        append (let ((left 0) (right 0))
+                 (dolist (voice voices)
+                   (multiple-value-bind (more-left more-right) (voice-at voice frame rate volume)
+                     (incf left more-left)
+                     (incf right more-right)))
+                 (list (to-16 left) (to-16 right)))))
+
+(defun burst (voices frames &key (rate 48000) (volume 100))
+  (let ((period (floor rate 100)))
+    (append (sound-rule voices frames :rate rate :volume volume)
+            (make-list (* 2 (- (* period (1+ (ceiling frames period))) frames)) :initial-element 0))))
+
+(defun note-voice (frames shape millihertz &key (loud 100) (pan 0))
+  (list (list (list frames (cons shape millihertz))) loud pan))
+
+;; Are these the same numbers? T, or where they first differ.
+(defun same-sound (heard rule)
+  (let ((at (mismatch heard rule)))
+    (or (null at)
+        (format nil "~D numbers, and ~D by the rule; number ~D is ~S, and ~S by the rule"
+                (length heard) (length rule) at (nth at heard) (nth at rule)))))
+
+;; The card is found, asked what its streams are, told what it will be
+;; given, and got ready: it is not started until there is something to play.
+(check (format nil "sound: 00:07.0 is a sound card: 48000 frames a second, left and right~%") (new-sound))
+(check '(#x100 #x101 #x102) (reverse (vdev-requests *sound*)))
+(check '(0 7680 1920 2 5 7) (vdev-told *sound*))
+(check :ready (vdev-stage *sound*))
+(check "the sound card 00:07.0: 48000 frames a second, left and right" (clara.sound:card))
+(check (1+ *before-sound*) (length (clara:all-threads)))
+(check "sound" (clara:thread-name (clara.sound::card-thread clara.sound::*card*)))
+
+;; The four shapes. The sine is the sine, to the nearest number, at every
+;; one of its 1024 places; the square is up for half a turn and down for
+;; the other; the triangle goes up and down in straight lines, from nothing
+;; to the top at a quarter; the sawtooth rises evenly all the way; and each
+;; goes as far down as up.
+(flet ((table (shape) (cdr (assoc shape clara.sound::*waves*))))
+  (check nil (loop for i below 1024
+                   unless (= (svref (table :sine) i) (round (* 32767 (sin (* 2 pi (/ i 1024))))))
+                     collect i))
+  (check '(512 512 nil) (list (count 32767 (table :square) :end 512) (count -32767 (table :square) :start 512)
+                              (find-if-not (lambda (number) (= (abs number) 32767)) (table :square))))
+  (check nil (loop for i below 1024
+                   unless (= (svref (table :triangle) i)
+                             (max -32767 (min 32767 (* 32768 (- 1 (* 4 (abs (- (mod (+ (/ i 1024) 1/4) 1) 1/2))))))))
+                     collect i))
+  (check '((64) 0 32736 -32736)
+         (list (remove-duplicates (loop for i from 1 below 1024
+                                        collect (- (svref (table :sawtooth) i) (svref (table :sawtooth) (1- i)))))
+               (reduce #'+ (table :sawtooth)) (reduce #'max (table :sawtooth)) (reduce #'min (table :sawtooth))))
+  (check '(:sine :square :triangle :sawtooth :noise) (mapcar #'car clara.sound::*waves*))
+  (check nil (table :noise)))
+
+;; A wave moves on by whole places of its table and 1048576ths, and a
+;; place that comes out even is the next whole one: here at every second
+;; frame, which no pitch brings about so soon. The same for noise, which
+;; takes its next number when it has gone round.
+(let ((sine (cdr (assoc :sine clara.sound::*waves*))) (move (+ (* 300 1048576) 524288)))
+  (let ((mix (make-array 40 :initial-element 0)) (wave (vector sine 300 524288 0 0 0 0)))
+    (clara.sound::render mix 2 18 wave 65536 0 3 5)
+    (check (append '(0 0 0 0)
+                   (loop for frame below 18
+                         append (let ((number (svref sine (mod (floor (* frame move) 1048576) 1024))))
+                                  (list (* number 65536 3) (* number 65536 5)))))
+           (coerce mix 'list))
+    (check (list (mod (floor (* 18 move) 1048576) 1024) (mod (* 18 move) 1048576)) ; where it is after 18 frames: 289, and no part
+           (list (svref wave 3) (svref wave 4))))
+  (let ((mix (make-array 40 :initial-element 0))
+        (wave (vector nil 300 524288 0 0 (clara.sound::chance-value 20261122) 20261122)))
+    (clara.sound::render-noise mix 0 20 wave 65536 0 1 1)
+    (check (loop for frame below 20
+                 append (let ((number (chance-after (floor (* frame move) 1073741824))))
+                          (list (* number 65536) (* number 65536))))
+           (coerce mix 'list))))
+
+;; The names of the notes. Every key of nine octaves is the twelfth root of
+;; two times the key below it, with the A of the fourth octave at 440, to
+;; a thousandth of a time a second.
+(check nil (loop for octave from 0 to 8
+                 append (loop for name in '("C" "C#" "D" "D#" "E" "F" "F#" "G" "G#" "A" "A#" "B")
+                              for key from 0
+                              for note = (format nil "~A~D" name octave)
+                              unless (<= (abs (- (clara.sound::pitch-of note)
+                                                 (* 440000 (expt 2d0 (/ (- (+ (* 12 (1+ octave)) key) 69) 12)))))
+                                         (if (= octave 8) 0.5 0.75))
+                                collect note)))
+(check '(440000 440000 440000 440000 261626 261626 27500 7902133 16352)
+       (mapcar #'clara.sound::pitch-of '(a4 :a4 "a4" a c "C4" a0 b8 c0)))
+;; The key above and the key below, written either way; a C that is lowered is the B of the octave before.
+(check t (= (clara.sound::pitch-of 'c#4) (clara.sound::pitch-of 'cs4) (clara.sound::pitch-of 'db4)))
+(check t (= (clara.sound::pitch-of 'bb3) (clara.sound::pitch-of 'a#3)))
+(check t (= (clara.sound::pitch-of 'e#4) (clara.sound::pitch-of 'f4)))
+(check t (= (clara.sound::pitch-of 'cb4) (clara.sound::pitch-of 'b3)))
+(check t (= (clara.sound::pitch-of 'b#3) (clara.sound::pitch-of 'c4)))
+(check '(1000000 20000 20000000 nil nil nil) (mapcar #'clara.sound::pitch-of '(1000 20 20000 rest :rest nil)))
+(check '("H4 is not a note: a note has a name like C4, F#3 or BB5, or is a number of times a second, or REST"
+         "C9 is not a note: a note has a name like C4, F#3 or BB5, or is a number of times a second, or REST"
+         "CB0 is not a note: a note has a name like C4, F#3 or BB5, or is a number of times a second, or REST"
+         "\"b#8\" is not a note: a note has a name like C4, F#3 or BB5, or is a number of times a second, or REST"
+         "C44 is not a note: a note has a name like C4, F#3 or BB5, or is a number of times a second, or REST"
+         "\"c4#\" is not a note: a note has a name like C4, F#3 or BB5, or is a number of times a second, or REST"
+         "\"\" is not a note: a note has a name like C4, F#3 or BB5, or is a number of times a second, or REST"
+         "(C4) is not a note: a note has a name like C4, F#3 or BB5, or is a number of times a second, or REST"
+         "19 is not a pitch that is played: as a number one is from 20 to 20000 times a second"
+         "20001 is not a pitch that is played: as a number one is from 20 to 20000 times a second")
+       (mapcar (lambda (note) (condition-text (lambda () (clara.sound::pitch-of note))))
+               '(h4 c9 cb0 "b#8" c44 "c4#" "" (c4) 19 20001)))
+
+;; A tone. What the card is given is the rule's numbers, every one of them,
+;; and the card is started for it, and stopped a while after the last.
+(check t (clara.sound:tone 440 100))
+(check t (same-sound (sounded) (burst (list (note-voice 4800 :sine 440000)) 4800)))
+(check '(#x100 #x101 #x102 #x104) (reverse (vdev-requests *sound*)))
+(check t (eventually (lambda () (eq (vdev-stage *sound*) :stopped))))
+(check '(#x100 #x101 #x102 #x104 #x105) (reverse (vdev-requests *sound*)))
+;; And the rule's numbers are a tone: where the note is all the way up they are the wave that
+;; mathematics has, a quarter as far as a number of 16 bits goes, to the 1024th of a turn.
+(clara.sound:tone 440 100)
+(let ((heard (coerce (sounded) 'vector)))
+  (check nil (loop for frame from 256 below 4288
+                   unless (<= (abs (- (aref heard (* 2 frame)) (* 8191.75d0 (sin (* 2 pi 440 (/ frame 48000)))))) 52)
+                     collect frame))
+  (check '(0 0) (list (aref heard 0) (aref heard 1)))
+  (check t (< (abs (aref heard (* 2 4799))) 20))
+  (check '(8192 -8192) (list (reduce #'max heard) (reduce #'min heard))))
+;; Every shape, a note by its name, a tone that is not a whole number of periods, the shortest ones,
+;; and how loud and where: the left side alone, the right side alone, and halfway.
+(dolist (shape '(:sine :square :triangle :sawtooth :noise))
+  (clara.sound:tone 1000 30 :wave shape)
+  (check (list shape t) (list shape (same-sound (sounded) (burst (list (note-voice 1440 shape 1000000)) 1440)))))
+(clara.sound:tone 'f#3 25)
+(check t (same-sound (sounded) (burst (list (note-voice 1200 :sine (clara.sound::pitch-of 'f#3))) 1200)))
+(dolist (milliseconds '(1 2 3 7 11 33))
+  (clara.sound:tone 3000 milliseconds :wave :triangle)
+  (let ((frames (* 48 milliseconds)))
+    (check (list milliseconds t)
+           (list milliseconds (same-sound (sounded) (burst (list (note-voice frames :triangle 3000000)) frames))))))
+(dolist (case '((100 -100) (100 100) (100 50) (100 -30) (40 0) (1 0) (0 0) (77 -100)))
+  (destructuring-bind (loud pan) case
+    (clara.sound:tone 700 20 :volume loud :pan pan :wave :square)
+    (check (list case t)
+           (list case (same-sound (sounded) (burst (list (note-voice 960 :square 700000 :loud loud :pan pan)) 960))))))
+(clara.sound:tone 700 20 :pan -100)
+(check '(t nil) (let ((heard (sounded)))
+                  (list (and (find-if #'plusp (loop for (left) on heard by #'cddr collect left)) t)
+                        (find-if-not #'zerop (loop for (nil right) on heard by #'cddr collect right)))))
+;; A rest is as long as a tone, and nothing; and the sound that says "here" is a tone.
+(clara.sound:tone 'rest 20)
+(check t (same-sound (sounded) (make-list (* 2 (+ 960 480)) :initial-element 0)))
+(check t (clara.sound:beep))
+(check t (same-sound (sounded) (burst (list (note-voice 5760 :sine 880000)) 5760)))
+;; How loud the machine is, which is the world's to say, and holds for what is already sounding;
+;; what is no such number counts as all of it, or as the nearest end.
+(dolist (case '((50 50) (0 0) (100 100) (150 100) (-5 0) (loud 100) (7 7)))
+  (setq clara.sound:*volume* (first case))
+  (clara.sound:tone 500 20)
+  (check (list case t)
+         (list case (same-sound (sounded) (burst (list (note-voice 960 :sine 500000)) 960 :volume (second case))))))
+(setq clara.sound:*volume* 100)
+;; What is no tone is said, and nothing is played.
+(check '("0 is not how long a tone can be: that is from 1 to 60000 thousandths of a second"
+         "60001 is not how long a tone can be: that is from 1 to 60000 thousandths of a second"
+         "LONG is not how long a tone can be: that is from 1 to 60000 thousandths of a second"
+         ":ROUND is not the shape of a wave: one is :SINE, :SQUARE, :TRIANGLE, :SAWTOOTH or :NOISE"
+         "101 is not how loud a sound can be: that is a number from 0 to 100"
+         "-1 is not how loud a sound can be: that is a number from 0 to 100"
+         "101 is not a place between the two sides: one is a number from -100, the left, to 100, the right"
+         ":LEFT is not a place between the two sides: one is a number from -100, the left, to 100, the right"
+         "H4 is not a note: a note has a name like C4, F#3 or BB5, or is a number of times a second, or REST")
+       (mapcar (lambda (arguments) (condition-text (lambda () (apply #'clara.sound:tone arguments))))
+               '((440 0) (440 60001) (440 long) (440 10 :wave :round) (440 10 :volume 101) (440 10 :volume -1)
+                 (440 10 :pan 101) (440 10 :pan :left) (h4 10))))
+(check ":ROUND is not the shape of a wave: one is :SINE, :SQUARE, :TRIANGLE, :SAWTOOTH or :NOISE"
+       (condition-text (lambda () (clara.sound:tone 'rest 10 :wave :round))))
+(check nil (sounded))
+
+;; Notes. Each lasts a step, and the tempo says how many steps there are
+;; to the minute; a list is the notes that sound together, and a number at
+;; its end how many steps they last; NIL and REST are a step of nothing.
+(flet ((of (note) (clara.sound::pitch-of note)))
+  (check t (clara.sound:play '(c4 (e4 g4 2) rest "a#3" 1000 nil (:b5 3) (220 330 1)) :tempo 6000))
+  (check t (same-sound (sounded)
+                       (burst (list (list (list (list 480 (cons :sine (of 'c4)))
+                                                (list 960 (cons :sine (of 'e4)) (cons :sine (of 'g4)))
+                                                (list 480)
+                                                (list 480 (cons :sine (of 'a#3)))
+                                                (list 480 (cons :sine 1000000))
+                                                (list 480)
+                                                (list 1440 (cons :sine (of 'b5)))
+                                                (list 480 (cons :sine 220000) (cons :sine 330000)))
+                                          100 0))
+                              5280)))
+  (check t (clara.sound:play '(a3 (a3 c#4 e4)) :tempo 4000 :wave :sawtooth :volume 60 :pan 40))
+  (check t (same-sound (sounded)
+                       (burst (list (list (list (list 720 (cons :sawtooth (of 'a3)))
+                                                (list 720 (cons :sawtooth (of 'a3)) (cons :sawtooth (of 'c#4))
+                                                      (cons :sawtooth (of 'e4))))
+                                          60 40))
+                              1440)))
+  ;; A number at the end of a list is how many steps only when something comes before it: a pitch
+  ;; of 440 for 330 steps is two numbers, two pitches for one step are three, and one alone is a pitch.
+  (check '((158400 1) (480 2) (480 1))
+         (mapcar (lambda (item)
+                   (let ((step (clara.sound::step-of item 480 :sine 48000)))
+                     (list (car step) (length (cdr step)))))
+                 '((440 330) (440 330 1) (440))))
+  ;; A step that ends a frame after a period does: 481 frames.
+  (check t (clara.sound:play '(a4 b4 (c5 2)) :tempo 5987 :wave :square))
+  (check t (same-sound (sounded)
+                       (burst (list (list (list (list 481 (cons :square 440000)) (list 481 (cons :square (of 'b4)))
+                                                (list 962 (cons :square (of 'c5))))
+                                          100 0))
+                              1924)))
+  ;; How long a step is: the frames of a minute over the tempo, as many whole ones as there are.
+  (check t (clara.sound:play '(a4 (880)) :tempo 4999))
+  (check t (same-sound (sounded)
+                       (burst (list (list (list (list 576 (cons :sine 440000)) (list 576 (cons :sine 880000))) 100 0))
+                              1152))))
+(check nil (clara.sound:play nil))
+(check '("0 is not a tempo: that is how many steps there are to the minute, from 1 to 6000"
+         "6001 is not a tempo: that is how many steps there are to the minute, from 1 to 6000"
+         "C4 is not a list of notes"
+         "H4 is not a note: a note has a name like C4, F#3 or BB5, or is a number of times a second, or REST"
+         "0 is not how many steps a note can last: that is from 1 to 1000"
+         "1001 is not how many steps a note can last: that is from 1 to 1000"
+         "(C4 D4 E4 F4 G4 A4 B4 C5 D5) is more than eight notes at once"
+         ":BUZZ is not the shape of a wave: one is :SINE, :SQUARE, :TRIANGLE, :SAWTOOTH or :NOISE"
+         "200 is not how loud a sound can be: that is a number from 0 to 100")
+       (mapcar (lambda (arguments) (condition-text (lambda () (apply #'clara.sound:play arguments))))
+               '(((c4) :tempo 0) ((c4) :tempo 6001) (c4) ((c4 h4)) ((c4 (d4 0))) (((d4 1001)))
+                 (((c4 d4 e4 f4 g4 a4 b4 c5 d5))) ((c4) :wave :buzz) ((c4) :volume 200))))
+(check nil (sounded))
+
+;; What is played together begins in the same frame, whatever was worked
+;; out in between, and the form gives what its last form gives.
+(check '(1 2) (multiple-value-list
+               (clara.sound:together
+                 (clara.sound:tone 440 50)
+                 (sleep 0.05)
+                 (clara.sound:play '(c5 (e5 2)) :tempo 3000 :wave :square :pan 100 :volume 40)
+                 (clara.sound:together
+                   (clara.sound:tone 90 35 :wave :triangle :pan -100))
+                 (sleep 0.05)
+                 (values 1 2))))
+(check t (same-sound (sounded)
+                     (burst (list (note-voice 2400 :sine 440000)
+                                  (list (list (list 960 (cons :square (clara.sound::pitch-of 'c5)))
+                                              (list 1920 (cons :square (clara.sound::pitch-of 'e5))))
+                                        40 100)
+                                  (note-voice 1680 :triangle 90000 :pan -100))
+                            2880)))
+;; Without it they begin apart; and with it, when the forms end in an error, nothing begins.
+(check "no" (condition-text (lambda () (clara.sound:together (clara.sound:tone 440 50) (error "no")))))
+(check nil (sounded))
+;; More than the numbers hold stays at their ends.
+(clara.sound:together
+  (dotimes (i 6)
+    (clara.sound:tone 300 20 :wave :square)))
+(let ((heard (sounded)))
+  (check t (same-sound heard (burst (loop repeat 6 collect (note-voice 960 :square 300000)) 960)))
+  (check '(32767 -32768) (list (reduce #'max heard) (reduce #'min heard))))
+
+;; A card that plays at its own pace. It is given four periods and no more
+;; until it gives one back, whoever waits for the end waits until the card
+;; has played the last, and sixteen voices are as many as there can be.
+(new-sound :paced t)
+(check t (clara.sound:tone 440 100))
+(check t (eventually (lambda () (= (length (vdev-flying *sound*)) 4))))
+(sleep 0.05)
+(check '(4 4 0) (list (length (vdev-flying *sound*)) (clara.sound::card-under-way clara.sound::*card*)
+                      (length (vdev-played *sound*))))
+(let* ((done nil) (waiter (clara:make-thread (lambda () (setq done (clara.sound:wait))))))
+  (sound-on *sound*)
+  (check t (eventually (lambda () (= (length (vdev-flying *sound*)) 4))))
+  (check 960 (length (vdev-played *sound*)))
+  (sleep 0.05)
+  (check nil done)
+  (play-out)
+  (check t (eventually (lambda () done)))
+  (clara:join-thread waiter))
+(check t (same-sound (played) (burst (list (note-voice 4800 :sine 440000)) 4800)))
+;; A sound that is short enough for the card to have all of it at once is not over for that.
+(clara.sound:tone 440 25)
+(check t (eventually (lambda () (= (length (vdev-flying *sound*)) 4))))
+(let* ((done nil) (waiter (clara:make-thread (lambda () (setq done (clara.sound:wait))))))
+  (sleep 0.05)
+  (check '(nil nil) (list done (clara.sound::card-voices clara.sound::*card*)))
+  (play-out)
+  (check t (eventually (lambda () done)))
+  (clara:join-thread waiter))
+(check t (same-sound (played) (burst (list (note-voice 1200 :sine 440000)) 1200)))
+(check '(t t t t t t t t t t t t t t t t)
+       (clara.sound:together (loop repeat 16 collect (clara.sound:tone 440 100))))
+(check t (eventually (lambda () (= (length (vdev-flying *sound*)) 4))))
+(check '(nil nil) (list (clara.sound:tone 440 30) (clara.sound:play '(c4))))
+(clara.sound:together                    ; two more than there is room for: neither begins
+  (clara.sound:tone 880 30)
+  (clara.sound:tone 660 30))
+(check 16 (length (clara.sound::card-voices clara.sound::*card*)))
+(play-out)
+(check t (same-sound (played) (burst (loop repeat 16 collect (note-voice 4800 :sine 440000)) 4800)))
+(check t (clara.sound:tone 440 30))                     ; and there is room again
+(play-out)
+(played)
+
+;; Stopping. A note that is sounding is let go of as at its end, so that it
+;; is gone within a hundredth of a second and without a click; what was to
+;; come after it does not come; and a period of nothing follows as after
+;; any sound. The card had four periods of the tone by then, 1920 frames.
+(new-sound :paced t)
+(clara.sound:play '((440 100) c4 d4) :tempo 600)
+(check t (eventually (lambda () (= (length (vdev-flying *sound*)) 4))))
+(check t (clara.sound:stop))
+(play-out)
+(check t (same-sound (played) (burst (list (note-voice 2432 :sine 440000)) 2432)))
+;; A note that was nearly over ends as it would have; a rest that is stopped is over; and with
+;; nothing sounding there is nothing to stop.
+(clara.sound:tone 440 45)
+(check t (eventually (lambda () (= (length (vdev-flying *sound*)) 4))))
+(clara.sound:stop)
+(play-out)
+(check t (same-sound (played) (burst (list (note-voice 2160 :sine 440000)) 2160)))
+(clara.sound:play '(rest c4) :tempo 60)
+(check t (eventually (lambda () (= (length (vdev-flying *sound*)) 4))))
+(clara.sound:stop)
+(play-out)
+(check t (same-sound (played) (make-list (* 2 (+ 1920 480)) :initial-element 0)))
+(check t (clara.sound:stop))
+(sleep 0.05)
+(play-out)
+(check nil (played))
+
+;; A card that does not send its message is looked at all the same, ten
+;; times a second.
+(new-sound :mute t)
+(clara.sound:tone 440 20)
+(check t (same-sound (sounded) (burst (list (note-voice 960 :sine 440000)) 960)))
+;; And it is not given up for that: the patience is for a card that gives nothing back, and begins
+;; anew with every period that comes.
+(setq clara.sound::*patience* 300)
+(clara.sound:tone 440 150)
+(check t (same-sound (sounded) (burst (list (note-voice 7200 :sine 440000)) 7200)))
+(setq clara.sound::*patience* 5000)
+
+;; Cards of other kinds. One that knows 44100 frames a second and not
+;; 48000 is played at that pace, a period of 441 frames; one whose first
+;; stream records is played by its second.
+(check (format nil "sound: 00:07.0 is a sound card: 44100 frames a second, left and right~%")
+       (new-sound :streams (list (list 0 #x20 #x40 2 2))))
+(check '(0 7056 1764 2 5 6) (vdev-told *sound*))
+(clara.sound:tone 1000 15 :wave :square)
+(check t (same-sound (sounded) (burst (list (note-voice 661 :square 1000000)) 661 :rate 44100)))
+(clara.sound:play '(a4 (c5 e5)) :tempo 6000 :wave :triangle)
+(check t (same-sound (sounded)
+                     (burst (list (list (list (list 441 (cons :triangle 440000))
+                                              (list 441 (cons :triangle (clara.sound::pitch-of 'c5))
+                                                    (cons :triangle (clara.sound::pitch-of 'e5))))
+                                        100 0))
+                            882 :rate 44100)))
+(check "the sound card 00:07.0: 44100 frames a second, left and right" (clara.sound:card))
+(new-sound :streams (list (list 1 #xe0078 #x3fff 1 2) (list 0 #xe0078 #x3fff 1 2)))
+(check '(1 7680 1920 2 5 7) (vdev-told *sound*))
+(clara.sound:tone 440 10)
+(check t (same-sound (sounded) (burst (list (note-voice 480 :sine 440000)) 480)))
+;; And the ones that cannot be played on: no numbers of 16 bits, one side only, no pace that is
+;; known here, nothing that plays, no streams at all.
+(dolist (streams (list (list (list 0 #x18 #x3fff 1 2))
+                       (list (list 0 #xe0078 #x3fff 1 1))
+                       (list (list 0 #xe0078 #x3f 1 2))
+                       (list (list 1 #xe0078 #x3fff 1 2))))
+  (check (format nil "sound: 00:07.0 did not start: the sound card has no stream that plays numbers of 16 bits ~
+                      on two sides, 48000 or 44100 times a second~%~
+                      sound: no sound card that has a driver here: nothing is played~%")
+         (new-sound :streams streams))
+  (check nil clara.sound::*card*))
+(check (format nil "sound: 00:07.0 did not start: the sound card has no streams~%~
+                    sound: no sound card that has a driver here: nothing is played~%")
+       (new-sound :streams nil))
+
+;; A card that says no, or nothing. When it is asked as the machine
+;; starts, it did not start, and the machine goes on without sound.
+(check (format nil "sound: 00:07.0 did not start: the sound card 00:07.0 was asked to play 16 bits on two sides ~
+                    and says that it cannot do that~%~
+                    sound: no sound card that has a driver here: nothing is played~%")
+       (new-sound :refuse '((#x101 . #x8002))))
+(check (format nil "sound: 00:07.0 did not start: the sound card 00:07.0 was asked what its streams are ~
+                    and says that the request is no request~%~
+                    sound: no sound card that has a driver here: nothing is played~%")
+       (new-sound :refuse '((#x100 . #x8001))))
+(check (format nil "sound: 00:07.0 did not start: the sound card 00:07.0 was asked to get ready ~
+                    and says 7, which is no answer of such a card's~%~
+                    sound: no sound card that has a driver here: nothing is played~%")
+       (new-sound :refuse '((#x102 . 7))))
+(check (format nil "sound: 00:07.0 did not start: the sound card 00:07.0 was asked what its streams are ~
+                    and has not answered in 300 milliseconds~%~
+                    sound: no sound card that has a driver here: nothing is played~%")
+       (let ((clara.sound::*patience* 300))
+         (new-sound :silent t)))
+;; When it is while something plays, the card plays nothing more, which is said once, and asked
+;; for: whoever waits for the end is not left waiting, and what is played after that gives NIL.
+(flet ((fails (words &rest options)
+         (apply #'new-sound options)
+         (check (list (format nil "sound: ~A~%" words) t
+                      (format nil "the sound card 00:07.0, which plays nothing more: ~A" words)
+                      nil nil nil t)
+                (list (said-by-all (lambda ()
+                                     (clara.sound:tone 440 100)
+                                     (clara.sound:wait)
+                                     (eventually (lambda ()
+                                                   (not (clara:thread-alive-p
+                                                         (clara.sound::card-thread clara.sound::*card*)))))))
+                      (clara.sound:wait)
+                      (clara.sound:card)
+                      (clara.sound:tone 440 100) (clara.sound:play '(c4)) (clara.sound:beep)
+                      (clara.sound:stop)))))
+  (fails "the sound card 00:07.0 was given a period to play and says that something went wrong on its side"
+         :verdict #x8003)
+  (fails "the sound card 00:07.0 was asked to start and says that it cannot do that"
+         :refuse '((#x104 . #x8002)))
+  (fails "the sound card 00:07.0 was asked to start and says 0, which is no answer of such a card's"
+         :refuse '((#x104 . :nothing)))
+  (setq clara.sound::*patience* 300)
+  (fails "the sound card 00:07.0 has not played what it was given 300 milliseconds ago" :stuck t)
+  (setq clara.sound::*patience* 5000))
+
+;; Files of sound. A file is read as it is written: the pieces that it is
+;; made of, what it says of its numbers, and the frames.
+(defun low-first (number count)
+  (loop for i below count collect (ldb (byte 8 (* 8 i)) number)))
+
+;; A file of FRAMES, each a list of a number for every side: with a sign
+;; for 16 bits, from 0 to 255 for 8. BEFORE are pieces that come first,
+;; each (letters . bytes); FURTHER says the kind of the numbers the long
+;; way; SAYS is how many bytes of frames the file claims to have, when that
+;; is not how many it has; and CUT is how many bytes of the file there are.
+(defun sound-file (frames &key (pace 48000) (sides 2) (bits 16) (kind 1) before further says cut (letters "fmt "))
+  (let* ((data (loop for frame in frames
+                     append (loop for number in frame append (low-first number (floor bits 8)))))
+         (width (* sides (floor bits 8)))
+         (said (append (low-first (if further #xfffe kind) 2) (low-first sides 2) (low-first pace 4)
+                       (low-first (* pace width) 4) (low-first width 2) (low-first bits 2)
+                       (when further
+                         (append (low-first 22 2) (low-first bits 2) (low-first 3 4) (low-first kind 2)
+                                 (list 0 0 0 0 16 0 128 0 0 170 0 56 155 113)))))
+         (pieces (append (loop for (name . bytes) in before
+                               append (append (map 'list #'char-code name) (low-first (length bytes) 4) bytes
+                                              (when (oddp (length bytes)) (list 0))))
+                         (map 'list #'char-code letters) (low-first (length said) 4) said
+                         (map 'list #'char-code "data") (low-first (or says (length data)) 4) data))
+         (file (append (map 'list #'char-code "RIFF") (low-first (+ 4 (length pieces)) 4)
+                       (map 'list #'char-code "WAVE") pieces)))
+    (coerce (if cut (subseq file 0 cut) file) '(vector (unsigned-byte 8)))))
+
+;; Frames that are some numbers and no others: each from the one before by a rule.
+(defun some-frames (count sides &key (most 32767) (least -32768))
+  (let ((state 2026))
+    (loop repeat count
+          collect (loop repeat sides
+                        collect (progn (setq state (logand #xffffffff (+ (* state 1103515245) 12345)))
+                                       (+ least (mod (ash state -8) (1+ (- most least)))))))))
+
+(defvar *frames-16* (some-frames 700 2))
+(defvar *frames-mono* (some-frames 300 1))
+(defvar *frames-8* (some-frames 90 1 :most 255 :least 0))
+(defvar *frames-8-2* (some-frames 90 2 :most 255 :least 0))
+
+(defun both-sides (frames &optional (bits 16))
+  (mapcar (lambda (frame)
+            (let ((numbers (if (= bits 8)
+                               (mapcar (lambda (number) (* 256 (- number 128))) frame)
+                               frame)))
+              (list (first numbers) (or (second numbers) (first numbers)))))
+          frames))
+
+;; How many frames the card is given for a file of COUNT frames at PACE.
+(defun frames-played (count pace &optional (rate 48000))
+  (ceiling (* count 1048576) (floor (+ (* pace 1048576) (floor rate 2)) rate)))
+
+(new-sound :files (list (list "ding.wav" (sound-file *frames-16*))
+                        (list "mono.wav" (sound-file *frames-mono* :sides 1 :pace 44100))
+                        (list "low.wav" (sound-file *frames-8* :sides 1 :bits 8 :pace 8000))
+                        (list "low2.wav" (sound-file *frames-8-2* :bits 8 :pace 11025))
+                        (list "fast.wav" (sound-file *frames-16* :pace 96000))
+                        (list "long.wav" (sound-file *frames-16* :pace 44100))
+                        (list "half.wav" (sound-file *frames-16* :pace 24000))
+                        (list "further.wav" (sound-file *frames-16* :further t
+                                                        :before (list (cons "LIST" (list 1 2 3 4 5))
+                                                                      (cons "fact" (list 9 9 9 9)))))
+                        (list "says.wav" (sound-file *frames-16* :says #xffffffff))
+                        (list "short.wav" (sound-file *frames-16* :cut (+ 44 (* 4 123) 2)))
+                        (list "none.wav" (sound-file nil))
+                        (list "text.wav" "RIFFling through the WAVEs")
+                        (list "form.wav" (let ((file (sound-file *frames-16*)))
+                                           (replace file (map 'vector #'char-code "FORM"))))
+                        (list "list.wav" (let ((file (sound-file *frames-16*)))
+                                           (replace file (map 'vector #'char-code "LIST") :start1 8)))
+                        (list "tiny.wav" "RIFF")
+                        (list "nothing.wav" (sound-file *frames-16* :letters "fmt?"))
+                        (list "nodata.wav" (sound-file *frames-16* :cut 36))
+                        (list "cutfmt.wav" (sound-file *frames-16* :cut 30))
+                        (list "packed.wav" (sound-file *frames-16* :kind 2))
+                        (list "packed2.wav" (sound-file *frames-16* :kind 3 :further t))
+                        (list "three.wav" (sound-file (some-frames 10 3) :sides 3))
+                        (list "wide.wav" (sound-file *frames-16* :bits 24))
+                        (list "slow.wav" (sound-file *frames-16* :pace 999))
+                        (list "notes" (list (list "c.wav" (sound-file *frames-mono* :sides 1))))))
+(let ((pages (clara.host:allocated-pages)))
+  ;; As it was made: at the card's pace, and as loud as it can be, the frames are the file's.
+  (check t (clara.sound:play-file "/ding.wav"))
+  (check t (same-sound (sounded) (burst (list (list :file *frames-16* 48000 100 0)) 700)))
+  (clara.sound:play-file "/ding.wav")
+  (check t (equal (subseq (sounded) 0 1400) (loop for frame in *frames-16* append frame)))
+  ;; One side for both, numbers of 8 bits, and another pace: the frame that the file has come to.
+  (clara.sound:play-file "/mono.wav")
+  (check t (same-sound (sounded) (burst (list (list :file (both-sides *frames-mono*) 44100 100 0))
+                                      (frames-played 300 44100))))
+  (clara.sound:play-file "/low.wav")
+  (check t (same-sound (sounded) (burst (list (list :file (both-sides *frames-8* 8) 8000 100 0))
+                                      (frames-played 90 8000))))
+  (check '(540 327) (list (frames-played 90 8000) (frames-played 300 44100)))
+  (clara.sound:play-file "/low2.wav")
+  (check t (same-sound (sounded) (burst (list (list :file (both-sides *frames-8-2* 8) 11025 100 0))
+                                      (frames-played 90 11025))))
+  (clara.sound:play-file "/fast.wav")
+  (check t (same-sound (sounded) (burst (list (list :file *frames-16* 96000 100 0)) 350)))
+  ;; Over more than one period, and at a pace that comes out even at every second frame.
+  (clara.sound:play-file "/long.wav")
+  (check t (same-sound (sounded) (burst (list (list :file *frames-16* 44100 100 0)) (frames-played 700 44100))))
+  (clara.sound:play-file "/half.wav")
+  (check t (same-sound (sounded) (burst (list (list :file *frames-16* 24000 100 0)) 1400)))
+  ;; How loud and where; in a directory; with notes; and together with them.
+  (clara.sound:play-file "/ding.wav" :volume 30 :pan -100)
+  (check t (same-sound (sounded) (burst (list (list :file *frames-16* 48000 30 -100)) 700)))
+  (clara.sound:play-file "/notes/c.wav" :pan 60)
+  (check t (same-sound (sounded) (burst (list (list :file (both-sides *frames-mono*) 48000 100 60)) 300)))
+  (setq clara.sound:*volume* 40)
+  (clara.sound:together
+    (clara.sound:play-file "/ding.wav" :volume 50)
+    (clara.sound:tone 440 20))
+  (check t (same-sound (sounded) (burst (list (list :file *frames-16* 48000 50 0) (note-voice 960 :sine 440000))
+                                      960 :volume 40)))
+  (setq clara.sound:*volume* 100)
+  ;; Pieces before the one that says what the numbers are, one of them of an odd length, and the
+  ;; kind of the numbers said the long way; a file that says it has more frames than it has, and
+  ;; one that was cut off in the middle of a frame; and a file with no frames in it.
+  (clara.sound:play-file "/further.wav")
+  (check t (same-sound (sounded) (burst (list (list :file *frames-16* 48000 100 0)) 700)))
+  (clara.sound:play-file "/says.wav")
+  (check t (same-sound (sounded) (burst (list (list :file *frames-16* 48000 100 0)) 700)))
+  (clara.sound:play-file "/short.wav")
+  (check t (same-sound (sounded) (burst (list (list :file (subseq *frames-16* 0 123) 48000 100 0)) 123)))
+  (check t (clara.sound:play-file "/none.wav"))
+  (check nil (sounded))
+  ;; The memory that a file was read into is given back when it has been played,
+  (check pages (clara.host:allocated-pages))
+  ;; and when what was to play it ended in an error,
+  (check "no" (condition-text (lambda ()
+                                (clara.sound:together
+                                  (clara.sound:play-file "/ding.wav")
+                                  (error "no")))))
+  (check pages (clara.host:allocated-pages))
+  ;; and a file that is not played is said, and its memory given back.
+  (check '("/text.wav is not a file of sound of the kind that is read here, a WAVE file"
+           "/form.wav is not a file of sound of the kind that is read here, a WAVE file"
+           "/list.wav is not a file of sound of the kind that is read here, a WAVE file"
+           "/tiny.wav is not a file of sound of the kind that is read here, a WAVE file"
+           "/nothing.wav does not say what its sound is before the sound begins, or has none"
+           "/nodata.wav does not say what its sound is before the sound begins, or has none"
+           "/cutfmt.wav is cut short where it says what its sound is"
+           "the sound in /packed.wav is not plain numbers but packed in some way, which is not read here"
+           "the sound in /packed2.wav is not plain numbers but packed in some way, which is not read here"
+           "the sound in /three.wav has 3 sides, 16 bits to the number and 48000 frames a second, and what is read here has 1 or 2, 8 or 16, and 1000 to 192000"
+           "the sound in /wide.wav has 2 sides, 24 bits to the number and 48000 frames a second, and what is read here has 1 or 2, 8 or 16, and 1000 to 192000"
+           "the sound in /slow.wav has 2 sides, 16 bits to the number and 999 frames a second, and what is read here has 1 or 2, 8 or 16, and 1000 to 192000"
+           "there is no file /nowhere.wav"
+           "200 is not how loud a sound can be: that is a number from 0 to 100")
+         (append (mapcar (lambda (name) (condition-text (lambda () (clara.sound:play-file name))))
+                         '("/text.wav" "/form.wav" "/list.wav" "/tiny.wav" "/nothing.wav" "/nodata.wav" "/cutfmt.wav" "/packed.wav"
+                           "/packed2.wav" "/three.wav" "/wide.wav" "/slow.wav" "/nowhere.wav"))
+                 (list (condition-text (lambda () (clara.sound:play-file "/ding.wav" :volume 200))))))
+  (check pages (clara.host:allocated-pages))
+  (check nil (sounded)))
+;; What a card was playing when it failed is let go of, with the memory of a file.
+(new-sound :verdict #x8003 :files (list (list "ding.wav" (sound-file (some-frames 5000 2)))))
+(let ((pages (clara.host:allocated-pages)))
+  (said-by-all (lambda ()
+                 (clara.sound:play-file "/ding.wav")
+                 (clara.sound:wait)
+                 (eventually (lambda ()
+                               (not (clara:thread-alive-p (clara.sound::card-thread clara.sound::*card*)))))))
+  (check (list pages nil) (list (clara.host:allocated-pages) (clara.sound::card-voices clara.sound::*card*))))
+;; A file that is stopped is over at once, and its memory is given back; so
+;; is that of one that was to be played when sixteen voices were sounding.
+(new-sound :paced t :files (list (list "ding.wav" (sound-file (some-frames 5000 2)))))
+(let ((pages (clara.host:allocated-pages)))
+  (clara.sound:play-file "/ding.wav")
+  (check t (eventually (lambda () (= (length (vdev-flying *sound*)) 4))))
+  (check t (> (clara.host:allocated-pages) pages))
+  (clara.sound:stop)
+  (play-out)
+  (check (* 2 (+ 1920 480)) (length (played)))
+  (check pages (clara.host:allocated-pages))
+  (clara.sound:together
+    (dotimes (i 16)
+      (clara.sound:tone 440 100)))
+  (check t (eventually (lambda () (= (length (vdev-flying *sound*)) 4))))
+  (check nil (clara.sound:play-file "/ding.wav"))
+  (check pages (clara.host:allocated-pages))
+  (play-out)
+  (played))
+
+;; What the machines of `make test` play (tools/session.txt and
+;; tools/resumed.txt), played here: QEMU writes what a machine plays into a
+;; file, tools/heard.py says what is in the file, and the session has the
+;; lines that it is to say, which begin with ^H. Said the same way of what
+;; is played here, they are the same lines: the kernel's Lisp and SBCL's
+;; come to the same numbers, and those are the numbers that the rule above
+;; has. A stretch of sound ends where there is nothing for five
+;; thousandths of a second; it turns once wherever the two sides together
+;; come up through nothing; and nothing for a twentieth of a second or
+;; more has a line of its own.
+(defun said-of (numbers &optional (rate 48000))
+  (let ((frames (coerce (loop for (left right) on numbers by #'cddr collect (cons left right)) 'vector))
+        (lines nil) (start nil) (last nil) (before nil))
+    (flet ((stretch (start end)
+             (when (and before (>= (* 20 (- start before)) rate))
+               (push (format nil "~D ms of nothing" (round (* 1000 (- start before)) rate)) lines))
+             (let ((turns 0) (below nil))
+               (loop for at from start to (min end (1- (length frames)))
+                     do (let ((both (+ (car (aref frames at)) (cdr (aref frames at)))))
+                          (cond ((< both 0) (setq below t))
+                                (below (setq below nil)
+                                       (incf turns)))))
+               (push (format nil "~D ms, ~D turns, ~D left, ~D right" (round (* 1000 (- end start)) rate) turns
+                             (loop for at from start below end maximize (abs (car (aref frames at))))
+                             (loop for at from start below end maximize (abs (cdr (aref frames at)))))
+                     lines))
+             (setq before end)))
+      (dotimes (at (length frames))
+        (unless (and (zerop (car (aref frames at))) (zerop (cdr (aref frames at))))
+          (cond ((null start) (setq start at))
+                ((> (- at last) (floor rate 200))
+                 (stretch start (1+ last))
+                 (setq start at)))
+          (setq last at)))
+      (when start
+        (stretch start (1+ last))))
+    (nreverse lines)))
+
+(new-sound :files (list (list "ding.wav" (sound-file (loop for i below 800 collect (list (if (< (mod i 16) 8) 228 28)))
+                                                     :sides 1 :bits 8 :pace 8000))))
+(check '("250 ms, 110 turns, 8192 left, 8192 right"
+         "500 ms, 172 turns, 16384 left, 0 right"
+         "125 ms of nothing"
+         "125 ms, 29 turns, 8192 left, 0 right"
+         "300 ms, 76 turns, 8192 left, 10606 right"
+         "120 ms, 106 turns, 4096 left, 4096 right"
+         "100 ms, 50 turns, 12800 left, 12800 right"
+         "100 ms, 50 turns, 0 left, 25600 right"
+         "200 ms, 88 turns, 0 left, 8192 right"
+         "100 ms, 50 turns, 25600 left, 25600 right")
+       (said-of (append (progn (clara.sound:tone 440 250)
+                               (sounded))
+                        (progn (clara.sound:play '(c4 e4 (g4 c5 2) rest "bb3") :tempo 480 :wave :square :pan -100)
+                               (sounded))
+                        (progn (clara.sound:together
+                                 (clara.sound:tone 'a3 300 :wave :triangle)
+                                 (clara.sound:tone 2000 300 :wave :noise :volume 30 :pan 100))
+                               (sounded))
+                        (progn (setq clara.sound:*volume* 50)
+                               (clara.sound:beep)
+                               (prog1 (sounded)
+                                 (setq clara.sound:*volume* 100)))
+                        (progn (clara.sound:play-file "/ding.wav" :volume 50)
+                               (sounded))
+                        (progn (clara.sound:play-file "/ding.wav" :pan 100)
+                               (sounded))
+                        (progn (clara.sound:tone 'a4 200 :pan 100)
+                               (sounded))
+                        (progn (clara.sound:play-file "/ding.wav")
+                               (sounded)))))
+
+;; A machine without a sound card says so as it starts, and everything
+;; gives NIL there and does nothing: no file is read. What is wrong with
+;; what was asked for is said all the same.
+(new-sound)
+(clara.sound:tone 440 10)
+(sounded)
+(check t (eventually (lambda () (eq (vdev-stage *sound*) :stopped))))
+(new-machine)
+(attach-bus)
+(add-function 0 0 0 #x8086 #x29c0 #x060000)
+(with-output-to-string (*standard-output*)
+  (clara.pci:start))
+(let ((card clara.sound::*card*))
+  ;; The card of a world that was saved is another machine's: the next start forgets it.
+  (check (format nil "sound: no sound card that has a driver here: nothing is played~%") (said-by #'clara.sound:start))
+  (check '(nil t) (list clara.sound::*card*
+                        (eventually (lambda () (not (clara:thread-alive-p (clara.sound::card-thread card))))))))
+(check '(nil nil nil nil nil nil nil 7)
+       (list (clara.sound:card) (clara.sound:tone 440 100) (clara.sound:play '(c4 e4 g4)) (clara.sound:beep)
+             (clara.sound:wait) (clara.sound:stop) (clara.sound:play-file "/no-such-file.wav")
+             (clara.sound:together (clara.sound:tone 440 100) 7)))
+(check '("H4 is not a note: a note has a name like C4, F#3 or BB5, or is a number of times a second, or REST"
+         "0 is not a tempo: that is how many steps there are to the minute, from 1 to 6000"
+         ":LEFT is not a place between the two sides: one is a number from -100, the left, to 100, the right")
+       (list (condition-text (lambda () (clara.sound:tone 'h4 100)))
+             (condition-text (lambda () (clara.sound:play '(c4) :tempo 0)))
+             (condition-text (lambda () (clara.sound:play-file "/ding.wav" :pan :left)))))
+
+;; A card that has nothing to play is left alone: its thread waits until
+;; somebody plays something, and asks the card nothing meanwhile.
+(new-sound)
+(clara.sound:tone 440 10)
+(sounded)
+(check t (eventually (lambda () (eq (vdev-stage *sound*) :stopped))))
+(let ((asked (length (vdev-requests *sound*))) (told (length (vdev-notified *sound*))))
+  (sleep 0.3)
+  (check (list asked told) (list (length (vdev-requests *sound*)) (length (vdev-notified *sound*)))))
+;; And it is started again for the next sound, and stopped again after it.
+(clara.sound:tone 440 10)
+(check t (same-sound (sounded) (burst (list (note-voice 480 :sine 440000)) 480)))
+(check t (eventually (lambda () (eq (vdev-stage *sound*) :stopped))))
+(check '(#x100 #x101 #x102 #x104 #x105 #x104 #x105) (reverse (vdev-requests *sound*)))
+;; Sounds that follow each other closely are played without the card being stopped between them.
+(setq clara.sound::*linger* 300)
+(dotimes (i 3)
+  (clara.sound:tone 440 10)
+  (clara.sound:wait))
+(check '(#x100 #x101 #x102 #x104 #x105 #x104 #x105 #x104) (reverse (vdev-requests *sound*)))
+(setq clara.sound::*linger* 20)
+
+(stop-sound)
+(setq clara.sound::*linger* 300)
+(check *before-sound* (length (clara:all-threads)))
 
 ;;; Certificates (lisp/tls.lisp): read as they are written, and held
 ;;; against a name, against the time, and against each other.

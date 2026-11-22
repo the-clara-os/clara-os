@@ -18,6 +18,10 @@
 (C T T)
 > (progn (setf (symbol-function 'svref) *svref*) (let ((before *asked*)) (list (first-of (vector 'e)) (= *asked* before))))
 (E T)
+> (list (stringp (clara.sound:card)) (clara.sound:tone 'a4 200 :pan 100) (clara.sound:wait) (clara.sound:play-file "/ding.wav") (clara.sound:wait))
+(T T T T T)
+^H 200 ms, 88 turns, 0 left, 8192 right
+^H 100 ms, 50 turns, 25600 left, 25600 right
 > (list (depth) *depth* (let ((*depth* 2)) (depth)))
 (0 0 2)
 > (let ((p (make-point :x 3))) (setf (point-y p) 4) p)
