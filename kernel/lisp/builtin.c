@@ -1048,6 +1048,39 @@ PRIMITIVE(p_structure_set) /* object name index value */
     return lisp_as_structure(argv[0])->slots[i] = argv[3];
 }
 
+/* (%type-of object): what an object is, as the name of the class that it
+ * is an instance of when nothing more is known of it (lisp/clos.lisp,
+ * which makes CLASS-OF and TYPE-OF of this). A structure is of its type,
+ * and so is a condition; an instance of a class that DEFCLASS made is a
+ * structure too, of the type STANDARD-OBJECT, and Lisp looks inside. What
+ * has no class of its own is a T: a thread, a lock, an event. */
+PRIMITIVE(p_type_of)
+{
+    static const char *const names[] = { "INTEGER", "CHARACTER", "NULL",     "SYMBOL",  "CONS",
+                                         "STRING",  "VECTOR",    "FUNCTION", "PACKAGE", "T" };
+    static lisp symbols[sizeof names / sizeof names[0]]; /* found once in a boot: symbols of COMMON-LISP, which stay */
+    lisp x = argv[0];
+    unsigned i;
+
+    if (lisp_is(x, LISP_STRUCTURE))
+        return lisp_as_cons(lisp_as_structure(x)->type)->car;
+    if (lisp_is(x, LISP_CONDITION))
+        return lisp_as_condition(x)->type;
+    i = lisp_is_fixnum(x)             ? 0
+        : lisp_is_character(x)        ? 1
+        : x == NIL                    ? 2
+        : lisp_is_symbol(x)           ? 3
+        : lisp_is_cons(x)             ? 4
+        : lisp_is(x, LISP_STRING)     ? 5
+        : lisp_is(x, LISP_VECTOR)     ? 6
+        : lisp_is(x, LISP_FUNCTION)   ? 7
+        : lisp_is(x, LISP_PACKAGE)    ? 8
+                                      : 9;
+    if (!symbols[i])
+        symbols[i] = lisp_symbol_in(lisp_roots.common_lisp, names[i], 1);
+    return symbols[i];
+}
+
 PRIMITIVE(p_copy_structure)
 {
     const struct lisp_structure *s = lisp_as_structure(argv[0]);
@@ -1168,12 +1201,14 @@ PRIMITIVE(p_load)
  * ~D for an integer, ~% for a new line, and ~~. */
 
 /* Where the printer writes when it makes a string: its bytes become
- * characters again, counted the first time through and stored the second. */
+ * characters again, counted the first time through and stored the second,
+ * and no more of them are stored than were counted. */
 struct sink {
     uint32_t *chars;
     uint64_t length;
     uint32_t code;
     unsigned more; /* bytes of the character still to come */
+    uint64_t room; /* how many characters chars has room for */
 };
 
 static void sink_put(void *to, char c)
@@ -1193,13 +1228,65 @@ static void sink_put(void *to, char c)
         s->code = byte & 0x07, s->more = 3;
     if (s->more)
         return;
-    if (s->chars)
+    if (s->chars && s->length < s->room)
         s->chars[s->length] = s->code;
     s->length++;
 }
 
+/* The printer leaves some structures to Lisp: the instances of a class,
+ * and whatever a method of PRINT-OBJECT was written for (print.c). It is
+ * gone through three times then. The first time it counts, and notes
+ * those structures in base[0], the last first. Then Lisp is asked for the
+ * text of each (%OBJECT-TEXT, lisp/clos.lisp), here, between two rounds of
+ * the printer and not in the middle of one; the texts are base[1], in the
+ * order in which the printer came to the structures. The second time it counts with the texts in place, and
+ * the third time it stores. base[2] is the list as far as the printer has
+ * used it. All three are words of the value stack, where the collector
+ * finds them while Lisp runs.
+ *
+ * This is the asking, in the order in which the printer came to them: a
+ * method of PRINT-OBJECT may do more than write, and the first one that
+ * fails is the one that is heard of. 0 after failing: something went wrong
+ * in Lisp, and an exit is under way. */
+static lisp turned(lisp list) /* a list back to front, in its own conses */
+{
+    lisp done = NIL;
+
+    while (list != NIL) {
+        lisp next = lisp_as_cons(list)->cdr;
+
+        lisp_as_cons(list)->cdr = done;
+        done = list;
+        list = next;
+    }
+    return done;
+}
+
+static int ask_for_texts(lisp *base)
+{
+    lisp symbol = lisp_symbol_in(lisp_roots.common_lisp, "%OBJECT-TEXT", 0);
+
+    base[0] = turned(base[0]);
+    while (base[0] != NIL) {
+        lisp *argv = lisp_stack(), text = NIL;
+
+        if (!lisp_push(lisp_as_cons(base[0])->car))
+            return 0;
+        base[0] = lisp_as_cons(base[0])->cdr;
+        if (lisp_as_symbol(symbol)->function != LISP_UNBOUND)
+            text = lisp_apply(lisp_as_symbol(symbol)->function, 1, argv);
+        lisp_stack_drop(argv);
+        if (lisp_unwinding())
+            return 0;
+        base[1] = lisp_cons(text, base[1]);
+    }
+    base[1] = turned(base[1]);
+    return 1;
+}
+
 /* Says 0 after failing. */
-static int format(void (*put)(void *to, char c), void *to, lisp control, unsigned argc, const lisp *argv)
+static int format(void (*put)(void *to, char c), void *to, lisp control, unsigned argc, const lisp *argv,
+                  struct lisp_printing *ask)
 {
     const struct lisp_string *s = lisp_as_string(control);
     uint64_t length = lisp_length(s->header);
@@ -1225,31 +1312,47 @@ static int format(void (*put)(void *to, char c), void *to, lisp control, unsigne
         } else if (used == argc) {
             lisp_fail("FORMAT has no argument left for a directive of ~S", control);
             return 0;
-        } else if (c == 'S')
-            lisp_print(argv[used++], put, to);
-        else
-            lisp_princ(argv[used++], put, to);
+        } else
+            lisp_print_asking(argv[used++], c == 'S', put, to, ask);
     }
     return 1;
 }
 
 /* What FORMAT makes of a control string and its arguments, in a new
- * string; 0 after failing. */
-static lisp format_string(lisp control, unsigned argc, const lisp *argv)
+ * string; 0 after failing. The control string and the arguments are on
+ * the value stack, since Lisp may run in the middle. */
+static lisp format_string(lisp *control, unsigned argc, const lisp *argv)
 {
-    struct sink sink = { NULL, 0, 0, 0 };
-    lisp string;
+    struct sink sink = { NULL, 0, 0, 0, 0 };
+    struct lisp_printing ask = { NULL, NULL };
+    lisp *base = lisp_stack(), string = 0;
 
-    if (!format(sink_put, &sink, control, argc, argv))
+    if (!lisp_push(NIL) || !lisp_push(NIL) || !lisp_push(NIL))
         return 0;
+    ask.found = &base[0];
+    if (!format(sink_put, &sink, *control, argc, argv, &ask))
+        goto out;
+    ask.found = NULL;
+    ask.texts = &base[2];
+    if (base[0] != NIL) {
+        if (!ask_for_texts(base))
+            goto out;
+        base[2] = base[1];
+        sink.length = 0;
+        format(sink_put, &sink, *control, argc, argv, &ask);
+    }
     if (!lisp_heap_room(1 + (sink.length + 1) / 2)) {
         no_room();
-        return 0;
+        goto out;
     }
     string = lisp_make_string(NULL, sink.length);
     sink.chars = lisp_as_string(string)->chars;
+    sink.room = sink.length;
     sink.length = 0;
-    format(sink_put, &sink, control, argc, argv);
+    base[2] = base[1];
+    format(sink_put, &sink, *control, argc, argv, &ask);
+out:
+    lisp_stack_drop(base);
     return string;
 }
 
@@ -1259,38 +1362,56 @@ PRIMITIVE(p_format) /* a control string and its arguments */
 
     if (!lisp_is(argv[0], LISP_STRING))
         return lisp_fail("FORMAT wants a string to go by, and ~S is not one", argv[0]);
-    string = format_string(argv[0], argc - 1, argv + 1);
+    string = format_string(&argv[0], argc - 1, argv + 1);
     return string ? string : NIL;
 }
 
-/* What the printer makes of an object, in a new string; 0 after failing. */
-static lisp print_string(lisp x, void (*print)(lisp x, void (*put)(void *to, char c), void *to))
+/* What the printer makes of an object, in a new string; 0 after failing.
+ * The object is on the value stack, like the arguments of FORMAT. */
+static lisp print_string(lisp *x, int escape)
 {
-    struct sink sink = { NULL, 0, 0, 0 };
-    lisp string;
+    struct sink sink = { NULL, 0, 0, 0, 0 };
+    struct lisp_printing ask = { NULL, NULL };
+    lisp *base = lisp_stack(), string = 0;
 
-    print(x, sink_put, &sink);
+    if (!lisp_push(NIL) || !lisp_push(NIL) || !lisp_push(NIL))
+        return 0;
+    ask.found = &base[0];
+    lisp_print_asking(*x, escape, sink_put, &sink, &ask);
+    ask.found = NULL;
+    ask.texts = &base[2];
+    if (base[0] != NIL) {
+        if (!ask_for_texts(base))
+            goto out;
+        base[2] = base[1];
+        sink.length = 0;
+        lisp_print_asking(*x, escape, sink_put, &sink, &ask);
+    }
     if (!lisp_heap_room(1 + (sink.length + 1) / 2)) {
         no_room();
-        return 0;
+        goto out;
     }
     string = lisp_make_string(NULL, sink.length);
     sink.chars = lisp_as_string(string)->chars;
+    sink.room = sink.length;
     sink.length = 0;
-    print(x, sink_put, &sink);
+    base[2] = base[1];
+    lisp_print_asking(*x, escape, sink_put, &sink, &ask);
+out:
+    lisp_stack_drop(base);
     return string;
 }
 
 PRIMITIVE(p_prin1_to_string)
 {
-    lisp string = print_string(argv[0], lisp_print);
+    lisp string = print_string(&argv[0], 1);
 
     return string ? string : NIL;
 }
 
 PRIMITIVE(p_princ_to_string)
 {
-    lisp string = print_string(argv[0], lisp_princ);
+    lisp string = print_string(&argv[0], 0);
 
     return string ? string : NIL;
 }
@@ -1453,7 +1574,7 @@ static lisp condition_of(unsigned argc, lisp *argv, lisp simple)
     if (lisp_is(datum, LISP_CONDITION) && argc == 1)
         return datum;
     if (lisp_is(datum, LISP_STRING)) {
-        if (!(said = format_string(datum, argc - 1, argv + 1)))
+        if (!(said = format_string(&argv[0], argc - 1, argv + 1)))
             return 0;
         while (--argc)
             arguments = lisp_cons(argv[argc], arguments);
@@ -1679,6 +1800,7 @@ const struct lisp_primitive lisp_primitives[] = {
     { "%STRUCTURE-REF", p_structure_ref, 3, 3 },
     { "%STRUCTURE-SET", p_structure_set, 4, 4 },
     { "COPY-STRUCTURE", p_copy_structure, 1, 1 },
+    { "%TYPE-OF", p_type_of, 1, 1 },
     { "FUNCALL", p_funcall, 1, LISP_MANY },
     { "APPLY", p_apply, 2, LISP_MANY },
     { "VALUES", p_values, 0, LISP_MANY },

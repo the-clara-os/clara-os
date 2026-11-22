@@ -113,6 +113,27 @@ LOW-FUEL
 3
 > (error 'low-fuel :left 3)
 error: #<LOW-FUEL :LEFT 3>
+> (defclass tank () ((level :initarg :level :initform 0 :accessor level) (name :initarg :name :reader tank-name)))
+#<STANDARD-CLASS TANK>
+> (defgeneric drain (thing amount))
+#<STANDARD-GENERIC-FUNCTION DRAIN (0)>
+> (defmethod drain ((tank tank) amount) (setf (level tank) (max 0 (- (level tank) amount))))
+#<STANDARD-METHOD DRAIN (TANK T)>
+> (defmethod drain :before ((tank tank) (amount (eql 0))) (error 'low-fuel :left (level tank)))
+#<STANDARD-METHOD DRAIN :BEFORE (TANK (EQL 0))>
+> (defmethod drain ((point point) amount) (list 'a-point (point-x point) amount))
+#<STANDARD-METHOD DRAIN (POINT T)>
+> (defmethod print-object ((tank tank) stream) (format stream "#<TANK ~A at ~D>" (tank-name tank) (level tank)))
+#<STANDARD-METHOD PRINT-OBJECT (TANK T)>
+> (defvar *tank* (make-instance 'tank :name "main" :level 10))
+*TANK*
+> (list *tank* (drain *tank* 4) (drain (make-point :x 1) 2) (handler-case (drain *tank* 0) (low-fuel (c) (fuel-left c))))
+(#<TANK main at 6> 6 (A-POINT 1 2) 6)
+> (list (class-name (class-of 5)) (class-of "five") (find-class 'low-fuel) (class-of *tank*) (type-of 'five)
+        (class-name (class-of *standard-output*)) (class-of (find-class 'tank)) #'drain)
+(INTEGER #<BUILT-IN-CLASS STRING> #<BUILT-IN-CLASS LOW-FUEL> #<STANDARD-CLASS TANK> SYMBOL STREAM #<BUILT-IN-CLASS STANDARD-CLASS> #<FUNCTION DRAIN>)
+> (car *tank*)
+error: CAR wants a list, and #<STANDARD-OBJECT> is not one
 > (unwind-protect (car 5) (format t "cleaning up~%"))
 cleaning up
 error: CAR wants a list, and 5 is not one

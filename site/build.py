@@ -26,7 +26,8 @@ fall behind it:
 
 The manual cannot fall behind either, in two ways. Every name that the
 system gives a meaning, the special forms and the functions in C
-(kernel/lisp/eval.c, builtin.c, symbol.c), what lisp/boot.lisp exports,
+(kernel/lisp/eval.c, builtin.c, symbol.c), what lisp/boot.lisp and
+lisp/clos.lisp export,
 and what the package of every other file in lisp/ exports, has to be in
 one of the manual's lists of names, the elements of the class "names", and
 nothing else may be in one: a function that is added without a word in the
@@ -125,6 +126,11 @@ def defined():
         if not exports:
             sys.exit(f"site/build.py: lisp/boot.lisp no longer says what it exports from {package}")
         names[package].update(word.upper() for word in exports.group(1).split())
+    # The object system is a file of its own, which exports its names from COMMON-LISP as boot.lisp does.
+    objects = re.search(r"\(export '\((.*?)\)\)", read("lisp", "clos.lisp"), flags=re.S)
+    if not objects:
+        sys.exit("site/build.py: lisp/clos.lisp no longer says what it exports from COMMON-LISP")
+    names["COMMON-LISP"].update(word.upper() for word in objects.group(1).split())
     for path in sorted(glob.glob(os.path.join(ROOT, "lisp", "*.lisp"))):
         with open(path, encoding="utf-8") as f:
             text = f.read()

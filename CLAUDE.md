@@ -33,7 +33,7 @@ Build with `make` (Homebrew's llvm and lld under /opt/homebrew/opt when they
 are there, otherwise clang and lld-link from the PATH; `LLVM=` and `LLD=`
 name other directories). `make test` runs the host tests of the Lisp
 files under SBCL (`make host-test`, a minute), then boots both
-architectures headless under QEMU, fifteen boots in about five minutes,
+architectures headless under QEMU, sixteen boots in about five minutes,
 types a session at each kernel, and saves what each screen shows to
 build/screen-<name>.png; look at those images when a change touches the
 display. `make run-aarch64` and `make run-x86_64` open a QEMU window with
@@ -501,7 +501,7 @@ Rules:
 - What DISASSEMBLE writes is in a session and in the manual, and a line
   of a session that begins with two spaces is one that is typed: a line of
   a listing begins with its number.
-- `make test` boots fifteen times. Three machines, x86_64, AArch64 with GIC
+- `make test` boots sixteen times. Three machines, x86_64, AArch64 with GIC
   version 3, and AArch64 emulated with GIC version 2, whose files in build/
   are named aarch64-gic2, each from a disk of another kind, and each twice:
   the first boot is typed tools/session.txt, which ends by saving the world,
@@ -548,7 +548,9 @@ Rules:
   server on this computer and upgrades to it (aarch64-network,
   tools/network.txt), and two boots for the user
   manual, named manual and manual-again: what the manual shows of the prompt
-  is typed at them. The serial port of each is QEMU's standard input and
+  is typed at them, and one for the object system, x86_64-objects, which
+  is typed tools/objects.txt (below, under the object system). The serial
+  port of each is QEMU's standard input and
   output: the log is what the kernel printed, and a FIFO feeds it what the
   session types. QEMU's hvf has no version 2, and UTM uses version 3.
   tools/boottest.sh passes any further arguments on to QEMU, which is how to
@@ -622,7 +624,12 @@ Rules:
   form at a time, each file in a thread that is given `*patience*`. So
   what a session defines at the top of a line is written to the disk of
   its boot, and is loaded by every later boot that makes a world from
-  that disk: the upgrade boots and the stress boot. A form of
+  that disk: the upgrade boots and the stress boot. A form takes the
+  place of an earlier one with the same key (`key-of`), its first two
+  words, and for a DEFMETHOD also the words before its parameters and
+  what each parameter is for: the methods of a generic function are so
+  many definitions, and tools/upgrade.txt asks the world that was made
+  again for all three of the ones that tools/session.txt types. A form of
   tools/session.txt that must not come back that way, one that starts a
   thread or redefines a function of the language's, is typed inside a
   PROGN. What a new world says of the text, the lines that begin with
@@ -1044,13 +1051,106 @@ Rules:
   code does without a call; what a macro of this file expands into is
   what every file of the world runs, so it is worth a look at the
   instructions (`disassemble`).
+- The object system (lisp/clos.lisp; DESIGN.md has what was decided) is
+  the second file that SBCL cannot load as it stands: it gives Common
+  Lisp's own names their meaning, DEFCLASS and the rest. Its first four
+  forms are what the host tests take it by: `(in-package "COMMON-LISP")`,
+  the `(export '(...))` of those names, the DEFPACKAGE of CLARA.CLOS and
+  the IN-PACKAGE. Under SBCL the tests read it a form at a time into
+  CLARA.CLOS with every exported name hidden behind a symbol of that
+  package (`load-objects`, lisp/host/tests.lisp). So a name goes into
+  that list only when the language did not have it before: one that it
+  had, and that the file calls, would be a symbol there that nothing
+  defines, and the tests say so. The list is also what site/build.py
+  reads for the manual's lists of names. Everything else in the file is
+  the subset, as in any file of the world, and its own names are internal
+  to CLARA.CLOS. What it asks of the kernel is seven functions at its top,
+  under `#+clara`, the only place where it names a symbol of
+  lisp/boot.lisp's or the substrate's (`cl::%type-of`, `cl::%structure`,
+  `cl::%condition`, `cl::%setf-name`, `cl::%printed`); under SBCL
+  lisp/host/objects.lisp defines the seven, from what SBCL knows.
+- SBCL's own object system is the second opinion on that file, the piece
+  of its tests that nobody here wrote. tools/objects.txt is a transcript
+  that is answered three times: by lisp/clos.lisp under SBCL, to the
+  letter; by SBCL's own, which has to fail where the answer is an error
+  and to go well where the answer shows a `#<`, and to give the same text
+  otherwise; and by a kernel, x86_64-objects of `make test`. So a form
+  there shows nothing that the two systems put differently (the class of
+  5, the text of an error of the substrate's), and every error in it is
+  one that lisp/clos.lisp words itself. What only a kernel can answer is
+  in tools/session.txt, tools/resumed.txt and the manual. A new thing in
+  the file gets its forms there: type the form and what should come back,
+  and the host tests say what each system answers when that is not it.
+  Besides, classes, methods and redefinitions that chance picks are given
+  to both systems (`both`, `chance`): a change to the precedence list, to
+  which methods fit and in which order, or to how an instance follows its
+  class is tried by those. Two things that they taught: SBCL's SORT uses
+  up the list that it is given, which ClaraOS's does not, so a list that
+  is kept gets a COPY-LIST before it is sorted; and SBCL keeps a class
+  that it refused among the ones below the classes it was to be a kind
+  of, and fails when one of those is defined again, which is why the
+  classes that are defined again there are a family that is never
+  refused.
+- An instance follows its class at two places and no others: a look at a
+  slot (`current`) and a call of a generic function with it
+  (`class-in-call`, from `dispatch` and `applicable`). CLASS-OF changes
+  nothing. A class works out what it keeps when `*epoch*` has moved on
+  (`fresh`), which only a class that is defined again moves; whatever
+  reads the precedence list, the slots or the layout of a class has it
+  from `fresh`. A generic function drops what it keeps when its methods
+  change (`tune`) and when the number has moved.
+- How an instance is written (kernel/lisp/print.c, builtin.c). The printer
+  goes through an object twice and cannot call Lisp in between, so the
+  functions that make a string for Lisp go through it three times when
+  it comes to a structure whose type's name has `cl::%printed` on its
+  property list: once to note those structures, then
+  `cl::%object-text` is asked for each, and twice with the texts in place
+  (`ask_for_texts`). What is on the value stack there stays on it while
+  Lisp runs. `lisp_print` and `lisp_princ` ask nobody and write such a
+  structure as its type between `#<` and `>`: that is what an error of
+  the substrate's shows, and what the texts of the self-test see. A text
+  that gives `cl::%object-text` a function puts back what was there, and
+  `#'not` when nothing was, never a function of its own: such a function
+  holds a symbol of the text's package, the package stayed in the heap
+  with all that the texts had defined until lisp/clos.lisp was loaded,
+  and every collection of the stress boot up to there went through it.
+  (What showed it: with lisp/clos.lisp left out of `world`, the kernel
+  stops with "48 of its functions and macros are still the evaluator's to
+  walk".)
+- A function that SETF writes with, `(setf name)`, lives in a symbol that
+  the name keeps under `cl::%setf` (`%setf-name`, lisp/boot.lisp). `%setf`
+  calls that symbol when it has a function as the form is expanded, and
+  has `%setf-function` look for it when the form runs otherwise, with
+  the error that an unknown place always had. DEFSETF comes first: a
+  reader with a writer of that kind never gets as far.
+- SYMBOL-MACROLET is in the evaluator (`sf_symbol_macrolet`, a frame of
+  the kind SYMBOL_MACROS) and in the compiler (`c-symbol-macrolet`, a
+  variable that is `(:symbol-macro . form)`). `lookup_variable` says that
+  a name stands for a form by the lowest bit of the address it returns,
+  and not through a variable of its caller's: `eval_car` has a frame on
+  the stack for every form inside a form, and with one more word in it
+  a function called itself 3110 deep where it had 3456. Look at that
+  line of the boot report after any change there.
+- What a change costs the boot that collects at every safe point is not
+  seen where the Mac runs the machine itself: time a collection where it
+  is emulated, `(time (dotimes (i 500) (cl::%collect)))` in a session
+  with `NO_HVF=1`, on the kernel before and the kernel after, one boot
+  after the other. A collection once got a seventh slower with nothing
+  in heap.c changed: code that was added elsewhere had moved the
+  collector's loop onto another page of the kernel than the function it
+  called for every word, and QEMU's emulator pays for a call across a
+  page (`llvm-nm build/esp/EFI/BOOT/BOOTAA64.EFI` has the addresses).
+  Those calls are written into the loops since (`words_of`, `reach`,
+  heap.c). When that boot is slower and the heap is not that much
+  larger, look there before anywhere else.
 - The other files in lisp/ are the world, and each has to load under
   SBCL as it stands: the subset of Common Lisp that the evaluator has,
   no name of Common Lisp's given a new meaning (LISTEN is one), and the
   substrate only through CLARA and CLARA.UNSAFE. The kernel loads them
   in the order of `world` in lisp.c (the compiler, then native and the file
   of the machine's own processor, arm64.lisp or x86-64.lisp, whose name
-  is the machine's in `*features*`, and then the console, draw, pci,
+  is the machine's in `*features*`, then clos, which is the exception
+  above, and then the console, draw, pci,
   virtio, input, disk, fat, type, random, net, sound, the listener,
   windows, terminal, system and tls), and
   lisp/host/tests.lisp loads the same files: a new one goes into both, and what its package exports goes into

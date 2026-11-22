@@ -63,7 +63,7 @@ extern const struct lisp_primitive *g_primitive; /* the function in C that was c
  * the packages hold them. */
 struct known {
     lisp lambda, declare, special, optional, rest, body, key, allow_other_keys, aux, whole, environment;
-    lisp execute, eval, allow, no_error, condition, destructuring_bind, compiler;
+    lisp execute, eval, allow, no_error, condition, destructuring_bind, compiler, setf;
 };
 extern struct known S;
 

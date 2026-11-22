@@ -48,6 +48,8 @@ clara: starting the machine again
 (120 42 NOT-ZERO 0 "PLAY")
 > (list *from-init* *jobs* (fboundp 'not-written-down) (handler-case (error 'low-fuel :left 3) (low-fuel (c) (fuel-left c))))
 ((LOADED BEFORE NIL) CHANGED-AND-NOT-DEFINED-AGAIN NIL 3)
+> (list (drain *tank* 4) (drain (make-point :x 1) 2) (handler-case (drain *tank* 0) (low-fuel (c) (fuel-left c))) *tank*)
+(6 (A-POINT 1 2) 6 #<TANK main at 6>)
 > (list (clara.windows:running-p) (clara.windows:window-title *window*) (> (length clara.system::*report*) 10))
 (T "A picture" T)
 > (list *from-a-file* (written-down "(load (concatenate 'string \"/clara/\" \"kept.lisp\"))") (written-down "(default-of 4)") (written-down "(defun default-of (value) value)"))

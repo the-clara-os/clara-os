@@ -134,8 +134,20 @@ void lisp_heap_empty(void)
 
 /* How many words the object under this header takes, the header included,
  * or 0 when it is no header at all. The one place that knows, for making
- * objects and for walking past them. */
-uint64_t lisp_object_words(lisp header)
+ * objects and for walking past them.
+ *
+ * It is written into the collector's two loops, and so is `reach` below,
+ * where each could be a call. A collection asks this of every object in
+ * the heap, twice, and reaches every word of every object that is in use:
+ * some hundred thousand calls. Where the machine is emulated, as on CI, a
+ * call to a function that lies on another page of the kernel than its
+ * caller is several times as dear as one to a function on the same page
+ * (QEMU chains the pieces of code that it translates only within a page),
+ * and which functions share a page changes whenever any code before them
+ * grows. That made a collection a seventh slower from one build to the
+ * next, with nothing in this file changed, and the boot that collects at
+ * every safe point with it. */
+static inline __attribute__((always_inline)) uint64_t words_of(lisp header)
 {
     uint64_t length = lisp_length(header);
 
@@ -168,6 +180,11 @@ uint64_t lisp_object_words(lisp header)
         return length;
     }
     return 0;
+}
+
+uint64_t lisp_object_words(lisp header)
+{
+    return words_of(header);
 }
 
 /* Memory that is free from here on, words long: its body holds LISP_FREED
@@ -414,7 +431,7 @@ static lisp *object_of(lisp x)
 
 /* x is in use. If it is an object, and this is the first time the
  * collector comes to it, it is marked, and waits to be looked into. */
-void lisp_reach(lisp x)
+static inline __attribute__((always_inline)) void reach(lisp x)
 {
     lisp *object = object_of(x);
 
@@ -425,6 +442,11 @@ void lisp_reach(lisp x)
         g_marks[g_waiting++] = object;
     else
         g_overflow = 1; /* it is marked, and the heap will be searched for it */
+}
+
+void lisp_reach(lisp x)
+{
+    reach(x);
 }
 
 /* Look into every object that waits: whatever it holds is in use too.
@@ -439,11 +461,11 @@ static void look_into_the_waiting(void)
 
         while (object) {
             lisp header = *object;
-            uint64_t words = (header & 0xff) == LISP_STRING ? 1 : lisp_object_words(header);
+            uint64_t words = (header & 0xff) == LISP_STRING ? 1 : words_of(header);
 
             *object = (header & ~MARK_MASK) | SCANNED;
             for (uint64_t i = 1; i + 1 < words; i++)
-                lisp_reach(object[i]);
+                reach(object[i]);
             object = words > 1 ? object_of(object[words - 1]) : NULL;
             if (object && (*object & MARK_MASK))
                 object = NULL;
@@ -487,7 +509,7 @@ static uint64_t sweep(void)
     g_free_words = g_large_words = 0;
     while (at < g_next) {
         lisp *object = (lisp *)(uintptr_t)at, header = *object;
-        uint64_t words = lisp_object_words(header);
+        uint64_t words = words_of(header);
 
         if (!words || words > (g_next - at) / sizeof(lisp))
             panic("lisp: the heap is damaged: at %llx the header is %llx", at, header);

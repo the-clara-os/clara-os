@@ -117,6 +117,14 @@ at a time. `(clara.sound:tone 440 500)` is a tone, of one of five shapes;
 after the other or several together; and `(clara.sound:play-file
 "/home/chime.wav")` plays a file of sound. All of it is worked out in
 whole numbers, and all of it is Lisp.
+Common Lisp's object system is there (lisp/clos.lisp): `defclass` for
+classes whose instances have slots, `defgeneric` and `defmethod` for
+functions that are put together from methods, each for arguments of some
+classes, with `call-next-method` and the methods that run before, after
+and around. A class can be a kind of several, an instance is written by
+a method of `print-object`, and a class that is defined again takes its
+instances with it. It is Lisp too, held against SBCL's own object system
+form for form.
 The same Lisp files load
 under SBCL on the host, where they are tested against a machine that is
 made up for the purpose.
@@ -185,7 +193,7 @@ Layout:
     kernel/arch/     one directory per architecture: the only assembly and the only MMIO addresses
     kernel/lisp/     the Lisp runtime: objects and the heap, symbols and packages, the reader, the printer,
                      the evaluator, and the machine that compiled code runs on (vm.c)
-    lisp/            Lisp sources: the language's own part, the compiler, the console, drawing, the drivers, the
+    lisp/            Lisp sources: the language's own part, the compiler, the object system, the console, drawing, the drivers, the
                      file system, the fonts, the network, sound, the listener, the window manager and the terminal in a window, which the kernel loads as it starts, and
                      the two applications, editor.lisp and files.lisp, which the launcher loads when they are picked;
                      the build copies them to the system's directory on the ESP, \clara\<its name>, read at boot

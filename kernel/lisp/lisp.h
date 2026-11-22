@@ -468,6 +468,19 @@ extern const struct lisp_character_name lisp_character_names[];
 void lisp_print(lisp x, void (*put)(void *to, char c), void *to);
 void lisp_princ(lisp x, void (*put)(void *to, char c), void *to);
 
+/* The same for a caller that can ask Lisp what a structure looks like
+ * which Lisp is to write, an instance of a class for one (print.c says
+ * which those are). Both words are places on the value stack, and one of
+ * them is NULL: `found` collects such structures as the printer comes to
+ * them, the last first, and nothing is written for them; `texts` is the
+ * list of what Lisp said of them, in the order in which the printer comes
+ * to them, and it takes one off for each. */
+struct lisp_printing {
+    lisp *found;
+    lisp *texts;
+};
+void lisp_print_asking(lisp x, int escape, void (*put)(void *to, char c), void *to, struct lisp_printing *ask);
+
 /* eval.c: the evaluator. A form may give several values or none: what
  * lisp_eval and lisp_apply return is the first, or NIL, and lisp_values
  * says how many there are and, unless there is exactly one, holds them.

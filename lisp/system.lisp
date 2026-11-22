@@ -476,13 +476,34 @@
                         (handler-case (nth-value 1 (macroexpand-1 form))
                           (error () nil))))))))
 
+;; What follows the name in a DEFMETHOD, as far as it says which method of
+;; the generic function this is: the words before the parameters, and what
+;; each parameter that must get an argument is for, a class, (EQL form), or
+;; T when nothing is said.
+(defun method-key (rest)
+  (let ((words nil) (specializers nil))
+    (loop
+      (when (or (atom rest) (listp (car rest)))
+        (return))
+      (setq words (cons (car rest) words)
+            rest (cdr rest)))
+    (dolist (parameter (if (consp rest) (car rest)))
+      (when (member parameter '(&optional &rest &body &key &aux &allow-other-keys))
+        (return))
+      (setq specializers (cons (if (consp parameter) (car (cdr parameter)) t) specializers)))
+    (list (reverse words) (reverse specializers))))
+
 ;; What a form defines, as a text that two forms have in common when the
 ;; one is to take the other's place: its first word and what follows it,
-;; as they print in the package that the form was read in.
+;; as they print in the package that the form was read in. The methods of
+;; a generic function all begin alike, and each is a definition of its own:
+;; of a DEFMETHOD the text goes on to say which method it is.
 (defun key-of (form package)
   (and (consp form) (symbolp (car form))
        (let ((*package* package))
-         (format nil "~A ~S" (symbol-name (car form)) (car (cdr form))))))
+         (if (and (eq (car form) 'defmethod) (consp (cdr form)))
+             (format nil "DEFMETHOD ~S ~S" (car (cdr form)) (method-key (cdr (cdr form))))
+             (format nil "~A ~S" (symbol-name (car form)) (car (cdr form)))))))
 
 ;; The forms of a text that is defined.lisp, in order, each as (start end
 ;; package key): where it begins in the text, with what lies before it,

@@ -26,6 +26,14 @@
 (0 0 2)
 > (let ((p (make-point :x 3))) (setf (point-y p) 4) p)
 #S(POINT :X 3 :Y 4)
+> (list *tank* (drain *tank* 1) (level *tank*) (typep *tank* 'tank) (drain (make-point :x 2) 3))
+(#<TANK main at 5> 5 5 T (A-POINT 2 3))
+> (defclass tank ()
+    ((level :initarg :level :initform 0 :accessor level) (name :initarg :name :reader tank-name)
+     (unit :initform 'litres :accessor unit)))
+#<STANDARD-CLASS TANK>
+> (list (unit *tank*) (level *tank*) *tank* (handler-case (drain *tank* 0) (low-fuel (c) (fuel-left c))))
+(LITRES 5 #<TANK main at 5> 5)
 > (handler-case (error 'low-fuel :left 3) (low-fuel (c) (fuel-left c)))
 3
 > (list *jobs* *from-a-file* (clara:thread-alive-p *spinner*))

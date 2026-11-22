@@ -1,0 +1,483 @@
+> (defclass shape () ((name :initarg :name :initform "a shape" :accessor name)))
+#<STANDARD-CLASS SHAPE>
+> (defclass circle (shape) ((radius :initarg :radius :initform 1 :accessor radius)))
+#<STANDARD-CLASS CIRCLE>
+> (defvar *c* (make-instance 'circle :radius 3))
+*C*
+> (list (name *c*) (radius *c*) (slot-value *c* 'radius))
+("a shape" 3 3)
+> (setf (radius *c*) 5)
+5
+> (list (radius *c*) (slot-value *c* 'radius))
+(5 5)
+> (setf (slot-value *c* 'name) "ring")
+"ring"
+> (name *c*)
+"ring"
+> (list (typep *c* 'circle) (typep *c* 'shape) (typep *c* 'standard-object) (typep *c* 'integer) (typep *c* t))
+(T T T NIL T)
+> (list (class-name (class-of *c*)) (eq (class-of *c*) (find-class 'circle)) (type-of *c*))
+(CIRCLE T CIRCLE)
+> (radius (make-instance (find-class 'circle) :radius 8))
+8
+> (handler-case (make-instance 'no-such-class) (error () 'no-such-class))
+NO-SUCH-CLASS
+> (handler-case (radius 5) (error () 'no-radius))
+NO-RADIUS
+> (defclass box () (content (label :initarg :label)))
+#<STANDARD-CLASS BOX>
+> (defvar *b* (make-instance 'box))
+*B*
+> (list (slot-boundp *b* 'content) (slot-boundp *b* 'label) (slot-exists-p *b* 'content) (slot-exists-p *b* 'lid))
+(NIL NIL T NIL)
+> (handler-case (slot-value *b* 'content) (unbound-slot (c) (list 'unbound (cell-error-name c))))
+(UNBOUND CONTENT)
+> (slot-value *b* 'content)
+error: the slot CONTENT of #<BOX> has no value
+> (setf (slot-value *b* 'content) 'gold)
+GOLD
+> (slot-value *b* 'content)
+GOLD
+> (progn (slot-makunbound *b* 'content) (slot-boundp *b* 'content))
+NIL
+> (slot-value *b* 'lid)
+error: #<BOX> has no slot named LID
+> (make-instance 'box :lid 1)
+error: an instance of BOX cannot be made with :LID: no slot is filled by it, and no method takes it
+> (make-instance 'box :label)
+error: an instance of BOX is made with keywords and values in turn, and :LABEL has no value
+> (handler-case (make-instance 'box :lid 1 :allow-other-keys t) (error () 'refused))
+#<BOX>
+> (defmethod slot-unbound (class (b box) name) (list 'empty name))
+#<STANDARD-METHOD SLOT-UNBOUND (T BOX T)>
+> (slot-value *b* 'content)
+(EMPTY CONTENT)
+> (defmethod slot-missing (class (b box) name operation &optional value) (list 'no name operation value))
+#<STANDARD-METHOD SLOT-MISSING (T BOX T T)>
+> (list (slot-value *b* 'lid) (setf (slot-value *b* 'lid) 5) (slot-boundp *b* 'lid))
+((NO LID SLOT-VALUE NIL) 5 T)
+> (defmethod initialize-instance :after ((b box) &key &allow-other-keys) nil)
+#<STANDARD-METHOD INITIALIZE-INSTANCE :AFTER (BOX)>
+> (progn (make-instance 'box :anything 1 :at-all 2) 'made)
+MADE
+> (defvar *count* 0)
+*COUNT*
+> (defclass ticket () ((number :initform (setq *count* (+ *count* 1)) :reader ticket-number)))
+#<STANDARD-CLASS TICKET>
+> (list (ticket-number (make-instance 'ticket)) (ticket-number (make-instance 'ticket)) *count*)
+(1 2 2)
+> (defclass seat (ticket) ((row :initarg :row :reader row)) (:default-initargs :row 'back))
+#<STANDARD-CLASS SEAT>
+> (list (row (make-instance 'seat)) (row (make-instance 'seat :row 'front)) *count*)
+(BACK FRONT 4)
+> (defclass counter () ((total :allocation :class :initform 0 :accessor total) (own :initform 0 :accessor own)))
+#<STANDARD-CLASS COUNTER>
+> (defvar *one* (make-instance 'counter))
+*ONE*
+> (defvar *two* (make-instance 'counter))
+*TWO*
+> (progn (setf (total *one*) 7 (own *one*) 1) (list (total *two*) (own *two*)))
+(7 0)
+> (defclass tally (counter) ())
+#<STANDARD-CLASS TALLY>
+> (let ((tally (make-instance 'tally))) (setf (total tally) 9) (list (total tally) (total *one*)))
+(9 9)
+> (defclass counter () ((total :allocation :class :initform 0 :accessor total) (own :initform 0 :accessor own)))
+#<STANDARD-CLASS COUNTER>
+> (list (total *one*) (own *one*) (total *two*) (slot-exists-p *one* 'total) (slot-boundp *one* 'total))
+(9 1 9 T T)
+> (defclass shelf () ((books :allocation :class :accessor books)))
+#<STANDARD-CLASS SHELF>
+> (let ((one (make-instance 'shelf)) (other (make-instance 'shelf)))
+    (list (slot-boundp one 'books) (handler-case (books one) (unbound-slot () 'no-books))
+          (progn (setf (books other) 3) (books one)) (slot-boundp one 'books)
+          (progn (slot-makunbound one 'books) (slot-boundp other 'books))))
+(NIL NO-BOOKS 3 T NIL)
+> (defclass counted () ((n :initarg :n :reader counted-n)) (:default-initargs :n (setq *count* (+ *count* 1))))
+#<STANDARD-CLASS COUNTED>
+> (defclass recounted (counted) () (:default-initargs :n (setq *count* (+ *count* 100))))
+#<STANDARD-CLASS RECOUNTED>
+> (progn (setq *count* 0)
+    (list (counted-n (make-instance 'counted :n 'given)) *count* (counted-n (make-instance 'counted)) *count*
+          (counted-n (make-instance 'recounted)) *count*))
+(GIVEN 0 1 1 101 101)
+> (defclass kept () ((a :initform 1 :initarg :a)))
+#<STANDARD-CLASS KEPT>
+> (let ((kept (make-instance 'kept)))
+    (list (progn (slot-makunbound kept 'a) (reinitialize-instance kept) (slot-boundp kept 'a))
+          (progn (shared-initialize kept t) (slot-value kept 'a))
+          (progn (setf (slot-value kept 'a) 5) (shared-initialize kept t) (slot-value kept 'a))
+          (progn (reinitialize-instance kept :a 7) (slot-value kept 'a))
+          (handler-case (reinitialize-instance kept :b 7) (error () 'refused))))
+(NIL 1 5 7 REFUSED)
+> (handler-case (make-instance 'integer) (error () 'not-made))
+NOT-MADE
+> (handler-case (progn (defclass whole (integer) ()) 'defined) (error () 'refused))
+REFUSED
+> (defclass rack () ((items :allocation :class :initform 0 :accessor items)))
+#<STANDARD-CLASS RACK>
+> (let ((rack (make-instance 'rack)))
+    (list (items rack) (progn (slot-makunbound rack 'items) (make-instance 'rack) (slot-boundp rack 'items))))
+(0 NIL)
+> (defclass pair () ((left :initarg :left :initarg :first :reader left)))
+#<STANDARD-CLASS PAIR>
+> (defclass named-pair (pair) ((left :initarg :west)))
+#<STANDARD-CLASS NAMED-PAIR>
+> (list (left (make-instance 'named-pair :left 1)) (left (make-instance 'named-pair :west 2))
+        (left (make-instance 'named-pair :first 3 :west 4)))
+(1 2 3)
+> (list (left (make-instance 'pair :first 1 :left 2)) (left (make-instance 'pair :left 3)))
+(1 3)
+> (defclass a () ((x :initform 'a :reader x)))
+#<STANDARD-CLASS A>
+> (defclass b (a) ((x :initform 'b)))
+#<STANDARD-CLASS B>
+> (defclass c (a) ((y :initform 'c :reader y)))
+#<STANDARD-CLASS C>
+> (defclass d (b c) ())
+#<STANDARD-CLASS D>
+> (let ((d (make-instance 'd))) (list (x d) (y d) (typep d 'a) (typep d 'c) (typep (make-instance 'c) 'b)))
+(B C T T NIL)
+> (handler-case (progn (defclass e (a b) ()) (make-instance 'e) 'made) (error () 'no-order))
+NO-ORDER
+> (defgeneric who (thing) (:method ((thing a)) (list 'a)) (:method ((thing b)) (cons 'b (call-next-method))))
+#<STANDARD-GENERIC-FUNCTION WHO (2)>
+> (defmethod who ((thing c)) (cons 'c (call-next-method)))
+#<STANDARD-METHOD WHO (C)>
+> (defmethod who ((thing d)) (cons 'd (call-next-method)))
+#<STANDARD-METHOD WHO (D)>
+> (list (who (make-instance 'd)) (who (make-instance 'c)) (who (make-instance 'b)) (who (make-instance 'a)))
+((D B C A) (C A) (B A) (A))
+> (defclass f () ())
+#<STANDARD-CLASS F>
+> (defclass g (f a) ())
+#<STANDARD-CLASS G>
+> (defclass h (d g) ())
+#<STANDARD-CLASS H>
+> (defmethod who ((thing f)) (cons 'f (call-next-method)))
+#<STANDARD-METHOD WHO (F)>
+> (defmethod who ((thing g)) (cons 'g (call-next-method)))
+#<STANDARD-METHOD WHO (G)>
+> (defmethod who ((thing h)) (cons 'h (call-next-method)))
+#<STANDARD-METHOD WHO (H)>
+> (list (who (make-instance 'h)) (who (make-instance 'g)))
+((H D B C G F A) (G F A))
+> (defgeneric describe-it (thing))
+#<STANDARD-GENERIC-FUNCTION DESCRIBE-IT (0)>
+> (defmethod describe-it ((thing integer)) (list 'integer thing))
+#<STANDARD-METHOD DESCRIBE-IT (INTEGER)>
+> (defmethod describe-it ((thing string)) (list 'string thing))
+#<STANDARD-METHOD DESCRIBE-IT (STRING)>
+> (defmethod describe-it ((thing symbol)) (list 'symbol thing))
+#<STANDARD-METHOD DESCRIBE-IT (SYMBOL)>
+> (defmethod describe-it ((thing null)) (list 'null (call-next-method)))
+#<STANDARD-METHOD DESCRIBE-IT (NULL)>
+> (defmethod describe-it ((thing list)) (list 'list thing))
+#<STANDARD-METHOD DESCRIBE-IT (LIST)>
+> (defmethod describe-it ((thing t)) (list 'something))
+#<STANDARD-METHOD DESCRIBE-IT (T)>
+> (mapcar #'describe-it (list 1 "two" 'three nil '(4) #\5 (vector 6)))
+((INTEGER 1) (STRING "two") (SYMBOL THREE) (NULL (SYMBOL NIL)) (LIST (4)) (SOMETHING) (SOMETHING))
+> (defmethod describe-it ((thing sequence)) (list 'sequence (length thing)))
+#<STANDARD-METHOD DESCRIBE-IT (SEQUENCE)>
+> (defmethod describe-it ((thing character)) (list 'character (call-next-method)))
+#<STANDARD-METHOD DESCRIBE-IT (CHARACTER)>
+> (defmethod describe-it ((thing function)) (list 'function))
+#<STANDARD-METHOD DESCRIBE-IT (FUNCTION)>
+> (defmethod describe-it ((thing number)) (list 'number))
+#<STANDARD-METHOD DESCRIBE-IT (NUMBER)>
+> (mapcar #'describe-it (list 1 "two" '(4) #\5 (vector 6 7) #'car))
+((INTEGER 1) (STRING "two") (LIST (4)) (CHARACTER (SOMETHING)) (SEQUENCE 2) (FUNCTION))
+> (defgeneric meet (one other))
+#<STANDARD-GENERIC-FUNCTION MEET (0)>
+> (defmethod meet ((one integer) (other integer)) 'numbers)
+#<STANDARD-METHOD MEET (INTEGER INTEGER)>
+> (defmethod meet ((one integer) (other t)) 'number-first)
+#<STANDARD-METHOD MEET (INTEGER T)>
+> (defmethod meet ((one t) (other integer)) 'number-second)
+#<STANDARD-METHOD MEET (T INTEGER)>
+> (defmethod meet (one other) 'strangers)
+#<STANDARD-METHOD MEET (T T)>
+> (list (meet 1 2) (meet 1 'x) (meet 'x 2) (meet 'x 'y))
+(NUMBERS NUMBER-FIRST NUMBER-SECOND STRANGERS)
+> (defmethod meet ((one a) (other c)) (list 'a-c (call-next-method)))
+#<STANDARD-METHOD MEET (A C)>
+> (defmethod meet ((one b) (other a)) (list 'b-a (call-next-method)))
+#<STANDARD-METHOD MEET (B A)>
+> (defmethod meet ((one a) (other a)) (list 'a-a (call-next-method)))
+#<STANDARD-METHOD MEET (A A)>
+> (meet (make-instance 'd) (make-instance 'd))
+(B-A (A-C (A-A STRANGERS)))
+> (handler-case (meet 1) (error () 'too-few))
+TOO-FEW
+> (defgeneric price (item))
+#<STANDARD-GENERIC-FUNCTION PRICE (0)>
+> (defmethod price ((item symbol)) 10)
+#<STANDARD-METHOD PRICE (SYMBOL)>
+> (defmethod price ((item (eql 'gold))) (* 100 (call-next-method)))
+#<STANDARD-METHOD PRICE ((EQL GOLD))>
+> (list (price 'tin) (price 'gold))
+(10 1000)
+> (defmethod price ((item (eql 'silver))) 50)
+#<STANDARD-METHOD PRICE ((EQL SILVER))>
+> (list (price 'tin) (price 'gold) (price 'silver))
+(10 1000 50)
+> (price 5)
+error: PRICE has no method for the arguments (5)
+> (defmethod price ((item string)) (call-next-method))
+#<STANDARD-METHOD PRICE (STRING)>
+> (price "x")
+error: PRICE has no next method for the arguments ("x")
+> (defmethod price ((item symbol)) 20)
+#<STANDARD-METHOD PRICE (SYMBOL)>
+> (list (price 'tin) (price 'gold))
+(20 2000)
+> (defvar *trace* nil)
+*TRACE*
+> (defgeneric act (thing))
+#<STANDARD-GENERIC-FUNCTION ACT (0)>
+> (defmethod act ((thing a)) (push 'primary-a *trace*) 'done-a)
+#<STANDARD-METHOD ACT (A)>
+> (defmethod act ((thing b)) (push 'primary-b *trace*) (call-next-method))
+#<STANDARD-METHOD ACT (B)>
+> (defmethod act :before ((thing a)) (push 'before-a *trace*))
+#<STANDARD-METHOD ACT :BEFORE (A)>
+> (defmethod act :before ((thing b)) (push 'before-b *trace*))
+#<STANDARD-METHOD ACT :BEFORE (B)>
+> (defmethod act :after ((thing a)) (push 'after-a *trace*))
+#<STANDARD-METHOD ACT :AFTER (A)>
+> (defmethod act :after ((thing b)) (push 'after-b *trace*))
+#<STANDARD-METHOD ACT :AFTER (B)>
+> (defmethod act :around ((thing b)) (push 'around-b *trace*) (list 'wrapped (call-next-method)))
+#<STANDARD-METHOD ACT :AROUND (B)>
+> (defmethod act :around ((thing a)) (push 'around-a *trace*) (list 'inside (call-next-method)))
+#<STANDARD-METHOD ACT :AROUND (A)>
+> (list (act (make-instance 'b)) (reverse *trace*))
+((WRAPPED (INSIDE DONE-A)) (AROUND-B AROUND-A BEFORE-B BEFORE-A PRIMARY-B PRIMARY-A AFTER-A AFTER-B))
+> (progn (setq *trace* nil) (list (act (make-instance 'a)) (reverse *trace*)))
+((INSIDE DONE-A) (AROUND-A BEFORE-A PRIMARY-A AFTER-A))
+> (defgeneric only-before (thing))
+#<STANDARD-GENERIC-FUNCTION ONLY-BEFORE (0)>
+> (defmethod only-before :before ((thing integer)) 'before)
+#<STANDARD-METHOD ONLY-BEFORE :BEFORE (INTEGER)>
+> (handler-case (only-before 1) (error () 'nothing-gives-a-value))
+NOTHING-GIVES-A-VALUE
+> (defgeneric depth (thing))
+#<STANDARD-GENERIC-FUNCTION DEPTH (0)>
+> (defmethod depth ((thing t)) (if (next-method-p) 'more 0))
+#<STANDARD-METHOD DEPTH (T)>
+> (defmethod depth ((thing a)) (if (next-method-p) (+ 1 (call-next-method)) 'none))
+#<STANDARD-METHOD DEPTH (A)>
+> (defmethod depth ((thing b)) (+ 1 (call-next-method)))
+#<STANDARD-METHOD DEPTH (B)>
+> (list (depth 5) (depth (make-instance 'a)) (depth (make-instance 'd)))
+(0 1 2)
+> (defgeneric twice (n))
+#<STANDARD-GENERIC-FUNCTION TWICE (0)>
+> (defmethod twice ((n number)) (* 2 n))
+#<STANDARD-METHOD TWICE (NUMBER)>
+> (defmethod twice ((n integer)) (call-next-method (+ n 1)))
+#<STANDARD-METHOD TWICE (INTEGER)>
+> (twice 5)
+12
+> (defgeneric parts (n) (:method ((n integer)) (floor n 10)))
+#<STANDARD-GENERIC-FUNCTION PARTS (1)>
+> (defmethod parts :around ((n integer)) (call-next-method))
+#<STANDARD-METHOD PARTS :AROUND (INTEGER)>
+> (multiple-value-list (parts 42))
+(4 2)
+> (defmethod parts :after ((n integer)) (values 'not 'these))
+#<STANDARD-METHOD PARTS :AFTER (INTEGER)>
+> (multiple-value-list (parts 42))
+(4 2)
+> (defgeneric greet (who &optional how))
+#<STANDARD-GENERIC-FUNCTION GREET (0)>
+> (defmethod greet ((who symbol) &optional (how 'hello)) (list how who))
+#<STANDARD-METHOD GREET (SYMBOL)>
+> (list (greet 'world) (greet 'world 'goodbye))
+((HELLO WORLD) (GOODBYE WORLD))
+> (defgeneric build (kind &key size &allow-other-keys))
+#<STANDARD-GENERIC-FUNCTION BUILD (0)>
+> (defmethod build ((kind symbol) &key (size 1) color) (list kind size color))
+#<STANDARD-METHOD BUILD (SYMBOL)>
+> (defmethod build :around ((kind (eql 'cube)) &key (size 2)) (list 'around size (call-next-method)))
+#<STANDARD-METHOD BUILD :AROUND ((EQL CUBE))>
+> (list (build 'ball) (build 'ball :size 3 :color 'red) (build 'cube :color 'blue))
+((BALL 1 NIL) (BALL 3 RED) (AROUND 2 (CUBE 1 BLUE)))
+> (defgeneric sum-all (first &rest more))
+#<STANDARD-GENERIC-FUNCTION SUM-ALL (0)>
+> (defmethod sum-all ((first integer) &rest more) (apply #'+ first more))
+#<STANDARD-METHOD SUM-ALL (INTEGER)>
+> (sum-all 1 2 3)
+6
+> (handler-case (defmethod describe-it ((one integer) other) 'two) (error () 'other-parameters))
+OTHER-PARAMETERS
+> (handler-case (defgeneric describe-it (one other)) (error () 'has-methods))
+HAS-METHODS
+> (defgeneric early (n))
+#<STANDARD-GENERIC-FUNCTION EARLY (0)>
+> (defmethod early ((n integer))
+    "A method can be left by the name of its generic function."
+    (when (> n 0) (return-from early 'positive))
+    'not-positive)
+#<STANDARD-METHOD EARLY (INTEGER)>
+> (defmethod early ((n symbol) &aux (name (symbol-name n))) (declare (ignore name)) 'a-symbol)
+#<STANDARD-METHOD EARLY (SYMBOL)>
+> (defmethod early ((n string) &aux (length (length n)))
+    "What a method says of itself comes first, and what it declares after that."
+    (declare (ignore length))
+    'a-string)
+#<STANDARD-METHOD EARLY (STRING)>
+> (list (early 5) (early -5) (early 'five) (early "five"))
+(POSITIVE NOT-POSITIVE A-SYMBOL A-STRING)
+> (defgeneric sideways (n) (:method ((n integer)) 'forwards))
+#<STANDARD-GENERIC-FUNCTION SIDEWAYS (1)>
+> (handler-case (progn (defmethod sideways :sideways ((n integer)) 1) (sideways 1)) (error () 'no-such-word))
+NO-SUCH-WORD
+> (defgeneric tick () (:method () 'tock))
+#<STANDARD-GENERIC-FUNCTION TICK (1)>
+> (tick)
+TOCK
+> (defgeneric car (thing))
+error: CAR is a function of the system's, and cannot be made a generic function
+> (defclass tank () ((level :initform 0 :reader level)))
+#<STANDARD-CLASS TANK>
+> (defgeneric (setf level) (value tank))
+#<STANDARD-GENERIC-FUNCTION (SETF LEVEL) (0)>
+> (defmethod (setf level) (value (tank tank)) (setf (slot-value tank 'level) (max 0 value)))
+#<STANDARD-METHOD (SETF LEVEL) (T TANK)>
+> (let ((tank (make-instance 'tank))) (list (setf (level tank) -5) (level tank) (setf (level tank) 9) (level tank)))
+(0 0 9 9)
+> (defclass gauge (tank) ((reads :initform 0 :accessor reads) (limit :initform 5 :writer set-limit :reader limit)))
+#<STANDARD-CLASS GAUGE>
+> (defmethod (setf level) :after (value (gauge gauge)) (incf (reads gauge)))
+#<STANDARD-METHOD (SETF LEVEL) :AFTER (T GAUGE)>
+> (let ((gauge (make-instance 'gauge))) (setf (level gauge) 3) (set-limit 8 gauge) (list (level gauge) (reads gauge) (limit gauge)))
+(3 1 8)
+> (defclass rect () ((w :initarg :w :accessor w) (h :initarg :h :accessor h) (area :accessor area)))
+#<STANDARD-CLASS RECT>
+> (defmethod initialize-instance :after ((r rect) &key) (setf (area r) (* (w r) (h r))))
+#<STANDARD-METHOD INITIALIZE-INSTANCE :AFTER (RECT)>
+> (area (make-instance 'rect :w 3 :h 4))
+12
+> (defclass square (rect) ())
+#<STANDARD-CLASS SQUARE>
+> (defmethod initialize-instance :around ((s square) &key side) (call-next-method s :w side :h side))
+#<STANDARD-METHOD INITIALIZE-INSTANCE :AROUND (SQUARE)>
+> (area (make-instance 'square :side 5))
+25
+> (handler-case (make-instance 'rect :w 1 :h 2 :depth 3) (error () 'refused))
+REFUSED
+> (let ((r (make-instance 'rect :w 1 :h 2))) (reinitialize-instance r :w 10) (list (w r) (h r) (area r)))
+(10 2 2)
+> (defclass logged () ((seen :initform nil :accessor seen)))
+#<STANDARD-CLASS LOGGED>
+> (defmethod shared-initialize :after ((thing logged) names &key note) (push (list names note) (seen thing)))
+#<STANDARD-METHOD SHARED-INITIALIZE :AFTER (LOGGED T)>
+> (let ((thing (make-instance 'logged :note 'new))) (reinitialize-instance thing :note 'again) (seen thing))
+((NIL AGAIN) (T NEW))
+> (let ((r (make-instance 'rect :w 2 :h 3)))
+    (with-slots (w (height h)) r (setq w 10) (incf height) (list w height (w r) (h r))))
+(10 4 10 4)
+> (let ((r (make-instance 'rect :w 2 :h 3))) (with-accessors ((wide w) (high h)) r (setf wide (* wide high)) (w r)))
+6
+> (let ((pair (cons 1 2))) (symbol-macrolet ((head (car pair))) (setq head 10) (let ((head 5)) head) (list head pair)))
+(10 (10 . 2))
+> (defmethod print-object ((r rect) stream) (format stream "#<a rect of ~D by ~D>" (w r) (h r)))
+#<STANDARD-METHOD PRINT-OBJECT (RECT T)>
+> (make-instance 'rect :w 2 :h 3)
+#<a rect of 2 by 3>
+> (list (make-instance 'rect :w 1 :h 1) 'and (format nil "~A/~S" (make-instance 'square :side 2) 7))
+(#<a rect of 1 by 1> AND "#<a rect of 2 by 2>/7")
+> (defclass plain () ())
+#<STANDARD-CLASS PLAIN>
+> (make-instance 'plain)
+#<PLAIN>
+> (defmethod print-object ((p plain) stream) (print-unreadable-object (p stream :type t) (princ "thing" stream)))
+#<STANDARD-METHOD PRINT-OBJECT (PLAIN T)>
+> (list (make-instance 'plain) (princ-to-string (make-instance 'plain)))
+(#<PLAIN thing> "#<PLAIN thing>")
+> (defclass house () ((rooms :initarg :rooms :accessor rooms)))
+#<STANDARD-CLASS HOUSE>
+> (defvar *home* (make-instance 'house :rooms 3))
+*HOME*
+> (defclass house () ((rooms :initarg :rooms :accessor rooms) (floors :initform 1 :accessor floors)))
+#<STANDARD-CLASS HOUSE>
+> (list (rooms *home*) (floors *home*))
+(3 1)
+> (defmethod rooms ((thing t)) 'no-such-reader)
+#<STANDARD-METHOD ROOMS (T)>
+> (defclass house () ((floors :initform 2 :accessor floors) (garden :initarg :garden :initform nil)))
+#<STANDARD-CLASS HOUSE>
+> (list (floors *home*) (slot-exists-p *home* 'rooms) (slot-value *home* 'garden) (rooms *home*))
+(1 NIL NIL NO-SUCH-READER)
+> (handler-case (slot-value *home* 'rooms) (error () 'no-rooms))
+NO-ROOMS
+> (defclass animal () ((legs :initform 4 :accessor legs)))
+#<STANDARD-CLASS ANIMAL>
+> (defclass dog (animal) ((name :initarg :name :accessor dog-name)))
+#<STANDARD-CLASS DOG>
+> (defvar *rex* (make-instance 'dog :name "Rex"))
+*REX*
+> (defgeneric speak (animal) (:method ((animal animal)) 'silence))
+#<STANDARD-GENERIC-FUNCTION SPEAK (1)>
+> (speak *rex*)
+SILENCE
+> (defclass animal () ((legs :initform 4 :accessor legs) (sound :initform 'quiet :accessor sound)))
+#<STANDARD-CLASS ANIMAL>
+> (list (dog-name *rex*) (legs *rex*) (sound *rex*) (speak *rex*))
+("Rex" 4 QUIET SILENCE)
+> (defclass pet () ((owner :initform 'nobody :accessor owner)))
+#<STANDARD-CLASS PET>
+> (defmethod speak ((animal pet)) (list 'pet (call-next-method)))
+#<STANDARD-METHOD SPEAK (PET)>
+> (list (speak *rex*) (typep *rex* 'pet))
+(SILENCE NIL)
+> (defclass dog (pet animal) ((name :initarg :name :accessor dog-name)))
+#<STANDARD-CLASS DOG>
+> (list (dog-name *rex*) (owner *rex*) (speak *rex*) (typep *rex* 'pet))
+("Rex" NOBODY (PET SILENCE) T)
+> (defstruct coin value)
+COIN
+> (defgeneric worth (thing))
+#<STANDARD-GENERIC-FUNCTION WORTH (0)>
+> (defmethod worth ((thing coin)) (coin-value thing))
+#<STANDARD-METHOD WORTH (COIN)>
+> (defmethod worth ((thing error)) 'nothing)
+#<STANDARD-METHOD WORTH (ERROR)>
+> (defmethod worth ((thing condition)) 'a-word)
+#<STANDARD-METHOD WORTH (CONDITION)>
+> (list (worth (make-coin :value 5)) (worth (make-condition 'simple-error :format-control "x"))
+        (worth (make-condition 'warning)))
+(5 NOTHING A-WORD)
+> (list (typep (make-coin) 'coin) (typep (make-coin) 'structure-object) (typep 5 'coin)
+        (class-name (class-of (make-coin))) (typep (make-condition 'warning) 'condition))
+(T T NIL COIN T)
+> (mapcar (lambda (x) (typecase x (integer 'int) (string 'str) ((or symbol cons) 'sym-or-cons) (t 'other)))
+          (list 1 "a" 'b '(c) #\d))
+(INT STR SYM-OR-CONS SYM-OR-CONS OTHER)
+> (list (typep 1 '(or string integer)) (typep 1 '(and integer (not null))) (typep 'a '(member a b))
+        (typep 3 '(eql 3)) (typep 4 '(satisfies evenp)) (typep 3 '(satisfies evenp)))
+(T T T T T NIL)
+> (list (typep 1 '(and integer (satisfies evenp))) (typep 'a '(or string integer)) (typep 1 '(not integer))
+        (typep 'c '(member a b)) (typep 4 '(eql 3)) (typep *c* (find-class 'shape)) (typep 5 (find-class 'shape))
+        (typep 'member '(member a b)))
+(NIL NIL NIL NIL NIL T NIL NIL)
+> (list (typep nil 'null) (typep nil 'list) (typep nil 'symbol) (typep '(1) 'list) (typep "s" 'sequence)
+        (typep :k 'keyword) (typep 'a 'atom) (typep 5 'fixnum) (typep 5 'number) (typep t 'boolean))
+(T T T T T T T T T T)
+> (list (typep 'a 'null) (typep 5 'list) (typep "s" 'symbol) (typep 'a 'keyword) (typep '(1) 'atom)
+        (typep 'a 'fixnum) (typep "s" 'number) (typep 5 'boolean) (typep 5 nil))
+(NIL NIL NIL NIL NIL NIL NIL NIL NIL)
+> (typecase 'neither (integer 'int) (string 'str) (otherwise 'something-else))
+SOMETHING-ELSE
+> (handler-case (etypecase 5 (string 'no)) (error () 'fell-through))
+FELL-THROUGH
+> (etypecase 5 (string 'no) ((or integer symbol) 'yes))
+YES
+> (defmethod print-object ((coin coin) stream) (write-string "a coin: " stream) (call-next-method))
+#<STANDARD-METHOD PRINT-OBJECT (COIN T)>
+> (list (make-coin :value 5) (prin1-to-string (make-coin :value 6)))
+(a coin: #S(COIN :VALUE 5) "a coin: #S(COIN :VALUE 6)")
+> (handler-case (progn (defclass coin () ()) 'defined) (error () 'refused))
+REFUSED

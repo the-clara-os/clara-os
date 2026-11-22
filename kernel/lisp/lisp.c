@@ -858,6 +858,33 @@ static const struct {
     { "(let ((i 0) (v (vector 0 0))) (incf (aref v (incf i))) (list i v))", "(1 #(0 1))" },
     { "(progn (setf (get 'thing 'colour) 'red) (get 'thing 'colour))", "RED" },
     { "(setf (no-such-place 1) 2)", "error: SETF does not know the place (NO-SUCH-PLACE 1)" },
+    /* a place that a function (SETF name) writes, which is given the new value first: the one that is there
+       when the SETF is expanded, or the one that is found when the form runs */
+    { "(let ((c (list 1))) (cl::%set-symbol-function (cl::%setf-name 'first-of)"
+      " (lambda (value list) (rplaca list (* 2 value)) value)) (list (setf (first-of c) 5) c))",
+      "(5 (10))" },
+    { "(let ((c (list 1 2)) (order nil)) (cl::%set-symbol-function (cl::%setf-name 'item-of)"
+      " (lambda (value list n) (setf (nth n list) value)))"
+      " (setf (item-of (progn (push 'list order) c) (progn (push 'n order) 1)) (progn (push 'value order) 'b))"
+      " (list c (reverse order)))",
+      "((1 B) (LIST N VALUE))" },
+    { "(handler-case (setf ((lambda (x) x) 1) 2) (error () 'no-place))", "NO-PLACE" },
+    /* names that stand for forms */
+    { "(let ((pair (cons 1 2))) (symbol-macrolet ((head (car pair)) (tail (cdr pair)))"
+      " (setq head 10 tail 20) (list head tail pair)))",
+      "(10 20 (10 . 20))" },
+    { "(let ((x 1)) (symbol-macrolet ((x (car (list 5))))"
+      " (list x (let ((x 7)) x) ((lambda (x) x) 9) (flet ((f (x) x)) (f 8)))))",
+      "(5 7 9 8)" },
+    { "(let ((cell (list 1 nil))) (symbol-macrolet ((n (car cell)) (items (cadr cell)))"
+      " (incf n 4) (push 'a items) (push 'b items) (list n (pop items) cell)))",
+      "(5 B (5 (A)))" },
+    { "(funcall (symbol-macrolet ((x (car y))) (let ((y (list 3))) (lambda () x))))", "3" },
+    { "(symbol-macrolet ((x 1)) (symbol-macrolet ((y (+ x 1))) (let ((x 10)) (list x y))))", "(10 11)" },
+    { "(multiple-value-list (symbol-macrolet ((x 1)) (declare (ignorable x)) (values x 2)))", "(1 2)" },
+    { "(symbol-macrolet ((nil 1)) 2)", "error: NIL cannot be the name of a symbol macro" },
+    { "(symbol-macrolet (5) 2)", "error: NIL cannot be the name of a symbol macro" },
+    { "(symbol-macrolet ((*package* 1)) 2)", "error: *PACKAGE* cannot be the name of a symbol macro" },
     /* structures */
     { "(defstruct point x (y 10))", "POINT" },
     { "(make-point :x 1)", "#S(POINT :X 1 :Y 10)" },
@@ -867,6 +894,37 @@ static const struct {
     { "(point-x 5)", "error: 5 is not a structure of type POINT" },
     { "(let* ((p (make-point :x 1)) (q (copy-point p))) (setf (point-x q) 2) (list (point-x p) (point-x q)))",
       "(1 2)" },
+    /* what an object is, as the name of a class (lisp/clos.lisp) */
+    { "(mapcar #'cl::%type-of (list 1 #\\a nil 'a '(1) \"s\" (vector) #'car (find-package \"KEYWORD\")"
+      " (clara:current-thread)))",
+      "(INTEGER CHARACTER NULL SYMBOL CONS STRING VECTOR FUNCTION PACKAGE T)" },
+    { "(progn (defstruct ty a) (list (cl::%type-of (make-ty)) (get 'ty 'cl::%structure)"
+      " (cl::%type-of (make-condition 'simple-error :format-control \"x\"))))",
+      "(TY (TY A) SIMPLE-ERROR)" },
+    /* a structure that Lisp writes: the printer asks for its text, between its rounds, wherever it comes to
+       one; where nobody can be asked, in what an error of the substrate's says, it is its type and no more.
+       (What the text puts back when nothing was there to ask is NOT, which says NIL of a structure and
+       is a function in C: a function of the text's own would hold a symbol of the text's package, and
+       the package with all that the texts defined would stay in the heap for as long as it is there.) */
+    { "(progn (defstruct marked a) (cl::%put 'marked 'cl::%printed t)"
+      " (let ((old (if (fboundp 'cl::%object-text) (symbol-function 'cl::%object-text) #'not)))"
+      " (unwind-protect (progn (cl::%set-symbol-function 'cl::%object-text"
+      " (lambda (object) (format nil \"<~D>\" (marked-a object))))"
+      " (list (prin1-to-string (list (make-marked :a 1) \"two\" (make-marked :a 3)))"
+      " (format nil \"~A and ~S\" (make-marked :a 4) (list (make-marked :a 5)))))"
+      " (cl::%set-symbol-function 'cl::%object-text old))))",
+      "(\"(<1> \\\"two\\\" <3>)\" \"<4> and (<5>)\")" },
+    { "(progn (defstruct marked a) (cl::%put 'marked 'cl::%printed t)"
+      " (let ((old (if (fboundp 'cl::%object-text) (symbol-function 'cl::%object-text) #'not)) (asked 0))"
+      " (unwind-protect (progn (cl::%set-symbol-function 'cl::%object-text"
+      " (lambda (object) (setq asked (+ asked 1)) (error \"~D cannot be shown\" (marked-a object))))"
+      " (handler-case (prin1-to-string (list 1 (make-marked :a 2) (make-marked :a 3)))"
+      " (error (c) (list asked (princ-to-string c)))))"
+      " (cl::%set-symbol-function 'cl::%object-text old))))",
+      "(1 \"2 cannot be shown\")" },
+    { "(progn (defstruct marked a) (cl::%put 'marked 'cl::%printed t)"
+      " (handler-case (car (make-marked :a 1)) (error (c) (princ-to-string c))))",
+      "\"CAR wants a list, and #<MARKED> is not one\"" },
     /* characters, strings, symbols and packages */
     { "(list (char \"abc\" 1) (char-code #\\A) (code-char 955) (length \"four\"))", "(#\\b 65 #\\\xce\xbb 4)" },
     { "(char \"abc\" 3)", "error: CHAR wants an index that is inside what it is given, and 3 is not one" },
@@ -2147,7 +2205,8 @@ static void load(const char *file)
  * are the beginning of the world. */
 static void new_world(void)
 {
-    static const char *const world[] = { "compiler.lisp", "native.lisp",   "font.lisp",    "console.lisp",
+    static const char *const world[] = { "compiler.lisp", "native.lisp",   "clos.lisp",    "font.lisp",
+                                         "console.lisp",
                                          "draw.lisp",     "pci.lisp",      "virtio.lisp",  "input.lisp",
                                          "disk.lisp",     "fat.lisp",      "type.lisp",     "random.lisp",   "net.lisp",
                                          "sound.lisp",    "listener.lisp",

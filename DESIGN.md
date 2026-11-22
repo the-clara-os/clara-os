@@ -37,7 +37,8 @@ manager, and the applications are Lisp programs loaded into that world.
   packages, conses, fixnums, characters and strings, vectors, hash tables,
   closures, special variables, multiple values, macros, defstruct, the
   lambda-list keywords, conditions with handler-case and unwind-protect.
-  Later: floats, CLOS, the rest of format.
+  Since M20, classes, generic functions and methods ("Objects", below).
+  Later: floats, the rest of format.
 - **Interpreter first, compiler later.** The substrate evaluates Lisp with an
   interpreter written in C. A compiler is written in Lisp once the world
   can host it, which it is since M14a ("The compiler", below): it makes
@@ -476,7 +477,8 @@ architectures (kernel/vm.c).
   one that gives the next line that was read. The printer, which is C,
   makes strings, and everything that writes is Lisp that hands one to a
   stream (lisp/boot.lisp). Generic functions would be the Common Lisp
-  way, and they wait for CLOS.
+  way, and there were none when this was decided; they are there since
+  M20 ("Objects", below), and a stream is still two functions.
 - There are two consoles. The substrate's (console.c, fbcon.c) prints the
   boot report, before there is a Lisp, and the kernel's last words, when
   there may be none left. The world's is Lisp (lisp/console.lisp), and a
@@ -615,7 +617,7 @@ architectures (kernel/vm.c).
   started (`clara:provide-files`): one that gives the text of the file of
   a name, one that gives the names in a directory, one that makes a file
   of bytes in memory, and one that deletes a file. That is the shape a
-  stream has, for the same reason: generic functions wait for CLOS. A
+  stream has, for the same reason: there were no generic functions. A
   program written with those five runs under SBCL on the host's files.
 - LOAD takes a file from the disk when the file system has one of that
   name, and otherwise from the files that the boot handoff read. Those
@@ -2112,6 +2114,140 @@ architectures (kernel/vm.c).
   is to say; the same forms played under SBCL give the same lines. And
   files that macOS's own converter made of its system sounds were played
   once, by hand, and came out of the card to the byte.
+
+## Objects (decided in M20a, M20b and M20c, 2026-11-22)
+
+- Common Lisp's object system is Lisp here, a file of the world
+  (lisp/clos.lisp), and not a part of the substrate. An instance, a
+  class, a generic function and a method are structures, and what they
+  hold are lists, vectors and closures: nothing was added to the heap,
+  and a world that is saved holds its classes and its instances as it
+  holds everything else. The substrate was given three things for it: a
+  function that says what an object is (`%type-of`), a printer that asks
+  Lisp what such a structure looks like, and SYMBOL-MACROLET. The other
+  ways were an instance as an object of the substrate's own, which is
+  more in C for nothing that can be seen yet; and the whole of it in
+  lisp/boot.lisp with the rest of the language, which the evaluator would
+  walk before it is compiled, twice at every start from the files, and
+  whose texts the stress boot would go through with a collection at
+  every call.
+- Its names are Common Lisp's, symbols of COMMON-LISP, as they are in
+  any Common Lisp: `defclass` in a program means the same symbol here and
+  under SBCL. So lisp/clos.lisp is the second file that SBCL cannot load
+  as it stands, after lisp/boot.lisp, and unlike that one it is tested
+  there all the same: the host tests read it a form at a time into a
+  package in which those names are symbols of its own, beside SBCL's
+  object system, which is then the second opinion that nobody here
+  wrote. One transcript, tools/objects.txt, is answered three ways: by
+  this file under SBCL, by SBCL's own, and by a kernel at which
+  `make test` types it; and classes, methods and redefinitions that
+  chance picks are given to both systems under SBCL, which have to agree
+  call for call. What that found before any kernel had run a line of it:
+  a SORT that used up the list of a generic function's methods, which
+  SBCL's does and ClaraOS's does not; and when an instance follows a
+  class that was defined again, below.
+- An instance is a structure of three slots: its class, the names of its
+  slots in the order of their values, and the values in a vector of
+  their own. The vector is apart because objects in the heap neither
+  move nor grow, and an instance has to be able to get other slots: a
+  class can be defined again, at the prompt, with instances of it in
+  variables, and that is how programs are written here. The instance
+  finds out when it is next used, by its names no longer being the ones
+  that its class has, and is given a new vector: the slots that it had
+  keep their values, the ones that are gone are dropped, the new ones
+  begin as the class says. "Used" is a look at a slot or a call of a
+  generic function with the instance. The standard asks only for the
+  first; SBCL does the second too, so a slot that one definition took
+  away is gone when a later one brings it back, and here it is the same.
+- A class does not know the classes below it. A number goes up when a
+  class is defined again, and every class and every generic function
+  remembers at which number it last worked out what it keeps: a class
+  its precedence list and its slots, a generic function what its methods
+  come to. Whoever finds the number moved on works that out again, when
+  it is next asked. A list of the classes below would have to be kept
+  right for classes that go away, with the package of an application
+  that is unloaded, and nothing here could say when they do.
+- A generic function is called through an ordinary function, which
+  closes over it and hands DISPATCH the arguments in a list. What the
+  methods that fit come to is one function of that list, made when
+  arguments of some classes first arrive and kept under those classes,
+  as many of them from the left as any method looks at; for a generic
+  function with a method for one particular object, an EQL, nothing is
+  kept, and it is worked out at every call. A call costs a list for its
+  arguments and a walk through what is kept, which is what a first
+  version costs and is measured in ROADMAP.md; a method could be reached
+  without either, and the roadmap says how.
+- Methods are put together in the standard's standard way, and in no
+  other: the :AROUND methods, then the :BEFORE methods, the most specific
+  method with its CALL-NEXT-METHOD, and the :AFTER methods. A method is a
+  function of the arguments; one whose body names CALL-NEXT-METHOD or
+  NEXT-METHOD-P is given two things before them, the arguments as a list
+  and the chain of methods that it is the first of, and is the only kind
+  that makes a closure when it is called.
+- The classes that the language begins with are the standard's, under
+  the standard's names, and no others: the class of 5 is INTEGER, where
+  SBCL says FIXNUM, since a method for FIXNUM is a program that runs
+  under one Common Lisp and not the next. A type that DEFSTRUCT made and
+  a type of condition are classes, made when they are first asked for;
+  what has no class of its own, a thread, is a T. A method can be
+  written for any of them. Only a class that DEFCLASS made can have a
+  class below it, and there is one kind of such class: no metaobject
+  protocol.
+- MAKE-INSTANCE refuses a keyword that fills no slot and that no method
+  of INITIALIZE-INSTANCE or SHARED-INITIALIZE takes, as the standard has
+  it: that is what finds a keyword that was typed wrongly. A call of any
+  other generic function is not held against the keywords of its
+  methods, which the standard asks for too; a program that is right
+  under SBCL is right here, and one that is wrong there may pass.
+- The printer asks. It is in C, and goes through an object twice, once
+  to count the characters and once to store them, so it cannot call
+  Lisp in the middle: a method of PRINT-OBJECT would run twice, and
+  could say something longer the second time. So a structure whose
+  type's name is marked is left out of a first round and noted; then
+  Lisp is asked for the text of each (PRINT-OBJECT into a string), in
+  the order in which the printer came to them, and the two rounds of
+  before follow with those texts in place. That
+  happens in the functions that make a string for Lisp, PRIN1-TO-STRING,
+  PRINC-TO-STRING and FORMAT, so an instance is written by its method
+  wherever it stands, at the prompt, in a list, in the text of an error
+  that a program signals. Where nobody can be asked, in what an error of
+  the substrate's says, it is `#<STANDARD-OBJECT>`. The marked types are
+  the four of lisp/clos.lisp, and any structure's type for whose class a
+  method of PRINT-OBJECT is written.
+- An instance is written as `#<ACCOUNT>`, with no number that tells it
+  from another of its class. SBCL writes the address; here the address
+  would be another on every machine, and a session or the manual could
+  never show an instance. A method of PRINT-OBJECT says what tells two
+  apart.
+- A function that SETF writes with has the name (SETF name) in Common
+  Lisp. Here it lives in a symbol of its own that the name keeps on its
+  property list, and SETF calls it for a place that begins with a name
+  which is no macro's and has no writer of the older kind (DEFSETF): by
+  that symbol when the function is there as the SETF is expanded, and
+  found when the form runs otherwise, so a function can be compiled
+  before the class whose accessor it writes with. DEFGENERIC, DEFMETHOD
+  and the accessors of a class make such functions. DEFUN and FUNCTION do
+  not take such a name: that is the evaluator's and the compiler's to
+  learn, and nothing needed it.
+- SYMBOL-MACROLET is a special form of the evaluator's and a converter of
+  the compiler's, which WITH-SLOTS and WITH-ACCESSORS are written with:
+  a name stands for a form, where it is evaluated and where it is set.
+  The compiler makes nothing for it, the name being a form wherever it
+  is in sight. The evaluator keeps such names in a frame of a kind of
+  its own and looks for a variable in both kinds; that it found a form
+  it says by the lowest bit of the address it gives back, so that the
+  function which evaluates a form inside a form, and has a frame on the
+  stack for each, has no word more than before.
+- TYPEP, TYPE-OF, TYPECASE and ETYPECASE came with it, since a class is
+  a type and nothing here asked what type an object is of before. They
+  are Lisp over CLASS-OF, and know the classes, a few names that are
+  types and no classes, and the types that are put together of others.
+- What is typed is kept as text (above), a form taking the place of an
+  earlier one that defined the same name. The methods of a generic
+  function all begin with the same two words, so each is told apart
+  there by what is before its parameters and by what each parameter is
+  for: without that, a world made again after an upgrade would have had
+  the last method that was typed and no other.
 
 ## Shutting down (decided in M15e, 2026-11-20)
 

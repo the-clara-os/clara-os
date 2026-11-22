@@ -802,7 +802,68 @@ Sound:
   converter makes of its system sounds comes out of the card to the
   byte.
 
-Later, in no order: CLOS; a USB keyboard and mouse, and a driver for the
+Objects:
+
+- [x] **M20a generic functions** (2026-11-22, version 0.0.41). The first
+  half of Common Lisp's object system, the part that programs are
+  written with. A generic function is a function whose behaviour is put
+  together from methods, each written for arguments of some classes:
+  `(defmethod area ((shape circle)) ...)` is what `area` does for a
+  circle, and a call runs the methods that fit the arguments it was
+  given, the most specific first. The classes that the language begins
+  with are there under the standard's names, from `t` down to `integer`,
+  `string`, `null` and `function`; a type that `defstruct` made is a
+  class, and so is a type of condition; and a method can be for one
+  particular object, `(eql 0)`. Several parameters of a method can each
+  name a class. A method calls the next one that fits with
+  `(call-next-method)`, and a word before its parameters says when it
+  runs: `:before` the others, `:after` them, or `:around` all of them.
+  What the methods that fit come to for arguments of some classes is
+  worked out once, when such arguments first arrive, and kept until a
+  method or a class changes. lisp/clos.lisp is all of it, in Lisp, with
+  structures, lists and closures for what it keeps; the substrate was
+  given one function for it, which says what an object is. Its names
+  are symbols of COMMON-LISP, as they are in any Common Lisp.
+- [x] **M20b classes and instances** (2026-11-22, version 0.0.42).
+  `defclass` makes a class of a name, the classes that it is a kind of,
+  and its slots. A slot says which keyword fills it, what it begins
+  with otherwise, the names of the functions that read it and write it,
+  which are generic functions and written with SETF, and whether the
+  instances have it each or between them. A class can be a kind of
+  several: the classes above it are put in one order by the standard's
+  rule, and a class whose definitions ask for orders that cannot both
+  be had is refused. `make-instance` makes an instance and hands it to
+  `initialize-instance`, for a method of a program's own to do what
+  else a new instance needs, and refuses a keyword that fills no slot
+  and that no such method takes, which finds the keyword that was typed
+  wrongly. `slot-value` reads a slot by its name; a slot without a
+  value, and a slot that is not there, are generic functions for a
+  class to answer. And a class can be defined again, as a function can,
+  with instances of it in the world: the classes below it follow, and
+  each instance has the slots of the new definition the next time it is
+  used, with the values that it had for the ones that stay.
+- [x] **M20c objects in the system** (2026-11-22, version 0.0.43). What
+  ties the two into the rest. An instance is written by a method of
+  `print-object`, wherever it is written: the printer, which is C and
+  goes through an object twice, asks Lisp for the text of every instance
+  that it comes to, between its rounds. `with-slots` and
+  `with-accessors` make the names of slots stand for the slots, by
+  `symbol-macrolet`, which the evaluator and the compiler learned for
+  it. SETF writes with a function `(setf name)` for a place that it
+  knows no other way, which is how an accessor is written and what
+  `(defmethod (setf name) ...)` defines. A class is a type: `typep`,
+  `type-of`, `typecase` and `etypecase` are new with it. What is typed
+  of all this is kept as text like any definition, each method of a
+  generic function by itself, and a world that is saved keeps its
+  classes, its methods and its instances. It is held against the one
+  object system that nobody here wrote, SBCL's: a transcript of some two
+  hundred forms is answered by lisp/clos.lisp under SBCL, by SBCL's own,
+  and by a kernel that `make test` types it at, and has to come out the
+  same three times; and classes, methods and redefinitions that chance
+  picks are given to both systems under SBCL, which have to agree call
+  for call.
+
+Later, in no order: a USB keyboard and mouse, and a driver for the
 sound card of Intel's, which are what UTM gives a machine that is not
 told otherwise.
 
@@ -2940,6 +3001,145 @@ M19a, M19b and M19c, sound, what they left:
   its stress boot 270 s of its 900, where main's has been seen at 251 to
   263 s on that kind: what the Mac's two figures say. In the Ubuntu
   container on the Mac the stress boot took 204 s.
+
+M20a, M20b and M20c, objects, what they left:
+
+- What is not there of the object system. Methods are put together in
+  the standard way and no other: no `define-method-combination`, no
+  `:method-combination` of another name, no `:argument-precedence-order`.
+  No `change-class`, no `update-instance-for-redefined-class` for a
+  program to say what becomes of an instance, no `make-instances-obsolete`.
+  No metaobject protocol: one kind of class that DEFCLASS makes,
+  `:metaclass` refused, nothing to ask a class for its slots or the
+  classes above it but the functions of CLARA.CLOS, which are internal
+  (`clara.clos::class-precedence-list`). A class that is named as a kind
+  of another has to find that one there: a class is not defined before
+  the classes above it. `:type` and `:documentation` of a slot are read
+  and forgotten; there is no `documentation` and no `describe`.
+- A function `(setf name)` is a generic function or nothing. DEFUN and
+  FUNCTION take no such name, which is the evaluator's and the
+  compiler's to learn (`sf_defun`, `sf_function`, `c-defun`): the
+  function lives in a symbol that the name keeps, so it is a matter of
+  which symbol those two write to and read from.
+- The keywords of a call are not held against the methods. The standard
+  has a generic function refuse a keyword that none of the methods which
+  fit takes; here only MAKE-INSTANCE and REINITIALIZE-INSTANCE do that,
+  for the keywords that fill slots and the ones that the methods of
+  INITIALIZE-INSTANCE and SHARED-INITIALIZE take. Every method is made to
+  take any keyword, as the standard has it, so a keyword that was typed
+  wrongly in a call of some other generic function is passed over in
+  silence where SBCL fails. The lists are there (`standard-method-keys`);
+  what is missing is the check where what the methods come to is put
+  together (`effective`).
+- DEFGENERIC gives back what the generic function is, which is written
+  as `#<STANDARD-GENERIC-FUNCTION AREA (2)>` and cannot be called; the
+  function is `#'area`, an ordinary function that hands its arguments
+  on, and CLASS-OF says FUNCTION of it. In Common Lisp the two are one
+  object. Nothing here can make an object that is a structure and can be
+  called.
+- An instance is written without a number of its own (DESIGN.md says
+  why), so `:identity t` of PRINT-UNREADABLE-OBJECT adds nothing. A
+  condition is written by the printer as before, whatever method of
+  PRINT-OBJECT is written for its type: the printer asks for structures
+  only. DEFINE-CONDITION still refuses `:report`, which could now be had
+  the same way, a function that writes to a stream when the condition is
+  made. And a method of PRINT-OBJECT for STRUCTURE-OBJECT or for T is not
+  asked for a structure: the mark is on the name of a type, and is put
+  there by a method for that type's own class.
+- Types. TYPEP knows the classes, ATOM, KEYWORD, FIXNUM and BOOLEAN, and
+  OR, AND, NOT, MEMBER, EQL and SATISFIES. Not `(integer 0 9)`, not
+  `(unsigned-byte 8)`, not `(vector ...)`, and there is no SUBTYPEP,
+  CHECK-TYPE, DEFTYPE or COERCE. The class of a generic function's
+  metaobject, of a method and of a class is one that is called built in
+  here, as a type of condition is: CLASS-OF a class that DEFCLASS made is
+  the class STANDARD-CLASS, which is itself of the class BUILT-IN-CLASS.
+- What a call costs, on the Mac, where the processor runs the machine
+  itself, a million calls each: a generic function with one method 150
+  ns, where an ordinary function is under 10; with a :BEFORE method and a
+  CALL-NEXT-METHOD 390; with two arguments whose classes count 270; the
+  reader of a slot 240 and the writer 350; SLOT-VALUE 80, where the
+  reader of a structure's slot is 10; TYPEP 150; and an instance is made
+  in a microsecond, a structure in a tenth of that. Where the time goes:
+  every call makes a list of its arguments and the method is applied to
+  it; what is kept is looked up in a list, by the class; and a slot is
+  found by going through the names of the class's slots. A function for
+  each generic function that takes its arguments as they come, when all
+  of them have to be there, would save the list; and a method that reads
+  a slot could know where the slot lies for the class that it was last
+  called with.
+- An application that is unloaded leaves its methods behind where they
+  are methods of a generic function of somebody else's, PRINT-OBJECT or
+  INITIALIZE-INSTANCE for a class of its own: the method holds the class,
+  the class its name, and the name what was defined under it, so that
+  much of the application stays in the heap, and one more of it with
+  every load. Nothing of the system's is such an application yet.
+  `clara.windows:unload-application` would have to ask lisp/clos.lisp to
+  let go of the methods for the classes of the packages that it deletes,
+  which means going through the symbols of the other packages for their
+  generic functions: nothing lists them.
+- Threads. One thread at a time has the runtime, and loses it at a call,
+  so two threads can each find the same instance behind its class and
+  each bring it up, the slots that are new getting their first values
+  twice; and what a generic function keeps is read, added to and written
+  back in three steps, of which another thread's addition can be lost,
+  which costs a second working out and nothing else. A class that is
+  defined again while another thread makes instances of it is not
+  thought through.
+- A type of condition or a structure's type that is defined again after
+  its class was first asked for keeps the class that was made then: the
+  types above a condition are read once. A method for the type goes on
+  fitting; the order of the classes above it is the old one.
+- The printer goes through an object three times when it comes to an
+  instance, and Lisp runs between the first and the second. A method of
+  PRINT-OBJECT that changes what is being printed can leave the second
+  round with other instances than the first found: what has no text then
+  is written as its type between `#<` and `>`, and nothing is written
+  past the length that was counted. A method that prints the object it
+  was given, by `~S` of itself, goes round until the stack is full, which
+  is an error like any other. And an error of the substrate's own cannot
+  ask at all: `CAR wants a list, and #<STANDARD-OBJECT> is not one`.
+- What was checked by hand and by planted mistakes. 132 mistakes were put
+  into lisp/clos.lisp, the printer, the evaluator, the compiler,
+  lisp/boot.lisp, lisp/system.lisp and the collector, one at a time, and
+  each tree given to the host tests or to a boot. Eleven got through at
+  first. One of those showed a fault and not a gap: a slot that the
+  instances share was given its first value again by every new instance
+  that found it without one, where the standard gives it when the class
+  is defined and at no other time. Closing another showed a second: the
+  methods of PRINT-OBJECT were asked for the last instance of a list
+  first, so that the first one to fail was not the one that was heard
+  of. Seven were things that nothing asked, and each got a form in
+  tools/objects.txt or a check beside it; one is asked by the first
+  session, which the boot that I gave it to does not type. Two change
+  nothing that can be seen (a structure that is noted is also written in
+  a round whose text is thrown away; a second method is not called while
+  an exit is under way, with or without the look that says so).
+- What it costs the tests. The world has 2105 functions where it had
+  1913, and is loaded in 320 ms where it took 290, on the Mac. The stress
+  boot, where the machine is emulated, on the Mac, main and this side by
+  side: 209 s for main and 266 s for this at first, a quarter more, which
+  was two things and neither of them the object system. A text of the
+  self-test left a function behind that held a symbol of the texts' own
+  package, and so the package, until lisp/clos.lisp was loaded. And a
+  collection had become a seventh slower with nothing in heap.c changed:
+  the code that was added before it in the kernel had moved the
+  collector's loop onto another page than the function that it called
+  for every word, and QEMU's emulator pays for every call across a page.
+  Where the Mac's processor runs the machine itself the two kernels
+  collect at the same pace, so only a collection timed where it is
+  emulated showed it (CLAUDE.md has the recipe). Those calls are now
+  written into the loops, which makes a collection a seventh quicker
+  than main's, emulated, with the heap a tenth larger: 189 s for the
+  stress boot, against main's 209. `make test` has one boot more,
+  x86_64-objects, 21 s on the Mac, where x86_64 is emulated. In the
+  Ubuntu container on the Mac the stress boot took 162 s, where it took
+  204 s at M19. On CI the first run took 14m46s of the job's thirty
+  minutes, on a runner between the two kinds (x86_64 in 53 s, where the
+  quick kind has 42 to 45 and the slow 55), and its stress boot 246 s of
+  its 900; main's last run, on a quick runner (x86_64 in 42 s), had
+  13m14s and 261 s. The new boot took 33 s there.
+- UTM is untried, like everything else there, and so is the object
+  system on a machine with more than the tests' half gigabyte of memory.
 
 No milestone yet, to be picked up when they start to matter:
 
