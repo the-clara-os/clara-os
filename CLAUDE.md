@@ -1,9 +1,12 @@
 # ClaraOS: working notes for Claude
 
-Read DESIGN.md and ROADMAP.md first. One session is one roadmap slice: state
-the slice, build it, finish with `make test` green on both architectures,
-bump the patch version, update ROADMAP.md, and open the pull request. Julio
-reviews and merges it.
+Read DESIGN.md and ROADMAP.md first. Work comes from the issues of the
+repository (Julio, 2026-11-22: "I want to transition into issues based
+work"): `gh issue list` says what is open. One session is one slice, and a
+slice is an issue, the one that Julio names, or a part of it when it is too
+large for a session: say which, build it, finish with `make test` green on
+both architectures, bump the patch version, update ROADMAP.md, and open the
+pull request. Julio reviews and merges it.
 
 Pull requests (Julio, 2026-11-12: "feel free to create the PR straight away
 in github"). Work on a `julio/<topic>` branch off main. Never `git commit`
@@ -12,8 +15,9 @@ keyboard. `python3 tools/api-commit.py <message-file>` sends the working
 tree to GitHub as one commit that GitHub signs, creating the branch there
 if needed, and moves the local branch onto it. Then `gh pr create --base main`
 with a title in his style, `feat(m3): Virtual Memory`, and a body that says
-what changed, how it was checked, and every decision that departs from the
-roadmap. Never merge, and never push to main. The pull request is built and
+what changed, how it was checked, every decision that departs from the
+roadmap, and `Closes #N` for each issue that it settles, so that the merge
+closes it. Never merge, and never push to main. The pull request is built and
 booted once more on Ubuntu (.github/workflows/ci.yml): watch that run with
 `gh pr checks --watch`, and the slice is not finished until it passes. The
 ruleset on main requires that check, `build-and-boot`, before a merge.
@@ -1620,11 +1624,30 @@ Rules:
   there, and what it left in the way, a lock that was held, a thread that
   waited, a package that uses no other, has to be out of it. Whatever a
   session of the first boot adds to the world can be asked for there.
-- Whatever a session leaves open goes into ROADMAP.md in the same change,
-  under the milestone that settles it: a shortcut, a provisional decision,
-  a limit, a check that was only run by hand. Saying it in the summary at
-  the end is not enough; the next session starts from the files. Before
-  starting a milestone, read its group there.
+- Whatever a session leaves to be done gets an issue before the session
+  ends (Julio, 2026-11-22, of the calls at the end of M20's summary: "Make
+  them into GitHub issues"): a shortcut, a provisional decision, a limit,
+  a call that Julio may want changed, something that it found wrong and
+  did not put right. Saying it in the summary at the end, or in the pull
+  request, is not enough; the next session starts from the issues. One
+  issue for each thing that can be closed by itself, written like the
+  ones that are there (#65 to #75 were the first): a title of the kind
+  `CLOS - CHANGE-CLASS`, one of his labels (`feature`, `bug`, `chore`),
+  Julio as the assignee, and a few lines that say what happens now, what
+  SBCL answers where it is a matter of the language, why it was left,
+  where the change goes, and which documents describe it as it is. What
+  a kernel answers is typed at one and not written from memory: a session
+  with the answers in it passes only when the kernel says exactly that
+  (`NAME=probe SESSION=file tools/boottest.sh aarch64`, five seconds).
+  Look whether the issue is there already (`gh issue list --search`), and
+  file it with `gh issue create --body-file`. A record is no work and no
+  issue: what was measured, and what was checked by hand, goes into
+  ROADMAP.md under its milestone as before. What ROADMAP.md holds as
+  still to be done from before that day stays there until it comes up, in
+  a session or because Julio asks for it: it becomes an issue then, its
+  entry says the number, and the pull request that closes an issue takes
+  out what ROADMAP.md says of it. Before starting an issue, read the
+  group of the milestone that it belongs to there.
 - The website, https://claraos.org, is site/index.html, filled in by
   site/build.py from ROADMAP.md, kernel/kernel.h (the version)
   and the console font (`make site`, then open build/site/index.html), and

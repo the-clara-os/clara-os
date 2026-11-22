@@ -1801,8 +1801,11 @@ Infrastructure, for sessions with budget left over:
   a disk in the Finder.
 
 Shortcuts and loose ends, under the milestone that settles each one. A
-session reads its own group before it starts, and whatever it leaves open
-is added here in the same change.
+session reads its own group before it starts. Since 2026-11-22 what a
+session leaves to be done is an issue of the repository and is no longer
+added here; what it measured, and what it checked by hand, still is. An
+entry here becomes an issue when it comes up, and then says the issue's
+number; the pull request that closes the issue takes the entry out.
 
 M15a, an upgrade in place, what it left:
 
@@ -3015,12 +3018,15 @@ M20a, M20b and M20c, objects, what they left:
   (`clara.clos::class-precedence-list`). A class that is named as a kind
   of another has to find that one there: a class is not defined before
   the classes above it. `:type` and `:documentation` of a slot are read
-  and forgotten; there is no `documentation` and no `describe`.
+  and forgotten; there is no `documentation` and no `describe`. Of
+  these, the ways of putting methods together and
+  `:argument-precedence-order` are #68, `change-class` and its kin #69,
+  and the metaobject protocol #72.
 - A function `(setf name)` is a generic function or nothing. DEFUN and
   FUNCTION take no such name, which is the evaluator's and the
   compiler's to learn (`sf_defun`, `sf_function`, `c-defun`): the
   function lives in a symbol that the name keeps, so it is a matter of
-  which symbol those two write to and read from.
+  which symbol those two write to and read from. This is #70.
 - The keywords of a call are not held against the methods. The standard
   has a generic function refuse a keyword that none of the methods which
   fit takes; here only MAKE-INSTANCE and REINITIALIZE-INSTANCE do that,
@@ -3030,13 +3036,13 @@ M20a, M20b and M20c, objects, what they left:
   wrongly in a call of some other generic function is passed over in
   silence where SBCL fails. The lists are there (`standard-method-keys`);
   what is missing is the check where what the methods come to is put
-  together (`effective`).
+  together (`effective`). This is #71.
 - DEFGENERIC gives back what the generic function is, which is written
   as `#<STANDARD-GENERIC-FUNCTION AREA (2)>` and cannot be called; the
   function is `#'area`, an ordinary function that hands its arguments
   on, and CLASS-OF says FUNCTION of it. In Common Lisp the two are one
   object. Nothing here can make an object that is a structure and can be
-  called.
+  called. This is #66.
 - An instance is written without a number of its own (DESIGN.md says
   why), so `:identity t` of PRINT-UNREADABLE-OBJECT adds nothing. A
   condition is written by the printer as before, whatever method of
@@ -3045,7 +3051,8 @@ M20a, M20b and M20c, objects, what they left:
   the same way, a function that writes to a stream when the condition is
   made. And a method of PRINT-OBJECT for STRUCTURE-OBJECT or for T is not
   asked for a structure: the mark is on the name of a type, and is put
-  there by a method for that type's own class.
+  there by a method for that type's own class. The number is #65; the
+  condition, `:report` and the method for STRUCTURE-OBJECT are #73.
 - Types. TYPEP knows the classes, ATOM, KEYWORD, FIXNUM and BOOLEAN, and
   OR, AND, NOT, MEMBER, EQL and SATISFIES. Not `(integer 0 9)`, not
   `(unsigned-byte 8)`, not `(vector ...)`, and there is no SUBTYPEP,
@@ -3053,6 +3060,13 @@ M20a, M20b and M20c, objects, what they left:
   metaobject, of a method and of a class is one that is called built in
   here, as a type of condition is: CLASS-OF a class that DEFCLASS made is
   the class STANDARD-CLASS, which is itself of the class BUILT-IN-CLASS.
+  The types and the four that are missing are #74.
+- Two calls that DESIGN.md or the pull request (#64) has, and nothing
+  above. The class of 5 is INTEGER, and there is no class FIXNUM to
+  write a method for: #67. And a DEFMETHOD makes a generic function of
+  an ordinary function of the user's own without a word, where the
+  standard has it refused, and only a function of the system's is
+  refused here: #75.
 - What a call costs, on the Mac, where the processor runs the machine
   itself, a million calls each: a generic function with one method 150
   ns, where an ordinary function is under 10; with a :BEFORE method and a
