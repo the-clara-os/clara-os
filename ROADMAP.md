@@ -1027,7 +1027,7 @@ Infrastructure, done:
   a long list would cost. A part that is not there is an error in the
   words of SUBSEQ's, also where what is looked for comes before the end
   that was named: that one case SBCL lets pass for a list, and the manual
-  says that it is an error here. The answers of the evaluator's
+  says that it is an error here (issue #82). The answers of the evaluator's
   self-test are SBCL's, taken from a list of 63 forms that was typed at
   both, which the kernel answered as SBCL did the first time it was
   booted, the errors apart: eleven texts, which every boot from the files
@@ -3859,7 +3859,8 @@ No milestone yet, to be picked up when they start to matter:
   `:test`, with `:key` for MEMBER and ASSOC and `:initial-value` for
   REDUCE; FIND, FIND-IF, POSITION and POSITION-IF take strings and
   vectors too, with `:start`, `:end`, `:key` and `:from-end`, since
-  0.0.45. SETF knows the places that boot.lisp lists with DEFSETF and the
+  0.0.45. The others on strings and vectors are issue #83, and COUNT,
+  SEARCH, FIND-IF-NOT and POSITION-IF-NOT, which are not there, #84. SETF knows the places that boot.lisp lists with DEFSETF and the
   ones DEFSTRUCT adds. `eq` and `eql` are one function, `char=` and
   `char<` take two characters. A file in lisp/ that needs one of these
   loads under SBCL and not here: only a boot tells.
