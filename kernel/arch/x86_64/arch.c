@@ -33,6 +33,24 @@ int arch_serial_getc(void)
 const char *const arch_serial_kind = "NS16550";
 const uint64_t arch_serial_base = COM1;
 
+/* OVMF, the firmware of these machines under QEMU, looks into the page frame
+ * at 0x812000 whenever a machine starts: a loader of another kind (IGVM)
+ * would have left a map of the memory there and a count of the processors,
+ * and where the first words pass for such a map the firmware lays the
+ * machine out by them, and not by what QEMU says of it. RAM keeps what it
+ * holds when a machine is started again, and as EDK2 was between its
+ * commits 5e8db785e4 and e4f99a8554, which is the release of November 2025
+ * and so the OVMF that Ubuntu 26.04 has, the firmware's map gives that
+ * frame to the system as free memory. With words of the Lisp heap in it,
+ * the next start put the 64-bit window of the PCI bus at an address that
+ * the processor does not have, and the firmware went round looking for it
+ * for good: a machine that was told to start again and never came back.
+ * Later firmware keeps the frame to itself, and its map says so. (EDK2:
+ * OvmfPkg/Library/PlatformInitLib/Igvm.c, and for the address
+ * OvmfPkg/Include/Fdf/MemFd.fdf.inc: 0x12000 above the 8 MiB where that
+ * firmware keeps what it needs first.) */
+const uint64_t arch_kept_frame = 0x812000;
+
 int arch_port_read(uint16_t port, unsigned size, uint32_t *value)
 {
     uint16_t word;

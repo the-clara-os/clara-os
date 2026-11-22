@@ -5,7 +5,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define CLARA_VERSION "0.0.43"
+#define CLARA_VERSION "0.0.44"
 
 #define PAGE_SHIFT 12
 #define PAGE_SIZE  (1ULL << PAGE_SHIFT)
@@ -298,6 +298,10 @@ int  arch_port_write(uint16_t port, unsigned size, uint32_t value);
  * its first I/O port or the address of its registers. */
 extern const char *const arch_serial_kind;
 extern const uint64_t arch_serial_base;
+/* A page frame that the firmware of these machines reads whenever one of
+ * them starts, by its address, or 0 when it reads none: the allocator never
+ * hands it out (pmm.c). */
+extern const uint64_t arch_kept_frame;
 
 /* arch/<arch>/power.c: turning the machine off, starting it again, and its
  * power button, each by the way that ACPI names for this machine. */

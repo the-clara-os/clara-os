@@ -102,6 +102,7 @@ jobs:
             build/boot-*.log
             build/session-*.txt
             build/qemu-*.log
+            build/monitor-*.log
             build/fsck-*.log
             build/serve-*.log
             build/screen-*.png

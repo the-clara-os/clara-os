@@ -2276,6 +2276,26 @@ architectures (kernel/vm.c).
   and its data so that it can be written, on the word of a memory map from
   before the handoff, gives that up for the sake of two calls. A call to a
   higher level and a write to a port need nothing of the kind.
+- A machine that is started again keeps what its memory held, and its
+  firmware starts in that memory. What the firmware's map calls free is
+  the system's to write on, and a firmware should take nothing there on
+  trust at its next start; one did. OVMF looks for what a loader of
+  another kind (IGVM) leaves it in a page frame at a fixed address,
+  0x812000, and for three months of EDK2, a release among them, neither
+  kept that frame to itself nor looked at more than two words of it:
+  with words of the Lisp heap there, a machine that was told to start
+  again was laid out by them and stood still in its firmware (ROADMAP.md,
+  0.0.44). The firmware was mended by keeping the frame to itself in its
+  map. The system does that for itself: on x86_64 that one frame never
+  leaves the allocator once the map has given it up, and is cleared
+  (kernel/pmm.c, `arch_kept_frame`), so that the firmware finds nothing
+  there whatever starts the machine again, the system, the host, or a
+  fault. It costs 4 KiB on a machine that has no such firmware. Clearing
+  all of memory before the machine is told to start again would guard
+  against every firmware that reads what it should not: it takes seconds
+  where a machine is emulated, cannot be taken back when the machine
+  turns out to have no way of starting again, and does nothing when the
+  machine is started again from outside.
 - Two facts are in the DSDT and nowhere else: the type of the sleep state
   that is "off", and where the registers of the generic event device are,
   which is what has the power button on a machine without a PC's fixed
