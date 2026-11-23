@@ -39,6 +39,11 @@ for a machine that has just started and manual-again.txt for the same
 machine started again from the world that the first session saved (the
 class "session again"), and `make test` boots both.
 
+A page's links into itself are held as well: one that names an id which is
+not there stops the build, and so does an id that is there twice, since a
+browser goes to the first of the two and a link to the second lands in
+another chapter.
+
 Nor can the picture on the front page, site/boot.png, which is what a
 screen showed at the end of `make test`. --screenshot makes it of such a
 screenshot and writes into it, as a line of text that a PNG file can
@@ -162,6 +167,17 @@ def check_names(manual):
         sys.exit("site/build.py: site/manual.html is behind the kernel:\n  " + "\n  ".join(problems))
 
 
+def check_anchors(name, page):
+    """A page's links into itself against its ids: stops the build when a
+    link names an id that is not there, or an id is there twice."""
+    ids = re.findall(r'\sid="([^"]*)"', page)
+    links = set(re.findall(r'\shref="#([^"]*)"', page))
+    problems = [f"the id {anchor} is there {ids.count(anchor)} times" for anchor in sorted(set(ids)) if ids.count(anchor) > 1]
+    problems += [f"a link goes to #{anchor}, and nothing has that id" for anchor in sorted(links - set(ids))]
+    if problems:
+        sys.exit(f"site/build.py: site/{name} does not lead where it says:\n  " + "\n  ".join(problems))
+
+
 PNG = b"\x89PNG\r\n\x1a\n"
 
 
@@ -263,6 +279,9 @@ def main():
                 f.write("\n".join(lines) + "\n")
         return
     check_names(manual)
+    index = read("site", "index.html")
+    for name, page in (("index.html", index), ("manual.html", manual)):
+        check_anchors(name, page)
     out = sys.argv[1] if len(sys.argv) > 1 else os.path.join(ROOT, "build", "site")
     groups = milestones(read("ROADMAP.md"))
     items = [item for _, group in groups for item in group]
@@ -289,7 +308,6 @@ def main():
         "latest": f"{done[-1][0]}, {done[-1][1]}",
         "roadmap": roadmap_html(groups),
     }
-    index = read("site", "index.html")
     values["style"] = re.search(r"<style>\n(.*?)</style>", index, flags=re.S).group(1)
     os.makedirs(out, exist_ok=True)
     for name, page in (("index.html", index), ("manual.html", manual)):
