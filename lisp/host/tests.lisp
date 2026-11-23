@@ -75,12 +75,14 @@
 (load-source "lisp/draw.lisp")
 (load-source "lisp/pci.lisp")
 (load-source "lisp/virtio.lisp")
+(load-source "lisp/usb.lisp")
 (load-source "lisp/input.lisp")
 (load-source "lisp/disk.lisp")
 (load-source "lisp/fat.lisp")
 (load-source "lisp/type.lisp")
 (load-source "lisp/random.lisp")
 (load-source "lisp/net.lisp")
+(load-source "lisp/hda.lisp")
 (load-source "lisp/sound.lisp")
 (load-source "lisp/listener.lisp")
 (load-source "lisp/windows.lisp")
@@ -209,6 +211,70 @@
   (incf *checks*)
   (unless (or (string= name "QUASIQUOTE") (external-p name "COMMON-LISP"))
     (failed "the evaluator has the special form ~A, which Common Lisp does not have" name)))
+
+;;; What the files of the world call. Each of them loads here, under SBCL,
+;;; which has all of Common Lisp, and on the machine, which has the part of
+;;; it that lisp/boot.lisp, lisp/clos.lisp and the substrate define. A
+;;; function that only SBCL has passes every test here, and fails on the
+;;; machine the first time it is called: on a way that no boot takes, that
+;;; is never under `make test`. (CEILING was one, in the driver for USB,
+;;; where a controller is given the pages that it wants for itself, which
+;;; QEMU's never wants.) So every file is read as text, and a word that
+;;; stands first in a pair of parentheses there, or behind #', and is a
+;;; function, a macro or a special form of Common Lisp's, has to be one
+;;; that the machine has. A variable with such a name that stands first in
+;;; its binding is taken for a call too, which is why the few names that
+;;; the files bind and never call are listed here.
+
+(defvar *bound-and-never-called* '("COUNT" "STEP" "BYTE" "BIT" "READ"))
+
+(defun called-names (text)
+  (let ((names nil) (i 0) (n (length text)))
+    (flet ((word-at (start)
+             (let ((end (or (position-if (lambda (c) (find c " ()'\"`,;
+")) text :start start) n)))
+               (when (> end start)
+                 (pushnew (string-upcase (subseq text start end)) names :test #'string=)))))
+      (loop
+        (when (>= i n)
+          (return names))
+        (let ((c (char text i)))
+          (cond ((char= c #\;)                    ; a comment, to the end of its line
+                 (setq i (or (position #\Newline text :start i) n)))
+                ((char= c #\")                    ; a string, to the quote that no backslash stands before
+                 (incf i)
+                 (loop
+                   (when (or (>= i n) (char= (char text i) #\"))
+                     (return))
+                   (incf i (if (char= (char text i) #\\) 2 1)))
+                 (incf i))
+                ((and (char= c #\#) (< (1+ i) n) (char= (char text (1+ i)) #\\))
+                 (incf i 3))                      ; a character, which may be a parenthesis
+                ((and (char= c #\#) (< (1+ i) n) (char= (char text (1+ i)) #\'))
+                 (word-at (+ i 2))
+                 (incf i 2))
+                ((char= c #\()
+                 (word-at (1+ i))
+                 (incf i))
+                (t (incf i))))))))
+
+(let* ((boot (lines (file-text "lisp/boot.lisp")))
+       (has (append (exports boot) (definitions boot) (table-names "kernel/lisp/builtin.c")
+                    (table-names "kernel/lisp/eval.c") (exports (lines (file-text "lisp/clos.lisp")))))
+       (files (remove-if (lambda (file) (member (pathname-name file) '("boot" "clos") :test #'string=))
+                         (directory (merge-pathnames "lisp/*.lisp" *root*)))))
+  (check t (> (length files) 20))
+  (check '("CAR" "FOO" "MAPCAR" "QUOTE-NOT") (sort (called-names "(car x) ; (cdr y)
+\"(cons 1 2)\" #\\( (foo #'mapcar '(quote-not))") #'string<))
+  (dolist (file files)
+    (dolist (name (called-names (file-text (format nil "lisp/~A.lisp" (pathname-name file)))))
+      (incf *checks*)
+      (multiple-value-bind (symbol status) (find-symbol name "COMMON-LISP")
+        (when (and (eq status :external)
+                   (or (fboundp symbol) (special-operator-p symbol))
+                   (not (member name has :test #'string=))
+                   (not (member name *bound-and-never-called* :test #'string=)))
+          (failed "lisp/~A.lisp calls ~A, which SBCL has and the machine has not" (pathname-name file) name))))))
 
 ;;; The object system (lisp/clos.lisp). It is the second file that SBCL
 ;;; cannot load as it stands: the names that it exports from COMMON-LISP on
@@ -11414,6 +11480,1041 @@
   (clara.pci:start))
 (check '(t nil) (list (and clara.random::*source* t) (progn (said-by #'clara.random:start) clara.random::*source*)))
 
+;;; USB (lisp/usb.lisp, and the keyboards and pointers of lisp/input.lisp),
+;;; against a controller that is made up, with devices at its ports that
+;;; are made up as well. The controller is the other side of the rings: it
+;;; reads the commands and the transfers as the specification has a
+;;; controller read them, writes its events where it was told to, and fails
+;;; the run when the driver asks out of order, names memory that is not its
+;;; own, or switches a port off. A device answers the requests of chapter 9
+;;; with what it was made with, and gives a report when a test says that
+;;; something was typed or moved.
+
+(defvar *usb-lock* (sb-thread:make-mutex :name "USB controller")) ; a test and the threads of the driver both come here
+
+(defstruct udev
+  name (speed 3) (packet 64) (vendor #x0627) (product 1)
+  interfaces        ; each (class subclass protocol description address most interval)
+  more              ; bytes that follow those in what it says of how it is set up
+  set-up            ; which way it was set up, when it was
+  refuses           ; the requests that it refuses, each (kind request), or T for all of them
+  mute              ; it never answers
+  waiting           ; the reports that nobody has fetched yet: (address . bytes), the oldest first
+  requests)         ; the requests that it was given, the last first: (kind request value index)
+
+(defstruct uport device (status #x2a0))
+
+(defstruct xend ring (cycle 1) most kind pace halted
+  rung)   ; the driver has rung for it since the controller last took an entry of its ring
+
+(defstruct xslot device ends)   ; the endpoints that the controller was told of, by their index
+
+(defstruct xhc
+  config table
+  ports                     ; a vector of them
+  (count 16)                ; how many slots it has
+  wide (scratch 0)          ; contexts of 64 bytes; pages that it wants for itself
+  stuck                     ; it never comes out of its reset,
+  mute                      ; has no message to send,
+  silent                    ; or never answers a command
+  (command 0) (status 1) (in-use 0) (contexts 0)
+  (ring 0) (ring-cycle 1)   ; where it reads commands, and with which bit
+  (iman 0) (segments 0) (segment-table 0) (read-to 0)
+  (events 0) (event-count 0) (event-at 0) (event-cycle 1)
+  pending                   ; it has interrupted, and was not told yet that the events were taken
+  (slots (make-array 256 :initial-element nil))
+  history)                  ; what the driver had it do, the last first
+
+(defun own-memory-p (address bytes)
+  (let ((index (- address clara.host:+memory-base+)))
+    (and (<= 0 index) (<= (+ index bytes) clara.host::+memory-size+)
+         (not (find 0 clara.host::*pages* :start (floor index 4096) :end (ceiling (+ index bytes) 4096))))))
+
+;; The controller says something: an event, where the driver told it to
+;; write them, and its message, unless the last one is still to be
+;; answered.
+(defun xhc-interrupt (xhc)
+  (unless (or (xhc-pending xhc) (xhc-mute xhc) (not (logbitp 1 (xhc-iman xhc))) (not (logbitp 2 (xhc-command xhc))))
+    (setf (xhc-pending xhc) t)
+    (let ((table (xhc-table xhc)))
+      (when (and (logbitp 15 (le (xhc-config xhc) #x92 2)) (not (logbitp 0 (le table 12 4))))
+        (clara.host:send-message (logior (le table 0 4) (ash (le table 4 4) 32)) (le table 8 4))))))
+
+(defun xhc-event (xhc address status control)
+  (when (zerop (xhc-event-count xhc))
+    (failed "the USB controller has something to say and was never told where"))
+  (let ((at (+ (xhc-events xhc) (* 16 (xhc-event-at xhc)))))
+    (unless (own-memory-p at 16)
+      (failed "the driver gave the USB controller a ring of events in memory that is not its own"))
+    (poke at 4 (ldb (byte 32 0) address))
+    (poke (+ at 4) 4 (ldb (byte 32 32) address))
+    (poke (+ at 8) 4 status)
+    (poke (+ at 12) 4 (logior control (xhc-event-cycle xhc)))
+    (when (= (incf (xhc-event-at xhc)) (xhc-event-count xhc))
+      (setf (xhc-event-at xhc) 0
+            (xhc-event-cycle xhc) (- 1 (xhc-event-cycle xhc))))
+    (xhc-interrupt xhc)))
+
+;; The entry of a ring at an address, as (low high status control), and
+;; where the reading goes on after it: a link is followed, and turns the
+;; reader's bit over when it says so.
+(defun trb (address)
+  (unless (own-memory-p address 16)
+    (failed "the driver gave the USB controller a ring at #x~X, in memory that is not its own" address))
+  ;; The last word first: the driver writes it last, and it says whether the others are there yet.
+  (let ((control (peek (+ address 12) 4)))
+    (list (peek address 4) (peek (+ address 4) 4) (peek (+ address 8) 4) control)))
+
+(defun context-of (xhc base index)
+  (+ base (* index (if (xhc-wide xhc) 64 32))))
+
+;;; A device's answers
+
+(defun letters-16 (text)
+  (loop for character across text append (list (char-code character) 0)))
+
+(defun device-descriptor (udev)
+  (list 18 1 0 2 0 0 0 (udev-packet udev)
+        (ldb (byte 8 0) (udev-vendor udev)) (ldb (byte 8 8) (udev-vendor udev))
+        (ldb (byte 8 0) (udev-product udev)) (ldb (byte 8 8) (udev-product udev))
+        0 1 1 (if (udev-name udev) 2 0) 0 1))
+
+(defun set-up-descriptor (udev)
+  (let ((rest (append (loop for (class subclass protocol description address most interval) in (udev-interfaces udev)
+                            for number from 0
+                            append (list 9 4 number 0 1 class subclass protocol 0)
+                            when description
+                              append (list 9 #x21 #x11 1 0 1 #x22 (ldb (byte 8 0) (length description))
+                                           (ldb (byte 8 8) (length description)))
+                            append (list 7 5 address 3 (ldb (byte 8 0) most) (ldb (byte 8 8) most) interval))
+                      (udev-more udev))))
+    (append (list 9 2 (ldb (byte 8 0) (+ 9 (length rest))) (ldb (byte 8 8) (+ 9 (length rest)))
+                  (length (udev-interfaces udev)) 1 0 #xa0 50)
+            rest)))
+
+;; What a device says to a request: the bytes that it gives, T when there
+;; are none to give, :REFUSED, or :SILENCE.
+(defun udev-answer (udev kind request value index &optional data)
+  (push (if data (list kind request value index data) (list kind request value index)) (udev-requests udev))
+  (cond ((udev-mute udev) :silence)
+        ((or (eq (udev-refuses udev) t) (member (list kind request) (udev-refuses udev) :test #'equal)) :refused)
+        ((and (= kind #x80) (= request 6))
+         (case (ash value -8)
+           (1 (device-descriptor udev))
+           (2 (set-up-descriptor udev))
+           (3 (cond ((zerop (logand value 255)) (list 4 3 9 4))
+                    ((and (= (logand value 255) 2) (udev-name udev))
+                     (list* (+ 2 (* 2 (length (udev-name udev)))) 3 (letters-16 (udev-name udev))))
+                    (t :refused)))
+           (t :refused)))
+        ((and (= kind #x81) (= request 6) (= (ash value -8) #x22))
+         (let ((interface (nth index (udev-interfaces udev))))
+           (if (and interface (fourth interface)) (coerce (fourth interface) 'list) :refused)))
+        ((and (= kind 0) (= request 9))
+         (setf (udev-set-up udev) value)
+         t)
+        ((and (= kind #x21) (member request '(9 10 11))) t)
+        (t :refused)))
+
+;;; The controller's side of the rings
+
+;; Go on in a ring from an endpoint's place: the next entry that is the
+;; driver's to give, or NIL when the ring has no more for now.
+(defun next-of (end)
+  (loop
+    (let ((entry (trb (xend-ring end))))
+      (unless (= (logand (fourth entry) 1) (xend-cycle end))
+        (return nil))
+      (cond ((= (ldb (byte 6 10) (fourth entry)) 6)
+             (setf (xend-ring end) (logior (logandc2 (first entry) 15) (ash (second entry) 32)))
+             (when (logbitp 1 (fourth entry))
+               (setf (xend-cycle end) (- 1 (xend-cycle end)))))
+            (t
+             (return (prog1 (cons (xend-ring end) entry)
+                       (incf (xend-ring end) 16))))))))
+
+(defun transfer-event (xhc slot index entry code left)
+  (xhc-event xhc (car entry) (logior (ash code 24) left) (logior (ash 32 10) (ash index 16) (ash slot 24))))
+
+;; A request at endpoint 0: the three entries that make one, the device's
+;; answer, and what the controller says of it.
+(defun xhc-request (xhc number slot end)
+  (let ((setup (next-of end)))
+    (when setup
+      (destructuring-bind (address low high status control) setup
+        (declare (ignore address))
+        (let* ((kind (ldb (byte 8 0) low)) (request (ldb (byte 8 8) low)) (value (ldb (byte 16 16) low))
+               (index (ldb (byte 16 0) high)) (length (ldb (byte 16 16) high))
+               (way (ldb (byte 2 16) control))
+               (body (and (plusp length) (next-of end)))
+               (last (next-of end)))
+          (unless (and (= (ldb (byte 6 10) control) 2) (logbitp 6 control) (= (logand status #x1ffff) 8)
+                       (= way (cond ((zerop length) 0) ((>= kind 128) 3) (t 2)))
+                       (or (zerop length)
+                           (and body (= (ldb (byte 6 10) (fifth body)) 3) (= (logand (fourth body) #x1ffff) length)
+                                (eq (logbitp 16 (fifth body)) (>= kind 128))))
+                       last (= (ldb (byte 6 10) (fifth last)) 4) (logbitp 5 (fifth last))
+                       (eq (logbitp 16 (fifth last)) (not (and (>= kind 128) (plusp length)))))
+            (failed "the driver gave the USB controller a request that is not one: ~S ~S ~S" setup body last))
+          (let* ((memory (and body (logior (second body) (ash (third body) 32))))
+                 (answer nil))
+            (when (and memory (not (own-memory-p memory length)))
+              (failed "the driver gave a USB device ~D bytes of memory at #x~X that are not all its own" length memory))
+            (setq answer (udev-answer (xslot-device slot) kind request value index
+                                      (and memory (< kind 128) (loop for i below length collect (peek (+ memory i) 1)))))
+            (cond ((member answer '(:refused :silence))
+                   (setf (xend-halted end) t)
+                   (transfer-event xhc number 1 setup (if (eq answer :refused) 6 4) 0))
+                  (t
+                   (when (and (>= kind 128) (plusp length))
+                     (let ((count (min length (length answer))))
+                       (loop for byte in answer for i below count do (poke (+ memory i) 1 byte))
+                       (when (and (< count length) (logbitp 2 (fifth body)))
+                         (transfer-event xhc number 1 body 13 (- length count)))))
+                   (transfer-event xhc number 1 last 1 0)))))))))
+
+;; The next report that a device has waiting goes to the endpoint that
+;; asks for it, when the driver has asked: a controller looks at a ring
+;; when its doorbell was rung and not before, which is also what keeps
+;; this one from reading an entry that the driver is in the middle of
+;; writing. The driver asks for one report at a time.
+(defun xhc-reports (xhc number slot index end)
+  (let* ((udev (xslot-device slot))
+         (address (logior #x80 (floor index 2))))
+    (loop
+      (let ((report (find address (udev-waiting udev) :key #'car)))
+        (unless (and report (xend-rung end) (not (xend-halted end)))
+          (return))
+        (setf (xend-rung end) nil)
+        (let ((entry (next-of end)))
+          (unless entry
+            (return))
+          (let ((room (logand (fourth entry) #x1ffff)) (memory (logior (second entry) (ash (third entry) 32)))
+                (bytes (cdr report)))
+            (unless (and (= (ldb (byte 6 10) (fifth entry)) 1) (logbitp 5 (fifth entry)) (logbitp 2 (fifth entry))
+                         (>= room (length bytes)) (own-memory-p memory room))
+              (failed "the driver asked a USB device for a report in a way that gets none: ~S, for ~D bytes" entry
+                      (length bytes)))
+            (setf (udev-waiting udev) (remove report (udev-waiting udev) :count 1))
+            (loop for byte in bytes for i from 0 do (poke (+ memory i) 1 byte))
+            (transfer-event xhc number index entry (if (= room (length bytes)) 1 13) (- room (length bytes)))))))))
+
+(defun slot-asked (xhc number)
+  (or (and (< 0 number 256) (aref (xhc-slots xhc) number))
+      (failed "the driver named the slot ~D to the USB controller, which never gave it out" number)))
+
+(defun xhc-doorbell (xhc number index)
+  (let* ((slot (slot-asked xhc number))
+         (end (cdr (assoc index (xslot-ends slot)))))
+    (unless (and (xslot-device slot) end)
+      (failed "the driver rang for the endpoint ~D of the slot ~D, which the USB controller was never told of" index number))
+    (setf (xend-rung end) t)
+    (unless (xend-halted end)
+      (if (= index 1)
+          (xhc-request xhc number slot end)
+          (xhc-reports xhc number slot index end)))))
+
+;; What a command is told about a device, read from the page that it
+;; points at: the flags, and the endpoint with an index.
+(defun told-end (xhc input index)
+  (let ((at (context-of xhc input (1+ index))))
+    (make-xend :ring (logior (logandc2 (peek (+ at 8) 4) 15) (ash (peek (+ at 12) 4) 32))
+               :cycle (logand (peek (+ at 8) 4) 1)
+               :pace (ldb (byte 8 16) (peek at 4))
+               :most (ash (peek (+ at 4) 4) -16)
+               :kind (ldb (byte 3 3) (peek (+ at 4) 4)))))
+
+(defun xhc-do (xhc address low high control)
+  (let* ((kind (ldb (byte 6 10) control)) (number (ash control -24)) (input (logior (logandc2 low 15) (ash high 32)))
+         (code 1))
+    (push (list kind number) (xhc-history xhc))
+    (unless (logbitp 0 (xhc-command xhc))
+      (failed "the driver gave a command to a USB controller that it had not started"))
+    (flet ((flags ()
+             (unless (own-memory-p input 4096)
+               (failed "the driver told the USB controller of a device in memory that is not its own"))
+             (list (peek input 4) (peek (+ input 4) 4))))
+      (case kind
+        (9 (setq number (or (loop for n from 1 to (xhc-count xhc) unless (aref (xhc-slots xhc) n) return n) 0))
+           (cond ((zerop number)
+                  (setq code 9))
+                 (t
+                  ;; A slot that is given out anew has nothing in the table: the driver took it out.
+                  (unless (and (zerop (peek (+ (xhc-contexts xhc) (* 8 number)) 4))
+                               (zerop (peek (+ (xhc-contexts xhc) (* 8 number) 4) 4)))
+                    (failed "the driver left the page of a device that is gone in the table of a USB controller, at ~D"
+                            number))
+                  (setf (aref (xhc-slots xhc) number) (make-xslot)))))
+        (10 (slot-asked xhc number)
+            (setf (aref (xhc-slots xhc) number) nil))
+        (11 (let* ((slot (slot-asked xhc number))
+                   (port (ldb (byte 8 16) (peek (+ (context-of xhc input 1) 4) 4)))
+                   (uport (and (<= 1 port (length (xhc-ports xhc))) (aref (xhc-ports xhc) (1- port))))
+                   (context (logior (peek (+ (xhc-contexts xhc) (* 8 number)) 4)
+                                    (ash (peek (+ (xhc-contexts xhc) (* 8 number) 4) 4) 32))))
+              (unless (and (equal (flags) '(0 3)) uport (uport-device uport) (logbitp 1 (uport-status uport))
+                           (own-memory-p context 4096)
+                           (= (ldb (byte 5 27) (peek (context-of xhc input 1) 4)) 1)
+                           (= (xend-kind (told-end xhc input 1)) 4))
+                (failed "the driver had the USB controller give a device an address that it cannot have: port ~D, flags ~S"
+                        port (flags)))
+              (if (udev-mute (uport-device uport))
+                  (setq code 4)
+                  (setf (xslot-device slot) (uport-device uport)
+                        (xslot-ends slot) (list (cons 1 (told-end xhc input 1)))))))
+        (13 (let ((slot (slot-asked xhc number)))
+              (unless (and (equal (flags) '(0 2)) (xslot-device slot))
+                (failed "the driver told the USB controller the size of a device's packets with the flags ~S" (flags)))
+              (setf (xend-most (cdr (assoc 1 (xslot-ends slot)))) (xend-most (told-end xhc input 1)))))
+        (12 (let* ((slot (slot-asked xhc number)) (flags (flags)))
+              (unless (and (xslot-device slot) (zerop (first flags)) (= (logand (second flags) 3) 1))
+                (failed "the driver told the USB controller of endpoints with the flags ~S" flags))
+              (loop for index from 2 to 31
+                    when (logbitp index (second flags))
+                      do (let ((end (told-end xhc input index)))
+                           (unless (and (= (xend-kind end) 7) (oddp index) (plusp (xend-most end))
+                                        (>= (ldb (byte 5 27) (peek (context-of xhc input 1) 4))
+                                            (reduce #'max (mapcar #'car (xslot-ends slot)) :initial-value index))
+                                        (own-memory-p (xend-ring end) 4096))
+                             (failed "the driver told the USB controller of an endpoint ~D that is none: kind ~D, ~D bytes"
+                                     index (xend-kind end) (xend-most end)))
+                           (push (cons index end) (xslot-ends slot))))))
+        (14 (let ((end (cdr (assoc (ldb (byte 5 16) control) (xslot-ends (slot-asked xhc number))))))
+              (if (and end (xend-halted end))
+                  (setf (xend-halted end) nil)
+                  (setq code 19))))
+        (16 (let ((end (cdr (assoc (ldb (byte 5 16) control) (xslot-ends (slot-asked xhc number))))))
+              (if end
+                  (setf (xend-ring end) input
+                        (xend-cycle end) (logand low 1))
+                  (setq code 19))))
+        (t (setq code 5))))
+    (unless (xhc-silent xhc)
+      (xhc-event xhc address (ash code 24) (logior (ash 33 10) (ash number 24))))))
+
+(defun xhc-commands (xhc)
+  (let ((end (make-xend :ring (xhc-ring xhc) :cycle (xhc-ring-cycle xhc))))
+    (loop
+      (let ((entry (next-of end)))
+        (setf (xhc-ring xhc) (xend-ring end)
+              (xhc-ring-cycle xhc) (xend-cycle end))
+        (unless entry
+          (return))
+        (xhc-do xhc (first entry) (second entry) (third entry) (fifth entry))))))
+
+;;; The controller's registers
+
+(defun xhc-reset (xhc)
+  (setf (xhc-command xhc) 0 (xhc-status xhc) 1 (xhc-in-use xhc) 0 (xhc-contexts xhc) 0
+        (xhc-ring xhc) 0 (xhc-iman xhc) 0 (xhc-segments xhc) 0 (xhc-segment-table xhc) 0 (xhc-read-to xhc) 0
+        (xhc-events xhc) 0 (xhc-event-count xhc) 0 (xhc-event-at xhc) 0 (xhc-event-cycle xhc) 1
+        (xhc-pending xhc) nil)
+  (fill (xhc-slots xhc) nil)
+  (loop for uport across (xhc-ports xhc)
+        ;; A device of the fastest kind comes up by itself; any other waits for its port to be reset.
+        do (setf (uport-status uport) (cond ((null (uport-device uport)) #x2a0)
+                                            ((= (udev-speed (uport-device uport)) 4) #x21203)
+                                            (t #x202e1)))))
+
+(defun xhc-read (xhc offset size)
+  (declare (ignore size))
+  (cond ((< offset #x40)
+         (case offset
+           (0 #x01000040)
+           (4 (logior (xhc-count xhc) (ash 1 8) (ash (length (xhc-ports xhc)) 24)))
+           (8 (logior (ash (ldb (byte 5 5) (xhc-scratch xhc)) 21) (ash (ldb (byte 5 0) (xhc-scratch xhc)) 27)))
+           (16 (logior 1 (if (xhc-wide xhc) 4 0)))
+           (20 #x2000)
+           (24 #x1000)
+           (t 0)))
+        ((< offset #x440)
+         (case (- offset #x40)
+           (0 (xhc-command xhc))
+           (4 (xhc-status xhc))
+           (8 1)
+           (#x18 (ldb (byte 32 0) (xhc-ring xhc)))
+           (#x30 (ldb (byte 32 0) (xhc-contexts xhc)))
+           (#x34 (ldb (byte 32 32) (xhc-contexts xhc)))
+           (#x38 (xhc-in-use xhc))
+           (t 0)))
+        ((< offset #x1000)
+         (let ((port (floor (- offset #x440) 16)))
+           (if (and (zerop (mod offset 16)) (< port (length (xhc-ports xhc))))
+               (uport-status (aref (xhc-ports xhc) port))
+               0)))
+        ((< offset #x2000)
+         (case (- offset #x1000)
+           (#x20 (xhc-iman xhc))
+           (#x28 (xhc-segments xhc))
+           (#x38 (logior (ldb (byte 32 0) (xhc-read-to xhc)) (if (xhc-pending xhc) 8 0)))
+           (#x3c (ldb (byte 32 32) (xhc-read-to xhc)))
+           (t 0)))
+        (t 0)))
+
+(defun xhc-write (xhc offset size value)
+  (declare (ignore size))
+  (sb-thread:with-recursive-lock (*usb-lock*)
+    (cond ((< offset #x40)
+           (failed "the driver wrote to what a USB controller says of itself, at ~D" offset))
+          ((< offset #x440)
+           (case (- offset #x40)
+             (0 (cond ((logbitp 1 value)
+                       (push :reset (xhc-history xhc))
+                       (xhc-reset xhc)
+                       (when (xhc-stuck xhc)
+                         (setf (xhc-command xhc) 2)))
+                      (t
+                       (when (and (logbitp 0 value) (not (logbitp 0 (xhc-command xhc))))
+                         (push :run (xhc-history xhc))
+                         (unless (and (own-memory-p (xhc-contexts xhc) 4096) (plusp (xhc-ring xhc))
+                                      (plusp (xhc-event-count xhc)) (plusp (xhc-in-use xhc))
+                                      (= (xhc-read-to xhc) (xhc-events xhc)))
+                           (failed "the driver started a USB controller that it had not given its memory"))
+                         (when (plusp (xhc-scratch xhc))
+                           (let ((list (logior (peek (xhc-contexts xhc) 4) (ash (peek (+ (xhc-contexts xhc) 4) 4) 32))))
+                             (unless (and (own-memory-p list (* 8 (xhc-scratch xhc)))
+                                          (loop for i below (xhc-scratch xhc)
+                                                always (own-memory-p (logior (peek (+ list (* 8 i)) 4)
+                                                                             (ash (peek (+ list (* 8 i) 4) 4) 32))
+                                                                     4096)))
+                               (failed "the driver started a USB controller without the ~D pages that it wants for itself"
+                                       (xhc-scratch xhc))))))
+                       (setf (xhc-command xhc) value
+                             (xhc-status xhc) (if (logbitp 0 value)
+                                                  (logandc2 (xhc-status xhc) 1)
+                                                  (logior (xhc-status xhc) 1))))))
+             (4 (setf (xhc-status xhc) (logandc2 (xhc-status xhc) (logand value #x1c))))
+             (#x18 (setf (xhc-ring xhc) (logandc2 value 63)
+                         (xhc-ring-cycle xhc) (logand value 1)))
+             (#x1c (setf (xhc-ring xhc) (logior (ldb (byte 32 0) (xhc-ring xhc)) (ash value 32))))
+             (#x30 (setf (xhc-contexts xhc) (logandc2 value 63)))
+             (#x34 (setf (xhc-contexts xhc) (logior (ldb (byte 32 0) (xhc-contexts xhc)) (ash value 32))))
+             (#x38 (setf (xhc-in-use xhc) (logand value 255)))))
+          ((< offset #x1000)
+           (let* ((port (floor (- offset #x440) 16)) (uport (aref (xhc-ports xhc) port)))
+             (when (logbitp 1 value)
+               (failed "the driver switched the port ~D of a USB controller off" (1+ port)))
+             (setf (uport-status uport) (logandc2 (uport-status uport) (logand value #xfe0000)))
+             (when (and (logbitp 4 value) (uport-device uport))
+               (push (list :port-reset (1+ port)) (xhc-history xhc))
+               ;; A controller speaks of a port when a change comes that it has not been told was
+               ;; taken back: one that is left standing is spoken of once.
+               (let ((said (logbitp 21 (uport-status uport))))
+                 (setf (uport-status uport)
+                       (logior (dpb 0 (byte 4 5) (uport-status uport)) 2 (ash 1 21)
+                               (ash (udev-speed (uport-device uport)) 10)))
+                 (when (and (logbitp 0 (xhc-command xhc)) (not said))
+                   (xhc-event xhc (ash (1+ port) 24) (ash 1 24) (ash 34 10)))))))
+          ((< offset #x2000)
+           (case (- offset #x1000)
+             (#x20 (setf (xhc-iman xhc) (logand value 2)))
+             (#x28 (setf (xhc-segments xhc) value))
+             (#x30 (setf (xhc-segment-table xhc) value))
+             (#x34 (setf (xhc-segment-table xhc) (logior (ldb (byte 32 0) (xhc-segment-table xhc)) (ash value 32)))
+                   (unless (and (= (xhc-segments xhc) 1) (own-memory-p (xhc-segment-table xhc) 16))
+                     (failed "the driver named ~D pieces of a ring of events to a USB controller, at #x~X"
+                             (xhc-segments xhc) (xhc-segment-table xhc)))
+                   (setf (xhc-events xhc) (logior (peek (xhc-segment-table xhc) 4)
+                                                  (ash (peek (+ (xhc-segment-table xhc) 4) 4) 32))
+                         (xhc-event-count xhc) (peek (+ (xhc-segment-table xhc) 8) 4)
+                         (xhc-event-at xhc) 0
+                         (xhc-event-cycle xhc) 1)
+                   (unless (<= 16 (xhc-event-count xhc) 4096)
+                     (failed "the driver gave a USB controller a ring of ~D events" (xhc-event-count xhc))))
+             (#x38 (setf (xhc-read-to xhc) (logior (logandc2 value 15) (ash (ldb (byte 32 32) (xhc-read-to xhc)) 32)))
+                   (when (logbitp 3 value)
+                     (setf (xhc-pending xhc) nil)
+                     ;; Events that were written since the driver last looked are another interrupt.
+                     (unless (= (ldb (byte 32 0) (xhc-read-to xhc))
+                                (ldb (byte 32 0) (+ (xhc-events xhc) (* 16 (xhc-event-at xhc)))))
+                       (xhc-interrupt xhc))))
+             (#x3c (setf (xhc-read-to xhc) (logior (ldb (byte 32 0) (xhc-read-to xhc)) (ash value 32))))))
+          ((zerop (- offset #x2000))
+           (xhc-commands xhc))
+          (t
+           (xhc-doorbell xhc (floor (- offset #x2000) 4) (logand value 255))))))
+
+;; A USB controller in a slot of bus 0, with these devices at its first
+;; ports, NIL for a port that nothing hangs from: its registers behind base
+;; address register 0, which is one of 64 bits, and its table of messages
+;; in the same place, as QEMU's have it. Without MESSAGES it has none to
+;; send.
+(defun add-xhci (slot devices &key (ports (max 4 (length devices))) (messages t) wide (scratch 0) stuck mute silent (count 16))
+  (let* ((config (add-function 0 slot 0 #x1033 #x0194 #x0c0330))
+         (table (make-array 4096 :element-type '(unsigned-byte 8) :initial-element 0))
+         (base (+ #x8100000000 (* slot #x100000)))
+         (xhc (make-xhc :config config :table table :wide wide :scratch scratch :stuck stuck :mute mute :silent silent
+                        :count count
+                        :ports (coerce (loop for i below ports collect (make-uport :device (nth i devices))) 'vector))))
+    (setf (le config #x10 4) (logior (ldb (byte 32 0) base) 4)
+          (le config #x14 4) (ash base -32))
+    (when messages
+      (setf (le config 6 2) #x10
+            (le config #x34 1) #x90)
+      (replace config (list #x11 0 15 0  0 #x30 0 0  0 #x38 0 0) :start1 #x90))
+    (xhc-reset xhc)
+    ;; As a firmware leaves one that it has used: stopped, with what it was told still in its registers.
+    (setf (xhc-in-use xhc) 64)
+    (clara.host:map-device base #x4000
+                           (lambda (offset size)
+                             (if (>= offset #x3000) (le table (- offset #x3000) size) (xhc-read xhc offset size)))
+                           (lambda (offset size value)
+                             (if (>= offset #x3000)
+                                 (setf (le table (- offset #x3000) size) value)
+                                 (xhc-write xhc offset size value)))
+                           :mapped nil)
+    xhc))
+
+;; What three devices say that their reports are made of: a keyboard as
+;; nearly every one is, with a byte of the keys that are held with others,
+;; a byte of nothing and six places for the keys that are down; a mouse
+;; with three buttons and how far it moved, in a byte each way; and a
+;; tablet with three buttons, where its pen is, from 0 to 32767 each way,
+;; and a wheel.
+(defvar *keyboard-report*
+  #(#x05 #x01 #x09 #x06 #xa1 #x01
+    #x05 #x07 #x19 #xe0 #x29 #xe7 #x15 #x00 #x25 #x01 #x75 #x01 #x95 #x08 #x81 #x02
+    #x95 #x01 #x75 #x08 #x81 #x01
+    #x95 #x06 #x75 #x08 #x15 #x00 #x25 #x65 #x05 #x07 #x19 #x00 #x29 #x65 #x81 #x00
+    #xc0))
+
+(defvar *mouse-report*
+  #(#x05 #x01 #x09 #x02 #xa1 #x01 #x09 #x01 #xa1 #x00
+    #x05 #x09 #x19 #x01 #x29 #x03 #x15 #x00 #x25 #x01 #x95 #x03 #x75 #x01 #x81 #x02
+    #x95 #x01 #x75 #x05 #x81 #x01
+    #x05 #x01 #x09 #x30 #x09 #x31 #x15 #x81 #x25 #x7f #x75 #x08 #x95 #x02 #x81 #x06
+    #xc0 #xc0))
+
+(defvar *tablet-report*
+  #(#x05 #x01 #x09 #x02 #xa1 #x01 #x09 #x01 #xa1 #x00
+    #x05 #x09 #x19 #x01 #x29 #x03 #x15 #x00 #x25 #x01 #x95 #x03 #x75 #x01 #x81 #x02
+    #x95 #x01 #x75 #x05 #x81 #x01
+    #x05 #x01 #x09 #x30 #x09 #x31 #x15 #x00 #x26 #xff #x7f #x75 #x10 #x95 #x02 #x81 #x02
+    #x09 #x38 #x15 #x81 #x25 #x7f #x75 #x08 #x95 #x01 #x81 #x06
+    #xc0 #xc0))
+
+;; And one that numbers its reports: the first is a keyboard's, with three
+;; places for keys whose most is written in two bytes, and the second a
+;; mouse's with two buttons. Between them it puts what it has said so far
+;; by and takes it up again, and it begins with an item of the long kind,
+;; which means nothing to anybody, and whose bytes would be a field of
+;; eight bits if they were read as items.
+(defvar *both-report*
+  #(#xfe #x06 #x00 #x75 #x08 #x95 #x01 #x81 #x02
+    #x05 #x01 #x09 #x06 #xa1 #x01 #x85 #x01
+    #x05 #x07 #x19 #xe0 #x29 #xe7 #x15 #x00 #x25 #x01 #x75 #x01 #x95 #x08 #x81 #x02
+    #x95 #x03 #x75 #x08 #x15 #x00 #x26 #xff #x00 #x19 #x00 #x2a #xff #x00 #x81 #x00
+    #xc0
+    #x05 #x01 #x09 #x02 #xa1 #x01 #x85 #x02
+    #xa4
+    #x05 #x09 #x19 #x01 #x29 #x02 #x15 #x00 #x25 #x01 #x95 #x02 #x75 #x01 #x81 #x02
+    #x95 #x01 #x75 #x06 #x81 #x03
+    #xb4
+    #x09 #x30 #x09 #x31 #x15 #x81 #x25 #x7f #x75 #x08 #x95 #x02 #x81 #x06
+    #xc0))
+
+(defun usb-keyboard (&rest options)
+  (apply #'make-udev :name "Made-up Keyboard" :interfaces (list (list 3 1 1 *keyboard-report* #x81 8 7)) options))
+
+(defun usb-mouse (&rest options)
+  (apply #'make-udev :name "Made-up Mouse" :interfaces (list (list 3 1 2 *mouse-report* #x81 4 7)) options))
+
+(defun usb-tablet (&rest options)
+  (apply #'make-udev :name "Made-up Tablet" :interfaces (list (list 3 0 0 *tablet-report* #x81 8 4)) options))
+
+;; A device has a report to give, from the endpoint with an address: it is
+;; fetched at once when the driver has asked for one.
+(defun usb-report (xhc udev bytes &optional (address #x81))
+  (sb-thread:with-recursive-lock (*usb-lock*)
+    (setf (udev-waiting udev) (append (udev-waiting udev) (list (cons address bytes))))
+    (loop for number from 1 below 256
+          for slot = (aref (xhc-slots xhc) number)
+          when (and slot (eq (xslot-device slot) udev))
+            do (let* ((index (1+ (* 2 (logand address 15)))) (end (cdr (assoc index (xslot-ends slot)))))
+                 (when end
+                   (xhc-reports xhc number slot index end))))))
+
+;; A device is plugged into a port, or pulled out of it, and the
+;; controller says that something happened there.
+(defun usb-plug (xhc port udev)
+  (sb-thread:with-recursive-lock (*usb-lock*)
+    (let* ((uport (aref (xhc-ports xhc) (1- port))) (said (logbitp 17 (uport-status uport))))
+      (setf (uport-device uport) udev
+            (uport-status uport) (if udev #x202e1 #x202a0))
+      (when (and (logbitp 0 (xhc-command xhc)) (not said))
+        (xhc-event xhc (ash port 24) (ash 1 24) (ash 34 10))))))
+
+(defvar *xhc* nil)                      ; the controller of the machine
+(defvar *typed-codes* nil)              ; what was typed on its keyboards, the last first
+(defvar *typed-lock* (clara:make-lock "typed"))
+
+;; The threads of a controller and of its devices go with their machine.
+(defun stop-usb ()
+  (dolist (thread (append (mapcar #'clara.usb::controller-thread clara.usb::*controllers*)
+                          (mapcar #'clara.input::input-thread clara.input::*inputs*)))
+    (when (and thread (clara:thread-alive-p thread))
+      (clara:destroy-thread thread)
+      (eventually (lambda () (not (clara:thread-alive-p thread))))))
+  (setq clara.usb::*controllers* nil
+        clara.input::*inputs* nil))
+
+;; A machine with a screen of 640 by 480 and a USB controller with these
+;; devices at its ports: what the start of its keyboards and pointers says.
+;; What is typed from then on is kept for TYPED.
+(defun new-usb (devices &rest options)
+  (stop-usb)
+  (new-machine)
+  (attach-bus)
+  (add-function 0 0 0 #x8086 #x29c0 #x060000)
+  (clara.host:set-framebuffer (clara.unsafe:allocate-memory 1) 640 480 2560 #xff0000 #x00ff00 #x0000ff)
+  (setq *xhc* (apply #'add-xhci 2 devices options)
+        *typed-codes* nil)
+  (with-output-to-string (*standard-output*)
+    (clara.pci:start))
+  (prog1 (said-by #'clara.input:start)
+    (clara.input:send-keys-to (lambda (code) (clara:with-lock-held (*typed-lock*) (push code *typed-codes*))))))
+
+(defun typed-codes ()
+  (clara:with-lock-held (*typed-lock*)
+    (reverse *typed-codes*)))
+
+;; Has this, and nothing else, been typed since the machine was made?
+(defun typed-p (&rest codes)
+  (or (eventually (lambda () (equal (typed-codes) codes)))
+      (typed-codes)))
+
+(defun pointer-p (x y buttons)
+  (or (eventually (lambda () (equal (multiple-value-list (clara.input:pointer)) (list x y buttons))))
+      (multiple-value-list (clara.input:pointer))))
+
+(defun history-of (xhc)
+  (reverse (xhc-history xhc)))
+
+(defun thread-names ()
+  (sort (mapcar #'clara:thread-name (remove (clara:current-thread) (clara:all-threads))) #'string<))
+
+;; What the description of a device's reports comes to: each field as
+;; (report bit bits count variable relative page things first least most).
+(defun fields-of (description)
+  (mapcar (lambda (field)
+            (list (clara.input::field-report field) (clara.input::field-at field) (clara.input::field-size field)
+                  (clara.input::field-count field) (clara.input::field-variable field)
+                  (clara.input::field-relative field) (clara.input::field-page field)
+                  (clara.input::field-usages field) (clara.input::field-lowest field)
+                  (clara.input::field-least field) (clara.input::field-most field)))
+          (clara.input::read-fields description)))
+
+(check '((0 0 1 8 t nil 7 nil #xe0 0 1) (0 16 8 6 nil nil 7 nil 0 0 #x65))
+       (fields-of *keyboard-report*))
+(check '((0 0 1 3 t nil 9 nil 1 0 1) (0 8 8 2 t t 1 (#x30 #x31) nil -127 127))
+       (fields-of *mouse-report*))
+(check '((0 0 1 3 t nil 9 nil 1 0 1) (0 8 16 2 t nil 1 (#x30 #x31) nil 0 32767) (0 40 8 1 t t 1 (#x38) nil -127 127))
+       (fields-of *tablet-report*))
+(check '((1 0 1 8 t nil 7 nil #xe0 0 1) (1 8 8 3 nil nil 7 nil 0 0 255)
+         (2 0 1 2 t nil 9 nil 1 0 1) (2 8 8 2 t t 1 (#x30 #x31) nil -127 127))
+       (fields-of *both-report*))
+;; A most that is written in one byte and reads as less than the least was meant without its sign;
+;; a description that stops in the middle of an item gives what came before it; and bits that
+;; mean nothing are no field, and neither are values of no bits or of more than 32.
+(check '((0 0 8 2 t nil 1 (#x30 #x31) nil 0 255))
+       (fields-of #(#x05 #x01 #x09 #x30 #x09 #x31 #x15 #x00 #x25 #xff #x75 #x08 #x95 #x02 #x81 #x02)))
+(check '((0 0 1 8 t nil 7 nil #xe0 0 1))
+       (fields-of (subseq *keyboard-report* 0 (- (length *keyboard-report*) 3))))
+(check nil (fields-of #(#x05 #x07 #x75 #x00 #x95 #x08 #x81 #x02 #x75 #x21 #x81 #x02 #x75 #x08 #x81 #x01)))
+(check nil (fields-of #()))
+
+;; START: the controller is stopped, reset, given its memory and started;
+;; each device is found at its port, which is reset first, given a slot and
+;; an address, asked what it is, and set up; and each becomes a keyboard or
+;; a pointer by what it says of its reports, with a thread of its own.
+(let* ((tablet (usb-tablet)) (mouse (usb-mouse))
+       ;; The keyboard has a second way of being set up, with another endpoint, which is passed over.
+       (keyboard (usb-keyboard :more (list 9 4 0 1 1 3 1 1 0  7 5 #x83 3 8 0 7)))
+       (before (length (clara:all-threads)))
+       (said (new-usb (list nil tablet mouse keyboard)))
+       (xhc *xhc*))
+  (check (format nil "usb: 00:02.0 is a USB controller: 4 ports, and at them 3 devices~@
+                      usb:   port 2 0627:0001 Made-up Tablet~@
+                      usb:   port 3 0627:0001 Made-up Mouse~@
+                      usb:   port 4 0627:0001 Made-up Keyboard~@
+                      input: 00:02.0 port 2 is a tablet, Made-up Tablet~@
+                      input: 00:02.0 port 3 is a mouse, Made-up Mouse~@
+                      input: 00:02.0 port 4 is a keyboard, Made-up Keyboard~%")
+         said)
+  (check '(:reset :run (:port-reset 2) (9 0) (11 1) (:port-reset 3) (9 0) (11 2) (:port-reset 4) (9 0) (11 3)
+           (12 1) (12 2) (12 3))
+         (history-of xhc))
+  ;; What a keyboard is asked: who it is, eight bytes of that first; its name; how it is set up, nine
+  ;; bytes of that first; to be set up so; to report as it describes; and for the description.
+  (check '((#x80 6 #x100 0) (#x80 6 #x100 0) (#x80 6 #x302 #x409) (#x80 6 #x200 0) (#x80 6 #x200 0) (0 9 1 0)
+           (#x21 11 1 0) (#x81 6 #x2200 0))
+         (reverse (udev-requests keyboard)))
+  (check nil (find '(#x21 11 1 0) (udev-requests tablet) :test #'equal))   ; a tablet is not of the simple kind
+  ;; How often each is asked, as a device of the fast kind says it, less one: every 8 thousandths
+  ;; of a second for the keyboard, and every thousandth for the tablet.
+  (check '((7 3 8) (7 6 4) (7 6 8))
+         (loop for number from 1 to 3
+               collect (let ((end (cdr (assoc 3 (xslot-ends (aref (xhc-slots xhc) number))))))
+                         (list (xend-kind end) (xend-pace end) (xend-most end)))))
+  (check '(1 ((#x81 3 8 7)))
+         (let ((interfaces (clara.usb:device-interfaces (third (clara.usb:devices)))))
+           (list (length interfaces) (clara.usb::interface-endpoints (car interfaces)))))
+  (check '(1 1 1) (mapcar #'udev-set-up (list tablet mouse keyboard)))
+  (check '("a tablet" "a mouse" "a keyboard") (mapcar #'clara.input::input-kind (clara.input:devices)))
+  (check nil (set-difference '("input 00:02.0 port 2" "input 00:02.0 port 3" "input 00:02.0 port 4" "usb 00:02.0")
+                             (thread-names) :test #'equal))
+  (check 4 (- (length (clara:all-threads)) before))
+  (check '(3 "00:02.0 port 4" "Made-up Keyboard" #x0627 1)
+         (let ((device (third (clara.usb:devices))))
+           (list (length (clara.usb:devices)) (clara.usb:device-place device) (clara.usb:device-name device)
+                 (clara.usb:device-vendor device) (clara.usb:device-product device))))
+  (check '(3 1 1 0 (#x21))
+         (let ((interface (car (clara.usb:device-interfaces (third (clara.usb:devices))))))
+           (list (clara.usb:interface-class interface) (clara.usb:interface-subclass interface)
+                 (clara.usb:interface-protocol interface) (clara.usb:interface-number interface)
+                 (mapcar #'car (clara.usb:interface-extras interface)))))
+  ;; Its registers answer, it may write memory, its line of old is off, and its messages are on.
+  (check #x406 (logand (le (xhc-config xhc) 4 2) #x406))
+  (check #x8000 (logand (le (xhc-config xhc) #x92 2) #xc000))
+  (check '(5 2 16) (list (xhc-command xhc) (xhc-iman xhc) (xhc-in-use xhc)))
+  ;; A key goes down and up: a report with it, and one without.
+  (usb-report xhc keyboard '(0 0 4 0 0 0 0 0))
+  (usb-report xhc keyboard '(0 0 0 0 0 0 0 0))
+  (check t (typed-p 97))
+  ;; With Shift held, which is a bit of the first byte; two keys in one report, in their order; one
+  ;; of the two let go, which types nothing; Enter; Ctrl and C; and a key that types no character.
+  (usb-report xhc keyboard '(2 0 0 0 0 0 0 0))
+  (usb-report xhc keyboard '(2 0 4 0 0 0 0 0))
+  (usb-report xhc keyboard '(0 0 0 0 0 0 0 0))
+  (usb-report xhc keyboard '(0 0 4 5 0 0 0 0))
+  (usb-report xhc keyboard '(0 0 5 0 0 0 0 0))
+  (usb-report xhc keyboard '(0 0 0 0 0 0 0 0))
+  (usb-report xhc keyboard '(0 0 40 0 0 0 0 0))
+  (usb-report xhc keyboard '(1 0 0 0 0 0 0 0))
+  (usb-report xhc keyboard '(1 0 6 0 0 0 0 0))
+  (usb-report xhc keyboard '(0 0 82 0 0 0 0 0))
+  (usb-report xhc keyboard '(0 0 0 0 0 0 0 0))
+  (check t (typed-p 97 65 97 98 10 3 clara.input:+up+))
+  ;; A keyboard that cannot tell which keys are down says so in every place: nothing is typed, and
+  ;; the key that was down before is not taken for let go and pressed again.
+  (usb-report xhc keyboard '(0 0 7 0 0 0 0 0))
+  (usb-report xhc keyboard '(0 0 1 1 1 1 1 1))
+  (usb-report xhc keyboard '(0 0 7 8 0 0 0 0))
+  (usb-report xhc keyboard '(0 0 0 0 0 0 0 0))
+  (check t (typed-p 97 65 97 98 10 3 clara.input:+up+ 100 101))
+  ;; The pointer begins in the middle of the screen. The mouse says how far it moved, each way in a
+  ;; byte with a sign, and the tablet where its pen is, of 32767.
+  (check t (pointer-p 320 240 0))
+  (usb-report xhc mouse '(0 5 253))
+  (check t (pointer-p 325 237 0))
+  (usb-report xhc mouse '(1 0 0))
+  (check t (pointer-p 325 237 1))
+  (usb-report xhc tablet '(4 0 #x40 #xff #x7f 0))
+  (check t (pointer-p 319 479 5))                        ; a button of each is down: both are
+  (usb-report xhc mouse '(0 129 0))
+  (check t (pointer-p 192 479 4))
+  (usb-report xhc tablet '(0 #xff #x7f 0 0 3))
+  (check t (pointer-p 639 0 0))
+  ;; A report that is shorter than the device said: what is not there is nothing.
+  (usb-report xhc mouse '(2))
+  (check t (pointer-p 639 0 2))
+  (usb-report xhc mouse '(0 0 0))
+  (check t (pointer-p 639 0 0)))
+
+;; A key that stays down types again after a while, and then again and
+;; again, as on a keyboard of virtio's.
+(let* ((keyboard (usb-keyboard)))
+  (setq clara.input:*repeat-delay* 60
+        clara.input:*repeat-interval* 10)
+  (new-usb (list keyboard))
+  (usb-report *xhc* keyboard '(0 0 4 0 0 0 0 0))
+  (sleep 0.5)
+  (usb-report *xhc* keyboard '(0 0 0 0 0 0 0 0))
+  (usb-report *xhc* keyboard '(0 0 5 0 0 0 0 0))
+  (usb-report *xhc* keyboard '(0 0 0 0 0 0 0 0))
+  (check t (eventually (lambda () (eql (car (last (typed-codes))) 98))))
+  (sleep 0.1)
+  (let ((codes (typed-codes)))
+    (check t (and (< 5 (length codes) 60) (every (lambda (code) (= code 97)) (butlast codes)) (= (car (last codes)) 98))))
+  (setq clara.input:*repeat-delay* 400
+        clara.input:*repeat-interval* 40))
+
+;; A device that numbers its reports is a keyboard and a mouse in one: the
+;; first byte of a report says which of its two it is.
+(let* ((both (make-udev :name "Made-up Both" :interfaces (list (list 3 1 1 *both-report* #x81 8 7))))
+       (said (new-usb (list both))))
+  (check t (and (search (format nil "input: 00:02.0 port 1 is a keyboard, Made-up Both~%") said) t))
+  (usb-report *xhc* both '(1 2 4 0 0))
+  (usb-report *xhc* both '(1 0 0 0 0))
+  (usb-report *xhc* both '(2 1 10 246))
+  (check t (typed-p 65))
+  (check t (pointer-p 330 230 1))
+  (usb-report *xhc* both '(3 255 255 255))            ; a report with a number that the device never spoke of
+  (usb-report *xhc* both '())                         ; and one with nothing in it
+  (usb-report *xhc* both '(2 0 1 0))
+  (check t (pointer-p 331 230 0))
+  (check t (typed-p 65)))
+
+;; A device with two interfaces is two things here, each at an endpoint of
+;; its own; and one whose axes go from 0 to 255 is a tablet all the same.
+(let* ((two (make-udev :name "Made-up Two" :speed 1 :packet 8
+                       :interfaces (list (list 3 1 1 *keyboard-report* #x81 8 10)
+                                         (list 3 0 0 #(#x05 #x09 #x19 #x01 #x29 #x03 #x15 #x00 #x25 #x01
+                                                       #x95 #x03 #x75 #x01 #x81 #x02 #x95 #x05 #x81 #x01
+                                                       #x05 #x01 #x09 #x30 #x09 #x31 #x15 #x00 #x25 #xff
+                                                       #x75 #x08 #x95 #x02 #x81 #x02)
+                                               #x82 3 10))))
+       (said (new-usb (list two))))
+  (check (format nil "usb: 00:02.0 is a USB controller: 4 ports, and at them 1 devices~@
+                      usb:   port 1 0627:0001 Made-up Two~@
+                      input: 00:02.0 port 1 is a keyboard, Made-up Two~@
+                      input: 00:02.0 port 1 is a tablet, Made-up Two~%")
+         said)
+  (check '(:reset :run (:port-reset 1) (9 0) (11 1) (12 1) (12 1)) (history-of *xhc*))
+  ;; A slow device says how often in thousandths of a second: ten of them are asked for every eight.
+  (check '(6 6) (mapcar (lambda (index) (xend-pace (cdr (assoc index (xslot-ends (aref (xhc-slots *xhc*) 1)))))) '(3 5)))
+  (usb-report *xhc* two '(0 0 9 0 0 0 0 0))
+  (usb-report *xhc* two '(0 0 0 0 0 0 0 0))
+  (usb-report *xhc* two '(2 255 0) #x82)
+  (check t (typed-p 102))
+  (check t (pointer-p 639 0 2)))
+
+;; The same with the endpoints the other way round: the one with the
+;; higher number is listened at first, and the controller is told of the
+;; second without being told that there are fewer than before.
+(let ((two (make-udev :name "Made-up Other Way"
+                      :interfaces (list (list 3 1 1 *keyboard-report* #x82 8 7) (list 3 1 2 *mouse-report* #x81 4 7)))))
+  (new-usb (list two))
+  (check '("a keyboard" "a mouse") (mapcar #'clara.input::input-kind (clara.input:devices)))
+  (usb-report *xhc* two '(0 0 4 0 0 0 0 0) #x82)
+  (usb-report *xhc* two '(1 2 2))
+  (check t (typed-p 97))
+  (check t (pointer-p 322 242 1)))
+
+;; A device that is plugged in while the machine runs arrives the same way,
+;; in the controller's thread, which says so; and one that is pulled out is
+;; let go of: its slot, its memory, its thread, and a button that was down
+;; on it.
+(let* ((keyboard (usb-keyboard)) (mouse (usb-mouse)) (pages nil) (threads nil))
+  (new-usb (list keyboard))
+  (setq pages (clara.host:allocated-pages)
+        threads (length (clara:all-threads)))
+  (check (format nil "usb: a device at 00:02.0 port 3: 0627:0001 Made-up Mouse~@
+                      input: 00:02.0 port 3 is a mouse, Made-up Mouse~%")
+         (said-by-all (lambda ()
+                        (usb-plug *xhc* 3 mouse)
+                        (eventually (lambda () (= (length (clara.input:devices)) 2))))))
+  (check t (eventually (lambda () (= (length (clara:all-threads)) (1+ threads)))))
+  (usb-report *xhc* mouse '(1 7 7))
+  (check t (pointer-p 327 247 1))
+  (check (format nil "usb: the device at 00:02.0 port 3 is gone: 0627:0001 Made-up Mouse~%")
+         (said-by-all (lambda ()
+                        (usb-plug *xhc* 3 nil)
+                        (eventually (lambda () (= (length (clara.usb:devices)) 1))))))
+  (check t (pointer-p 327 247 0))
+  (check '(1 "a keyboard") (list (length (clara.input:devices)) (clara.input::input-kind (car (clara.input:devices)))))
+  (check t (eventually (lambda () (= (length (clara:all-threads)) threads))))
+  (check pages (clara.host:allocated-pages))
+  (check '(10 2) (car (xhc-history *xhc*)))
+  (check nil (aref (xhc-slots *xhc*) 2))
+  ;; The keyboard is as it was, and another device in the same port is another device.
+  (usb-report *xhc* keyboard '(0 0 4 0 0 0 0 0))
+  (usb-report *xhc* keyboard '(0 0 0 0 0 0 0 0))
+  (check t (typed-p 97))
+  (said-by-all (lambda ()
+                 (usb-plug *xhc* 3 (usb-tablet))
+                 (eventually (lambda () (= (length (clara.input:devices)) 2)))))
+  (check '("a keyboard" "a tablet") (mapcar #'clara.input::input-kind (clara.input:devices)))
+  ;; Plugged and pulled a hundred times, which takes the ring of commands round: nothing is kept.
+  (said-by-all (lambda ()
+                 (usb-plug *xhc* 3 nil)
+                 (eventually (lambda () (= (length (clara.usb:devices)) 1)))
+                 (dotimes (i 100)
+                   (usb-plug *xhc* 4 mouse)
+                   (eventually (lambda () (= (length (clara.input:devices)) 2)))
+                   (usb-plug *xhc* 4 nil)
+                   (eventually (lambda () (= (length (clara.usb:devices)) 1))))))
+  (check t (eventually (lambda () (= (length (clara:all-threads)) threads))))
+  (check pages (clara.host:allocated-pages))
+  (check t (> (count-if #'consp (xhc-history *xhc*)) 400)))
+
+;; A device that is pulled out and another put in before anything has
+;; looked at the port: the port says that it was plugged anew, and the
+;; device that is known there is let go of. And a device that does not
+;; start is said once, and its port is tried again when it is plugged anew.
+(let ((keyboard (usb-keyboard)) (mouse (usb-mouse)))
+  (new-usb (list keyboard))
+  (check (format nil "usb: the device at 00:02.0 port 1 is gone: 0627:0001 Made-up Keyboard~@
+                      usb: a device at 00:02.0 port 1: 0627:0001 Made-up Mouse~@
+                      input: 00:02.0 port 1 is a mouse, Made-up Mouse~%")
+         (said-by-all (lambda ()
+                        (usb-plug *xhc* 1 mouse)
+                        (eventually (lambda ()
+                                      (equal (mapcar #'clara.input::input-kind (clara.input:devices)) '("a mouse")))))))
+  (check (format nil "usb: what is at 00:02.0 port 2 did not start: the USB controller 00:02.0 was asked to give a device ~
+                      its address and says that the device did not answer as a device should~%")
+         (said-by-all (lambda ()
+                        (usb-plug *xhc* 2 (usb-mouse :mute t))
+                        (eventually (lambda () (equal (car (xhc-history *xhc*)) '(10 2))))
+                        (sleep 0.2))))
+  (check '(2) (clara.usb::controller-failed (car clara.usb::*controllers*)))
+  (usb-plug *xhc* 2 nil)
+  (check t (eventually (lambda () (null (clara.usb::controller-failed (car clara.usb::*controllers*))))))
+  (said-by-all (lambda ()
+                 (usb-plug *xhc* 2 keyboard)
+                 (eventually (lambda () (= (length (clara.input:devices)) 2)))))
+  (check '("a mouse" "a keyboard") (mapcar #'clara.input::input-kind (clara.input:devices))))
+
+;; More reports than a ring holds: the driver's ring of what it asks, and
+;; the controller's of what it says, go round, and no move is lost.
+(let ((mouse (usb-mouse)))
+  (new-usb (list mouse))
+  (clara.input:set-pointer-limits 10000 10000)
+  (dotimes (burst 7)
+    (dotimes (i 100)
+      (usb-report *xhc* mouse '(0 1 2)))
+    (check t (pointer-p (+ 5100 (* 100 burst)) (+ 5200 (* 200 burst)) 0))))
+
+;; And more requests than a device's own ring holds, by this thread, once
+;; the controller's has been stopped: a request that carries bytes to the
+;; device, one that carries none, and one that fetches some.
+(let ((keyboard (usb-keyboard)))
+  (new-usb (list keyboard))
+  (let ((device (car (clara.usb:devices))) (thread (clara.usb::controller-thread (car clara.usb::*controllers*))))
+    (clara:destroy-thread thread)
+    (eventually (lambda () (not (clara:thread-alive-p thread))))
+    (setf (udev-requests keyboard) nil)
+    (check t (clara.usb:control device #x21 10 0 0))
+    (check t (clara.usb:control device #x21 9 #x200 0 0 '(5 6 7)))
+    (check '((#x21 9 #x200 0 (5 6 7)) (#x21 10 0 0)) (udev-requests keyboard))
+    (check t (dotimes (i 200 t)
+               (unless (equalp (clara.usb:control device #x80 6 #x100 0 18)
+                               (coerce (device-descriptor keyboard) 'vector))
+                 (return i))))
+    ;; Fewer bytes than were asked for are the bytes that came; and what a device refuses is an
+    ;; error that names it, after which the device is asked the next thing as before.
+    (check 18 (length (clara.usb:control device #x80 6 #x100 0 64)))
+    (check "the USB device at 00:02.0 port 1 was asked for 6 of the kind 128, and the controller says that the device refused"
+           (condition-text (lambda () (clara.usb:control device #x80 6 #x900 0 4))))
+    (check 18 (length (clara.usb:control device #x80 6 #x100 0 18)))
+    (check-condition error (clara.usb:control device #x80 6 #x100 0 5000))
+    ;; Listening: an endpoint is listened to once, and an interface that has none to listen at says so.
+    (check "the USB device at 00:02.0 port 1 is listened to already at its endpoint 129"
+           (condition-text (lambda () (clara.usb:listen-at (car (clara.usb:device-interfaces device)) #'identity))))
+    (check "the interface 0 of the USB device at 00:02.0 port 1 has nothing to listen at"
+           (let ((interface (car (clara.usb:device-interfaces device))))
+             (setf (clara.usb::interface-endpoints interface) (list (list #x01 3 8 7) (list #x82 2 8 7)))
+             (condition-text (lambda () (clara.usb:listen-at interface #'identity)))))))
+
+;; What goes wrong. A device that refuses to be told how to report is a
+;; keyboard all the same; one that refuses to say what its reports are is
+;; none, and the one beside it is not the worse for it.
+(let* ((first (usb-keyboard :refuses '((#x21 11)))) (second (usb-keyboard :refuses '((#x81 6)))) (third (usb-mouse))
+       (said (new-usb (list first second third))))
+  (check (format nil "usb: 00:02.0 is a USB controller: 4 ports, and at them 3 devices~@
+                      usb:   port 1 0627:0001 Made-up Keyboard~@
+                      usb:   port 2 0627:0001 Made-up Keyboard~@
+                      usb:   port 3 0627:0001 Made-up Mouse~@
+                      input: 00:02.0 port 1 is a keyboard, Made-up Keyboard~@
+                      input: 00:02.0 port 2 did not start: the USB device at 00:02.0 port 2 was asked for 6 of the kind 129, ~
+                      and the controller says that the device refused~@
+                      input: 00:02.0 port 3 is a mouse, Made-up Mouse~%")
+         said)
+  (usb-report *xhc* first '(0 0 4 0 0 0 0 0))
+  (check t (typed-p 97)))
+
+;; A device that does not answer, and one that refuses everything: each is
+;; said, its slot is given back, and nothing of its memory is kept. One
+;; that gives itself no name is said so, and something that is neither
+;; keyboard nor pointer is a device of the bus and nothing more.
+(let ((empty (progn (new-usb (list nil nil (usb-keyboard))) (clara.host:allocated-pages))))
+  (check (format nil "usb: what is at 00:02.0 port 1 did not start: the USB controller 00:02.0 was asked to give a device ~
+                      its address and says that the device did not answer as a device should~@
+                      usb: what is at 00:02.0 port 2 did not start: the USB device at 00:02.0 port 2 was asked for 6 of ~
+                      the kind 128, and the controller says that the device refused~@
+                      usb: 00:02.0 is a USB controller: 4 ports, and at them 2 devices~@
+                      usb:   port 3 0627:0001 Made-up Keyboard~@
+                      usb:   port 4 0781:5567 a device that gives itself no name~@
+                      input: 00:02.0 port 3 is a keyboard, Made-up Keyboard~%")
+         (new-usb (list (usb-mouse :mute t) (usb-mouse :refuses t) (usb-keyboard)
+                        (make-udev :vendor #x0781 :product #x5567 :speed 4 :packet 9
+                                   :interfaces (list (list 8 6 #x50 nil #x81 1024 0))))))
+  (check '(:reset :run (:port-reset 1) (9 0) (11 1) (10 1) (:port-reset 2) (9 0) (11 1) (14 1) (16 1) (10 1)
+           (:port-reset 3) (9 0) (11 1) (9 0) (11 2) (12 1))
+         (history-of *xhc*))
+  ;; The controller's thread comes to the same ports a moment later, for the resets that were
+  ;; done there, and does not try again what did not start.
+  (sleep 0.2)
+  (check 18 (length (xhc-history *xhc*)))
+  (check (+ empty 3) (clara.host:allocated-pages)))            ; the three pages of the device that nobody listens to
+
+;; Controllers that are not as QEMU's: one with contexts of 64 bytes that
+;; wants seven pages for itself, with a device that is slow and has packets
+;; of 32 bytes, which the controller is told (the command 13).
+(let* ((keyboard (usb-keyboard :speed 1 :packet 32))
+       (said (new-usb (list keyboard) :wide t :scratch 7)))
+  (check t (and (search "input: 00:02.0 port 1 is a keyboard" said) t))
+  (check '(:reset :run (:port-reset 1) (9 0) (11 1) (13 1) (12 1)) (history-of *xhc*))
+  (check 32 (xend-most (cdr (assoc 1 (xslot-ends (aref (xhc-slots *xhc*) 1))))))
+  (usb-report *xhc* keyboard '(0 0 4 0 0 0 0 0))
+  (check t (typed-p 97)))
+
+;; One that never comes out of its reset, one that says nothing to a
+;; command, one with no message to send, and one of an older kind: each is
+;; said, and the machine has no keyboard.
+(let ((clara.usb::*patience* 100))
+  (check (format nil "usb: 00:02.0 did not start: the USB controller 00:02.0 did not come out of its reset in 100 milliseconds~@
+                      input: no keyboard and no mouse that has a driver here: the serial port is where to type~%")
+         (new-usb (list (usb-keyboard)) :stuck t))
+  (check (format nil "usb: what is at 00:02.0 port 1 did not start: the USB controller 00:02.0 was asked for room for a ~
+                      device and has not answered in 100 milliseconds~@
+                      usb: 00:02.0 is a USB controller: 4 ports, and at them 0 devices~@
+                      input: no keyboard and no mouse that has a driver here: the serial port is where to type~%")
+         (new-usb (list (usb-keyboard)) :silent t)))
+(check (format nil "usb: 00:02.0 did not start: the PCI device 00:02.0 cannot send a message for an interrupt: it has ~
+                    neither MSI-X nor MSI~@
+                    input: no keyboard and no mouse that has a driver here: the serial port is where to type~%")
+       (new-usb (list (usb-keyboard)) :messages nil))
+(check (format nil "usb: 00:05.0 is a USB controller of an older kind (EHCI), which has no driver here~@
+                    usb: 00:06.0 is a USB controller of an older kind (UHCI), which has no driver here~@
+                    usb: 00:07.0 is a USB controller of an older kind, which has no driver here~@
+                    input: no keyboard and no mouse that has a driver here: the serial port is where to type~%")
+       (progn (stop-usb)
+              (new-machine)
+              (attach-bus)
+              (add-function 0 5 0 #x8086 #x293a #x0c0320)
+              (add-function 0 6 0 #x8086 #x2934 #x0c0300)
+              (add-function 0 7 0 #x8086 #x1234 #x0c03fe)
+              (with-output-to-string (*standard-output*)
+                (clara.pci:start))
+              (said-by #'clara.input:start)))
+
+;; A controller whose message does not arrive is asked all the same: every
+;; wait ends after a while to look.
+(let* ((keyboard (usb-keyboard))
+       (said (new-usb (list keyboard) :mute t)))
+  (check t (and (search "input: 00:02.0 port 1 is a keyboard" said) t)))
+
+;; A machine that is started a second time has its devices once, and the
+;; threads of the first start are gone.
+(let ((keyboard (usb-keyboard)) (mouse (usb-mouse)) (threads nil))
+  (new-usb (list keyboard mouse))
+  (setq threads (length (clara:all-threads)))
+  (check (format nil "usb: 00:02.0 is a USB controller: 4 ports, and at them 2 devices~@
+                      usb:   port 1 0627:0001 Made-up Keyboard~@
+                      usb:   port 2 0627:0001 Made-up Mouse~@
+                      input: 00:02.0 port 1 is a keyboard, Made-up Keyboard~@
+                      input: 00:02.0 port 2 is a mouse, Made-up Mouse~%")
+         (said-by #'clara.input:start))
+  (check t (eventually (lambda () (= (length (clara:all-threads)) threads))))
+  (check '(2 2) (list (length (clara.input:devices)) (length (clara.usb:devices))))
+  (clara.input:send-keys-to (lambda (code) (clara:with-lock-held (*typed-lock*) (push code *typed-codes*))))
+  (usb-report *xhc* keyboard '(0 0 4 0 0 0 0 0))
+  (check t (typed-p 97)))
+
+(stop-usb)
+(new-machine)
+
 ;;; Sound (lisp/sound.lisp): the driver of the sound card, against a card
 ;;; that is made up (above) and keeps the numbers that it is given to play,
 ;;; and what a tone, some notes and a file come to as numbers, against a
@@ -12269,6 +13370,633 @@
   (clara.sound:wait))
 (check '(#x100 #x101 #x102 #x104 #x105 #x104 #x105 #x104) (reverse (vdev-requests *sound*)))
 (setq clara.sound::*linger* 20)
+
+;;; Intel's sound card (lisp/hda.lisp), under the same sounds: against a
+;;; controller that is made up, with a codec at the other end of its link
+;;; that is made up as well. The codec is some parts, each with what it
+;;; says of itself, and keeps what it was told. The controller answers for
+;;; it through the two rings, as QEMU's does, which says nothing more
+;;; after an answer until the driver has taken the answer's flag back; it
+;;; reads a register only as what the register is; and it plays a period
+;;; when a test says so, never by itself, which is how a test has the
+;;; driver come too late when it wants to. It fails the run when the
+;;; stream is started before everything on the way has been told what it
+;;; needs to be told.
+
+(defstruct hpart
+  number kind
+  (abilities 0)             ; what it says of itself, without its kind
+  sources                   ; the parts that it takes its sound from
+  (socket 0) (wired 0)      ; of a socket: what it can do, and what it was wired to
+  takes                     ; what numbers it takes, when it says that itself
+  out in                    ; its amplifiers, as they say what they are, when it says that itself
+  power gain-out gains-in chosen pin format name) ; and what it was told
+
+(defstruct hcard
+  config
+  codecs                    ; ((address . parts) ...), the parts of each as HPARTs, the first of them its group
+  (recording 4)             ; how many streams it has that record, before the one that plays
+  (places 256)              ; how many places each of its two rings has: 256, 16 or 2
+  silent                    ; its codecs never answer,
+  stuck                     ; it never comes out of its reset,
+  deaf                      ; or it never moves on in what it plays
+  (reset 1)                 ; it is as a firmware leaves it: out of its reset,
+  fresh                     ; and not yet taken through one by the driver, which it has to be: :DOWN, then T
+  rewound                   ; the stream was reset since it last ran, and begins at the start of its ring
+  (present 0) (lines 0)
+  (words 0) (said 0) (read 0) (words-on 0)
+  (answers 0) (heard 0) (count 0) (answers-on 0) (flag 0) (since 0)
+  (switches 0) (place 0) (ring-bytes 0) (last 0) (format 0) (list 0)
+  periods                   ; the list as it was when the stream was started: (address bytes) each
+  (at 0)                    ; the period that is played next
+  (done 0)                  ; how many it has played since the stream was started
+  told                      ; what the codec was told, the last first: (part word)
+  (sent 0)                  ; how many messages it has sent
+  (played (make-array 0 :element-type '(signed-byte 16) :adjustable t :fill-pointer t)))
+
+(defvar *hda-lock* (sb-thread:make-mutex :name "Intel's sound card"))
+
+(defun hda-stream (hcard)
+  (+ #x80 (* #x20 (hcard-recording hcard))))
+
+;; What a part answers to a word, and what it keeps of it.
+(defun hda-word (hcard address number word)
+  (let* ((parts (cdr (assoc address (hcard-codecs hcard))))
+         (group (car parts))
+         (part (find number parts :key #'hpart-number))
+         (verb (ash word -8)) (low (logand word 255)))
+    (push (list number word) (hcard-told hcard))
+    ;; A part says what it takes, and what its amplifiers are, when a bit of its abilities says
+    ;; that it has that to say itself; a part without the bit says nothing, and has its group's.
+    (flet ((own-or-group (own question)
+             (if (or (eq part group) (logbitp (if (= question 10) 4 3) (hpart-abilities part)))
+                 (or own 0)
+                 0)))
+      (cond ((and (= number 0) (= verb #xf00))
+             (case low
+               (4 (logior (ash (hpart-number group) 16) 1))
+               (t 0)))
+            ((null part)
+             (failed "the driver spoke to the part ~D of a codec, which has no such part" number))
+            ((= verb #xf00)
+             (case low
+               (5 (if (eq part group) (hpart-kind part) 0))
+               (4 (if (eq part group) (logior (ash (hpart-number (second parts)) 16) (length (cdr parts))) 0))
+               (9 (logior (ash (hpart-kind part) 20) (hpart-abilities part)))
+               (10 (own-or-group (hpart-takes part) 10))
+               (12 (hpart-socket part))
+               (13 (own-or-group (hpart-in part) 13))
+               (14 (length (hpart-sources part)))
+               (18 (own-or-group (hpart-out part) 18))
+               (t 0)))
+            ((= verb #xf02)
+             (let ((four 0))
+               (dotimes (k 4 four)
+                 (setq four (logior four (ash (or (nth (+ low k) (hpart-sources part)) 0) (* 8 k)))))))
+            ((= verb #xf1c) (hpart-wired part))
+            ((= verb #x705) (setf (hpart-power part) low) 0)
+            ((= verb #x701) (setf (hpart-chosen part) low) 0)
+            ((= verb #x707) (setf (hpart-pin part) low) 0)
+            ((= verb #x706) (setf (hpart-name part) low) 0)
+            ((= (ash word -16) 2) (setf (hpart-format part) (logand word #xffff)) 0)
+            ((= (ash word -16) 3)
+             (let ((gain (logand word #xffff)))
+               (when (logbitp 15 gain)
+                 (setf (hpart-gain-out part) (logand gain #x30ff)))
+               (when (logbitp 14 gain)
+                 (push (cons (ldb (byte 4 8) gain) (logand gain #x30ff)) (hpart-gains-in part))))
+             0)
+            (t (failed "the driver said #x~X to the part ~D of a codec, which is nothing that one is told here"
+                       word number))))))
+
+;; The controller sends the words that the driver has written, for as
+;; long as it may: it stops after an answer until the driver has taken
+;; that answer's flag back.
+(defun hda-send (hcard)
+  (unless (eq (hcard-fresh hcard) t)
+    (failed "the driver spoke to a codec through a controller that it had not taken through its reset"))
+  (loop
+    (when (or (not (logbitp 1 (hcard-words-on hcard))) (= (hcard-read hcard) (hcard-said hcard))
+              (= (hcard-since hcard) (hcard-count hcard)))
+      (return))
+    (setf (hcard-read hcard) (mod (1+ (hcard-read hcard)) (hcard-places hcard)))
+    (let* ((word (peek (+ (hcard-words hcard) (* 4 (hcard-read hcard))) 4))
+           (address (ash word -28))
+           (answer (hda-word hcard address (ldb (byte 8 20) word) (logand word #xfffff))))
+      (unless (or (hcard-silent hcard) (not (logbitp 1 (hcard-answers-on hcard))))
+        (setf (hcard-heard hcard) (mod (1+ (hcard-heard hcard)) (hcard-places hcard)))
+        (poke (+ (hcard-answers hcard) (* 8 (hcard-heard hcard))) 4 answer)
+        (poke (+ (hcard-answers hcard) (* 8 (hcard-heard hcard)) 4) 4 address)
+        (incf (hcard-since hcard))
+        (when (logbitp 0 (hcard-answers-on hcard))
+          (setf (hcard-flag hcard) (logior (hcard-flag hcard) 1)))))))
+
+;; Is everything on the way as a stream needs it? The part that takes the
+;; numbers off the link has to have been told the stream's name and what
+;; the numbers are, every part has to be switched on, the socket has to
+;; give sound out, and no amplifier on the way may be muted or turned away
+;; from where a sound passes as it is.
+(defun hda-ready (hcard)
+  (let ((name (ldb (byte 4 20) (hcard-switches hcard))))
+    (dolist (codec (hcard-codecs hcard) nil)
+      (let ((end (find-if (lambda (part) (and (= (hpart-kind part) 0) (eql (hpart-name part) (ash name 4)))) (cdr codec))))
+        (when (and end (plusp name)
+                   (eql (hpart-format end) (hcard-format hcard))
+                   (eql (hpart-power end) 0) (eql (hpart-power (cadr codec)) 0)
+                   (find-if (lambda (part) (and (= (hpart-kind part) 4) (eql (hpart-pin part) #x40) (eql (hpart-power part) 0)))
+                            (cdr codec))
+                   (every (lambda (part)
+                            (or (null (hpart-gain-out part))
+                                (= (hpart-gain-out part)
+                                   (logior #x3000 (logand (or (hpart-out part) (hpart-out (cadr codec)) 0) 127)))))
+                          (cdr codec)))
+          (return t))))))
+
+(defun hda-own-p (address bytes)
+  (let ((index (- address clara.host:+memory-base+)))
+    (and (<= 0 index) (<= (+ index bytes) clara.host::+memory-size+)
+         (not (find 0 clara.host::*pages* :start (floor index 4096) :end (ceiling (+ index bytes) 4096))))))
+
+(defun hda-start (hcard)
+  (let* ((count (1+ (hcard-last hcard)))
+         (periods (loop for i below count
+                        for entry = (+ (hcard-list hcard) (* 16 i))
+                        collect (list (logior (peek entry 4) (ash (peek (+ entry 4) 4) 32)) (peek (+ entry 8) 4)
+                                      (peek (+ entry 12) 4)))))
+    (unless (and (hda-ready hcard) (hda-own-p (hcard-list hcard) (* 16 count))
+                 (= (reduce #'+ (mapcar #'second periods)) (hcard-ring-bytes hcard))
+                 (every (lambda (period)
+                          (and (hda-own-p (first period) (second period)) (zerop (mod (first period) 128))
+                               (plusp (second period)) (zerop (mod (second period) 4)) (logbitp 0 (third period))))
+                        periods))
+      (failed "the driver started a stream of Intel's sound card that is not ready to be played: ~S, ~D bytes, format #x~X"
+              periods (hcard-ring-bytes hcard) (hcard-format hcard)))
+    ;; A stream that was not reset goes on where it stopped, as a real one does.
+    (when (hcard-rewound hcard)
+      (setf (hcard-at hcard) 0
+            (hcard-place hcard) 0))
+    (setf (hcard-periods hcard) periods
+          (hcard-rewound hcard) nil
+          (hcard-done hcard) 0)))
+
+;; The card plays COUNT periods, one after the other with nothing between
+;; them, and says after each that it is done with one.
+(defun intel-on (hcard &optional (count 1))
+  (sb-thread:with-recursive-lock (*hda-lock*)
+    (dotimes (i count)
+      (when (and (logbitp 1 (hcard-switches hcard)) (not (hcard-deaf hcard)))
+        (destructuring-bind (address bytes flags) (nth (hcard-at hcard) (hcard-periods hcard))
+          (declare (ignore flags))
+          (let ((index (clara.host::memory-index address bytes)))
+            (loop for at from index below (+ index bytes) by 2
+                  do (vector-push-extend (let ((number (le clara.host::*memory* at 2)))
+                                           (if (>= number 32768) (- number 65536) number))
+                                         (hcard-played hcard))))
+          (incf (hcard-done hcard))
+          ;; The card says that a period is done when that is news: with the last one's flag still
+          ;; standing, it has said so already.
+          (let ((said (logbitp 26 (hcard-switches hcard))))
+            (setf (hcard-at hcard) (mod (1+ (hcard-at hcard)) (length (hcard-periods hcard)))
+                  (hcard-place hcard) (if (zerop (hcard-at hcard)) 0 (+ (hcard-place hcard) bytes))
+                  (hcard-switches hcard) (logior (hcard-switches hcard) (ash 1 26)))
+            (unless said
+              (hda-interrupt hcard))))))))
+
+;; Its message, when the driver has asked to be told of the stream and
+;; messages are switched on: the older kind, whose address and number are
+;; in the capability itself.
+(defun hda-interrupt (hcard)
+  (let ((config (hcard-config hcard)))
+    (when (and (logbitp 31 (hcard-lines hcard)) (logbitp (hcard-recording hcard) (hcard-lines hcard))
+               (logbitp 0 (le config #x62 2)))
+      (incf (hcard-sent hcard))
+      (clara.host:send-message (logior (le config #x64 4) (ash (le config #x68 4) 32)) (le config #x6c 2)))))
+
+;; The registers, each with how many bytes it has.
+(defun hda-register (hcard offset size)
+  (let* ((stream (hda-stream hcard))
+         (bytes (or (cdr (assoc offset '((0 . 2) (8 . 4) (#x0e . 2) (#x20 . 4) (#x24 . 4) (#x40 . 4) (#x44 . 4) (#x48 . 2)
+                                         (#x4a . 2) (#x4c . 1) (#x4d . 1) (#x4e . 1) (#x50 . 4) (#x54 . 4) (#x58 . 2)
+                                         (#x5a . 2) (#x5c . 1) (#x5d . 1) (#x5e . 1))))
+                    (cdr (assoc (- offset stream) '((0 . 4) (4 . 4) (8 . 4) (12 . 2) (18 . 2) (24 . 4) (28 . 4)))))))
+    (unless (eql bytes size)
+      (failed "the driver took ~D bytes for the register at #x~X of Intel's sound card, which has ~S" size offset bytes))
+    (- offset stream)))
+
+(defun hda-read (hcard offset size)
+  (let ((in-stream (hda-register hcard offset size)))
+    (case offset
+      (0 (logior 1 (ash (hcard-recording hcard) 8) (ash 4 12)))
+      (8 (hcard-reset hcard))
+      (#x0e (hcard-present hcard))
+      (#x20 (hcard-lines hcard))
+      (#x48 (hcard-said hcard))
+      (#x4a (hcard-read hcard))
+      (#x4c (hcard-words-on hcard))
+      (#x4e (case (hcard-places hcard) (256 #x42) (16 #x21) (t #x10)))
+      (#x58 (hcard-heard hcard))
+      (#x5a (hcard-count hcard))
+      (#x5c (hcard-answers-on hcard))
+      (#x5d (hcard-flag hcard))
+      (#x5e (case (hcard-places hcard) (256 #x42) (16 #x21) (t #x10)))
+      (t (case in-stream
+           (0 (hcard-switches hcard))
+           (4 (hcard-place hcard))
+           (8 (hcard-ring-bytes hcard))
+           (12 (hcard-last hcard))
+           (18 (hcard-format hcard))
+           (t 0))))))
+
+(defun hda-write (hcard offset size value)
+  (sb-thread:with-recursive-lock (*hda-lock*)
+    (let ((in-stream (hda-register hcard offset size)))
+      (case offset
+        (8 (cond ((not (logbitp 0 value))
+                  (setf (hcard-fresh hcard) :down)
+                  (setf (hcard-reset hcard) 0 (hcard-present hcard) 0 (hcard-lines hcard) 0
+                        (hcard-words-on hcard) 0 (hcard-answers-on hcard) 0 (hcard-said hcard) 0 (hcard-read hcard) 0
+                        (hcard-heard hcard) 0 (hcard-count hcard) 0 (hcard-flag hcard) 0 (hcard-since hcard) 0
+                        (hcard-switches hcard) 0 (hcard-place hcard) 0))
+                 ((not (hcard-stuck hcard))
+                  (when (eq (hcard-fresh hcard) :down)
+                    (setf (hcard-fresh hcard) t))
+                  (setf (hcard-reset hcard) 1
+                        (hcard-present hcard) (reduce #'logior (mapcar (lambda (codec) (ash 1 (car codec)))
+                                                                         (hcard-codecs hcard)))))))
+        (#x20 (setf (hcard-lines hcard) value))
+        (#x40 (setf (hcard-words hcard) value))
+        (#x44 (setf (hcard-words hcard) (logior (ldb (byte 32 0) (hcard-words hcard)) (ash value 32))))
+        (#x48 (setf (hcard-said hcard) (logand value 255))
+              (hda-send hcard))
+        (#x4a (when (logbitp 15 value)
+                (setf (hcard-read hcard) 0)))
+        (#x4c (setf (hcard-words-on hcard) (logand value 3))
+              (hda-send hcard))
+        (#x50 (setf (hcard-answers hcard) value))
+        (#x54 (setf (hcard-answers hcard) (logior (ldb (byte 32 0) (hcard-answers hcard)) (ash value 32))))
+        (#x58 (when (logbitp 15 value)
+                (setf (hcard-heard hcard) 0)))
+        (#x5a (setf (hcard-count hcard) (logand value 255)))
+        (#x5c (setf (hcard-answers-on hcard) (logand value 7)))
+        (#x5d (when (logbitp 0 value)
+                (setf (hcard-flag hcard) (logandc2 (hcard-flag hcard) 1)
+                      (hcard-since hcard) 0)
+                (hda-send hcard)))
+        ((0 #x0e #x24 #x4e #x5e))
+        (t (case in-stream
+             (0 (let ((before (hcard-switches hcard)))
+                  (cond ((logbitp 0 value)
+                         (setf (hcard-rewound hcard) t)
+                         (setf (hcard-switches hcard) 1 (hcard-place hcard) 0 (hcard-ring-bytes hcard) 0
+                               (hcard-last hcard) 0 (hcard-format hcard) 0 (hcard-list hcard) 0))
+                        (t
+                         (setf (hcard-switches hcard)
+                               (logior (logand value #x00ff001e)
+                                       (logandc2 (logand before #x1c000000) (logand value #x1c000000))))
+                         (when (and (logbitp 1 value) (not (logbitp 1 before)))
+                           (hda-start hcard))))))
+             (8 (setf (hcard-ring-bytes hcard) value))
+             (12 (setf (hcard-last hcard) (logand value 255)))
+             (18 (setf (hcard-format hcard) value))
+             (24 (setf (hcard-list hcard) value))
+             (28 (setf (hcard-list hcard) (logior (ldb (byte 32 0) (hcard-list hcard)) (ash value 32))))
+             (t (failed "the driver wrote to the register at #x~X of Intel's sound card, which nothing writes to" offset))))))))
+
+;; A codec as QEMU's are: a group of sound, the part that takes numbers
+;; off the link, with an amplifier behind it, and a socket for a line out
+;; that takes its sound from that part. TAKES is what the first of them
+;; says it takes: 16 bits at every pace there is, unless a test says less.
+(defun plain-codec (&key (address 0) (takes #x201fc) (wired #x90100010))
+  (cons address
+        (list (make-hpart :number 1 :kind 1 :takes #x201fc :out #x80031f1f :in 0)
+              (make-hpart :number 2 :kind 0 :abilities #x41d :takes takes :out #x80034a4a)
+              (make-hpart :number 3 :kind 4 :abilities #x101 :sources '(2) :socket #x10 :wired wired))))
+
+;; And one that is built the long way round: a socket that nothing was
+;; wired to; a socket that only takes sound in, whatever was wired to it;
+;; and a socket for headphones behind a part that chooses, among six, the
+;; last, which is a part that mixes, with an amplifier before it, and
+;; behind that the part that takes the numbers, which says nothing of its
+;; own about them. Its group has the number 16, and before it on the link
+;; there is a codec that is no sound at all, for all that it has a socket
+;; and a part behind it.
+(defun long-codec (&key (address 2))
+  (cons address
+        (list (make-hpart :number 16 :kind 1 :takes #x20020 :out #x80051f1f :in #x80030303)
+              (make-hpart :number 17 :kind 4 :abilities #x100 :sources '(21) :socket #x10 :wired #x40000000)
+              (make-hpart :number 18 :kind 4 :abilities #x100 :sources '(21) :socket #x20 :wired #x00014010)
+              (make-hpart :number 23 :kind 4 :abilities #x104 :sources '(19) :socket #x10 :wired #x00214010)
+              (make-hpart :number 19 :kind 3 :abilities #x100 :sources '(22 22 22 22 22 20))
+              (make-hpart :number 20 :kind 2 :abilities #x102 :sources '(22 21))
+              (make-hpart :number 21 :kind 0 :abilities #x004)
+              ;; And a part that takes its sound from itself, which a way must not go round for ever.
+              (make-hpart :number 22 :kind 2 :abilities #x100 :sources '(22)))))
+
+(defun modem-codec (&key (address 0))
+  (cons address (list (make-hpart :number 1 :kind 2 :takes #x201fc)
+                      (make-hpart :number 2 :kind 0 :abilities #x010 :takes #x201fc)
+                      (make-hpart :number 3 :kind 4 :abilities #x100 :sources '(2) :socket #x10 :wired #x00014010))))
+
+;; Such a card in a slot of bus 0: its registers behind base address
+;; register 0, and a message of the older kind, with an address of 64
+;; bits, unless a test says that it has none.
+(defun add-intel (slot &key (codecs (list (plain-codec))) (messages t) (recording 4) (places 256) silent stuck deaf)
+  (let* ((config (add-function 0 slot 0 #x8086 #x2668 #x040300))
+         (base (+ #x8200000000 (* slot #x100000)))
+         (hcard (make-hcard :config config :codecs codecs :recording recording :places places
+                            :silent silent :stuck stuck :deaf deaf)))
+    (setf (le config #x10 4) (logior (ldb (byte 32 0) base) 4)
+          (le config #x14 4) (ash base -32))
+    (when messages
+      (setf (le config 6 2) #x10
+            (le config #x34 1) #x60)
+      (replace config (list 5 0 #x80 0) :start1 #x60))
+    (clara.host:map-device base #x4000
+                           (lambda (offset size) (hda-read hcard offset size))
+                           (lambda (offset size value) (hda-write hcard offset size value))
+                           :mapped nil)
+    hcard))
+
+(defvar *intel* nil)                   ; the card of the machine
+
+;; A machine with such a card: what the start of the sound says.
+(defun new-intel (&rest options)
+  (stop-sound)
+  (new-machine)
+  (attach-bus)
+  (add-function 0 0 0 #x8086 #x29c0 #x060000)
+  (setq *intel* (apply #'add-intel 6 options))
+  (with-output-to-string (*standard-output*)
+    (clara.pci:start))
+  (said-by #'clara.sound:start))
+
+(defun intel-card ()
+  (clara.sound::card-intel clara.sound::*card*))
+
+;; The driver has done all that it does about what the card has played so
+;; far: it knows of every period, and has handed over as many as it hands
+;; over ahead, or has nothing more to hand over.
+(defun intel-settled ()
+  (let ((card clara.sound::*card*) (intel (intel-card)))
+    (clara:with-lock-held ((clara.sound::card-lock card))
+      (and (= (clara.hda::card-played intel) (hcard-done *intel*))
+           (or (and (null (clara.sound::card-voices card)) (not (clara.sound::card-tail card)))
+               (= (- (clara.hda::card-written intel) (clara.hda::card-played intel)) 5))))))
+
+;; The card plays a period at a time, and the driver is given the time to
+;; do its part after each, until the machine has nothing more to play: the
+;; numbers that were played, left and right in turn.
+(defun intel-sounded ()
+  (let ((card clara.sound::*card*))
+    (eventually #'intel-settled)
+    (eventually (lambda ()
+                  (intel-on *intel*)
+                  (eventually #'intel-settled)
+                  (clara:with-lock-held ((clara.sound::card-lock card))
+                    (and (null (clara.sound::card-voices card)) (zerop (clara.sound::card-under-way card))))))
+    (intel-played)))
+
+(defun intel-played ()
+  (sb-thread:with-recursive-lock (*hda-lock*)
+    (prog1 (coerce (hcard-played *intel*) 'list)
+      (setf (fill-pointer (hcard-played *intel*)) 0))))
+
+;; What was played, a period at a time, without the periods of nothing.
+(defun sounding-periods (numbers &optional (period 960))
+  (loop for at from 0 below (length numbers) by period
+        for piece = (subseq numbers at (min (length numbers) (+ at period)))
+        unless (every #'zerop piece) append piece))
+
+;; How many periods of nothing lie between two periods of something, for
+;; every such gap.
+(defun quiet-gaps (numbers &optional (period 960))
+  (let ((gaps nil) (gap 0) (begun nil))
+    (loop for at from 0 below (length numbers) by period
+          do (cond ((every #'zerop (subseq numbers at (min (length numbers) (+ at period))))
+                    (incf gap))
+                   (t
+                    (when (and begun (plusp gap))
+                      (push gap gaps))
+                    (setq gap 0
+                          begun t))))
+    (reverse gaps)))
+
+;; The card plays COUNT periods in one go, before the driver can do
+;; anything about the first of them.
+(defun intel-at-once (count)
+  (clara:with-lock-held ((clara.sound::card-lock clara.sound::*card*))
+    (intel-on *intel* count)))
+
+;; The card is found, taken through its reset, its codec is asked what it
+;; is built of, and the way through it is set up: the parts are switched
+;; on, the amplifier is turned to where a sound passes as it is, the
+;; socket gives sound out, and the part at the end knows what it will be
+;; given and under which name. It plays nothing yet, and says nothing.
+(check (format nil "sound: 00:06.0 is a sound card of Intel's kind: 48000 frames a second, left and right~%") (new-intel))
+(check "the sound card 00:06.0, of Intel's kind: 48000 frames a second, left and right" (clara.sound:card))
+(let ((parts (cdr (car (hcard-codecs *intel*)))))
+  (check '(0 0 0) (mapcar #'hpart-power parts))
+  (check '(#x11 #x10 #x304a nil) (list (hpart-format (second parts)) (hpart-name (second parts))
+                                         (hpart-gain-out (second parts)) (hpart-gains-in (second parts))))
+  (check '(#x40 nil) (list (hpart-pin (third parts)) (hpart-gain-out (third parts)))))
+(check '(1 0 0 2 3 1 0) (list (hcard-reset *intel*) (hcard-lines *intel*) (hcard-switches *intel*)
+                                (hcard-words-on *intel*) (hcard-answers-on *intel*) (hcard-count *intel*) (hcard-flag *intel*)))
+;; Its registers answer, it may write memory, its line of old is off, and its one message is on.
+(check '(#x406 #x81) (list (logand (le (hcard-config *intel*) 4 2) #x406) (le (hcard-config *intel*) #x62 2)))
+(let ((message (car (clara.host:message-interrupts))))
+  (check (list (* 8 6) (logand (third message) #xffffffff) (ash (third message) -32) (fourth message))
+         (list (first message) (le (hcard-config *intel*) #x64 4) (le (hcard-config *intel*) #x68 4)
+               (le (hcard-config *intel*) #x6c 2))))
+(check (1+ *before-sound*) (length (clara:all-threads)))
+
+;; A tone. The card begins at the start of its ring, where there is
+;; nothing, and the driver writes two periods on from where the card is:
+;; so two periods of nothing are played, then the tone as the rule has it,
+;; with nothing to the end of its last period and a period of nothing
+;; after it, and nothing from then on.
+(let ((rule (burst (list (note-voice 4800 :sine 440000)) 4800)))
+  (check t (clara.sound:tone 440 100))
+  (let ((heard (intel-sounded)))
+    (check t (every #'zerop (subseq heard 0 1920)))
+    (check t (same-sound (subseq heard 1920 (+ 1920 (length rule))) rule))
+    (check t (every #'zerop (subseq heard (+ 1920 (length rule)))))))
+(check t (> (hcard-sent *intel*) 8))                    ; it said after every period that it was done with one
+;; The stream was started when there was something to play, with the card allowed to say when a
+;; period is done; it says nothing while it has nothing of the driver's; and after a while the
+;; stream is stopped, and the ring holds nothing.
+(check t (eventually (lambda () (not (logbitp 1 (hcard-switches *intel*))))))
+(check '(0 #x100000) (list (hcard-lines *intel*) (logand (hcard-switches *intel*) #xf0001f)))
+(check t (every #'zerop (loop for (address bytes) in (hcard-periods *intel*)
+                              append (coerce (memory-bytes address bytes) 'list))))
+(check '(32 61440 #x11) (list (length (hcard-periods *intel*)) (hcard-ring-bytes *intel*) (hcard-format *intel*)))
+
+;; A sound that is longer than the ring, which goes round under it: every
+;; period that was played is made silent again before the card comes back
+;; to it, and what is played is the rule's numbers and no others. Two
+;; voices at once, one of them on one side only.
+(let ((rule (burst (list (note-voice 24000 :square 220000 :pan -100) (note-voice 12000 :triangle 330000 :loud 50)) 24000)))
+  (clara.sound:together
+    (clara.sound:tone 220 500 :wave :square :pan -100)
+    (clara.sound:tone 330 250 :wave :triangle :volume 50))
+  (let ((heard (intel-sounded)))
+    (check t (same-sound (subseq heard 1920 (+ 1920 (length rule))) rule))
+    (check t (every #'zerop (subseq heard (+ 1920 (length rule)))))))
+
+;; A driver that comes too late. The card plays twelve periods in one go,
+;; three times, while a long tone is under way and the ring has been round
+;; once: what it plays past the periods that it was handed is nothing, and
+;; never a period of before; and the tone goes on behind the gap where it
+;; was, so that all of it is played, to the last number, with gaps in it.
+(let ((rule (burst (list (note-voice 48000 :sine 440000)) 48000)))
+  (check t (eventually (lambda () (not (logbitp 1 (hcard-switches *intel*))))))
+  (clara.sound:tone 440 1000)
+  (eventually #'intel-settled)
+  (dotimes (i 40)
+    (intel-on *intel*)
+    (eventually #'intel-settled))
+  (dotimes (i 3)
+    (intel-at-once 12)
+    (eventually #'intel-settled)
+    (dotimes (k 5)
+      (intel-on *intel*)
+      (eventually #'intel-settled)))
+  (let ((heard (append (intel-played) (intel-sounded))))
+    (check t (same-sound (sounding-periods heard) (sounding-periods rule)))
+    ;; Three gaps of nine periods each: of the twelve that were played at once the card had been
+    ;; handed five, which leaves seven of nothing, and the driver goes on two periods after the
+    ;; one that the card is in.
+    (check '(9 9 9) (quiet-gaps heard))))
+
+;; Two sounds that follow each other closely are played without the stream
+;; being stopped between them, and one that is stopped is over a hundredth
+;; of a second later.
+(setq clara.sound::*linger* 2000)
+(check t (eventually (lambda () (null (clara.sound::card-running clara.sound::*card*)))))
+(let ((first (burst (list (note-voice 480 :sine 440000)) 480)))
+  (clara.sound:tone 440 10)
+  (let ((heard (intel-sounded)))
+    (check t (same-sound (sounding-periods heard) (sounding-periods first))))
+  (check t (logbitp 1 (hcard-switches *intel*)))
+  (check 0 (hcard-lines *intel*))
+  (clara.sound:tone 440 10)
+  (let ((heard (intel-sounded)))
+    (check t (same-sound (sounding-periods heard) (sounding-periods first))))
+  (check t (logbitp 1 (hcard-switches *intel*)))
+  (clara.sound:tone 440 1000)
+  (eventually #'intel-settled)
+  (dotimes (i 10)
+    (intel-on *intel*)
+    (eventually #'intel-settled))
+  (intel-played)
+  (clara.sound:stop)
+  (check t (< 0 (length (sounding-periods (intel-sounded))) (* 8 960))))
+(setq clara.sound::*linger* 20)
+(check t (eventually (lambda () (not (logbitp 1 (hcard-switches *intel*))))))
+
+;; A card that stops moving on in what it plays is given up after a
+;; while, and told to stop.
+(progn
+  (setq clara.sound::*patience* 300)
+  (new-intel :deaf t)
+  (check "sound: the sound card 00:06.0 has not played what it was given 300 milliseconds ago"
+         (string-right-trim '(#\Newline)
+                            (said-by-all (lambda ()
+                                           (clara.sound:tone 440 100)
+                                           (clara.sound:wait)))))
+  (check nil (clara.sound:tone 440 100))
+  (check t (and (search "which plays nothing more" (clara.sound:card)) t))
+  (check nil (logbitp 1 (hcard-switches *intel*)))
+  (setq clara.sound::*patience* 5000))
+
+;; A codec that is built the long way round, behind one on the link that
+;; is no sound at all: the way goes from the socket for headphones
+;; through the part that chooses, which is told to take the second of its
+;; sources, and the part that mixes, whose amplifier before that source is
+;; turned up, to the part that takes the numbers, which takes them 44100
+;; times a second and no faster. The card that records has no streams
+;; here, so the one that plays is the first.
+(check (format nil "sound: 00:06.0 is a sound card of Intel's kind: 44100 frames a second, left and right~%")
+       (new-intel :codecs (list (modem-codec) (long-codec)) :recording 0 :places 16))
+(check '(nil nil nil) (mapcar #'hpart-power (cdr (first (hcard-codecs *intel*)))))   ; the codec that is no sound was left alone
+(let ((parts (cdr (second (hcard-codecs *intel*)))))
+  (flet ((part (number) (find number parts :key #'hpart-number)))
+    (check '(0 nil nil 0 0 0 0 nil) (mapcar #'hpart-power parts))
+    (check '(#x40 #x301f nil nil) (list (hpart-pin (part 23)) (hpart-gain-out (part 23)) (hpart-pin (part 17))
+                                        (hpart-pin (part 18))))
+    (check '(5 nil) (list (hpart-chosen (part 19)) (hpart-gains-in (part 19))))
+    (check '(((1 . #x3003)) nil) (list (hpart-gains-in (part 20)) (hpart-gain-out (part 20))))
+    (check '(#x4011 #x10 #x301f) (list (hpart-format (part 21)) (hpart-name (part 21)) (hpart-gain-out (part 21))))))
+(let ((rule (burst (list (note-voice 4410 :sine 440000)) 4410 :rate 44100)))
+  (clara.sound:tone 440 100)
+  (let ((heard (intel-sounded)))
+    (check t (same-sound (subseq heard 1764 (+ 1764 (length rule))) rule))
+    (check t (every #'zerop (subseq heard (+ 1764 (length rule)))))))
+(check '(#x80 56448 #x4011 t) (list (hda-stream *intel*) (hcard-ring-bytes *intel*) (hcard-format *intel*)
+                                    (> (hcard-sent *intel*) 8)))
+
+;; What goes wrong when a card is opened, each said, with nothing of the
+;; machine's memory kept: no codec on the link; a codec that is no sound;
+;; one whose socket nothing was wired to; one that does not take numbers
+;; of 16 bits; a codec that never answers; a card that never comes out of
+;; its reset; and one with no message to send.
+(let ((clara.hda::*patience* 50) (pages nil))
+  (flet ((refused (&rest options)
+           (let ((said (apply #'new-intel options)))
+             ;; The first line of what is said: the second is that the machine has no card.
+             (list (subseq said 0 (position #\Newline said)) (clara.host:allocated-pages) (clara.sound:card)))))
+    (setq pages (progn (stop-sound) (new-machine) (clara.host:allocated-pages)))
+    (check (list "sound: 00:06.0 did not start: the sound card 00:06.0 found no codec on its link in 50 milliseconds" pages nil)
+           (refused :codecs nil))
+    (check (list "sound: 00:06.0 did not start: the sound card 00:06.0 has no codec with a socket that plays" pages nil)
+           (refused :codecs (list (modem-codec))))
+    (check (list "sound: 00:06.0 did not start: the sound card 00:06.0 has no codec with a socket that plays" pages nil)
+           (refused :codecs (list (plain-codec :wired #x40000000))))
+    (check (list "sound: 00:06.0 did not start: the sound card 00:06.0 does not play numbers of 16 bits, 48000 or 44100 times a second"
+                 pages nil)
+           (refused :codecs (list (plain-codec :takes #x101fc))))
+    (check (list "sound: 00:06.0 did not start: the sound card 00:06.0 does not play numbers of 16 bits, 48000 or 44100 times a second"
+                 pages nil)
+           (refused :codecs (list (plain-codec :takes #x2019f))))
+    (check (list "sound: 00:06.0 did not start: the sound card 00:06.0 did not answer for its codec in 50 milliseconds" pages nil)
+           (refused :silent t))
+    (check (list "sound: 00:06.0 did not start: the sound card 00:06.0 did not come out of its reset in 50 milliseconds" pages nil)
+           (refused :stuck t))
+    (check (list "sound: 00:06.0 did not start: the PCI device 00:06.0 cannot send a message for an interrupt: it has neither MSI-X nor MSI"
+                 pages nil)
+           (refused :messages nil))))
+
+;; A machine with a card of each kind plays on the one that comes first on
+;; the bus.
+(progn
+  (stop-sound)
+  (new-machine)
+  (attach-bus)
+  (add-function 0 0 0 #x8086 #x29c0 #x060000)
+  (add-intel 4)
+  (add-sound 7)
+  (with-output-to-string (*standard-output*)
+    (clara.pci:start))
+  (check (format nil "sound: 00:04.0 is a sound card of Intel's kind: 48000 frames a second, left and right~%")
+         (said-by #'clara.sound:start)))
+
+;; The message of the older kind, by itself: a device whose address for it
+;; has 32 bits cannot be told one that has more, as this machine's has,
+;; and such a device has one message and no second.
+(let* ((config (progn (stop-sound) (new-machine) (attach-bus) (add-function 0 9 0 #x8086 #x2668 #x040300)))
+       (device (progn (setf (le config 6 2) #x10
+                            (le config #x34 1) #x50)
+                      (replace config (list 5 0 0 0) :start1 #x50)
+                      (with-output-to-string (*standard-output*)
+                        (clara.pci:start))
+                      (device-at 0 9 0))))
+  (check "the PCI device 00:09.0 cannot send a message to an address of more than 32 bits"
+         (condition-text (lambda () (clara.pci:message-interrupt device 0))))
+  (check 0 (le config #x52 2))
+  (setf (le config #x52 2) #x80)
+  (check "the PCI device 00:09.0 has one message to send, and none with the number 1"
+         (condition-text (lambda () (clara.pci:message-interrupt device 1))))
+  (check t (and (clara.pci:message-interrupt device 0) t))
+  (check '(#x81 #x400) (list (le config #x52 2) (logand (le config 4 2) #x400))))
 
 (stop-sound)
 (setq clara.sound::*linger* 300)

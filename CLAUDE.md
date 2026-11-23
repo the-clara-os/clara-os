@@ -37,7 +37,7 @@ Build with `make` (Homebrew's llvm and lld under /opt/homebrew/opt when they
 are there, otherwise clang and lld-link from the PATH; `LLVM=` and `LLD=`
 name other directories). `make test` runs the host tests of the Lisp
 files under SBCL (`make host-test`, a minute), then boots both
-architectures headless under QEMU, sixteen boots in about five minutes,
+architectures headless under QEMU, nineteen boots in about five minutes,
 types a session at each kernel, and saves what each screen shows to
 build/screen-<name>.png; look at those images when a change touches the
 display. `make run-aarch64` and `make run-x86_64` open a QEMU window with
@@ -122,7 +122,9 @@ Rules:
   the frame. Lisp gets the three as `clara.unsafe:message-interrupt`.
 - A driver is a file in lisp/ like the console: it finds its device among
   `(clara.pci:devices)`, maps registers with `clara.pci:map-registers`,
-  asks for its interrupt with `clara.pci:message-interrupt`, shares
+  asks for its interrupt with `clara.pci:message-interrupt` (a message of
+  the device's table, or the one message of a device that has no table),
+  shares
   memory from `clara.unsafe:allocate-memory` with the device, and has a
   thread that waits for the interrupt's event. A virtio device goes
   through lisp/virtio.lisp. lisp/host/tests.lisp has a PCI bus and a
@@ -132,7 +134,9 @@ Rules:
   what the kernel refuses, an address that is not a multiple of the
   access and a value that does not fit.
 - tools/run.sh gives every machine a virtio keyboard, mouse and tablet
-  (`INPUT=` for none, `INPUT="-device ..."` for others), and its boot
+  (`INPUT=` for none, `INPUT="-device ..."` for others; `UTM=1` for the
+  USB controller, tablet, mouse and keyboard and the sound card of
+  Intel's that UTM gives a machine, below), and its boot
   volume as a virtio disk with `bootindex=0`, which is what the firmware
   boots from whatever build/vars-<arch>.fd remembers. A boot that ends at
   the firmware's `Shell>` means the firmware did not find that disk. The
@@ -505,12 +509,14 @@ Rules:
 - What DISASSEMBLE writes is in a session and in the manual, and a line
   of a session that begins with two spaces is one that is typed: a line of
   a listing begins with its number.
-- `make test` boots sixteen times. Three machines, x86_64, AArch64 with GIC
+- `make test` boots nineteen times. Three machines, x86_64, AArch64 with GIC
   version 3, and AArch64 emulated with GIC version 2, whose files in build/
   are named aarch64-gic2, each from a disk of another kind, and each twice:
   the first boot is typed tools/session.txt, which ends by saving the world,
   and the second, named with `-resumed` at its end, starts from that image
-  and is typed tools/resumed.txt. Then AArch64 once more for
+  and is typed tools/resumed.txt. Then each of the three once more from
+  that world with the devices that UTM gives a machine (`UTM=1`,
+  tools/utm.txt; below, under USB). Then AArch64 once more for
   the collector at every safe point of the evaluator (aarch64-stress). Its
   disk is the one that the first AArch64 session left, with two things on it
   for that boot: the saved world with a byte changed, which the kernel has
@@ -1178,7 +1184,7 @@ Rules:
   of the machine's own processor, arm64.lisp or x86-64.lisp, whose name
   is the machine's in `*features*`, then clos, which is the exception
   above, and then the console, draw, pci,
-  virtio, input, disk, fat, type, random, net, sound, the listener,
+  virtio, usb, input, disk, fat, type, random, net, hda, sound, the listener,
   windows, terminal, system and tls), and
   lisp/host/tests.lisp loads the same files: a new one goes into both, and what its package exports goes into
   a list of names in the manual, or `make site` stops. A file that is an
@@ -1372,6 +1378,108 @@ Rules:
   on 8.2; and the lengths in the head of the file that QEMU writes are
   only filled in when QEMU ends by itself, so tools/heard.py goes by the
   length of the file.
+- USB (lisp/usb.lisp; DESIGN.md has what was decided). Everything that
+  speaks to a controller runs in the controller's thread, or in START
+  before that thread exists: `control`, `listen-at`, a command, a look at
+  a port. Whoever takes devices is called from there (`*arrival*`,
+  `*departure*`) and may ask a device things; what it does with a report
+  it does in a thread of its own, since a report is handed over in the
+  controller's thread, which has other devices to hear. A ring is
+  written with the lap's bit last, by `ring-put`, and nothing else
+  writes one. What a command is told goes through `fill-input` and
+  `fill-endpoint`, which write every word of the contexts that the flags
+  name: the page is one for all commands, and the controller reads no
+  context that the flags do not name. A function there cannot be called
+  LISTEN, nor a part of a
+  card STREAM: both are Common Lisp's, and SBCL refuses the file.
+- The controller of the tests (`add-xhci`, `new-usb` in
+  lisp/host/tests.lisp) is the other side of the rings. It fails the run
+  when the driver gives a command to a controller that it did not start,
+  names memory that is not its own, tells it of a device or an endpoint
+  that cannot be, switches a port off by writing its register back as it
+  read it, or leaves the page of a device that is gone in the table. It
+  speaks of a port when a change there is news, as a real one does: a
+  change that the driver left standing is spoken of once, and the next
+  device that is plugged in is never heard of. It
+  looks at an endpoint's ring when the doorbell was rung and not before,
+  as a real one does: one that looked whenever a test had a report read
+  an entry that the driver was in the middle of writing, one run in
+  three. Its devices (`usb-keyboard`, `usb-mouse`, `usb-tablet`,
+  `make-udev`) answer requests with what they were made with, and
+  `:refuses`, `:mute`, and a controller's `:stuck`, `:silent`, `:mute`,
+  `:wide`, `:scratch` are the ways for either to be wrong, or another
+  kind. `usb-report` is something typed or moved, `usb-plug` a device
+  put into a port or, with NIL, pulled out. `xhc-history` is what the
+  driver had the controller do, in order, and a test of what a start
+  comes to holds it to the whole list. A name of the tests may be taken
+  already: `utf-16` was, and a second definition failed fifteen checks
+  two thousand lines further down.
+- Keyboards and pointers of USB (lisp/input.lisp). What a device's
+  reports are made of is read from its description (`read-fields`), and
+  a report is gone through by those fields (`usb-report`); nothing there
+  knows the report that keyboards mostly have. `fields-of` in the tests
+  says what a description comes to, and a new kind of item or a device
+  that describes itself in another way gets a line there. A key is a
+  number of the page of keys, which `*usage-keys*` turns into the key
+  that the rest of the file knows: a key that is added to
+  `key-character` is added to that table too. What QEMU's monitor cannot
+  do is tried by hand after a change there: a tablet's place, by QEMU's
+  other socket (`-qmp unix:...`, the command `input-send-event` with
+  events of the type `abs`), and a device that is plugged in while the
+  machine runs (`^M device_add usb-kbd,bus=usb-bus.0,id=more`, `^M
+  device_del more`), on a machine with fewer than three devices at its
+  controller, since QEMU puts the fourth behind a hub of its own.
+- Intel's sound card (lisp/hda.lisp; DESIGN.md has what was decided). A
+  register of the controller is read and written as what it is, one, two
+  or four bytes: QEMU's knows a register by where it begins, and gives
+  nothing for the middle of one. The word of switches of a stream holds
+  what happened in its top byte, where a bit is taken back by writing
+  it: what is written there is the switches and those bits, on purpose.
+  The codec is asked through `ask`, which takes the answer's flag back
+  each time. Whatever changes when a period is written or which period
+  is made silent (`advance`, `next-period`, `hand-over`, `+margin+`,
+  `+ahead+`) is a change to what a machine sounds like when it is busy,
+  and the test of the driver that comes too late says what: its gaps are
+  counted in periods.
+- The card of the tests for it (`add-intel`, `new-intel`) is a
+  controller and codecs (`plain-codec`, `long-codec`, `modem-codec`, each
+  a list of parts as they say what they are). It plays a period only
+  when a test says so (`intel-on`; `intel-sounded` plays until the
+  machine has nothing more, giving the driver time after each period;
+  `intel-at-once` plays several before the driver can do anything), and
+  what it has played is numbers, held to the same rule as virtio's
+  card's (`burst`, `same-sound`), after two periods of nothing. It fails
+  the run when a stream is started before every part on the way has
+  been told what it needs to be told, when a register is taken for
+  more or fewer bytes than it has, and when a codec is spoken to through
+  a controller that the driver has not taken through its reset: it
+  begins as a firmware leaves one. Where QEMU's card is kinder than a
+  real one, this one is the real one: a stream that was not reset goes on
+  where it stopped, and the card says that a period is done only when the
+  flag of the last one was taken back.
+- A file of the world calls nothing that the machine has not. Under SBCL
+  everything of Common Lisp is there, so a function that the kernel's
+  Lisp lacks passes every host test and fails on the machine when it is
+  first called, which on a way that no boot takes is never: CEILING was
+  one, in lisp/usb.lisp. The host tests read every file of lisp/ as text
+  and hold what stands first in a pair of parentheses against what
+  lisp/boot.lisp, lisp/clos.lisp and the substrate define (`called-names`,
+  near the top of lisp/host/tests.lisp). A variable with the name of a
+  function of Common Lisp's that stands first in its binding looks like a
+  call there: the few that the files bind and never call are in
+  `*bound-and-never-called*`, and a new one is either added there or
+  given another name.
+- A machine as UTM gives one: `UTM=1` for tools/run.sh and
+  tools/boottest.sh, which is three boots of `make test` (x86_64-utm,
+  aarch64-utm, aarch64-gic2-utm, tools/utm.txt), each from the world that
+  its machine's first session saved, so in the window manager. What
+  Intel's card played is held to what the one sound of that session is
+  like, in a line `^H about ...`: frame for frame is more than QEMU
+  gives for that card, which drops what it cannot keep up with. To hear
+  what a change does to such a machine that is busy, play a tone and
+  keep the machine in one long step, `(clara.unsafe:sha-512 memory
+  bytes)` over tens of megabytes, and read tools/heard.py's lines for the
+  file: a gap, and all of the tone around it.
 - Windows (lisp/windows.lisp, the package CLARA.WINDOWS). Nothing there
   draws on the screen: what changes what the screen should show calls
   `damaged` with the rectangle, and `settle` puts the dirty rectangles

@@ -240,6 +240,28 @@
   (setf (config-16 device 4) (logior (config-16 device 4) 6))
   device)
 
+;; The older way of sending a message (MSI, capability 5; 6.8.1), for a
+;; device that has no table: one message, whose address and number are
+;; registers of the capability itself. The word at 2 says in bit 7 whether
+;; the address has 64 bits, and with it a second half at 8, which moves
+;; the number from 8 to 12; its bit 0 switches the message on, and bits 4
+;; to 6 would ask for more messages than the one.
+(defun plain-message (device capability index)
+  (let* ((control (config-16 device (+ capability 2)))
+         (wide (/= 0 (logand control 128))))
+    (unless (eql index 0)
+      (error "the PCI device ~A has one message to send, and none with the number ~D" (location device) index))
+    (multiple-value-bind (event address data) (clara.unsafe:message-interrupt (source device))
+      (when (and (not wide) (>= address #x100000000))
+        (error "the PCI device ~A cannot send a message to an address of more than 32 bits" (location device)))
+      (setf (config-32 device (+ capability 4)) (logand address #xffffffff))
+      (when wide
+        (setf (config-32 device (+ capability 8)) (ash address -32)))
+      (setf (config-16 device (+ capability (if wide 12 8))) data
+            (config-16 device (+ capability 2)) (logior (logand control #xff8e) 1)
+            (config-16 device 4) (logior (config-16 device 4) #x400))
+      event)))
+
 ;; An interrupt for the device, which it raises by sending a message
 ;; (MSI-X, capability #x11). The device has a table of the messages it can
 ;; send, 16 bytes each: the address to write to, in two halves, what to
@@ -248,11 +270,16 @@
 ;; (CLARA.UNSAFE:MESSAGE-INTERRUPT), messages are switched on, and the
 ;; interrupt line of old is switched off (bit 10 of the command register).
 ;; What is returned is the event that the interrupt signals; which of its
-;; messages the device sends for what is for its driver to tell it.
+;; messages the device sends for what is for its driver to tell it. A
+;; device without such a table has one message of the older way, which is
+;; its number 0.
 (defun message-interrupt (device index)
   (let ((capability (car (capabilities device #x11))))
     (unless capability
-      (error "the PCI device ~A cannot send a message for an interrupt: it has no MSI-X" (location device)))
+      (let ((plain (car (capabilities device 5))))
+        (when plain
+          (return-from message-interrupt (plain-message device plain index))))
+      (error "the PCI device ~A cannot send a message for an interrupt: it has neither MSI-X nor MSI" (location device)))
     (let* ((control (config-16 device (+ capability 2)))
            (table (config-32 device (+ capability 4)))
            (entries (1+ (logand control #x7ff))))

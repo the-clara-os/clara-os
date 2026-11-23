@@ -19,6 +19,11 @@
 #        INPUT="-device virtio-keyboard-pci ..." (the keyboard and the pointers the
 #        machine gets; the default is a virtio keyboard, mouse and tablet, and
 #        INPUT= gives a machine with none of them)
+#        UTM=1 (the keyboard, the pointers and the sound card that UTM gives a
+#        machine which is not told otherwise, in place of virtio's: a USB
+#        controller with a tablet, a mouse and a keyboard at its ports, and
+#        Intel's sound card. INPUT= and SOUND= still say something else, each
+#        for its own part)
 #        NET="-netdev user,id=net -device virtio-net-pci,netdev=net" (the network
 #        card the machine gets, and what is at the other end of it; the default
 #        is a virtio card on a network that QEMU makes up, on which the machine
@@ -56,7 +61,13 @@ esp=${ESP:-build/esp}
 share=${QEMU_SHARE:-/opt/homebrew/share/qemu}
 serial=${SERIAL:-mon:stdio}
 mem=${MEM:-512M}
-input=${INPUT--device virtio-keyboard-pci -device virtio-mouse-pci -device virtio-tablet-pci}
+if [ -n "${UTM:-}" ]; then
+    input=${INPUT--device nec-usb-xhci,id=usb-bus -device usb-tablet,bus=usb-bus.0 -device usb-mouse,bus=usb-bus.0 -device usb-kbd,bus=usb-bus.0}
+    card="-device intel-hda -device hda-duplex,audiodev=sound"
+else
+    input=${INPUT--device virtio-keyboard-pci -device virtio-mouse-pci -device virtio-tablet-pci}
+    card="-device virtio-sound-pci,audiodev=sound,streams=1"
+fi
 forward=${FORWARD:+,hostfwd=tcp:127.0.0.1:${FORWARD%%:*}-:${FORWARD##*:}}
 net=${NET--netdev user,id=net$forward -device virtio-net-pci,netdev=net}
 random=${RNG--device virtio-rng-pci}
@@ -70,7 +81,7 @@ if [ -z "${SOUND+set}" ]; then
             break
         fi
     done
-    SOUND="-audiodev $out,id=sound -device virtio-sound-pci,audiodev=sound,streams=1"
+    SOUND="-audiodev $out,id=sound $card"
 fi
 sound=$SOUND
 # Left to itself QEMU gives some machines a card of its own choosing, so no

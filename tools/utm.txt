@@ -1,0 +1,31 @@
+> (cl:in-package "COMMON-LISP-USER")
+#<PACKAGE "COMMON-LISP-USER">
+> (list 'keyboards 'and 'pointers (length (clara.input:devices)) (where))
+(KEYBOARDS AND POINTERS 3 (40 64))
+> (clara:wait-event *seen* 60000)
+^T (k)
+T
+> (list 'stopped (clara:wait-event *seen* 60000))
+^T (loop)
+^M sendkey ctrl-c
+^T (k)
+(STOPPED T)
+> (pointer-at 0 0 0)
+^M mouse_button 0
+^M mouse_move -5000 -5000
+OK
+> (pointer-at 200 50 0)
+^M mouse_move 200 50
+OK
+> (pointer-at 200 50 1)
+^M mouse_button 1
+OK
+> (until (equal (where) '(100 104)))
+^M mouse_move 60 40
+OK
+> (pointer-at 260 90 0)
+^M mouse_button 0
+OK
+> (list (stringp (clara.sound:card)) (clara.sound:tone 440 1000) (clara.sound:wait))
+(T T T)
+^H about 1000 ms, 440 turns, 8192 left, 8192 right
