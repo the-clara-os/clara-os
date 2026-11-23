@@ -5,7 +5,10 @@
 ;;;; right. A sound card takes such numbers at that pace and makes the
 ;;;; movement of them. Virtio has one (Virtual I/O Device specification
 ;;;; 1.2, 5.14, the sound device), which under QEMU hands them to the
-;;;; computer's own sound, and `tools/run.sh` gives every machine one.
+;;;; computer's own sound, and `tools/run.sh` gives every machine one. The
+;;;; other card that is played on here is Intel's, which is what UTM gives
+;;;; a machine: lisp/hda.lisp is its driver, and this file asks it for the
+;;;; few things that the two cards do differently.
 ;;;;
 ;;;; A frame is the two numbers of one instant, left and right, each of 16
 ;;;; bits with a sign. The card is given a period at a time, a hundredth of
@@ -36,6 +39,8 @@
 
 (defstruct card
   device control out      ; the virtio device, its queue for requests and its queue for what is to be played
+  intel                   ; or the card of Intel's kind that it is (lisp/hda.lisp)
+  event                   ; what the card's interrupt signals, and whoever has something new for its thread
   name                    ; where it is on the PCI bus
   stream                  ; which of the device's streams is the one that plays
   rate                    ; how many frames a second that stream takes,
@@ -156,6 +161,7 @@
          (out (clara.virtio:open-queue device 2 16))
          (in (clara.virtio:open-queue device 3 16))
          (card (make-card :device device :control control :out out :name (clara.pci:location pci)
+                          :event (clara.virtio:device-event device)
                           :page (clara.unsafe:allocate-memory 1)
                           :lock (clara:make-lock "sound") :rest (clara:make-event "quiet"))))
     (declare (ignorable told in))
@@ -175,6 +181,17 @@
     (dotimes (i +ahead+)
       (setf (card-free card) (cons (clara.unsafe:allocate-memory 1) (card-free card))))
     card))
+
+;; Open a card of Intel's kind. It plays the same numbers, 16 bits on two
+;; sides, at the pace that its codec takes, and a period is a hundredth of
+;; a second of them here too.
+(defun open-intel (pci)
+  (let* ((intel (clara.hda:open-card pci))
+         (frames (floor (clara.hda:card-rate intel) 100)))
+    (make-card :intel intel :event (clara.hda:card-event intel) :name (clara.pci:location pci)
+               :rate (clara.hda:card-rate intel) :frames frames
+               :mix (make-array (* 2 frames) :initial-element 0)
+               :lock (clara:make-lock "sound") :rest (clara:make-event "quiet"))))
 
 ;;; Voices
 ;;;
@@ -459,9 +476,14 @@
 ;;; same numbers as for a request. The card gives a page back when it has
 ;;; played what is in it, or as much later as it likes.
 
-;; Take back the periods that the card is done with.
+;; Take back the periods that the card is done with. A card of Intel's
+;; kind says how many it has played, and how many it still has.
 (defun collect (card)
-  (let ((taken nil))
+  (let ((taken nil) (intel (card-intel card)))
+    (when intel
+      (setq taken (plusp (clara.hda:advance intel)))
+      (setf (card-under-way card) (clara.hda:under-way intel))
+      (return-from collect taken))
     (loop
       (let ((page (clara.virtio:queue-take (card-out card))))
         (unless page
@@ -480,22 +502,45 @@
 ;; given no more may do as it likes with the last number that it had, and
 ;; this way that number is nothing.
 (defun feed (card)
-  (let ((bytes (* 4 (card-frames card))) (fed nil))
+  (let ((bytes (* 4 (card-frames card))) (fed nil) (intel (card-intel card)))
     (loop
-      (when (or (null (card-free card))
-                (and (null (card-voices card)) (not (card-tail card))))
+      (when (or (and (null (card-voices card)) (not (card-tail card)))
+                (if intel
+                    (null (clara.hda:next-period intel))
+                    (null (card-free card))))
         (return))
-      (let ((page (car (card-free card))) (sounding (card-voices card)))
-        (setf (card-free card) (cdr (card-free card)))
-        (setf (clara.unsafe:memory-32 page) (card-stream card)
-              (clara.unsafe:memory-32 (+ page 4088)) 0)
-        (mix-period card (+ page 4))
-        (setf (card-tail card) (and sounding t))
-        (clara.virtio:queue-add (card-out card) (list (list page (+ 4 bytes) nil) (list (+ page 4088) 8 t)) page)
-        (setf (card-under-way card) (1+ (card-under-way card)))
+      (let ((sounding (card-voices card)))
+        (cond (intel
+               ;; The period is written where the card's ring has its next place, and is the card's then.
+               (mix-period card (clara.hda:next-period intel))
+               (setf (card-tail card) (and sounding t))
+               (clara.hda:hand-over intel)
+               (setf (card-under-way card) (clara.hda:under-way intel)))
+              (t
+               (let ((page (car (card-free card))))
+                 (setf (card-free card) (cdr (card-free card)))
+                 (setf (clara.unsafe:memory-32 page) (card-stream card)
+                       (clara.unsafe:memory-32 (+ page 4088)) 0)
+                 (mix-period card (+ page 4))
+                 (setf (card-tail card) (and sounding t))
+                 (clara.virtio:queue-add (card-out card) (list (list page (+ 4 bytes) nil) (list (+ page 4088) 8 t)) page)
+                 (setf (card-under-way card) (1+ (card-under-way card))))))
         (setq fed t)))
-    (when fed
+    (when (and fed (not intel))
       (clara.virtio:queue-notify (card-out card)))))
+
+;; The card is told to start, and to stop.
+(defun run (card)
+  (if (card-intel card)
+      (clara.hda:run (card-intel card))
+      (command card #x104 "to start"))
+  (setf (card-running card) t))
+
+(defun halt (card)
+  (if (card-intel card)
+      (clara.hda:halt (card-intel card))
+      (command card #x105 "to stop"))
+  (setf (card-running card) nil))
 
 ;; Everybody who waits for it to be quiet is told that it is.
 (defun tell-quiet (card)
@@ -512,15 +557,14 @@
   ;; A voice can be over before a frame of it was played: one that was stopped, a file with nothing in it.
   (prune card)
   (when (and (card-voices card) (not (card-running card)))
-    (command card #x104 "to start")
-    (setf (card-running card) t))
+    (run card))
   (feed card)
   (cond ((> (card-under-way card) 0) :playing)
         (t (tell-quiet card)
            (if (card-running card) :quiet nil))))
 
 (defun serve (card)
-  (let ((event (clara.virtio:device-event (card-device card))) (lock (card-lock card)))
+  (let ((event (card-event card)) (lock (card-lock card)))
     (handler-case
         (loop
           (case (clara:with-lock-held (lock) (turn card))
@@ -540,8 +584,7 @@
              (unless (clara:wait-event event *linger*)
                (clara:with-lock-held (lock)
                  (when (null (card-voices card))
-                   (command card #x105 "to stop")
-                   (setf (card-running card) nil)))))
+                   (halt card)))))
             (t
              (clara:wait-event event))))
       (error (condition)
@@ -550,7 +593,10 @@
           (dolist (voice (card-voices card))
             (discard voice))
           (setf (card-voices card) nil)
-          (tell-quiet card))
+          (tell-quiet card)
+          ;; A card of Intel's kind goes on round its ring until it is told to stop.
+          (when (card-intel card)
+            (ignore-errors (clara.hda:halt (card-intel card)))))
         (format t "sound: ~A~%" condition)))))
 
 ;;; What a program says
@@ -567,7 +613,7 @@
           (setf (card-voices card) (append (card-voices card) voices))
           (setq taken t)))
       (if taken
-          (clara:signal-event (clara.virtio:device-event (card-device card)))
+          (clara:signal-event (card-event card))
           (dolist (voice voices)
             (discard voice))))
     taken))
@@ -761,7 +807,7 @@
                 (setf (voice-steps voice)
                       (and step (cdr step)
                            (list (cons (+ at (min 512 (- (car step) at))) (cdr step)))))))))
-      (clara:signal-event (clara.virtio:device-event (card-device card)))
+      (clara:signal-event (card-event card))
       t)))
 
 ;; What plays on this machine, in a line, or NIL when nothing does.
@@ -770,7 +816,8 @@
     (when card
       (if (card-failed card)
           (format nil "the sound card ~A, which plays nothing more: ~A" (card-name card) (card-failed card))
-          (format nil "the sound card ~A: ~D frames a second, left and right" (card-name card) (card-rate card))))))
+          (format nil "the sound card ~A~A: ~D frames a second, left and right" (card-name card)
+                  (if (card-intel card) ", of Intel's kind" "") (card-rate card))))))
 
 ;;; Files
 ;;;
@@ -856,23 +903,25 @@
             (voice-right voice) (min 100 (+ 100 pan)))
       (add-voice voice))))
 
-;; Find the sound card among the PCI devices, the first one that there is,
-;; open it, and start the thread that keeps it supplied. A card that a
-;; world has kept from an earlier start is another machine's, and so is
-;; whatever it was playing.
+;; Find the sound card among the PCI devices, the first one that there is
+;; of either kind, virtio's or Intel's, open it, and start the thread that
+;; keeps it supplied. A card that a world has kept from an earlier start is
+;; another machine's, and so is whatever it was playing.
 (defun start ()
   (when (and *card* (card-thread *card*) (clara:thread-alive-p (card-thread *card*)))
     (clara:destroy-thread (card-thread *card*)))
   (setq *card* nil)
   (dolist (pci (clara.pci:devices))
-    (when (and (null *card*) (eql (clara.virtio:device-type pci) 25))
-      (handler-case
-          (let ((card (open-card pci)))
-            (setf (card-thread card) (clara:make-thread (lambda () (serve card)) :name "sound"))
-            (setq *card* card)
-            (format t "sound: ~A is a sound card: ~D frames a second, left and right~%" (card-name card) (card-rate card)))
-        (error (condition)
-          (format t "sound: ~A did not start: ~A~%" (clara.pci:location pci) condition)))))
+    (let ((intel (clara.hda:hda-p pci)))
+      (when (and (null *card*) (or intel (eql (clara.virtio:device-type pci) 25)))
+        (handler-case
+            (let ((card (if intel (open-intel pci) (open-card pci))))
+              (setf (card-thread card) (clara:make-thread (lambda () (serve card)) :name "sound"))
+              (setq *card* card)
+              (format t "sound: ~A is a sound card~A: ~D frames a second, left and right~%" (card-name card)
+                      (if intel " of Intel's kind" "") (card-rate card)))
+          (error (condition)
+            (format t "sound: ~A did not start: ~A~%" (clara.pci:location pci) condition))))))
   (when (null *card*)
     (format t "sound: no sound card that has a driver here: nothing is played~%"))
   *card*)

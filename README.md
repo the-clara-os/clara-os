@@ -36,7 +36,9 @@ PCI bus are found and listed, and the ones that speak virtio have drivers,
 in Lisp as well: a keyboard, a mouse and a tablet so far, which interrupt
 by message through whatever the machine has for that, the local APIC, a
 GICv2m frame or the GIC's translation service. What is typed on the
-keyboard is read like what arrives on the serial port. A virtio disk has
+keyboard is read like what arrives on the serial port. A keyboard, a
+mouse and a tablet that hang from a USB controller have drivers as well
+(lisp/usb.lisp), which is what UTM gives a machine. A virtio disk has
 its driver too, and on it the FAT file system is read and written: the
 volume the machine booted from is the first whose files can be listed,
 read, loaded, written and deleted from the prompt,
@@ -111,8 +113,8 @@ one that runs, its manifest is signed with the key that the system has
 says. `:from "https://.../"` names another place. What a connection is kept closed with is in the kernel too,
 each piece held against the examples of its standard at every boot.
 And the machine plays sound (lisp/sound.lisp): a driver for virtio's sound
-card, and a thread that adds up what is sounding, a hundredth of a second
-at a time. `(clara.sound:tone 440 500)` is a tone, of one of five shapes;
+card and one for Intel's (lisp/hda.lisp), and a thread that adds up what
+is sounding, a hundredth of a second at a time. `(clara.sound:tone 440 500)` is a tone, of one of five shapes;
 `(clara.sound:play '(c4 e4 g4 (c5 2)))` plays notes by their names, one
 after the other or several together; and `(clara.sound:play-file
 "/home/chime.wav")` plays a file of sound. All of it is worked out in
@@ -225,13 +227,14 @@ what to do at the prompt once it is there.
    With NVMe the machine still boots, and sees no disk and no files.
 4. Add a Serial device with mode "Built-in Terminal": the kernel talks
    there, and a form can be typed there.
-5. For a keyboard in the display's own window: UTM gives a machine USB
-   devices, which ClaraOS has no driver for, so add virtio's by hand.
-   QEMU, Arguments, two new ones: `-device virtio-keyboard-pci` and
-   `-device virtio-tablet-pci`.
-6. For sound: in the machine's settings, under Sound, pick the card
-   Virtio Sound (`virtio-sound-pci`). UTM picks one of Intel's by itself,
-   which ClaraOS has no driver for.
+5. The keyboard and the pointer need nothing done on a machine that is
+   virtualized on Apple silicon: UTM gives it a USB controller with a
+   keyboard, a mouse and a tablet, which ClaraOS has drivers for. A
+   machine that is emulated as x86_64 gets a USB controller of an older
+   kind, which it has none for: there, QEMU, Arguments, two new ones,
+   `-device virtio-keyboard-pci` and `-device virtio-tablet-pci`.
+6. Sound needs nothing done either: the card that UTM picks by itself,
+   one of Intel's, has a driver, and so has Virtio Sound.
 7. Start. The display and the serial window both show the boot report,
    which ends at a prompt. A form typed in either,
    `(mapcar #'1+ '(1 2 3))` say, is evaluated, and what it gives is printed

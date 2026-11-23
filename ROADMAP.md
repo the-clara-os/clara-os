@@ -863,9 +863,71 @@ Objects:
   picks are given to both systems under SBCL, which have to agree call
   for call.
 
-Later, in no order: a USB keyboard and mouse, and a driver for the
-sound card of Intel's, which are what UTM gives a machine that is not
-told otherwise.
+The devices of UTM's machine:
+
+- [x] **M21a a USB controller** (2026-11-22, version 0.0.46). lisp/usb.lisp
+  is the driver for a USB controller of the newest kind, xHCI, which is
+  what UTM gives a machine and what QEMU has as `nec-usb-xhci` and
+  `qemu-xhci`. The controller is stopped, reset, given its memory and an
+  interrupt, and started; what hangs from each of its ports is reset,
+  given a slot and an address, asked what it is, and set up; and the
+  report names it. Driver and controller hand each other work through
+  rings: one of commands, one for every endpoint of a device that is
+  spoken to, and one of events, which the controller writes. A request to
+  a device (`clara.usb:control`) is three entries of the device's own
+  ring and waits for what the controller says of them, and
+  `clara.usb:listen-at` has the controller ask an endpoint for its next
+  report again and again and calls a function with each. One thread for
+  each controller takes in what it says, and everything that speaks to a
+  controller runs in that thread or before it is started, so nothing
+  there needs a lock. A device that is plugged in while the machine runs
+  arrives the same way, and one that is pulled out is let go of, with its
+  slot and its memory. A controller of an older kind is named in the
+  report and left alone, and so is what hangs from a hub. The host tests
+  have a controller of their own making with devices at its ports, which
+  reads the rings as the specification has a controller read them.
+- [x] **M21b keyboards and pointers of USB** (2026-11-22, version 0.0.47).
+  A keyboard, a mouse or a tablet that hangs from such a controller is
+  the machine's like one of virtio's (lisp/input.lisp): what is typed
+  goes where the other keyboard's goes, with the same keys, Shift, Ctrl,
+  Alt, Caps Lock and a key that types again while it is held, and the
+  pointer is the one that every mouse and tablet moves. Such a device
+  says in a description what its reports are made of, and that is what
+  is read: a keyboard is known by saying that it has keys, and not by
+  the report that keyboards mostly have; a tablet is told from a mouse by
+  saying where its pen is, and not how far it moved; and a device that
+  numbers its reports can be a keyboard and a mouse at once. Each has a
+  thread of its own, as the virtio ones have, which the controller's
+  thread hands its reports to. `make test` has three more boots, a
+  machine of each of its three kinds with the devices that UTM gives one
+  (`UTM=1`, tools/utm.txt), started from the world that its first
+  session saved: what is typed on the USB keyboard reaches the
+  listener's window, Ctrl-C stops a form there, and the mouse drags the
+  window by its title.
+- [x] **M21c Intel's sound card** (2026-11-22, version 0.0.48). The card
+  that UTM gives a machine, which Intel calls High Definition Audio and
+  QEMU `intel-hda`, is played on like virtio's: lisp/hda.lisp is its
+  driver, and lisp/sound.lisp asks it for the few things that the two
+  cards do differently. The driver takes the controller through its
+  reset, speaks to the codec at the other end of its link through two
+  rings, finds the way through the codec, from a socket that something
+  was wired to back to the part that takes numbers off the link, sets
+  every part on that way up, and gives the stream that plays a ring of
+  thirty-two periods. This card plays by the clock, which virtio's does
+  not: it goes round its ring whether the driver has written the next
+  period or not. So a period that was played is made silent again, the
+  driver writes two periods on from where the card is and three more
+  ahead, and a driver that comes too late is heard as a gap and never as
+  what was played before: the sound goes on behind the gap with nothing
+  of it lost. Such a card interrupts by a message of the older kind
+  (MSI), which lisp/pci.lisp learned for it. The three new boots play a
+  tone on that card, and what QEMU recorded of it is held to what the
+  tone is like and not to every frame (`^H about`, tools/heard.py), since
+  QEMU itself drops some of what such a card plays when it falls behind.
+  The host tests have a controller and codecs of their own making, which
+  play a period when a test says so: every number that is played is held
+  to the rule that virtio's card is held to, with the driver on time,
+  too late, and across the end of the ring.
 
 The website, <https://claraos.org>, is built from this file by
 site/build.py: the milestone list above, with its version numbers, is what
@@ -3228,6 +3290,102 @@ M20a, M20b and M20c, objects, what they left:
   13m14s and 261 s. The new boot took 33 s there.
 - UTM is untried, like everything else there, and so is the object
   system on a machine with more than the tests' half gigabyte of memory.
+
+M21a, M21b and M21c, the devices of UTM's machine, what they left:
+
+- What is still to be done is in the issues: what hangs from a hub
+  (#86); the older kinds of USB controller, which are what UTM gives a
+  machine that it emulates as x86_64 (#87); a disk of USB (#88); and the
+  gap that Intel's card leaves while the machine is busy in one long step
+  (#89).
+- UTM itself is untried. Everything was booted under QEMU, with the
+  devices that UTM's source gives a machine of the kind `virt`
+  (Configuration/UTMQemuConfiguration+Arguments.swift there:
+  `nec-usb-xhci` with `usb-tablet`, `usb-mouse` and `usb-kbd` at it, and
+  `intel-hda` with `hda-duplex`), which is what `UTM=1` asks tools/run.sh
+  for. A machine in UTM also has a second controller, for devices of the
+  computer that are handed on to it, with nothing at its ports until one
+  is: it should be named in the report with 0 devices.
+- What was checked by hand, and is no part of `make test`. The whole
+  first session and the second, typed at machines whose keyboard and
+  pointers are USB: x86_64, AArch64 under Apple's hypervisor, AArch64
+  emulated with GIC version 2, and the first session with version 3
+  emulated, where a message goes by the translation service; with
+  `nec-usb-xhci` and with `qemu-xhci`. A tablet's place, which is how UTM
+  moves the pointer and which QEMU's monitor cannot send: by QEMU's other
+  socket (`input-send-event`), to the middle of the screen, to its far
+  corner with a button down, and back. A mouse plugged into a running
+  machine and pulled out, and a second keyboard plugged in, typed on, and
+  pulled out, after which the first was typed on. A disk of USB at a port
+  of the fastest kind, which is found and named. Intel's card as
+  `intel-hda` and as `ich9-intel-hda`, with each of QEMU's three codecs,
+  on all three machines. And a tone of two seconds with the machine busy
+  in one step half a second into it, the sum of 64 MiB: 550 thousandths
+  of tone, 70 of nothing, 1450 of tone on Intel's card, with one turn
+  more than the 880 of the whole, and 2000 unbroken on virtio's.
+- What QEMU does, found by trying or read in its source. `nec-usb-xhci`
+  has its four ports for the fastest devices first, so UTM's three hang
+  from the ports 5, 6 and 7. The fourth device at one controller is put
+  behind a hub of QEMU's own making (hw/usb/bus.c), so a machine for
+  plugging things in by hand begins with one device. `mouse_move` in the
+  monitor is a distance and never a place. `intel-hda` knows a register
+  by where it begins and gives nothing for the middle of one; it sends
+  the codec nothing more after an answer until that answer's flag has
+  been taken back, and nothing at all while the count of answers before
+  it says so is 0; it starts a stream at the beginning of its list
+  whenever the stream is run, where a real one goes on; and its codec
+  drops what it holds when it has fallen behind (hw/audio/hda-codec.c,
+  "drop buffer"). A file that QEMU writes of what such a card played is
+  frame for frame what the machine wrote when it is written at the
+  card's own pace (`out.frequency=48000`), and has every number a little
+  off when it is not.
+- What was planted. 245 mistakes in lisp/usb.lisp, lisp/input.lisp,
+  lisp/hda.lisp, lisp/sound.lisp and lisp/pci.lisp, one at a time, each
+  tree given to the part of the host tests that is about it. Twenty got
+  through at first. Five because the devices of the tests were kinder
+  than a real one, and are no longer: the controller spoke of a port
+  whenever something happened there, also when the last change had been
+  left standing; the card said that a period was done whenever one was,
+  began a stream at the start of its ring without being reset, answered
+  for a codec without having been reset itself, and had a part that says
+  nothing of its own answer with its group's word. Nine were things that
+  nothing asked: a device swapped for another before anything looked; a
+  port tried again after a device that did not start; a second way of
+  setting an interface up; how many bytes an endpoint's packets have; an
+  item of the long kind whose bytes would be items; a part with more
+  than four sources; a way through a codec that leads round in a circle;
+  a codec that is no sound and has a socket all the same; and a socket
+  that only takes sound in. Four pointed at lines that nothing needs,
+  which were taken out: a page cleared before every word of it is
+  written, a port's changes taken back twice, a size of ring chosen
+  where any will do, and periods made silent in a stream that is never
+  started again. And two change nothing that can be seen: a name read
+  from the first byte of its text, whose first two bytes are no letters,
+  and one report taken at a look, where every report wakes the thread
+  once. A second round of 242, with those four lines gone, let the same
+  two through and two that the changes had only half closed, which were
+  closed then.
+- What no test would have found, and reading did: the driver for USB
+  called CEILING, which SBCL has and the machine has not, where a
+  controller is given the pages that it wants for itself, and QEMU's
+  wants none. The host tests now read every file of the world as text
+  and hold what it calls against what the machine has, some five
+  thousand names.
+- What it costs the tests. The host tests have 16107 checks, where they
+  had 10718, about five thousand of them the names above. The three new
+  boots take 7, 9 and 10 seconds on the Mac and 8, 11 and 11 in the
+  container that stands in for CI, where everything is emulated; each
+  played its tone there to the frame, though it is not held to that.
+  The world has two more files to load.
+- What it costs CI. The pull request's first run was on the slowest
+  runner so far, whose first boot, x86_64, took 68 s where a quick one
+  takes 41: the job took 21m55s of its thirty minutes and the stress
+  boot 467 s of its 900, and the three new boots 9, 12 and 12 s. The
+  run of #76 on a runner nearly as slow, which changed two documents,
+  had 20m29s, 62 s and 437 s: by the first boot the two are the same
+  boot for boot, so the drivers cost the stress boot nothing that can be
+  told, and the job the three boots and the longer host tests. That
+  runner leaves eight minutes of the limit (issue #93).
 
 A page frame that the firmware reads, what finding it took:
 

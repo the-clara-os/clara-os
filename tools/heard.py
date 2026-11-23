@@ -2,6 +2,7 @@
 """What a machine played, from the file that QEMU wrote of it.
 
 usage: tools/heard.py build/sound-<name>.wav
+       tools/heard.py --about "1000 ms, 440 turns, 8192 left, 8192 right" build/sound-<name>.wav
 
 tools/boottest.sh gives every machine a sound card whose sound goes into a
 file (`-audiodev wav`), frame for frame as the machine sent it. This says
@@ -24,6 +25,21 @@ nothing.
 All of it is counting in whole numbers, so the same file gives the same
 lines on every computer. The lengths that the file's own header gives are
 not gone by: QEMU writes them when it ends, and not when it is stopped.
+
+That holds for virtio's card, which plays what it is handed and waits for
+more. Intel's card goes by the clock: it takes the next numbers out of the
+machine's memory when their time has come, whether the machine has put
+them there or not, and QEMU, for its part, throws away what its codec
+holds when it has fallen behind its own clock (hw/audio/hda-codec.c,
+"drop buffer"). So a machine with that card that was late for a moment
+has a gap in what it played, and the file may lack a few hundredths of a
+second: frame for frame is more than can be asked of it. With --about, the file is held
+against one line of the kind above, for the one sound that such a session
+plays, all its stretches taken together: at least half as long, and no
+longer; as many turns to the second, to a part in twenty-five; as far out
+on each side, to a part in a hundred. When it is like that, the line comes
+back with "about" before it, and otherwise the file is described as
+always.
 """
 import struct
 import sys
@@ -59,23 +75,54 @@ def stretches(frames, rate):
     return found
 
 
+def turns_of(frames, start, end):
+    """How often a stretch turns: with the frame after it, where the last turn ends."""
+    turns, below = 0, False
+    for left, right in frames[start:end + 1]:
+        both = left + right
+        if both < 0:
+            below = True
+        elif below:
+            below = False
+            turns += 1
+    return turns
+
+
+def like(frames, rate, line):
+    """Is what the file holds like the one sound that the line describes?"""
+    words = line.replace(",", " ").split()
+    try:
+        length, turns, left, right = int(words[0]), int(words[2]), int(words[4]), int(words[6])
+    except (IndexError, ValueError):
+        sys.exit(f'tools/heard.py: "{line}" is not a line like "1000 ms, 440 turns, 8192 left, 8192 right"')
+    found = stretches(frames, rate)
+    if not found:
+        return False
+    heard = sum(end - start for start, end in found) * 1000 / rate
+    turned = sum(turns_of(frames, start, end) for start, end in found)
+    far_left = max(abs(a) for start, end in found for a, _ in frames[start:end])
+    far_right = max(abs(b) for start, end in found for _, b in frames[start:end])
+    return (length / 2 <= heard <= length + 10
+            and abs(turned * length - turns * heard) * 25 <= turns * heard
+            and abs(far_left - left) * 100 <= max(left, 100)
+            and abs(far_right - right) * 100 <= max(right, 100))
+
+
 def main():
-    if len(sys.argv) != 2:
+    about = None
+    if len(sys.argv) == 4 and sys.argv[1] == "--about":
+        about = sys.argv[2]
+    elif len(sys.argv) != 2:
         sys.exit(__doc__)
-    frames, rate = frames_of(sys.argv[1])
+    frames, rate = frames_of(sys.argv[-1])
+    if about is not None and like(frames, rate, about):
+        print(f"about {about}")
+        return
     before = None
     for start, end in stretches(frames, rate):
         if before is not None and (start - before) * 20 >= rate:
             print(f"{round((start - before) * 1000 / rate)} ms of nothing")
-        turns, below = 0, False
-        for left, right in frames[start:end + 1]:   # with the frame after it, where the last turn ends
-            both = left + right
-            if both < 0:
-                below = True
-            elif below:
-                below = False
-                turns += 1
-        print(f"{round((end - start) * 1000 / rate)} ms, {turns} turns, "
+        print(f"{round((end - start) * 1000 / rate)} ms, {turns_of(frames, start, end)} turns, "
               f"{max(abs(left) for left, _ in frames[start:end])} left, "
               f"{max(abs(right) for _, right in frames[start:end])} right")
         before = end

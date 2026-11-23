@@ -140,7 +140,14 @@ host-test:
 # (tools/session.txt), and the second boot, from a copy of that disk, has
 # to find the image, start from it, and answer for what the first one
 # defined (tools/resumed.txt). After every boot the host's own checker of
-# FAT volumes looks at the disk. Then each kind of processor once more, from
+# FAT volumes looks at the disk. Then each of the three machines once more
+# from that disk, with the devices that UTM gives a machine in place of
+# virtio's (UTM=1, tools/utm.txt): a USB controller with a tablet, a mouse
+# and a keyboard at its ports, and Intel's sound card. What is typed on
+# that keyboard has to reach the listener's window, Ctrl-C has to stop a
+# form there, the mouse has to drag the window, and a tone has to be
+# played, which is held to what it is like, and not to every frame, since
+# that card plays by the clock. Then each kind of processor once more, from
 # the disk that its first session left, for what is done to a machine and
 # not in it (tools/power.txt): it is asked to shut down while an editor has
 # a text that is not saved, and has to refuse; it is told to start again,
@@ -206,9 +213,11 @@ host-test:
 # its line gives it.
 test: export WORK :=
 test: export SOUND := capture
+test: export UTM :=
 SECOND = -drive if=none,id=second,format=raw,readonly=on,file=$(BUILD)/$(1).img -device virtio-blk-pci,drive=second
 UPGRADED := EXPECT='^ClaraOS: starting the system that is to be tried;;^system: .*-other has come to its prompt;;^world: made anew by ClaraOS .*-other;;^home: /home/init.lisp is loaded, 1 form of it, and 3 were passed over:;;^home:     the stack is full;;^home:     /home/init.lisp is loaded into a new world by itself;;^home: /home/defined.lisp is loaded, [0-9]* forms[^ ]*$$;;^world:   .*\*JOBS\*;;^world:   .*\*WINDOW\*;;^world:   .*NOT-WRITTEN-DOWN;;^world: it is saved as it is now;;^home: /home/defined.lisp has 1 form that this world did not have, which is loaded now'
 POWER :=SESSION=tools/power.txt MARKER='^clara: turning the machine off' EXPECT='^lisp: the heap is an image'
+AS_UTM := UTM=1 SESSION=tools/utm.txt EXPECT='^lisp: the heap is an image;;^usb: .* is a USB controller: 8 ports, and at them 3 devices;;^input: .* is a tablet, QEMU USB Tablet;;^input: .* is a mouse, QEMU USB Mouse;;^input: .* is a keyboard, QEMU USB Keyboard;;^sound: .* is a sound card of Intel.s kind: 48000 frames a second'
 RESUME := SESSION=tools/resumed.txt EXPECT='^lisp: the heap is an image;;^type: 8 files of outlines came with the system;;^lisp: and with it [0-9]* KiB of code for the processor;;^lisp:   of the functions .* and 0 are walked;;^lisp:   the processor runs [1-9][0-9]* of the compiled ones itself, .* and the machine 3[^0-9]*$$'
 test: all host-test release-test $(BUILD)/system-other/stamp $(BUILD)/system-broken/stamp
 	tools/boottest.sh x86_64
@@ -217,6 +226,10 @@ test: all host-test release-test $(BUILD)/system-other/stamp $(BUILD)/system-bro
 	NAME=aarch64-resumed DISK=$(BUILD)/boot-aarch64.img $(RESUME) tools/boottest.sh aarch64 -machine gic-version=3
 	NAME=aarch64-gic2 NO_HVF=1 MKDISK="--fat 12 --table none" tools/boottest.sh aarch64 -machine gic-version=2
 	NAME=aarch64-gic2-resumed NO_HVF=1 DISK=$(BUILD)/boot-aarch64-gic2.img $(RESUME) \
+		tools/boottest.sh aarch64 -machine gic-version=2
+	NAME=x86_64-utm DISK=$(BUILD)/boot-x86_64.img $(AS_UTM) tools/boottest.sh x86_64
+	NAME=aarch64-utm DISK=$(BUILD)/boot-aarch64.img $(AS_UTM) tools/boottest.sh aarch64 -machine gic-version=3
+	NAME=aarch64-gic2-utm NO_HVF=1 DISK=$(BUILD)/boot-aarch64-gic2.img $(AS_UTM) \
 		tools/boottest.sh aarch64 -machine gic-version=2
 	NAME=x86_64-power DISK=$(BUILD)/boot-x86_64.img $(POWER) tools/boottest.sh x86_64
 	NAME=aarch64-power DISK=$(BUILD)/boot-aarch64.img $(POWER) tools/boottest.sh aarch64 -machine gic-version=3

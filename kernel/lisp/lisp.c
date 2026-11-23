@@ -2250,9 +2250,9 @@ static void new_world(void)
 {
     static const char *const world[] = { "compiler.lisp", "native.lisp",   "clos.lisp",    "font.lisp",
                                          "console.lisp",
-                                         "draw.lisp",     "pci.lisp",      "virtio.lisp",  "input.lisp",
+                                         "draw.lisp",     "pci.lisp",      "virtio.lisp",  "usb.lisp",      "input.lisp",
                                          "disk.lisp",     "fat.lisp",      "type.lisp",     "random.lisp",   "net.lisp",
-                                         "sound.lisp",    "listener.lisp",
+                                         "hda.lisp",      "sound.lisp",    "listener.lisp",
                                          "windows.lisp",  "terminal.lisp", "system.lisp",   "tls.lisp" };
     uint64_t before[LISP_TYPES], after[LISP_TYPES], ticks, collections;
     char processor[16] = { 0 };

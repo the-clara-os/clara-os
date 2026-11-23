@@ -525,7 +525,8 @@ architectures (kernel/vm.c).
   and device share; and an interrupt as an event to wait for.
 - A device interrupts by sending a message: it writes a number to an
   address, and the interrupt controller makes an interrupt of the write
-  (MSI-X). It never does so by a line. Which line of which controller a
+  (MSI-X, and since M21c the older MSI for a device that has no table of
+  messages). It never does so by a line. Which line of which controller a
   device is wired to is written in the DSDT, in ACPI's bytecode, and an
   interpreter for that is a larger thing than everything here that takes
   messages; a message needs no wiring to be known. The price is paid on
@@ -539,11 +540,13 @@ architectures (kernel/vm.c).
   (kernel/interrupt.c), and all a handler does is signal the event of its
   source. The driver is a thread that waits for the event, which is what
   M7 decided for every interrupt that reaches Lisp.
-- Virtio is the one family of devices with drivers (lisp/virtio.lisp):
+- Virtio is the family of devices with drivers (lisp/virtio.lisp):
   version 1 of it, over PCI, with queues of the plain kind and nothing
   that a device merely offers. One file has what every virtio device has
   in common, the opening moves and the queues, and a file for each kind
-  of device has the rest.
+  of device has the rest. (It was the one family until M21, which added
+  what UTM gives a machine in its place: a USB controller with a
+  keyboard and pointers, and Intel's sound card, each below.)
 - A keyboard's driver turns keys into characters and hands them to the
   console, where they are read along with what the serial port brings. A
   key that types no character, an arrow or a function key, is handed on as
@@ -2009,13 +2012,13 @@ architectures (kernel/vm.c).
 ## Sound (decided in M19a, M19b and M19c, 2026-11-22)
 
 - The card is virtio's (lisp/sound.lisp, over lisp/virtio.lisp), the one
-  family of devices with drivers here, and QEMU has it: what the machine
-  plays goes to the sound of the computer it runs on. UTM gives a machine
-  another card unless it is told, one of Intel's, which would be a driver
-  of another family: registers of its own, a tree of parts to be asked
-  what they are, and an interrupt by a message of the older kind, which
-  nothing here sets up. So in UTM the card is chosen by hand, as the
-  keyboard is.
+  family of devices with drivers here at the time, and QEMU has it: what
+  the machine plays goes to the sound of the computer it runs on. UTM
+  gives a machine another card unless it is told, one of Intel's, which
+  is a driver of another family: registers of its own, a tree of parts to
+  be asked what they are, and an interrupt by a message of the older
+  kind. M21c wrote that driver ("Intel's sound card", below); until then
+  the card was chosen by hand in UTM, as the keyboard was.
 - Sound is taken, not sent. A program says what is to sound, which adds
   a voice to a list and returns; a thread of the card's puts the next
   hundredth of a second together out of every voice that is sounding and
@@ -2248,6 +2251,153 @@ architectures (kernel/vm.c).
   there by what is before its parameters and by what each parameter is
   for: without that, a world made again after an upgrade would have had
   the last method that was typed and no other.
+
+## The Universal Serial Bus (decided in M21a and M21b, 2026-11-22)
+
+- The controller that is driven is xHCI and no other (lisp/usb.lisp).
+  It is what UTM gives a machine that it virtualizes on Apple silicon,
+  with a tablet, a mouse and a keyboard at its ports, and what QEMU has
+  for either processor. The kinds before it, UHCI, OHCI and EHCI, are a
+  driver each, and a keyboard under EHCI needs UHCI beside it; they are
+  what UTM gives a machine that it emulates as x86_64, which goes on
+  needing the two virtio devices by hand (issue #87). A controller of
+  such a kind is named in the report, so that a machine with a keyboard
+  that does nothing says why.
+- Nothing is taken over from the firmware, which has used the controller
+  and the keyboard before the system started: the controller is stopped
+  and reset, and everything is found again.
+- A ring is one page, 255 entries and a link back to the first. The
+  driver does one thing at a time with each: a command waits for its
+  answer, a request to a device for the three entries that it is, and an
+  endpoint that is listened at has one entry under way. So a ring cannot
+  fill, and nothing looks whether it has.
+- One thread for each controller takes in what it says, and everything
+  that speaks to a controller runs in that thread, or before it is
+  started. That is instead of a lock: a controller's state is its rings
+  and the places in them, and two threads writing one ring is what a lock
+  would be there to stop. START does the first round in its own thread,
+  finding what is at the ports and telling whoever takes devices, and
+  starts the controller's thread last; so the lines of the boot report
+  come in order and before the prompt, which a session counts on.
+- What a device is, it says: who made it, what it calls itself, and
+  which interfaces it has, each of a class. This file knows nothing of
+  any class. It tells whoever asked of every device that arrives
+  (`*arrival*`) and of every one that goes (`*departure*`), carries
+  requests (`control`) and brings reports (`listen-at`). The one that
+  asks so far is lisp/input.lisp, for the class of things that people
+  type and point with; a disk of USB is found, named, and left (issue
+  #88).
+- A device can come and go while the machine runs. The controller says
+  that something happened at a port, and its thread looks: a device that
+  is new arrives as at the start, and one that is gone gives back its
+  slot and its pages. What did not start is not tried again until its
+  port says that it was plugged anew, since the port has more to say
+  while a device is being started, and each time would be another try.
+- A hub is not looked behind (issue #86). It is a device with ports of
+  its own, which are asked and reset through it, and a device behind it
+  is named to the controller by the way that leads to it. UTM's three
+  devices hang from the controller's own ports; QEMU puts a hub in by
+  itself for the fourth device at one controller.
+- A keyboard or a pointer is read by what it says of its own reports, and
+  not by the fixed report that a firmware asks such devices for. The
+  tablet decided that: it is the pointer that UTM moves, it has no fixed
+  report, and what reads a tablet's description reads a keyboard's and a
+  mouse's as well. So there is one way for all three, and a device is a
+  keyboard because it says that it has keys.
+- A keyboard of USB says which keys are down, where a keyboard of
+  virtio's says what happened. The keys of the report before are kept,
+  and the difference is the events: what is no longer down went up, and
+  what is new went down, in that order. From there on a key is a key,
+  whichever keyboard it came from: the same table of characters, the
+  same keys that are held with others, the same repeating.
+- Each such device has a thread of its own, as a virtio one has, which
+  is where its keys repeat and where what is typed is handed on; the
+  controller's thread only puts a report by for it. A window manager
+  that takes long over a key keeps one keyboard waiting, and not the
+  controller with everything else that hangs from it. Of reports that a
+  thread does not get to, the oldest go, since the newest is the one that
+  says which keys are down.
+- What is not there: the lights of a keyboard, a wheel, and the keys
+  that are no part of a keyboard's own page, the ones for sound and the
+  like.
+- It is tested as every driver is, twice. Under SBCL against a
+  controller that the tests make up, which reads the rings as the
+  specification has a controller read them, looks at a ring when its
+  doorbell was rung and not before, and fails the run for what a real
+  one would silently get wrong: memory that is not the driver's, a
+  command out of its order, a port switched off. And by booting: three
+  machines of `make test` have the devices that UTM gives one. What a
+  boot cannot do from QEMU's monitor was done by hand: a tablet's place
+  on the screen, which is how UTM moves the pointer, and plugging a
+  device in and pulling it out.
+
+## Intel's sound card (decided in M21c, 2026-11-22)
+
+- It is the card that UTM gives a machine, so it is played on
+  (lisp/hda.lisp), and lisp/sound.lisp stays what has something to play:
+  the voices, the periods and the thread are the same for both cards,
+  and the card's kind decides four things, how a period is handed over,
+  how the card says what it has played, and how it is started and
+  stopped.
+- The codec is spoken to through the two rings that every such
+  controller has, and not through the pair of registers that takes one
+  word at a time, which a controller may be without. QEMU's sends
+  nothing more after an answer until the flag of that answer has been
+  taken back, so the driver takes it back after every word, which a real
+  controller does not mind.
+- The way through a codec is found and not assumed. From a socket that
+  can give sound out and that something was wired to, a line out, a
+  loudspeaker or headphones, through at most four parts that mix or
+  choose, to a part that takes numbers off the link: the first such way
+  of the first codec that has one. Every part on it is switched on, and
+  every amplifier on it is turned to where a sound passes as it is: how
+  loud the machine is stays a number of lisp/sound.lisp's, which is one
+  place for both cards.
+- The card plays by the clock, and the driver is built around that. The
+  ring is thirty-two periods, a third of a second. The driver writes two
+  periods on from the one that the card is in, so that the card is not
+  in a period while it is being written, and keeps three more ahead; that
+  is a twentieth of a second from a sound being asked for to its being
+  heard, as with virtio's card. A period that the card has played is
+  made silent again before the card comes round to it. So a driver that
+  comes too late is heard as a gap and never as an old sound played
+  again, and it goes on, two periods after where the card is by then,
+  with the period that it had come to: time is frames here too, and a
+  machine that was busy plays the same numbers with nothing between
+  some of them (issue #89 has what that sounds like and what could be
+  done about it).
+- A period has two kilobytes of the ring to itself, of which it uses
+  1920 bytes or 1764: each then begins where a controller wants a
+  period to begin, at a multiple of 128.
+- The card says when it is done with a period only while it has
+  something of the driver's to play. A stream that runs with nothing in
+  it would otherwise wake the card's thread a hundred times a second,
+  for as long as it lingers after a sound, and a thread that wakes by
+  itself is paid for by every boot.
+- The stream is reset whenever it is started, so that it begins at the
+  beginning of its ring on QEMU's controller and on a real one alike.
+- 48000 frames a second, or 44100 when that is all a codec takes; 16
+  bits; two sides. Nothing is recorded.
+- Such a card has one message to send, of the older kind (MSI), where
+  every virtio device has a table of them (MSI-X). lisp/pci.lisp sets
+  either up, the table when a device has one.
+- A machine with a card of each kind plays on the one that comes first
+  on its bus.
+- What a boot can hold such a card to is less than for virtio's. QEMU
+  takes the numbers out of the machine's memory by its own clock, and
+  throws away what its codec holds when it has fallen behind (its
+  hw/audio/hda-codec.c, "drop buffer"), which a computer that is busy
+  with other things brings about. So the boots hold what was recorded to
+  what the sound is
+  like: at least half of it, the right number of turns to the second,
+  as far out on each side (`^H about`, tools/heard.py). Every number is
+  held to the rule under SBCL, where the card of the tests plays a
+  period when a test says so, which is also how a test has the driver
+  come too late.
+- Tried on QEMU's cards and codecs and on nothing else. A real card has
+  more to it that nothing here does: a socket that says whether
+  something is plugged in, an amplifier that has to be switched on
+  beside a loudspeaker, and several ways out to choose between.
 
 ## Shutting down (decided in M15e, 2026-11-20)
 

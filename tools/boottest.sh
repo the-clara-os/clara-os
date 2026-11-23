@@ -51,6 +51,11 @@
 #                 begin with ^H, that file has to hold it, by tools/heard.py.
 #                 Anything else is for tools/run.sh, as it stands: SOUND= is a
 #                 machine with no sound card)
+#        UTM=1 (the machine has the keyboard, the pointers and the sound card
+#                 that UTM gives one, and not virtio's: tools/run.sh. What
+#                 Intel's card plays is written into the same file, and a
+#                 session for it says what is to be heard in one line, "^H
+#                 about ...", since that card plays by the clock)
 #        plus what tools/run.sh reads
 set -eu
 arch=${1:?usage: tools/boottest.sh <arch> [qemu args]}
@@ -81,7 +86,12 @@ rm -f "$shot" "$sock" "$keys" "$orders" "$answers" "$heard" "$typing".* "$scratc
 # What the machine plays goes into a file, at the pace that its card plays
 # at, so that the file has the numbers that the machine sent and no others.
 case "${SOUND-capture}" in
-capture) SOUND="-audiodev wav,id=sound,path=$wav,out.frequency=48000 -device virtio-sound-pci,audiodev=sound,streams=1" ;;
+capture)
+    if [ -n "${UTM:-}" ]; then
+        SOUND="-audiodev wav,id=sound,path=$wav,out.frequency=48000 -device intel-hda -device hda-duplex,audiodev=sound"
+    else
+        SOUND="-audiodev wav,id=sound,path=$wav,out.frequency=48000 -device virtio-sound-pci,audiodev=sound,streams=1"
+    fi ;;
 esac
 export SOUND
 : > "$log"
@@ -182,7 +192,9 @@ dd if=/dev/zero of="$scratch" bs=1024 count=1024 2> /dev/null
 #   ^H words    what the machine is to have played by the end, a line for
 #               every stretch of sound in the order they were played, as
 #               tools/heard.py says it: "500 ms, 220 turns, 8192 left, 8192
-#               right". Nothing is typed for it.
+#               right". Nothing is typed for it. One line that begins with
+#               "about" is for a machine whose card plays by the clock, and
+#               says what the one sound of the session is like.
 # So the session is typed in parts, and a part waits for a line of the
 # kernel's: a Ctrl-C or a command, and what follows them, until the kernel
 # has echoed the line before, which it is evaluating by then; a line for
@@ -364,7 +376,12 @@ check_volume() {
 check_sound() {
     [ -n "$session" ] && grep -q '^^H ' "$session" || return 0
     sed -n 's/^^H //p' "$session" > "build/hear-$name.txt"
-    python3 -I tools/heard.py "$wav" > "build/heard-$name.txt" 2>&1 || true
+    if grep -q '^about ' "build/hear-$name.txt"; then
+        python3 -I tools/heard.py --about "$(sed -n 's/^about //p' "build/hear-$name.txt" | head -1)" "$wav" \
+            > "build/heard-$name.txt" 2>&1 || true
+    else
+        python3 -I tools/heard.py "$wav" > "build/heard-$name.txt" 2>&1 || true
+    fi
     diff -u "build/hear-$name.txt" "build/heard-$name.txt"
 }
 
