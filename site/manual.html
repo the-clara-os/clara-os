@@ -222,7 +222,7 @@ clara: turning the machine off</code></pre>
       <tr><td>In the <a href="#windows">window manager</a></td><td><code>Shut Down</code> and <code>Restart</code>, at the end of the list under <code>Applications</code>.</td></tr>
       <tr><td>By the power button</td><td>which is how a host asks a machine to stop: <code>system_powerdown</code> in QEMU's monitor, and Request power down in UTM. The system looks at the button four times a second.</td></tr>
     </table>
-    <p>A machine that is asked to shut down asks its windows first. An <a href="#editor">editor</a> whose text is not saved holds it back: its window comes to the top, the machine stays on, and the answer says why.</p>
+    <p>A machine that is asked to shut down asks its windows first. A window of <a href="#editor">Emma</a>, the editor, whose text is not saved holds it back: it comes to the top, the machine stays on, and the answer says why.</p>
 <pre><code>&gt; (clara.system:shut-down)
 error: the machine is not shut down: the window "/notes.txt" has text that is not saved. Finish that, or ask with :FORCE T, which goes on without</code></pre>
     <p>Save the text or close the window, and ask again; <code>(clara.system:shut-down :force t)</code> does not ask. Asked by the power button or from the list, the machine says the same on the serial port and stays on. What else goes with the machine is whatever a thread was in the middle of: a file that a program had open for writing and had not closed is not written.</p>
@@ -669,8 +669,8 @@ NIL</pre>
 &gt; (clara.system:system-file "boot.lisp")
 "/clara/{{version}}-8f3a1c2e/boot.lisp"</code></pre>
 <pre class="session">&gt; (clara.fat:names (clara.system:system-file ""))
-("arm64.lisp" "boot.lisp" "BOOTAA64.EFI" "BOOTX64.EFI" "clos.lisp" "compiler.lisp" "console.lisp" "disk.lisp" "draw.lisp" "editor.lisp" "fat.lisp" "files.lisp" "font.lisp" "Go-Bold-Italic.ttf" "Go-Bold.ttf" "Go-Italic.ttf" "Go-Mono-Bold-Italic.ttf" "Go-Mono-Bold.ttf" "Go-Mono-Italic.ttf" "Go-Mono.ttf" "Go-Regular.ttf" "hda.lisp" "input.lisp" "listener.lisp" "manifest" "native.lisp" "net.lisp" "pci.lisp" "random.lisp" "roots.pem" "self-test.lisp" "sound.lisp" "system.lisp" "terminal.lisp" "tls.lisp" "type.lisp" "usb.lisp" "virtio.lisp" "windows.lisp" "x86-64.lisp")</pre>
-    <p>Those are the system's Lisp files: the language's part that is written in Lisp, the compiler, the console, the drivers, the file system, the window manager and what sees to <a href="#stop">the machine as a whole</a>, and two that are not loaded until they are wanted, the <a href="#applications">applications</a> <code>editor.lisp</code> and <code>files.lisp</code>. <code>native.lisp</code> is what <a href="#processor">translates for the processor</a>, with a file for each kind of processor, <code>arm64.lisp</code> and <code>x86-64.lisp</code>, of which a machine loads its own. Beside them are a second copy of the kernels and <code>manifest</code>, the list of what the system is made of, which is what <a href="#upgrade">another machine reads</a> when it takes this system from this disk. The eight files whose names end in <code>.ttf</code> are the system's <a href="#fonts">fonts</a>, and <code>roots.pem</code> is the list of whom it <a href="#https">trusts</a>. Everything outside <code>/clara</code> and <code>/EFI</code> is yours, and no system writes there but for one file in <code>/home</code>.</p>
+("arm64.lisp" "boot.lisp" "BOOTAA64.EFI" "BOOTX64.EFI" "clos.lisp" "compiler.lisp" "console.lisp" "disk.lisp" "draw.lisp" "emma.lisp" "fat.lisp" "files.lisp" "font.lisp" "Go-Bold-Italic.ttf" "Go-Bold.ttf" "Go-Italic.ttf" "Go-Mono-Bold-Italic.ttf" "Go-Mono-Bold.ttf" "Go-Mono-Italic.ttf" "Go-Mono.ttf" "Go-Regular.ttf" "hda.lisp" "input.lisp" "listener.lisp" "manifest" "native.lisp" "net.lisp" "pci.lisp" "random.lisp" "roots.pem" "self-test.lisp" "sound.lisp" "system.lisp" "terminal.lisp" "tls.lisp" "type.lisp" "usb.lisp" "virtio.lisp" "windows.lisp" "x86-64.lisp")</pre>
+    <p>Those are the system's Lisp files: the language's part that is written in Lisp, the compiler, the console, the drivers, the file system, the window manager and what sees to <a href="#stop">the machine as a whole</a>, and two that are not loaded until they are wanted, the <a href="#applications">applications</a> <code>emma.lisp</code> and <code>files.lisp</code>. <code>native.lisp</code> is what <a href="#processor">translates for the processor</a>, with a file for each kind of processor, <code>arm64.lisp</code> and <code>x86-64.lisp</code>, of which a machine loads its own. Beside them are a second copy of the kernels and <code>manifest</code>, the list of what the system is made of, which is what <a href="#upgrade">another machine reads</a> when it takes this system from this disk. The eight files whose names end in <code>.ttf</code> are the system's <a href="#fonts">fonts</a>, and <code>roots.pem</code> is the list of whom it <a href="#https">trusts</a>. Everything outside <code>/clara</code> and <code>/EFI</code> is yours, and no system writes there but for one file in <code>/home</code>.</p>
 
     <h3 id="reading">Reading and loading</h3>
 <pre class="session">&gt; (with-open-file (in (clara.system:system-file "listener.lisp")) (list (read-line in) (read-line in)))
@@ -756,7 +756,7 @@ COPY-TEXT
 "/hello.lisp"
 &gt; (let ((clara.fat:*volume* (work))) (directory "/*"))
 ("/hello.lisp" "/mine.lisp")</pre>
-    <p>A <code>let</code> reaches the forms inside it and nothing else. To work on your disk for a while, set the variable instead: then every name is looked up there, in every thread, so the <a href="#applications">Editor and the file browser</a> open and save there as well.</p>
+    <p>A <code>let</code> reaches the forms inside it and nothing else. To work on your disk for a while, set the variable instead: then every name is looked up there, in every thread, so <a href="#applications">Emma and the file browser</a> open and save there as well.</p>
 <pre class="session">&gt; (progn (setq clara.fat:*volume* (work)) (directory "/*"))
 ("/hello.lisp" "/mine.lisp")
 &gt; (list (clara:save-image) (probe-file "/clara/clara.image"))
@@ -874,8 +874,8 @@ AREA
       <li>A form is written down when it was typed at a prompt, in any listener, on the serial port or in a window; when it stands by itself, and not inside a <code>progn</code> or a <code>let</code>; when it went well; and when its first word says that it defines something. That is a word of the language's own, <code>defun</code>, <code>defmacro</code>, <code>defvar</code>, <code>defparameter</code>, <code>defstruct</code>, <code>defpackage</code>, <code>define-condition</code>, <code>defclass</code>, <code>defgeneric</code>, <code>defmethod</code>; a macro of yours whose name begins with <code>def</code>; and anything whose name begins with <code>define-</code>, as <code>clara.windows:define-application</code>, and with it <code>clara.windows:install-application</code>. Any other call of a function is not written down, whatever the function is called. A <code>load</code> is, since what a file defined is in none of the forms that were typed, unless it is one of the two files of <code>/home</code> that is loaded.</li>
       <li>A form that defines a name again takes the place of the form that defined it before, so the file has every definition once, in the order in which each was first made. The <a href="#generic">methods</a> of a generic function are so many definitions: each <code>defmethod</code> is in the file, and one takes the place of another when it is the same method, for the same classes and with the same word before its parameters.</li>
       <li>Forms that were read in another package than the ones before them have a line <code>(cl:in-package "NAME")</code> before them.</li>
-      <li>What is not a definition is not written down. A variable that was changed after its <code>defvar</code> is in the file with the value that the <code>defvar</code> gives it, and a world that is made of the text alone has that one; an upgrade <a href="#across">carries the value that it had come to</a> as well. What a <code>defvar</code> did to get its value, it does again. And what <kbd>Ctrl-E</kbd> evaluated in the <a href="#editor">editor</a> is in the editor's file, and not here.</li>
-      <li>Nothing else that takes a definition back is written down: after <code>(delete-package "PLAY")</code> the forms that made the package, and what was defined in it, are still in the file. The file is text, and yours: read it, and take out of it what you no longer want, in the editor. What the system cannot read of it any more it leaves as it is, and goes on after it.</li>
+      <li>What is not a definition is not written down. A variable that was changed after its <code>defvar</code> is in the file with the value that the <code>defvar</code> gives it, and a world that is made of the text alone has that one; an upgrade <a href="#across">carries the value that it had come to</a> as well. What a <code>defvar</code> did to get its value, it does again. And what <kbd>Ctrl-E</kbd> evaluated in <a href="#editor">Emma</a> is in the file that Emma had open, and not here.</li>
+      <li>Nothing else that takes a definition back is written down: after <code>(delete-package "PLAY")</code> the forms that made the package, and what was defined in it, are still in the file. The file is text, and yours: read it, and take out of it what you no longer want, in Emma. What the system cannot read of it any more it leaves as it is, and goes on after it.</li>
     </ul>
 
     <h3 id="init">A file of your own</h3>
@@ -1131,7 +1131,7 @@ world:   *ADD*, *BELL*, *CANVAS*, *HELD*, *SEEN*, *SVREF*, *WAITER*, *WINDOW*
 world: 3 names that the world before had are not defined in this one:
 world:   *SPINNER* (a variable), HI, NOT-WRITTEN-DOWN
 world: it is saved as it is now, and the next start is in it; (clara.system:report) says this again</code></pre>
-    <p>The last of the three lists is what did not come across: names that the old world had, in <code>COMMON-LISP-USER</code> and in the packages that you made, and that nothing in the text defines. They were defined inside another form, by a file that was loaded from inside one, or in the editor. <code>(clara.system:report)</code> says all of it again, at any later time, with every name, where the report of a start says the first few lines of a long list.</p>
+    <p>The last of the three lists is what did not come across: names that the old world had, in <code>COMMON-LISP-USER</code> and in the packages that you made, and that nothing in the text defines. They were defined inside another form, by a file that was loaded from inside one, or in Emma. <code>(clara.system:report)</code> says all of it again, at any later time, with every name, where the report of a start says the first few lines of a long list.</p>
     <p>The disk needs room for two systems while the newer one is tried, some four mebibytes beside what is there. When it has less, the upgrade says so and does nothing.</p>
   </section>
 
@@ -1422,10 +1422,10 @@ NIL</pre>
         (sleep 2))))
 "Hello"
 &gt; (clara.windows:applications)
-("REPL" "Editor" "Files" "Hello")
+("REPL" "Emma" "Files" "Hello")
 &gt; (clara:join-thread (clara.windows:launch "Hello"))
 NIL</pre>
-    <p>The window is there for two seconds, and goes with its application. From now on <code>Hello</code> is in the list under <code>Applications</code>, below the three that come with the system. <code>REPL</code> is <code>clara.terminal:repl</code>, the first application and the one that is launched when the window manager starts; <code>Editor</code> and <code>Files</code> are the subject of <a href="#applications">the next chapter</a>.</p>
+    <p>The window is there for two seconds, and goes with its application. From now on <code>Hello</code> is in the list under <code>Applications</code>, below the three that come with the system. <code>REPL</code> is <code>clara.terminal:repl</code>, the first application and the one that is launched when the window manager starts; <code>Emma</code> and <code>Files</code> are the subject of <a href="#applications">the next chapter</a>.</p>
     <p>What the list has under its line are commands: a name and a function of no arguments, which is called in a thread of its own when the name is picked, and which opens no window that anything waits for.</p>
 <pre class="session">&gt; (clara.windows:commands)
 ("Restart" "Shut Down")
@@ -1443,7 +1443,7 @@ NIL</pre>
 <pre class="session again">&gt; (list (clara.windows:running-p) (mapcar #'clara.windows:window-title (clara.windows:windows)))
 (T ("REPL"))
 &gt; (clara.windows:applications)
-("REPL" "Editor" "Files" "Hello")
+("REPL" "Emma" "Files" "Hello")
 &gt; (clara.windows:stop)
 T</pre>
     <p>What is defined comes back, the applications among it. The windows that were open do not: a window is pixels and a thread, and an image has neither, so the window manager starts with one REPL, as it does the first time. <code>clara.windows:stop</code> ends the applications and gives the screen back to the console, cleared; a world that is saved after that starts at the console again.</p>
@@ -1452,19 +1452,19 @@ T</pre>
 
   <section id="applications">
     <h2>{{spleen:Applications}}</h2>
-    <p>Two applications come with the system besides the REPL: an editor for text, and a browser for the files of the disk. Each is a file of Lisp among <a href="#listing">the system's own</a>, <code>editor.lisp</code> and <code>files.lisp</code>, which the system does not load as it starts. The file is loaded the first time its application is picked from <code>Applications</code>, or launched from a prompt, and the application can be unloaded again while everything else goes on.</p>
+    <p>Two applications come with the system besides the REPL: Emma, an editor for text, and a browser for the files of the disk. Each is a file of Lisp among <a href="#listing">the system's own</a>, <code>emma.lisp</code> and <code>files.lisp</code>, which the system does not load as it starts. The file is loaded the first time its application is picked from <code>Applications</code>, or launched from a prompt, and the application can be unloaded again while everything else goes on.</p>
 
-    <h3 id="editor">The editor</h3>
-    <p><code>Editor</code> in the list opens a window with no text in it yet. From a prompt, the editor is launched with the name of a file, and the window has the file's name for its title:</p>
-<pre class="session">&gt; (find-package "CLARA.EDITOR")
+    <h3 id="editor">Emma, the editor</h3>
+    <p><code>Emma</code> in the list opens a window with no text in it yet, whose title is <code>Emma</code>. From a prompt, Emma is launched with the name of a file, and the window's title is <code>Emma - </code> and that name:</p>
+<pre class="session">&gt; (find-package "CLARA.EMMA")
 NIL
-&gt; (clara.windows:launch "Editor" "/hello.lisp")
-#&lt;THREAD "Editor"&gt;
-&gt; (list (package-name (find-package "CLARA.EDITOR"))
+&gt; (clara.windows:launch "Emma" "/hello.lisp")
+#&lt;THREAD "Emma"&gt;
+&gt; (list (package-name (find-package "CLARA.EMMA"))
         (clara.windows:window-title (clara.windows:focused-window)))
-("CLARA.EDITOR" "/hello.lisp")</pre>
-    <p>After the name, <code>:columns</code> and <code>:rows</code> say how large the text's part of the window is, in characters, and <code>:x</code> and <code>:y</code> where the window goes: <code>(clara.windows:launch "Editor" "/hello.lisp" :columns 60 :rows 20)</code>. Without them it is 80 by 24, or what the screen has room for.</p>
-    <p>The window shows the text, with a bar under the place where what is typed goes in, and below the text a row that says which file this is, whether the text has changed since it was read or saved, and the line and the column of the cursor. That row is also where the editor says what it did, and where it asks for the name of a file.</p>
+("CLARA.EMMA" "Emma - /hello.lisp")</pre>
+    <p>After the name, <code>:columns</code> and <code>:rows</code> say how large the text's part of the window is, in characters, and <code>:x</code> and <code>:y</code> where the window goes: <code>(clara.windows:launch "Emma" "/hello.lisp" :columns 60 :rows 20)</code>. Without them it is 80 by 24, or what the screen has room for.</p>
+    <p>The window shows the text, with a bar under the place where what is typed goes in, and below the text a row that says which file this is, whether the text has changed since it was read or saved, and the line and the column of the cursor. That row is also where Emma says what it did, and where it asks for the name of a file.</p>
     <table class="wrap">
       <tr><td>A character</td><td>goes in at the cursor.</td></tr>
       <tr><td><kbd>Enter</kbd></td><td>begins a new line, as far in as the line it comes from.</td></tr>
@@ -1474,7 +1474,7 @@ NIL
       <tr><td><kbd>Home</kbd>, <kbd>End</kbd></td><td>the start and the end of the line.</td></tr>
       <tr><td><kbd>Page Up</kbd>, <kbd>Page Down</kbd></td><td>a window's worth of lines up or down.</td></tr>
       <tr><td>A click</td><td>puts the cursor where the pointer is.</td></tr>
-      <tr><td><kbd>Ctrl-S</kbd></td><td>saves the text in its file. A text that has no file yet is asked for a name.</td></tr>
+      <tr><td><kbd>Ctrl-S</kbd></td><td>saves the text in its file. A text that has no file yet is asked for a name, which the window's title has from then on.</td></tr>
       <tr><td><kbd>Ctrl-O</kbd></td><td>asks for the name of another file, and the text becomes that of the file.</td></tr>
       <tr><td><kbd>Ctrl-K</kbd></td><td>cuts from the cursor to the end of the line, and at the end of a line the end itself. Typed several times in a row, it cuts as many lines.</td></tr>
       <tr><td><kbd>Ctrl-Y</kbd></td><td>puts back what <kbd>Ctrl-K</kbd> cut last, at the cursor, as often as it is typed.</td></tr>
@@ -1483,13 +1483,13 @@ NIL
     </table>
     <p>While the row asks for a name, what is typed is the name: <kbd>Enter</kbd> hands it over, <kbd>Backspace</kbd> takes a character of it back, and <kbd>Escape</kbd> gives the question up. A name is a whole one, from the top of the volume, like <code>/clara/notes.txt</code>. A file that is not there yet is a new one, which the first <kbd>Ctrl-S</kbd> makes.</p>
     <p>A text that has changed is not thrown away at the first asking. <kbd>Ctrl-O</kbd>, <kbd>Ctrl-Q</kbd> and the <code>x</code> say that the text is not saved, and do what they were asked when the same key comes again right after.</p>
-    <p>What to know about the editor as it is now:</p>
+    <p>What to know about Emma as it is now:</p>
     <ul>
       <li>A file is its lines. It is saved with a new line after each, so a file that did not end in one has one afterwards. The line with nothing in it after the last is where the text ends.</li>
       <li>A character that the screen's font does not have shows as a box, a tab among them, and is kept as it is.</li>
       <li>There is no undo, nothing is searched for, and nothing can be marked: <kbd>Ctrl-K</kbd> and <kbd>Ctrl-Y</kbd> are how text is moved.</li>
       <li>What the forms of <kbd>Ctrl-E</kbd> print goes to the console, which is the serial port while the windows are on the screen. They are read in the package <code>COMMON-LISP-USER</code> unless the text says <code>in-package</code>.</li>
-      <li>Each editor window is a thread of its own with its own text. Two that have the same file open know nothing of each other.</li>
+      <li>Each Emma window is a thread of its own with its own text. Two that have the same file open know nothing of each other.</li>
     </ul>
 
     <h3 id="browser">Files</h3>
@@ -1498,21 +1498,21 @@ NIL
 #&lt;THREAD "Files"&gt;
 &gt; (clara.windows:window-title (clara.windows:focused-window))
 "Files in /clara/"</pre>
-    <p><code>:columns</code>, <code>:rows</code>, <code>:x</code> and <code>:y</code> after the name do for this window what they do for the editor's; it is 48 by 16 without them.</p>
+    <p><code>:columns</code>, <code>:rows</code>, <code>:x</code> and <code>:y</code> after the name do for this window what they do for Emma's; it is 48 by 16 without them.</p>
     <p>The window lists what the directory holds: the directories first, each with a slash at its end, then the files, and above them all <code>../</code>, the way to the directory that this one is in. One name is picked, and shows the other way round.</p>
     <table class="wrap">
       <tr><td>The arrows up and down, <kbd>Page Up</kbd>, <kbd>Page Down</kbd>, <kbd>Home</kbd>, <kbd>End</kbd></td><td>pick another name.</td></tr>
-      <tr><td><kbd>Enter</kbd></td><td>goes into the directory that is picked, or opens the file that is picked in a new window of the editor.</td></tr>
+      <tr><td><kbd>Enter</kbd></td><td>goes into the directory that is picked, or opens the file that is picked in a new Emma window.</td></tr>
       <tr><td><kbd>Backspace</kbd>, the arrow to the left</td><td>go to the directory that this one is in.</td></tr>
       <tr><td>A click</td><td>picks the name it is on, and on the name that is picked does what <kbd>Enter</kbd> does.</td></tr>
       <tr><td><kbd>Delete</kbd></td><td>asks whether the file that is picked is to be deleted, and <kbd>y</kbd> deletes it. Any other key does not.</td></tr>
       <tr><td><kbd>Ctrl-R</kbd></td><td>reads the directory again: the window does not notice by itself what was written since.</td></tr>
       <tr><td><kbd>Ctrl-Q</kbd>, the <code>x</code> in the title</td><td>close the window.</td></tr>
     </table>
-    <p>Every file opens in the editor, also one that is no text, which the editor says it cannot read. Directories are not made or deleted here, which <a href="#writing">two functions</a> do at a prompt, and the window shows names and no sizes or dates.</p>
+    <p>Every file opens in Emma, also one that is no text, which Emma says it cannot read. Directories are not made or deleted here, which <a href="#writing">two functions</a> do at a prompt, and the window shows names and no sizes or dates.</p>
 
     <h3 id="installed">Applications in files</h3>
-    <p>The launcher knows the editor and the browser by a name and the name of a file. <code>clara.windows:install-application</code> says so for any file, and the file itself says <code>clara.windows:define-application</code> for the function, under the same name, as its last form. Here is such a file, written from the prompt, a line of it to the string, so that this page can be tried as it stands; the editor is the place to write one.</p>
+    <p>The launcher knows Emma and the browser by a name and the name of a file. <code>clara.windows:install-application</code> says so for any file, and the file itself says <code>clara.windows:define-application</code> for the function, under the same name, as its last form. Here is such a file, written from the prompt, a line of it to the string, so that this page can be tried as it stands; Emma is the place to write one.</p>
 <pre class="session">&gt; (defvar *greeting*
     '("(defpackage \"GREETING\" (:use \"COMMON-LISP\"))"
       "(in-package \"GREETING\")"
@@ -1535,7 +1535,7 @@ NIL
 &gt; (clara.windows:install-application "Greeting" "/greeting.lisp")
 "Greeting"
 &gt; (list (clara.windows:applications) (find-package "GREETING"))
-(("REPL" "Editor" "Files" "Hello" "Greeting") NIL)
+(("REPL" "Emma" "Files" "Hello" "Greeting") NIL)
 &gt; (clara.windows:launch "Greeting" "Good morning")
 #&lt;THREAD "Greeting"&gt;
 &gt; (list (package-name (find-package "GREETING"))
@@ -1545,18 +1545,18 @@ NIL
 <pre class="session">&gt; (clara.windows:unload-application "Greeting")
 "Greeting"
 &gt; (list (find-package "GREETING") (clara.windows:applications))
-(NIL ("REPL" "Editor" "Files" "Hello" "Greeting"))
+(NIL ("REPL" "Emma" "Files" "Hello" "Greeting"))
 &gt; (clara.windows:remove-application "Greeting")
 "Greeting"
 &gt; (clara.windows:applications)
-("REPL" "Editor" "Files" "Hello")</pre>
+("REPL" "Emma" "Files" "Hello")</pre>
     <ul>
       <li><code>clara.windows:unload-application</code> stops the application wherever it runs, which closes its windows, and deletes the packages that its file made: what the file defined is gone from the world, and the memory it took comes back. The application stays in the list, and the next launch loads the file as it is by then. That is how to try a change to an application: save the file, unload, launch.</li>
       <li><code>clara.windows:remove-application</code> does the same and takes the name out of the list. It is also what takes out an application that was defined at a prompt, like <code>Hello</code>.</li>
       <li>What is typed at a prompt to define an application or to install one is <a href="#defined">written down</a> with everything else that you define, so the launcher of a world that is made again, after <a href="#upgrade">an upgrade</a> for one, has it in its list. <code>clara.windows:remove-application</code> and <code>clara.windows:remove-command</code>, typed at a prompt with the name written out, take the form that put it there out of <code>/home/defined.lisp</code> again.</li>
       <li>An application that fails, in its file or later, ends with its windows closed. The reason is said on the console, as for any thread: <code>error in #&lt;THREAD "Greeting"&gt;:</code> and what went wrong.</li>
-      <li>The editor and the browser are unloaded and launched again the same way, and the system's <code>editor.lisp</code> can be changed in the editor: <code>(clara.system:system-file "editor.lisp")</code> is its name. A file that is installed by a name without a directory, as those two are, is one of the system's own.</li>
-      <li>What an application is installed as is part of the world, and is saved with it. Whether its file has been loaded is too: a world that is saved after the editor was used starts with the editor in it.</li>
+      <li>Emma and the browser are unloaded and launched again the same way, and the system's <code>emma.lisp</code> can be changed in Emma: <code>(clara.system:system-file "emma.lisp")</code> is its name. A file that is installed by a name without a directory, as those two are, is one of the system's own.</li>
+      <li>What an application is installed as is part of the world, and is saved with it. Whether its file has been loaded is too: a world that is saved after Emma was used starts with Emma in it.</li>
     </ul>
   </section>
 
@@ -1707,7 +1707,7 @@ error: nothing is mapped at #x0</pre>
       <tr><td><code>error: the machine is not shut down: the window ... has text that is not saved</code></td><td>A program holds something that would go with the machine, and the window that says so has come to the top. Save it or close the window and ask again, or ask with <code>:force t</code>: <a href="#stop">Stopping it</a>.</td></tr>
       <tr><td>The machine says <code>clara: starting the machine again</code>, and nothing more comes: its window stays black.</td><td>The machine went down, and its firmware is not coming up. That is a ClaraOS before 0.0.44 on a machine whose firmware is OVMF of EDK2's release of November 2025, which Ubuntu 26.04 has: that firmware reads a piece of the memory that the system left behind, and can stand still over what it finds there. End QEMU and start the machine once more, which starts it with empty memory; when a newer system was on its way, it is tried at that start. From 0.0.44 on the system keeps that piece of memory empty.</td></tr>
       <tr><td><code>clara: this machine cannot be turned off from inside</code></td><td>The firmware names no way of turning this machine off that the system knows, and the report said so as it started, in its line <code>power:</code>. The world is saved by then: stop the machine from outside.</td></tr>
-      <tr><td>The arrow keys do nothing at a prompt.</td><td>A line at a prompt is edited with <kbd>Backspace</kbd> alone. The arrows are for the <a href="#editor">editor</a> and the <a href="#browser">browser</a>.</td></tr>
+      <tr><td>The arrow keys do nothing at a prompt.</td><td>A line at a prompt is edited with <kbd>Backspace</kbd> alone. The arrows are for <a href="#editor">Emma</a> and the <a href="#browser">browser</a>.</td></tr>
       <tr><td><code>lisp: clara.image is not resumed</code> in the report.</td><td>A saved world was not started, and the reason follows on the same line: <a href="#refused">An image that is not taken</a>. After an upgrade that is how it should be.</td></tr>
       <tr><td>A report that begins with <code>exception:</code> or <code>panic:</code>, and a machine that stands still.</td><td>The kernel, or a driver, has failed, and has stopped the machine where it was. The report says what happened in words, where, and what was in every register. Start the machine again. What was saved or written to a file before is there. Then please <a href="https://github.com/the-clara-os/clara-os/issues">say what you did</a>, with the report: that is a bug in ClaraOS.</td></tr>
     </table>
@@ -1788,9 +1788,9 @@ error: nothing is mapped at #x0</pre>
     <p>What makes <a href="#processor">the processor's own instructions</a> of a compiled function. <code>start</code> is the system's: it asks the kernel, at every start, which processor this is and where the kernel keeps what such code reads.</p>
     <p class="names" data-package="CLARA.NATIVE"><code>clara.native:*translate*</code> <code>clara.native:translate</code> <code>clara.native:translate-all</code> <code>clara.native:translated-p</code> <code>clara.native:start</code></p>
 
-    <h3>The packages CLARA.EDITOR and CLARA.FILES</h3>
+    <h3>The packages CLARA.EMMA and CLARA.FILES</h3>
     <p>The two <a href="#applications">applications</a> that are files. Each package is there once its application has been launched, and gone again when it is unloaded; the one name of each is the function that <code>clara.windows:launch</code> calls.</p>
-    <p class="names" data-package="CLARA.EDITOR"><code>clara.editor:edit</code></p>
+    <p class="names" data-package="CLARA.EMMA"><code>clara.emma:edit</code></p>
     <p class="names" data-package="CLARA.FILES"><code>clara.files:browse</code></p>
 
     <h3>The package CLARA.SOUND</h3>

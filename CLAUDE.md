@@ -1034,7 +1034,7 @@ Rules:
   the bytes of the DSDT (`acpi_sleep_type`, `acpi_device_memory`): a
   change there is tried on all three machines, since each has a DSDT of
   its own. A program that holds what would be lost gives its window an
-  `:unfinished` function, as lisp/editor.lisp does, and nothing else is
+  `:unfinished` function, as lisp/emma.lisp does, and nothing else is
   asked before a shutdown.
 - A session can go across a start: a line `^R` after the form that starts
   the machine again, and what follows is typed at the kernel that comes up
@@ -1563,7 +1563,7 @@ Rules:
   `(:key code)`, `(:pointer x y buttons)`, `(:close)`. That is how an
   application is written: a loop that waits, changes what it holds, and
   draws. The close box is told once until the program has taken it.
-- Applications in files (lisp/editor.lisp, lisp/files.lisp). They are in
+- Applications in files (lisp/emma.lisp, lisp/files.lisp). They are in
   lisp/, so the build puts them on the boot volume, and they are not in
   `world` of lisp.c: the last lines of lisp/terminal.lisp install them
   (`clara.windows:install-application`), and the launcher loads the file
@@ -1575,8 +1575,19 @@ Rules:
   `unload-application` stops the threads and deletes the packages that
   were new after the load; a file that puts its definitions somewhere
   else leaves them behind. One application starts another by its name,
-  `(clara.windows:launch "Editor" name)`, and holds none of its symbols:
+  `(clara.windows:launch "Emma" name)`, and holds none of its symbols:
   the package may not be there when the file is read.
+- The editor is Emma (Julio's issue #41; it was the Editor until 0.0.50):
+  that is the application's name, in the launcher's list and for its
+  threads, and its file and its package go by it, lisp/emma.lisp and
+  CLARA.EMMA, where they were lisp/editor.lisp and CLARA.EDITOR. The
+  names inside the file and in the tests say what it is and stayed: the
+  struct `editor`, `open-editor`, `editor-wrong`. The title of its
+  window is `title`'s to say and nobody else's: `Emma` for a text with no
+  file, and `Emma - ` and the name of the file once there is one (Julio,
+  the same day: "in the window title, i would like it to say `Emma -
+  <name of open file>`"). The host tests and the sessions write such a
+  title out; none of them calls `title` for what it expects.
 - An application is written so that the tests can drive it without its
   thread: `open-editor` makes the window and the state, `key`, `point` and
   `happened` change the state, `render` draws, and `run` is the loop that

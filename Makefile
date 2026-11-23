@@ -149,7 +149,7 @@ host-test:
 # played, which is held to what it is like, and not to every frame, since
 # that card plays by the clock. Then each kind of processor once more, from
 # the disk that its first session left, for what is done to a machine and
-# not in it (tools/power.txt): it is asked to shut down while an editor has
+# not in it (tools/power.txt): it is asked to shut down while Emma has
 # a text that is not saved, and has to refuse; it is told to start again,
 # and has to come up in the world that it saved on the way; and its power
 # button is pressed, as a host does to stop a machine, after which it has

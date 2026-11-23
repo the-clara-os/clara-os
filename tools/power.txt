@@ -2,15 +2,15 @@
 #<PACKAGE "COMMON-LISP-USER">
 > (list (clara.windows:running-p) (clara.windows:commands) (fact 5))
 (T ("Restart" "Shut Down") 120)
-> (list (clara:thread-alive-p (clara.windows:launch "Editor")) (clara.windows:unfinished))
+> (list (clara:thread-alive-p (clara.windows:launch "Emma")) (clara.windows:unfinished))
 (T NIL)
 > (until (clara.windows:unfinished))
 ^T x
 OK
 > (clara.system:shut-down)
-error: the machine is not shut down: the window "Editor" has text that is not saved. Finish that, or ask with :FORCE T, which goes on without
+error: the machine is not shut down: the window "Emma" has text that is not saved. Finish that, or ask with :FORCE T, which goes on without
 > (list (clara.windows:window-title (clara.windows:focused-window)) (clara.windows:running-p))
-("Editor" T)
+("Emma" T)
 > (defvar *wanted* 'to-start-again)
 *WANTED*
 > (clara.system:start-again :force t)
