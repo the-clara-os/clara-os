@@ -59,8 +59,8 @@ part of the colour. And there is a window manager (lisp/windows.lisp):
 `(clara.windows:start)` takes the screen from the console and puts windows
 on it, each a surface that its program draws on, with the focus, the keys
 and the pointer going to the one that is picked, a launcher along the top,
-and a listener in a window (lisp/terminal.lisp), which is the same world
-as the prompt on the serial port. A world that is saved while it runs
+and the REPL, a listener in a window (lisp/terminal.lisp), which is the
+same world as the prompt on the serial port. A world that is saved while it runs
 boots straight into it. Two applications come with it, a text editor
 (lisp/editor.lisp) and a file browser (lisp/files.lisp): each is a file on
 the boot volume that the launcher loads when it is first picked, and

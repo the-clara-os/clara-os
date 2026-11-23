@@ -834,7 +834,12 @@ architectures (kernel/vm.c).
   stream, and puts its lines together with the console's own function for
   that. Each listener has a thread and a package to be in, and they share
   everything else, which is what one world means: what is defined in a
-  window is defined at the serial port.
+  window is defined at the serial port. As an application it is the REPL
+  (`clara.terminal:repl`), which is what the launcher's list, the window's
+  title and its thread say; it was the Listener until 0.0.49 (Julio's
+  issue #40). The listener is still the name of what reads, evaluates and
+  prints, at the serial port and in every such window
+  (lisp/listener.lisp).
 - Ctrl-C is for a thread. The serial port's goes to the thread that reads
   from the console, as it did. The keyboard's goes to the window that has
   the focus, whose terminal stops the thread that reads from it, by a
@@ -850,7 +855,7 @@ architectures (kernel/vm.c).
   own function looks at it when the substrate calls it at every boot
   (RESUME): what it knew of windows and pixels is forgotten, the pixels
   and the threads having stayed behind, and it starts afresh, with one
-  listener. A world that is made from the files starts at the console, and
+  REPL. A world that is made from the files starts at the console, and
   the window manager is started from there.
 - The window manager has one key of its own, Tab with Alt held, which
   brings the lowest window to the top and so each in turn. Every other key
@@ -875,8 +880,8 @@ architectures (kernel/vm.c).
   while everything else goes on, and the first two are made the way that a
   third will be: nothing about them is the kernel's to know.
 - The file says what it is. Its last form defines the application, under
-  the name that the launcher has for it, the way the listener's file does
-  for the listener. What a launcher would otherwise have to be told, which
+  the name that the launcher has for it, the way lisp/terminal.lisp does
+  for the REPL. What a launcher would otherwise have to be told, which
   function to call, is then in one place, the file.
 - Unloading is deleting packages. An application's file makes a package
   for what it defines, and the launcher notes which packages were not there
@@ -2480,7 +2485,7 @@ architectures (kernel/vm.c).
   something can be done about it. A machine without a disk has nowhere to
   save a world and goes all the same.
 - A thread of its own does all of that. The thread that asked may be an
-  application's, the listener's in a window, and stopping the window
+  application's, the REPL's for one, and stopping the window
   manager stops it halfway. Whoever asked waits for that thread, and hears
   from the procedure again only if the machine is still there: when a
   world could not be saved, or when the substrate has no way of turning

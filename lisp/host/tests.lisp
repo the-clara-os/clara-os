@@ -6112,7 +6112,7 @@
 ;;; The window manager in a font of outlines: the bar, the list and the
 ;;; titles. The rule for what the screen should show is the one above, with
 ;;; letters that have shades.
-(new-desk :letters t :applications (list (cons "Listener" (lambda () nil)) (cons "Files" (lambda () nil))
+(new-desk :letters t :applications (list (cons "REPL" (lambda () nil)) (cons "Files" (lambda () nil))
                                          (cons "An application with a long name" (lambda () nil)))
           :commands (list (cons "Shut Down" (lambda () nil))))
 (check '(t 0) (list (clara.type:font-p clara.windows::*letters*) (wrong-pixels)))
@@ -6295,7 +6295,7 @@
   (setf (clara.terminal::terminal-keys *terminal*) nil))
 (clara.windows:close-window (clara.terminal:terminal-window *terminal*))
 
-;; The listener in a window: the application that START launches. It says
+;; The REPL, the listener in a window: the application that START launches. It says
 ;; what it is, reads what is typed, evaluates it and prints what it gives,
 ;; in the one world there is.
 (let ((open-terminal #'clara.terminal:open-terminal))
@@ -6303,11 +6303,11 @@
         (lambda (&rest arguments) (setq *terminal* (apply open-terminal arguments))))
   (unwind-protect
        (progn
-         (new-desk :width 300 :height 220 :applications (list (cons "Listener" #'clara.terminal:listener)))
+         (new-desk :width 300 :height 220 :applications (list (cons "REPL" #'clara.terminal:repl)))
          (let* ((window (clara.windows:focused-window))
                 (face (clara.windows:window-surface window))
                 (thread (car clara.windows::*launched*)))
-           (check '("Listener" 248 96 "Listener")
+           (check '("REPL" 248 96 "REPL")
                   (list (clara.windows:window-title window) (clara.draw:surface-width face) (clara.draw:surface-height face)
                         (clara:thread-name thread)))
            (check t (eventually (lambda () (and (row-shows-p face 3 "> ") (bar-at-p face 3 2 +ink+)))))
@@ -6332,7 +6332,7 @@
            (check t (eventually (lambda () (and (null (clara.windows:windows)) (not (clara:thread-alive-p thread))))))
            (check '(0 nil) (list (wrong-pixels) clara.windows::*made*)))
          ;; The close box ends it as well.
-         (let ((thread (clara.windows:launch "listener")))
+         (let ((thread (clara.windows:launch "repl")))
            (multiple-value-bind (x y) (clara.windows:window-position (clara.windows:focused-window))
              (clara.windows:pointer-moved (+ x 240) (- y 10) 1)
              (clara.windows:pointer-moved (+ x 240) (- y 10) 0))
@@ -6343,12 +6343,12 @@
 (setq clara.windows::*applications* *defined-applications*)
 ;; What lisp/terminal.lisp defined and installed when it was loaded: the two
 ;; that are files have a function here because the tests loaded the files.
-(check '(("Listener" nil) ("Editor" "editor.lisp") ("Files" "files.lisp"))
+(check '(("REPL" nil) ("Editor" "editor.lisp") ("Files" "files.lisp"))
        (mapcar (lambda (application)
                  (list (clara.windows::application-name application) (clara.windows::application-file application)))
                clara.windows::*applications*))
-(check '("Listener" "Editor" "Files") (clara.windows:applications))
-(check (list #'clara.terminal:listener #'clara.editor:edit #'clara.files:browse)
+(check '("REPL" "Editor" "Files") (clara.windows:applications))
+(check (list #'clara.terminal:repl #'clara.editor:edit #'clara.files:browse)
        (mapcar #'clara.windows::application-function clara.windows::*applications*))
 
 ;;; What happens to a window, kept for its program: the keys that are typed

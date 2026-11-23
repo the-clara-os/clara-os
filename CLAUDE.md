@@ -73,7 +73,7 @@ Rules:
   site/boot.png of build/screen-aarch64-resumed.png and writes the version
   into it, and `make site` stops when the picture is of another version
   than the kernel's. When tools/resumed.txt ends in another way, or types
-  something else into the listener's window, the words beside the picture
+  something else into the REPL's window, the words beside the picture
   in site/index.html, its `alt`, are changed by hand.
 - Substrate code checks itself during boot (`pmm_selftest`) and panics when
   a check fails, so `make test` covers it. A check that needs a temporary
@@ -1232,7 +1232,7 @@ Rules:
   to the pixel. tools/session.txt defines `picture`, and tools/resumed.txt
   ends by drawing it in a window: that screen is the picture on the
   website, so the last forms of that session, and what it types into the
-  listener's window, are what the front page shows. The console does not draw with this file, and writes over what is
+  REPL's window, are what the front page shows. The console does not draw with this file, and writes over what is
   shown.
 - Fonts of outlines (lisp/type.lisp, the package CLARA.TYPE; DESIGN.md has
   what was decided). A font is a TrueType file at a size. Every byte of a
@@ -1260,7 +1260,7 @@ Rules:
   again. What is read and made for a font is kept beside it and not in it
   (`*made*`, a `kept` for each font that was used): a structure prints
   with all that it holds, and a font that held the pictures of its glyphs
-  filled the listener's window when it was the value of a form. The
+  filled the REPL's window when it was the value of a form. The
   fonts that come with the system are `fonts/*.ttf`, which the
   Makefile puts into the system's directory (`FONTS`, and so into
   `SYSTEM_SRCS`) and the handoff reads into memory with the system's Lisp
@@ -1503,8 +1503,14 @@ Rules:
   RESUME, having looked for the package, and RESUME starts the window
   manager when `*running*` was true in the world that was saved. A
   terminal (lisp/terminal.lisp) is a window with cells and a stream; the
-  listener in a window is its application, the first that is defined,
-  which START launches. Ctrl-C there is `clara:interrupt-thread`. What
+  REPL, the listener in a window (`clara.terminal:repl`), is its
+  application, the first that is defined, which START launches. That is
+  the application's name, in the launcher's list, on its window and for
+  its thread (Julio's issue #40; it was the Listener until 0.0.49). What
+  reads, evaluates and prints there and at the serial port is still the
+  listener (lisp/listener.lisp, the package CLARA.LISTENER), and the
+  thread at the serial port is still named so. Ctrl-C there is
+  `clara:interrupt-thread`. What
   the bar, the list and the titles say goes through `label`, which writes
   halfway up a strip in the window manager's letters: the font that
   `clara.windows:*font*` names, which START makes (`*letters*`), or the

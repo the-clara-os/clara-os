@@ -819,7 +819,7 @@
   (and *running* t))
 
 ;; The window manager takes the screen, the keyboard and the pointer, and
-;; launches the first application that was defined, which is the listener's
+;; launches the first application that was defined, which is the REPL
 ;; (lisp/terminal.lisp), so that there is somewhere to type. The console
 ;; goes on with the serial port alone. T when the window manager is
 ;; running after this, and NIL on a machine without a screen.

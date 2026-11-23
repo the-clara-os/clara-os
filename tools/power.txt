@@ -18,7 +18,7 @@ clara: the world is saved
 clara: starting the machine again
 ^R
 > (list *wanted* (fact 6) (clara.windows:running-p) (mapcar #'clara.windows:window-title (clara.windows:windows)))
-(TO-START-AGAIN 720 T ("Listener"))
+(TO-START-AGAIN 720 T ("REPL"))
 > (list 'the-button (clara:wait-event (clara:make-event) 60000))
 ^M system_powerdown
 clara: the power button was pressed

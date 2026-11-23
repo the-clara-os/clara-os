@@ -259,7 +259,7 @@ ONE
     </table>
     <p>That is all the editing there is. The arrow keys do nothing, and no line that was typed before can be called back. In a terminal on the serial port, the terminal's own copy and paste do what is missing: many forms can be pasted at once.</p>
     <p>The keyboard is read as one of the United States, with <kbd>Shift</kbd>, <kbd>Ctrl</kbd> and <kbd>Caps Lock</kbd>, and a key that is held down repeats. What is typed on the serial port can be any character, as UTF-8. The screen shows the characters of ASCII, and a box for any other.</p>
-    <p>A Listener <a href="#windows">window</a> has the same keys, with one difference: there <kbd>Ctrl-D</kbd> closes the window, and the machine goes on.</p>
+    <p>A REPL <a href="#windows">window</a> has the same keys, with one difference: there <kbd>Ctrl-D</kbd> closes the window, and the machine goes on.</p>
     <p>The screen holds 100 columns and 37 rows at 800 by 600 pixels, and what scrolls off its top is gone. The terminal on the serial port keeps whatever a terminal keeps.</p>
 
     <h3 id="errors">Mistakes</h3>
@@ -802,7 +802,7 @@ NIL
       <li>Functions, macros, structures, packages and conditions that were defined, and the values of variables, come back. So does the package that names were being read in. All of it is <a href="#compiler">compiled</a> and <a href="#processor">translated for the processor</a>, and comes back as it was.</li>
       <li>A special variable comes back with the value it has outside every <code>let</code>, also when it was saved from inside one.</li>
       <li>Threads do not come back. The world starts again at the prompt, and does not go on in the middle of what it was doing. A thread that was running is one that has been stopped, and a lock that was held is free.</li>
-      <li>The <a href="#windows">window manager</a> is running again when it was running, with one Listener window. The windows that were open do not come back.</li>
+      <li>The <a href="#windows">window manager</a> is running again when it was running, with one REPL window. The windows that were open do not come back.</li>
       <li>The devices are found again, as at every start. A world can be saved on one machine and started on another that has other devices, or another screen, as long as it is the same kind of processor.</li>
       <li>Files are on the disk either way, and have nothing to do with the image.</li>
       <li>What you defined after the world was saved, on a machine that was then stopped without a shutdown, is not in the image. It is in <a href="#home">the text</a>, and the start loads it from there.</li>
@@ -1118,7 +1118,7 @@ system: {{version}}-41d0c97b has come to its prompt, and is the system of this m
       <li>Every file that you wrote, wherever it is on the disk. The upgrade writes into <code>/clara</code> and <code>/EFI</code> and nowhere else.</li>
       <li>What you defined at a prompt, as text: the newer system loads <a href="#home"><code>/home/init.lisp</code> and <code>/home/defined.lisp</code></a> into the world that it makes.</li>
       <li>What your variables had come to, as far as that is text: numbers, characters, strings, symbols, and lists of those. The old system writes those values down as it leaves, and the new one gives them to the variables once the text has defined them.</li>
-      <li>The window manager: it is started when it was running, with one Listener window, and a form of your text that opens a window opens it.</li>
+      <li>The window manager: it is started when it was running, with one REPL window, and a form of your text that opens a window opens it.</li>
       <li>Not the world itself. A world belongs to the system that saved it, so the newer system makes one of its own files, and saves it without being asked: the next start is in it. What is no text is not in it: a function that no form of the text defines, a thread, a lock, a list that leads back into itself. A variable that held such a thing has what its form makes anew.</li>
     </ul>
     <p>The newer system says which is which as it starts, by name:</p>
@@ -1172,7 +1172,7 @@ error: the thread #&lt;THREAD "spinner"&gt; was stopped</pre>
       <li>An event counts how often it was signalled. <code>clara:wait-event</code> waits until it has been, and takes one off the count. With a number of milliseconds as its second argument it waits no longer than that, and gives <code>NIL</code> when the time ran out.</li>
       <li><code>(sleep 2)</code> waits two seconds. The other threads run meanwhile.</li>
       <li><code>clara:destroy-thread</code> tells a thread to stop, which it does at its next step, cleaning up on its way out.</li>
-      <li><code>clara:interrupt-thread</code> is <kbd>Ctrl-C</kbd> for one thread: what it computes, or waits for, ends with the condition <code>clara:keyboard-interrupt</code>, which the thread can handle. A Listener window does this to its own thread when <kbd>Ctrl-C</kbd> is typed in it.</li>
+      <li><code>clara:interrupt-thread</code> is <kbd>Ctrl-C</kbd> for one thread: what it computes, or waits for, ends with the condition <code>clara:keyboard-interrupt</code>, which the thread can handle. A REPL window does this to its own thread when <kbd>Ctrl-C</kbd> is typed in it.</li>
     </ul>
     <p>The threads take turns, a hundredth of a second each. One of them at a time is evaluating, on the one processor that the system uses, so threads keep the machine answering while something waits, and do not make a computation faster. Each thread has its own bindings of the special variables: one that it binds with <code>let</code> is bound for it alone. A thread costs about a mebibyte and a half of memory.</p>
   </section>
@@ -1319,8 +1319,8 @@ NIL</pre>
 <pre class="session">&gt; (clara.windows:start)
 T
 &gt; (mapcar #'clara.windows:window-title (clara.windows:windows))
-("Listener")</pre>
-    <p>The screen now shows a bar along its top, with <code>Applications</code> at its left-hand end and the system's name and version at the right; a window named Listener, with a prompt in it; and the pointer. It is worked like this:</p>
+("REPL")</pre>
+    <p>The screen now shows a bar along its top, with <code>Applications</code> at its left-hand end and the system's name and version at the right; a window named REPL, with a prompt in it; and the pointer. It is worked like this:</p>
     <table class="wrap">
       <tr><td>A click on a window</td><td>brings it to the top. The window on top has the focus: its frame is lit, and what is typed goes to it.</td></tr>
       <tr><td>The title of a window</td><td>is where to take hold of it: press the button there, move, and let go.</td></tr>
@@ -1329,8 +1329,8 @@ T
       <tr><td><kbd>Alt</kbd> and <kbd>Tab</kbd></td><td>brings the lowest window to the top, and so each window in its turn.</td></tr>
     </table>
     <p>What the bar, the list and the titles say is written in a <a href="#fonts">font</a>, <code>Sans</code> at 13 pixels. <code>clara.windows:*font*</code> says which: a list of a name and a size, as <code>clara.type:font</code> takes them, or <code>NIL</code> for the console's letters. The window manager reads it as it starts, so another font shows after <code>(clara.windows:stop)</code>, which ends the applications that run, and <code>(clara.windows:start)</code>; it stays with a <a href="#image">world that is saved</a>. The bar and the titles keep their height, which a font of up to 16 pixels fits.</p>
-    <p>A Listener window is a prompt like the first one, with the same <a href="#keys">keys</a>, except that <kbd>Ctrl-D</kbd> closes the window and <kbd>Ctrl-C</kbd> stops what that window is evaluating. Every listener is in the one world: what is defined in a window is defined at the serial port and in the next window. Each has a thread of its own, so one can compute while you type in another, and each is in a package of its own choosing.</p>
-    <p>It needs a keyboard and a pointer that the system has drivers for. <code>make run-aarch64</code> gives the machine both, and so does <a href="#utm">UTM</a> on Apple silicon. With a keyboard alone, the Listener window still takes what is typed, and the functions below do what the pointer would.</p>
+    <p>A REPL window is a prompt like the first one, with the same <a href="#keys">keys</a>, except that <kbd>Ctrl-D</kbd> closes the window and <kbd>Ctrl-C</kbd> stops what that window is evaluating. Every prompt is in the one world: what is defined in a window is defined at the serial port and in the next window. Each has a thread of its own, so one can compute while you type in another, and each is in a package of its own choosing.</p>
+    <p>It needs a keyboard and a pointer that the system has drivers for. <code>make run-aarch64</code> gives the machine both, and so does <a href="#utm">UTM</a> on Apple silicon. With a keyboard alone, the REPL window still takes what is typed, and the functions below do what the pointer would.</p>
 
     <h3 id="own">A window of your own</h3>
     <p>The functions are in the package <code>CLARA.WINDOWS</code>. A window's inside is a surface, and is drawn on like any other. What was drawn reaches the screen with <code>clara.windows:show</code>, as far as the window can be seen behind the others.</p>
@@ -1347,10 +1347,10 @@ T
 &gt; (clara.windows:move-window *window* 400 300)
 400
 300
-&gt; (clara.windows:launch "Listener")
-#&lt;THREAD "Listener"&gt;
+&gt; (clara.windows:launch "REPL")
+#&lt;THREAD "REPL"&gt;
 &gt; (mapcar #'clara.windows:window-title (clara.windows:windows))
-("Listener" "A window of my own" "Listener")
+("REPL" "A window of my own" "REPL")
 &gt; (clara.windows:window-title (clara.windows:raise-window *window*))
 "A window of my own"</pre>
     <ul>
@@ -1422,10 +1422,10 @@ NIL</pre>
         (sleep 2))))
 "Hello"
 &gt; (clara.windows:applications)
-("Listener" "Editor" "Files" "Hello")
+("REPL" "Editor" "Files" "Hello")
 &gt; (clara:join-thread (clara.windows:launch "Hello"))
 NIL</pre>
-    <p>The window is there for two seconds, and goes with its application. From now on <code>Hello</code> is in the list under <code>Applications</code>, below the three that come with the system. <code>Listener</code> is <code>clara.terminal:listener</code>, the first application and the one that is launched when the window manager starts; <code>Editor</code> and <code>Files</code> are the subject of <a href="#applications">the next chapter</a>.</p>
+    <p>The window is there for two seconds, and goes with its application. From now on <code>Hello</code> is in the list under <code>Applications</code>, below the three that come with the system. <code>REPL</code> is <code>clara.terminal:repl</code>, the first application and the one that is launched when the window manager starts; <code>Editor</code> and <code>Files</code> are the subject of <a href="#applications">the next chapter</a>.</p>
     <p>What the list has under its line are commands: a name and a function of no arguments, which is called in a thread of its own when the name is picked, and which opens no window that anything waits for.</p>
 <pre class="session">&gt; (clara.windows:commands)
 ("Restart" "Shut Down")
@@ -1441,18 +1441,18 @@ NIL</pre>
     <p>The report of the next start says so, in its last line before the prompt of the serial port:</p>
 <pre><code>windows: the window manager has the screen again, as it had when the world was saved</code></pre>
 <pre class="session again">&gt; (list (clara.windows:running-p) (mapcar #'clara.windows:window-title (clara.windows:windows)))
-(T ("Listener"))
+(T ("REPL"))
 &gt; (clara.windows:applications)
-("Listener" "Editor" "Files" "Hello")
+("REPL" "Editor" "Files" "Hello")
 &gt; (clara.windows:stop)
 T</pre>
-    <p>What is defined comes back, the applications among it. The windows that were open do not: a window is pixels and a thread, and an image has neither, so the window manager starts with one Listener, as it does the first time. <code>clara.windows:stop</code> ends the applications and gives the screen back to the console, cleared; a world that is saved after that starts at the console again.</p>
+    <p>What is defined comes back, the applications among it. The windows that were open do not: a window is pixels and a thread, and an image has neither, so the window manager starts with one REPL, as it does the first time. <code>clara.windows:stop</code> ends the applications and gives the screen back to the console, cleared; a world that is saved after that starts at the console again.</p>
     <p>A window is the size it was opened with. <kbd>Alt</kbd> and <kbd>Tab</kbd> is the one key that is the window manager's own: nothing on the keyboard opens the list of applications, moves a window or closes one, which the pointer does, and the pointer has one shape.</p>
   </section>
 
   <section id="applications">
     <h2>{{spleen:Applications}}</h2>
-    <p>Two applications come with the system besides the Listener: an editor for text, and a browser for the files of the disk. Each is a file of Lisp among <a href="#listing">the system's own</a>, <code>editor.lisp</code> and <code>files.lisp</code>, which the system does not load as it starts. The file is loaded the first time its application is picked from <code>Applications</code>, or launched from a prompt, and the application can be unloaded again while everything else goes on.</p>
+    <p>Two applications come with the system besides the REPL: an editor for text, and a browser for the files of the disk. Each is a file of Lisp among <a href="#listing">the system's own</a>, <code>editor.lisp</code> and <code>files.lisp</code>, which the system does not load as it starts. The file is loaded the first time its application is picked from <code>Applications</code>, or launched from a prompt, and the application can be unloaded again while everything else goes on.</p>
 
     <h3 id="editor">The editor</h3>
     <p><code>Editor</code> in the list opens a window with no text in it yet. From a prompt, the editor is launched with the name of a file, and the window has the file's name for its title:</p>
@@ -1535,7 +1535,7 @@ NIL
 &gt; (clara.windows:install-application "Greeting" "/greeting.lisp")
 "Greeting"
 &gt; (list (clara.windows:applications) (find-package "GREETING"))
-(("Listener" "Editor" "Files" "Hello" "Greeting") NIL)
+(("REPL" "Editor" "Files" "Hello" "Greeting") NIL)
 &gt; (clara.windows:launch "Greeting" "Good morning")
 #&lt;THREAD "Greeting"&gt;
 &gt; (list (package-name (find-package "GREETING"))
@@ -1545,11 +1545,11 @@ NIL
 <pre class="session">&gt; (clara.windows:unload-application "Greeting")
 "Greeting"
 &gt; (list (find-package "GREETING") (clara.windows:applications))
-(NIL ("Listener" "Editor" "Files" "Hello" "Greeting"))
+(NIL ("REPL" "Editor" "Files" "Hello" "Greeting"))
 &gt; (clara.windows:remove-application "Greeting")
 "Greeting"
 &gt; (clara.windows:applications)
-("Listener" "Editor" "Files" "Hello")</pre>
+("REPL" "Editor" "Files" "Hello")</pre>
     <ul>
       <li><code>clara.windows:unload-application</code> stops the application wherever it runs, which closes its windows, and deletes the packages that its file made: what the file defined is gone from the world, and the memory it took comes back. The application stays in the list, and the next launch loads the file as it is by then. That is how to try a change to an application: save the file, unload, launch.</li>
       <li><code>clara.windows:remove-application</code> does the same and takes the name out of the list. It is also what takes out an application that was defined at a prompt, like <code>Hello</code>.</li>
@@ -1774,7 +1774,7 @@ error: nothing is mapped at #x0</pre>
     <h3>The packages CLARA.WINDOWS and CLARA.TERMINAL</h3>
     <p><a href="#windows">Windows</a> says what each of these is for. <code>clara.windows:resume</code> is what the system calls as it starts, for a world that was saved with the window manager running.</p>
     <p class="names" data-package="CLARA.WINDOWS"><code>clara.windows:start</code> <code>clara.windows:stop</code> <code>clara.windows:running-p</code> <code>clara.windows:resume</code> <code>clara.windows:open-window</code> <code>clara.windows:close-window</code> <code>clara.windows:show</code> <code>clara.windows:window-p</code> <code>clara.windows:window-title</code> <code>clara.windows:window-surface</code> <code>clara.windows:window-position</code> <code>clara.windows:move-window</code> <code>clara.windows:raise-window</code> <code>clara.windows:rename-window</code> <code>clara.windows:next-event</code> <code>clara.windows:windows</code> <code>clara.windows:focused-window</code> <code>clara.windows:define-application</code> <code>clara.windows:install-application</code> <code>clara.windows:unload-application</code> <code>clara.windows:remove-application</code> <code>clara.windows:applications</code> <code>clara.windows:launch</code> <code>clara.windows:*application-directory*</code> <code>clara.windows:define-command</code> <code>clara.windows:remove-command</code> <code>clara.windows:commands</code> <code>clara.windows:unfinished</code> <code>clara.windows:*font*</code> <code>clara.windows:key-typed</code> <code>clara.windows:pointer-moved</code></p>
-    <p class="names" data-package="CLARA.TERMINAL"><code>clara.terminal:open-terminal</code> <code>clara.terminal:terminal-p</code> <code>clara.terminal:terminal-stream</code> <code>clara.terminal:terminal-window</code> <code>clara.terminal:clear</code> <code>clara.terminal:listener</code></p>
+    <p class="names" data-package="CLARA.TERMINAL"><code>clara.terminal:open-terminal</code> <code>clara.terminal:terminal-p</code> <code>clara.terminal:terminal-stream</code> <code>clara.terminal:terminal-window</code> <code>clara.terminal:clear</code> <code>clara.terminal:repl</code></p>
 
     <h3>The package CLARA.SYSTEM</h3>
     <p>The machine as a whole: <a href="#stop">shutting it down and starting it again</a>, and <a href="#upgrade">taking a newer system</a>. <code>system</code> is the name of the system that runs, <code>system-file</code> the name of one of its files, and <code>boot-volume</code> the volume that the machine was started from. <code>home</code> is the directory where <a href="#home">your work is kept as text</a>, <code>home-file</code> the name of a file in it, and <code>load-home</code> loads its two files into the world. <code>report</code> says again <a href="#across">how the world was made</a> and what came into it since. <code>start</code> is called by the kernel as the machine comes up: it sees to a system that is on trial, and has a thread watch the power button from then on.</p>

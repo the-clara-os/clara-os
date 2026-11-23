@@ -144,7 +144,7 @@ host-test:
 # from that disk, with the devices that UTM gives a machine in place of
 # virtio's (UTM=1, tools/utm.txt): a USB controller with a tablet, a mouse
 # and a keyboard at its ports, and Intel's sound card. What is typed on
-# that keyboard has to reach the listener's window, Ctrl-C has to stop a
+# that keyboard has to reach the REPL's window, Ctrl-C has to stop a
 # form there, the mouse has to drag the window, and a tone has to be
 # played, which is held to what it is like, and not to every frame, since
 # that card plays by the clock. Then each kind of processor once more, from
