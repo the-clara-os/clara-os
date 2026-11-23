@@ -842,6 +842,49 @@ static const struct {
     { "(remove-if #'evenp '(1 2 3 4))", "(1 3)" },
     { "(list (find 2 '(1 2 3)) (position 3 '(1 2 3)) (every #'oddp '(1 3)) (some #'evenp '(1 3)))",
       "(2 2 T NIL)" },
+    /* FIND, FIND-IF, POSITION and POSITION-IF: a list, a string or a
+     * vector, the part from :START up to :END, the last one first with
+     * :FROM-END, and what :KEY makes of an element. The answers are SBCL's. */
+    { "(list (find #\\b \"abc\") (find 3 (vector 1 2 3)) (find #\\. \"1.5+2\" :start 2) (find #\\. \"1.5+2\" :start 1)"
+      " (find 2 '(1 2 3) :start 2) (find 2 '(1 2 3) :start 1 :end 2) (find #\\. \"1.5+2\" :start 1 :end 1)"
+      " (find 2 '(1 2 3) :end 1) (find 4 '(1 2 3)) (find 1 nil))",
+      "(#\\b 3 NIL #\\. NIL 2 NIL NIL NIL NIL)" },
+    { "(list (find 5 '((1 . a) (5 . b) (5 . c)) :key #'car) (find 5 '((1 . a) (5 . b) (5 . c)) :key #'car :from-end t)"
+      " (find 3 '(1 2 3 4 5) :test #'<) (find 3 '(1 2 3 4 5) :test #'< :from-end t) (find nil '(1 nil 2))"
+      " (find \"b\" '(\"a\" \"b\") :test #'equal))",
+      "((5 . B) (5 . C) 4 5 NIL \"b\")" },
+    { "(list (find-if #'evenp '(1 2 3 4)) (find-if #'evenp '(1 2 3 4) :from-end t) (find-if #'evenp '(1 2 3 4) :start 2)"
+      " (find-if #'evenp (vector 1 2 3 4) :end 1) (find-if #'evenp '((a . 1) (b . 2)) :key #'cdr)"
+      " (find-if (lambda (c) (char= c #\\b)) \"abcabc\") (find-if #'evenp '(1 2 3 4) :key nil) (find-if #'evenp (vector)))",
+      "(2 4 4 NIL (B . 2) #\\b 2 NIL)" },
+    { "(list (position #\\b \"abcabc\") (position #\\b \"abcabc\" :from-end t) (position #\\b \"abcabc\" :start 2)"
+      " (position #\\b \"abcabc\" :start 2 :end 4) (position #\\b \"abcabc\" :start 4 :from-end t)"
+      " (position #\\b \"abcabc\" :start 5 :from-end t) (position #\\b \"abcabc\" :end 1) (position #\\a \"\"))",
+      "(1 4 4 NIL 4 NIL NIL NIL)" },
+    { "(list (position 2 (vector 1 2 3 2) :from-end t) (position 2 '(1 2 3 2) :from-end t)"
+      " (position 2 '(1 2 3 2) :from-end t :end 3) (position 2 '(1 2 3 2) :start 2)"
+      " (position \"b\" '(\"a\" \"b\") :test #'string=) (position 'b '((a . 1) (b . 2)) :key #'car)"
+      " (position 3 '(1 2 3 4 5) :test #'<) (position nil '(1 nil 2)) (position 1 nil) (position 5 '(1 2 3)))",
+      "(3 3 1 3 1 1 3 1 NIL NIL)" },
+    { "(list (position-if #'evenp '(1 2 3 4)) (position-if #'evenp '(1 2 3 4) :from-end t)"
+      " (position-if (lambda (c) (find c \"+-*/%\")) \"12+3*45\" :from-end t)"
+      " (position-if (lambda (c) (find c \"+-*/%\")) \"12345\" :from-end t)"
+      " (position-if #'evenp (vector 1 3 5)) (position-if #'evenp (vector 1 3 6) :key #'1+)"
+      " (position-if #'plusp '(-1 0 1) :start 3) (position-if #'plusp '(-1 0 1) :start 1 :end 3)"
+      " (position-if #'plusp (vector -1 0 1) :start 3 :end 3))",
+      "(1 3 4 NIL NIL 0 NIL 2 NIL)" },
+    /* A part that is not there is an error, whether or not what is looked
+     * for comes before its end: SBCL finds the 1 of the second of these. */
+    { "(find 1 '(1 2 3) :start 4)", "error: (1 2 3) has no part from 4 to 3" },
+    { "(position 1 '(1 2 3) :end 4)", "error: (1 2 3) has no part from 0 to 4" },
+    { "(position #\\a \"abc\" :start 2 :end 1)", "error: \"abc\" has no part from 2 to 1" },
+    { "(list (handler-case (find-if #'evenp \"abc\" :start 9) (error (c) (princ-to-string c)))"
+      " (handler-case (position 1 (vector 1 2) :end 3) (error (c) (princ-to-string c)))"
+      " (handler-case (find 1 '(1 2 3) :start -1) (error (c) (princ-to-string c)))"
+      " (handler-case (find 1 '(1 2 3) :start 'a) (error (c) (princ-to-string c))))",
+      "(\"\\\"abc\\\" has no part from 9 to 3\" \"#(1 2) has no part from 0 to 3\""
+      " \"(1 2 3) has no part from -1 to 3\" \"(1 2 3) has no part from A to 3\")" },
+    { "(position-if #'evenp 5)", "error: POSITION-IF looks into a list, a string or a vector, and 5 is none" },
     { "(member 2 '(1 2 3))", "(2 3)" },
     { "(member \"b\" '(\"a\" \"b\") :test #'equal)", "(\"b\")" },
     { "(assoc 'b '((a . 1) (b . 2)))", "(B . 2)" },
