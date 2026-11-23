@@ -10,9 +10,11 @@
 ;;;; is defined in the world, or it is a file that is loaded when it is
 ;;;; first picked, and can be unloaded again. Under the applications the
 ;;;; list has the commands: things that are done and open no window, such
-;;;; as shutting the machine down (lisp/system.lisp). What the bar, the list
-;;;; and the titles say is written in a font of outlines (lisp/type.lisp),
-;;;; and in the console's letters on a machine that has no such font.
+;;;; as shutting the machine down (lisp/system.lisp). A name stands in the
+;;;; list where it was defined, and MOVE-UP and MOVE-DOWN take it elsewhere.
+;;;; What the bar, the list and the titles say is written in a font of
+;;;; outlines (lisp/type.lisp), and in the console's letters on a machine
+;;;; that has no such font.
 ;;;;
 ;;;; Nothing here draws on the screen. What the screen is to show is put
 ;;;; together on a surface of the same size, out of sight: the desk, the
@@ -46,7 +48,7 @@
            "MOVE-WINDOW" "RAISE-WINDOW" "RENAME-WINDOW" "NEXT-EVENT" "WINDOWS" "FOCUSED-WINDOW"
            "DEFINE-APPLICATION" "INSTALL-APPLICATION" "UNLOAD-APPLICATION" "REMOVE-APPLICATION"
            "APPLICATIONS" "LAUNCH" "*APPLICATION-DIRECTORY*" "DEFINE-COMMAND" "REMOVE-COMMAND" "COMMANDS"
-           "UNFINISHED" "*FONT*"
+           "MOVE-UP" "MOVE-DOWN" "UNFINISHED" "*FONT*"
            "KEY-TYPED" "POINTER-MOVED"))
 (in-package "CLARA.WINDOWS")
 
@@ -85,6 +87,8 @@
 (defvar *dirty* nil)        ; rectangles of the screen that are to be put together again, none over another
 (defvar *applications* nil) ; the applications there are, in the order of the launcher's list
 (defvar *commands* nil)     ; and under them the commands, each (name . function), in that order
+(defvar *defined* 0)        ; how many applications were defined in this world, for the number of the next
+(defvar *arranged* nil)     ; a line of the list was moved: its order is the user's, and goes on to the system that comes next
 (defvar *application-directory* nil) ; where the file of an application is that was installed by a bare name, or NIL
 (defvar *loading* (clara:make-lock "applications")) ; the file of one application is loaded at a time
 (defvar *launched* nil)     ; the threads that LAUNCH made
@@ -634,7 +638,8 @@
   function  ; what running it calls; NIL while its file is still to be loaded
   file      ; the name of the file that defines it, or NIL for one that the world defined
   packages  ; the packages that loading the file made
-  threads)  ; the threads that it was launched in
+  threads   ; the threads that it was launched in
+  (number (setq *defined* (1+ *defined*)))) ; the first that was defined in this world has 1, the next 2: see FIRST-DEFINED
 
 (defun find-application (name)
   (find-if (lambda (application) (string-equal name (application-name application))) *applications*))
@@ -813,13 +818,137 @@
 (defun commands ()
   (mapcar #'car *commands*))
 
+;;; The order of the list
+;;;
+;;; A name stands in the launcher's list where it was first defined, under
+;;; the ones that were there. MOVE-UP and MOVE-DOWN take a line one place up
+;;; or down among the lines of its kind: an application stays above the line
+;;; across the list, and a command under it. A list that is open shows the
+;;; move. Nothing else comes of one: what START launches is the application
+;;; that was defined first, wherever it stands by then.
+;;;
+;;; An order that was made so is the user's. A world that is saved has it,
+;;; like everything else; and a world that leaves for a newer system says
+;;; it in its account, where the newer system finds it (lisp/system.lisp):
+;;; ARRANGEMENT and ARRANGE are for those two.
+
+;; ITEMS with ITEM and the one above it in each other's place, or with the
+;; one below it when UP is NIL. ITEMS itself, when there is no such other,
+;; or no ITEM.
+(defun exchanged (item items up)
+  (let ((above nil) (rest items))            ; what stands above ITEM, the nearest first
+    (loop
+      (when (or (null rest) (eq (car rest) item))
+        (return))
+      (setq above (cons (car rest) above)
+            rest (cdr rest)))
+    (cond ((null rest) items)
+          (up (if above
+                  (append (reverse (cdr above)) (list item (car above)) (cdr rest))
+                  items))
+          ((cdr rest) (append (reverse above) (list (cadr rest) item) (cddr rest)))
+          (t items))))
+
+;; The list has another order from now on, which a list that is open shows
+;; at once: it is as long and as wide as it was. The lock is held.
+(defun rearranged ()
+  (setq *arranged* t)
+  (when (and *running* *menu*)
+    (menu-damaged)
+    (settle)))
+
+(defun move (name up)
+  (unless (stringp name)
+    (error "a line of the launcher's list is moved by its name, a string, and ~S is not one" name))
+  (clara:with-lock-held (*lock*)
+    (let ((application (find-application name)) (command (find-command name)))
+      (cond (application
+             (let ((order (exchanged application *applications* up)))
+               (unless (eq order *applications*)
+                 (setq *applications* order)
+                 (rearranged)))
+             (applications))
+            (command
+             (let ((order (exchanged command *commands* up)))
+               (unless (eq order *commands*)
+                 (setq *commands* order)
+                 (rearranged)))
+             (commands))
+            (t
+             (error "there is no application and no command ~S: the applications are ~S, and the commands ~S"
+                    name (applications) (commands)))))))
+
+;; The line of that name, in letters of either case, stands one place
+;; higher in the launcher's list from now on, and the line that stood there
+;; is under it: an application's among the applications, a command's among
+;; the commands, and the application's when both have the name. The first
+;; of its kind stays where it is. What comes back is the names of that
+;; kind, in the order that they have now.
+(defun move-up (name)
+  (move name t))
+
+;; And one place lower, where the last of its kind stays.
+(defun move-down (name)
+  (move name nil))
+
+;; ITEMS with ITEM behind OTHER, or in front of them all when OTHER is NIL.
+(defun put-behind (item other items)
+  (cond ((null other) (cons item items))
+        ((null items) (list item))
+        ((eq (car items) other) (cons other (cons item (cdr items))))
+        (t (cons (car items) (put-behind item other (cdr items))))))
+
+;; ITEMS in the order that NAMES says, as far as it says: the ones that it
+;; names come first, in its order, and each of the others stands behind the
+;; one that it stood behind in ITEMS, the first of them in front of all. A
+;; name that no item has is passed over, and so is one that came before.
+;; NAME-OF gives the name of an item.
+(defun in-order (items names name-of)
+  (let ((named nil) (order nil) (before nil))
+    (dolist (name names)
+      (let ((item (find-if (lambda (item) (string-equal name (funcall name-of item))) items)))
+        (when (and item (not (member item named)))
+          (setq named (cons item named)))))
+    (setq order (reverse named))
+    (dolist (item items order)
+      (unless (member item named)
+        (setq order (put-behind item before order)))
+      (setq before item))))
+
+;; The order of the list when it is the user's, for whoever writes it down:
+;; the names of the applications and the names of the commands, a list of
+;; the two. NIL while no line was moved, here or in the world before.
+(defun arrangement ()
+  (clara:with-lock-held (*lock*)
+    (and *arranged* (list (applications) (commands)))))
+
+;; And an order that was written down is the list's again, in a world that
+;; was made in the place of the one that had it: the names are in the order
+;; that they had there. What that world did not have keeps its place behind
+;; the name that it was defined after, and what this one does not have is
+;; passed over.
+(defun arrange (applications commands)
+  (clara:with-lock-held (*lock*)
+    (setq *applications* (in-order *applications* applications #'application-name)
+          *commands* (in-order *commands* commands #'car))
+    (rearranged))
+  (arrangement))
+
 ;;; Starting and stopping
 
 (defun running-p ()
   (and *running* t))
 
+;; The application that was defined before the others that there are,
+;; wherever it stands in the list, or NIL when there is none.
+(defun first-defined ()
+  (let ((first nil))
+    (dolist (application *applications* first)
+      (when (or (null first) (< (application-number application) (application-number first)))
+        (setq first application)))))
+
 ;; The window manager takes the screen, the keyboard and the pointer, and
-;; launches the first application that was defined, which is the REPL
+;; launches the application that was defined first, which is the REPL
 ;; (lisp/terminal.lisp), so that there is somewhere to type. The console
 ;; goes on with the serial port alone. T when the window manager is
 ;; running after this, and NIL on a machine without a screen.
@@ -855,7 +984,7 @@
           (clara.input:send-keys-to #'key-typed)
           (clara.input:send-pointer-to #'pointer-moved))))
     (when (and started *applications*)
-      (launch (application-name (car *applications*))))
+      (launch (application-name (first-defined))))
     (running-p)))
 
 ;; The window manager lets go of the screen, the keyboard and the pointer,

@@ -4618,6 +4618,7 @@
   (clara.input:send-keys-to nil)
   (clara.input:send-pointer-to nil)
   (setq clara.windows::*running* nil
+        clara.windows::*arranged* nil
         clara.windows::*commands* commands
         clara.windows::*applications*
         (mapcar (lambda (application)
@@ -5026,6 +5027,162 @@
        (list (clara.windows:remove-command "ANOTHER") (clara.windows:commands) clara.windows::*menu* (wrong-pixels)))
 (check '("none of that name" ("Do it")) (list (clara.windows:remove-command "none of that name") (clara.windows:commands)))
 (check-condition error (clara.windows:define-command 'name #'list))
+
+;; The order of the list. MOVE-UP and MOVE-DOWN take a line one place up or
+;; down among the lines of its kind, by its name in letters of either case,
+;; and give the names of that kind as they stand then. The first of a kind
+;; and the last stay where they are, so an application never comes under
+;; the line across the list and a command never over it. A list that is
+;; open stays open, and shows the move.
+(defvar *picked* nil)
+
+(defun picks (what)
+  (lambda () (push what *picked*)))
+
+(check '((b a c) (a c b) (a b c) (a b c) (a b c) (a b c) (a) nil)
+       (list (clara.windows::exchanged 'b '(a b c) t) (clara.windows::exchanged 'b '(a b c) nil)
+             (clara.windows::exchanged 'a '(a b c) t) (clara.windows::exchanged 'c '(a b c) nil)
+             (clara.windows::exchanged 'd '(a b c) t) (clara.windows::exchanged 'd '(a b c) nil)      ; which is not there
+             (clara.windows::exchanged 'a '(a) t) (clara.windows::exchanged 'a nil nil)))
+(let ((items (list 'a 'b 'c)))                                              ; and the list that it was given is as it was
+  (check '((b a c) (a b c) t) (list (clara.windows::exchanged 'b items t) items
+                                    (eq items (clara.windows::exchanged 'a items t)))))
+
+(new-desk :applications (list (cons "One" (picks 1)) (cons "Two" (picks 2)) (cons "Three" (picks 3)))
+          :commands (list (cons "Left" (picks 'left)) (cons "Right" (picks 'right)) (cons "Three" (picks 'third))))
+(check t (eventually (lambda () (equal *picked* '(1)))))                    ; START launches the first
+(check nil (clara.windows::arrangement))                                    ; no line was moved: the order is nobody's
+(clara.windows:pointer-moved 5 5 1)
+(clara.windows:pointer-moved 5 5 0)
+(check '(("One" "Three" "Two") t 0) (list (clara.windows:move-up "three") clara.windows::*menu* (wrong-pixels)))
+(check '(("Three" "One" "Two") ("Left" "Right" "Three") 0)                   ; the application of that name, not the command
+       (list (clara.windows:move-up "THREE") (clara.windows:commands) (wrong-pixels)))
+(check '(("Three" "One" "Two") t 0) (list (clara.windows:move-up "Three") clara.windows::*menu* (wrong-pixels))) ; the first stays
+(check '(("Three" "One" "Two") ("Left" "Right" "Three")) (clara.windows::arrangement))
+(clara.windows:pointer-moved 20 30 1)          ; the first line of the list is the one that was moved there
+(clara.windows:pointer-moved 20 30 0)
+(check t (eventually (lambda () (equal *picked* '(3 1)))))
+(check '(nil 0) (list clara.windows::*menu* (wrong-pixels)))
+(check '(("Three" "Two" "One") ("Three" "Two" "One") 0)                      ; and so does the last
+       (list (clara.windows:move-down "One") (clara.windows:move-down "one") (wrong-pixels)))
+(check '(("Right" "Left" "Three") ("Right" "Left" "Three") ("Left" "Right" "Three") ("Left" "Three" "Right")
+         ("Left" "Three" "Right") ("Three" "Two" "One"))
+       (list (clara.windows:move-up "right") (clara.windows:move-up "Right") (clara.windows:move-down "Right")
+             (clara.windows:move-down "Right") (clara.windows:move-down "RIGHT") (clara.windows:applications)))
+(clara.windows:pointer-moved 5 5 1)
+(clara.windows:pointer-moved 5 5 0)
+(check '(t 0) (list clara.windows::*menu* (wrong-pixels)))
+(clara.windows:pointer-moved 20 130 1)         ; the sixth line, the last of the commands
+(clara.windows:pointer-moved 20 130 0)
+(check t (eventually (lambda () (equal *picked* '(right 3 1)))))
+(clara.windows:pointer-moved 5 5 1)
+(clara.windows:pointer-moved 5 5 0)
+(clara.windows:pointer-moved 20 110 1)         ; and the one over it
+(clara.windows:pointer-moved 20 110 0)
+(check t (eventually (lambda () (equal *picked* '(third right 3 1)))))
+;; A name that the list does not have, and what is no name. The list is
+;; whose it was afterwards.
+(check (format nil "there is no application and no command \"Four\": ~
+                    the applications are (\"Three\" \"Two\" \"One\"), and the commands (\"Left\" \"Three\" \"Right\")")
+       (handler-case (clara.windows:move-up "Four")
+         (error (condition) (let ((*print-pretty* nil)) (princ-to-string condition)))))
+(check-condition error (clara.windows:move-down "Four"))
+(check (format nil "a line of the launcher's list is moved by its name, a string, and ~S is not one" 'one)
+       (handler-case (clara.windows:move-up 'one)
+         (error (condition) (princ-to-string condition))))
+(check-condition error (clara.windows:move-down nil))
+(check '(("Three" "One" "Two") ("Three" "One" "Two") ("Left" "Three" "Right"))
+       (list (clara.windows:move-up "One") (clara.windows:applications) (clara.windows:commands)))
+;; A name that is defined again keeps the place that it was moved to, and
+;; one that is removed and defined anew is under the others, as ever.
+(check '("two" ("Three" "One" "Two") "left" ("Left" "Three" "Right"))
+       (list (clara.windows:define-application "two" (picks 'two)) (clara.windows:applications)
+             (clara.windows:define-command "left" (picks 'left-again)) (clara.windows:commands)))
+;; What START launches is the application that was defined first, wherever
+;; it stands in the list by now; and when that one is gone, the first of
+;; the ones that are left, here the one at the end of the list.
+(setq *picked* nil)
+(check '(t t) (list (clara.windows:stop) (clara.windows:start)))
+(check t (eventually (lambda () (equal *picked* '(1)))))
+(clara.windows:remove-application "One")
+(clara.windows:define-application "One" (picks 'one-again))
+(check '(("Three" "Two" "One") ("Three" "One" "Two") ("One" "Three" "Two"))
+       (list (clara.windows:applications) (clara.windows:move-up "One") (clara.windows:move-up "One")))
+(setq *picked* nil)
+(check '(t t) (list (clara.windows:stop) (clara.windows:start)))
+(check t (eventually (lambda () (equal *picked* '(two)))))
+;; A world that was saved has the list as it was left, and its order is
+;; still the user's.
+(with-output-to-string (*standard-output*) (clara.draw:start))             ; the machine is another now
+(setq *picked* nil)
+(with-output-to-string (*standard-output*)
+  (check t (clara.windows:resume)))
+(check t (eventually (lambda () (equal *picked* '(two)))))
+(check '(("One" "Three" "Two") (("One" "Three" "Two") ("Left" "Three" "Right")) 0)
+       (list (clara.windows:applications) (clara.windows::arrangement) (wrong-pixels)))
+
+;; An order that was written down is the list's again in a world that was
+;; made in the place of the one that had it (lisp/system.lisp): the names
+;; that it has, in letters of either case, in its order; a name that it
+;; has twice, once; a name that nothing here has, not at all; and what it
+;; does not name behind the one that it was defined after, the first of
+;; those in front of everything.
+(check '(("a" "b" "c") ("c" "b" "a") ("a" "c" "b") ("a" "b" "c") ("b" "c" "a") ("c" "a" "b") ("b" "a" "c") ("a" "b" "c"))
+       (mapcar (lambda (names) (clara.windows::in-order (list "a" "b" "c") names #'identity))
+               '(() ("c" "b" "a") ("c" "b") ("c") ("b" "a") ("c" "a") ("B" "b" "A" "d" "c" "a") ("d" "A" "C"))))
+(check '(nil nil) (list (clara.windows::in-order nil '("a") #'identity) (clara.windows::in-order nil nil #'identity)))
+(check '((x a b) (a x b) (a b x) (a b x) (x))
+       (list (clara.windows::put-behind 'x nil '(a b)) (clara.windows::put-behind 'x 'a '(a b))
+             (clara.windows::put-behind 'x 'b '(a b)) (clara.windows::put-behind 'x 'q '(a b))      ; behind what is not there
+             (clara.windows::put-behind 'x nil nil)))
+(new-desk :applications (list (cons "One" (picks 1)) (cons "Two" (picks 2)) (cons "Three" (picks 3)) (cons "Four" (picks 4)))
+          :commands (list (cons "Left" (picks 'left)) (cons "Right" (picks 'right))))
+(check nil (clara.windows::arrangement))
+(clara.windows:pointer-moved 5 5 1)
+(clara.windows:pointer-moved 5 5 0)
+(check '((("Four" "One" "Two" "Three") ("Right" "Left")) t 0)
+       (list (clara.windows::arrange '("four" "Gone" "ONE" "Four" "Three") '("Right" "Left" "Right"))
+             clara.windows::*menu* (wrong-pixels)))
+(check '(("Four" "One" "Two" "Three") ("Right" "Left")) (list (clara.windows:applications) (clara.windows:commands)))
+;; A line that stays where it is leaves the order nobody's. An order that
+;; names nothing leaves the list as it is, and is the user's all the same:
+;; it was moved into, in the world before.
+(new-desk :applications (list (cons "One" (picks 1)) (cons "Two" (picks 2))) :commands (list (cons "Left" (picks 'left))))
+(check '(("One" "Two") ("One" "Two") ("Left") ("Left") nil)
+       (list (clara.windows:move-up "One") (clara.windows:move-down "Two") (clara.windows:move-up "Left")
+             (clara.windows:move-down "Left") (clara.windows::arrangement)))
+(check '((("One" "Two") ("Left")) (("One" "Two") ("Left")))
+       (list (clara.windows::arrange nil nil) (clara.windows::arrangement)))
+;; Whatever is moved, and whether the list is open or shut, the screen is
+;; what the rule says, and the line that is clicked is the one that is
+;; shown there.
+(setq *picked* nil)
+(new-desk :width 128 :applications (list (cons "One" (picks 1)) (cons "Two" (picks 2)) (cons "Three" (picks 3)))
+          :commands (list (cons "Left" (picks 'left)) (cons "Right" (picks 'right)) (cons "Middle" (picks 'middle))))
+(check t (eventually (lambda () (equal *picked* '(1)))))
+(let ((state (sb-ext:seed-random-state 42)) (wrong 0) (missed 0) (moves 0) (clicks 0)
+      (names '("One" "Two" "Three" "Left" "Right" "Middle"))
+      (pushed '(("One" . 1) ("Two" . 2) ("Three" . 3) ("Left" . left) ("Right" . right) ("Middle" . middle))))
+  (dotimes (step 120)
+    (case (random 4 state)
+      (0 (clara.windows:pointer-moved 5 5 1)                                 ; the list opens, or a list that is open shuts
+       (clara.windows:pointer-moved 5 5 0))
+      (1 (clara.windows:move-up (nth (random 6 state) names))
+       (incf moves))
+      (2 (clara.windows:move-down (nth (random 6 state) names))
+       (incf moves))
+      (t (when clara.windows::*menu*
+           (let* ((line (random 6 state))
+                  (shown (nth line (append (clara.windows:applications) (clara.windows:commands)))))
+             (setq *picked* nil)
+             (clara.windows:pointer-moved 20 (+ 25 (* 20 line)) 1)
+             (clara.windows:pointer-moved 20 (+ 25 (* 20 line)) 0)
+             (incf clicks)
+             (unless (eventually (lambda () (equal *picked* (list (cdr (assoc shown pushed :test #'string=))))))
+               (incf missed))))))
+    (unless (eql (wrong-pixels) 0)
+      (incf wrong)))
+  (check '(0 0 t t t) (list wrong missed (> moves 40) (> clicks 10) (and (clara.windows::arrangement) t))))
 ;; Commands and no application: the button opens the list all the same,
 ;; and there is no line across it.
 (new-desk :commands (list (cons "Alone" (lambda () (push 'alone *commanded*)))))
@@ -8043,6 +8200,22 @@
 (let ((clara.windows::*running* t))
   (clara.system::carry "0.0.1-new"))
 (check 0 (search (format nil "(:carried \"0.0.0-host\" \"0.0.1-new\")~%(:windows)~%(:name ") (on-disk *machine-disk* "/clara/carried")))
+;; The launcher's list, once a line of it was moved: the applications and
+;; the commands by their names, in the order that they have. A list that
+;; nobody moved a line of is not spoken of, and the next system has it as
+;; its own files and the text make it.
+(let ((clara.windows::*applications* (list (clara.windows::make-application :name "One")
+                                           (clara.windows::make-application :name "The \"second\" of them")))
+      (clara.windows::*commands* (list (cons "Left" #'list) (cons "Right" #'list)))
+      (clara.windows::*arranged* nil))
+  (clara.system::carry "0.0.1-new")
+  (check '(nil nil) (list (search "(:applications" (on-disk *machine-disk* "/clara/carried"))
+                          (search "(:commands" (on-disk *machine-disk* "/clara/carried"))))
+  (clara.windows:move-up "Right")
+  (clara.system::carry "0.0.1-new")
+  (check 0 (search (format nil "(:carried \"0.0.0-host\" \"0.0.1-new\")~%~
+                                (:applications \"One\" \"The \\\"second\\\" of them\")~%(:commands \"Right\" \"Left\")~%(:name ")
+                   (on-disk *machine-disk* "/clara/carried"))))
 (clara.fat:remove-file "/clara/carried")
 (clara.fat:make-directory "/clara/carried")
 (check t (let ((said (said-by-all (lambda () (clara.system:start-again :save nil)))))
@@ -8163,6 +8336,44 @@
 (setq *order* nil)
 (said-by-all #'clara.system:start)
 (check '((nil) nil) (list *order* (clara.windows:running-p)))
+
+;; The launcher's list is in the order that the account says, once the
+;; text has defined what is the user's in it: the names of the account in
+;; their order, what the old world did not have behind the name that it
+;; was defined after, and nothing for a name that is not here. The order
+;; is the user's from then on, and goes to the system after this one.
+(trial-disk (format nil "(:carried \"0.0.0-host\" \"0.0.1-new\")~%~
+                         (:applications \"Mine\" \"One\" \"Gone\" \"Two\")~%(:commands \"Tidy\" \"Left\")~%")
+            (list "defined.lisp" (format nil "(clara.windows:define-application \"Mine\" #'car)~%~
+                                              (clara.windows:define-command \"Tidy\" #'list)~%")))
+(new-desk :machine nil :start nil :applications (list (cons "One" #'list) (cons "New" #'list) (cons "Two" #'list))
+          :commands (list (cons "Left" #'list) (cons "Right" #'list)))
+(check t (and (search (format nil "home: /home/defined.lisp is loaded, 2 forms~%~
+                                   world: the launcher's list is in the order that its lines were moved into in the world before~%~
+                                   world: every function and every variable that the world before had is defined in this one~%")
+                      (said-by-all #'clara.system:start))
+              t))
+(check '(("Mine" "One" "New" "Two") ("Tidy" "Left" "Right") (("Mine" "One" "New" "Two") ("Tidy" "Left" "Right")))
+       (list (clara.windows:applications) (clara.windows:commands) (clara.windows::arrangement)))
+;; An account that does not speak of the list leaves it as the files and
+;; the text made it, and nobody's. A line of it that is more than names is
+;; passed over, the other one counts; and what is no list at all is said,
+;; and the world is made.
+(dolist (case (list (list "" '("One" "Two" "Mine") '("Left" "Right") nil nil)
+                    (list "(:applications \"Two\" 5 \"One\")~%(:commands \"Right\" \"Left\")~%"
+                          '("One" "Two" "Mine") '("Right" "Left") t nil)
+                    (list "(:applications \"Two\" \"One\")~%" '("Two" "Mine" "One") '("Left" "Right") t nil)
+                    (list "(:applications \"Two\" \"One\")~%(:commands . 5)~%" '("One" "Two" "Mine") '("Left" "Right") nil t)))
+  (trial-disk (format nil "(:carried \"0.0.0-host\" \"0.0.1-new\")~%~?" (first case) nil)
+              (list "defined.lisp" (format nil "(clara.windows:define-application \"Mine\" #'car)~%")))
+  (new-desk :machine nil :start nil :applications (list (cons "One" #'list) (cons "Two" #'list))
+            :commands (list (cons "Left" #'list) (cons "Right" #'list)))
+  (let ((said (said-by-all #'clara.system:start)))
+    (check (list (second case) (third case) (fourth case) (fourth case) (fifth case) t)
+           (list (clara.windows:applications) (clara.windows:commands) (and (clara.windows::arrangement) t)
+                 (and (search "world: the launcher's list is in the order that its lines were moved into" said) t)
+                 (and (search "world: the launcher's list is not in the order that it had before: " said) t)
+                 (and (search "world: it is saved as it is now" said) t)))))
 
 ;; A world that came back as an image takes what the two files have that
 ;; it has not: what was defined after it was saved, and what somebody
