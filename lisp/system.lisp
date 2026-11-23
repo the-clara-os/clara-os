@@ -841,14 +841,17 @@
 ;;;
 ;;;   (:carried "from" "to")           the system that wrote it, and the one it is for
 ;;;   (:windows)                       the window manager was running
+;;;   (:applications "NAME" ...)       the launcher's list, when its lines were moved: the applications in their order,
+;;;   (:commands "NAME" ...)           and the commands
 ;;;   (:name "PACKAGE" "NAME" :function)   a function or a macro of the user's
 ;;;   (:name "PACKAGE" "NAME" :variable)   a variable of the user's
 ;;;   (:value "PACKAGE" "NAME" "text")     and its value, as COMMON-LISP-USER reads it
 ;;;
 ;;; What is the user's is what is in COMMON-LISP-USER and in the packages
 ;;; that were not there when the world was made. The system that comes
-;;; makes its world, loads the text into it, gives the variables their
-;;; values, and says which names it does not have.
+;;; makes its world, loads the text into it, puts the launcher's list in
+;;; its order, gives the variables their values, and says which names it
+;;; does not have.
 
 ;; The packages whose symbols are the user's: COMMON-LISP-USER, and every
 ;; package that was made since this world was, apart from the ones that
@@ -904,6 +907,13 @@
                        (and (there-p "/clara/" "next") (clara.fat:file-text "/clara/next")))))))
     (and text (starts-with "try " text) (trimmed (subseq text 4)))))
 
+;; A line of the account that is a word and names: (:word "one" "two").
+(defun write-names (out word names)
+  (format out "(:~A" word)
+  (dolist (name names)
+    (format out " ~S" name))
+  (format out ")~%"))
+
 ;; The account of this world, for the system TO, which is to take this
 ;; one's place.
 (defun carry (to)
@@ -911,6 +921,10 @@
                 (format out "(:carried ~S ~S)~%" (system) to)
                 (when (clara.windows:running-p)
                   (format out "(:windows)~%"))
+                (let ((order (clara.windows::arrangement)))
+                  (when order
+                    (write-names out "applications" (first order))
+                    (write-names out "commands" (second order))))
                 (dolist (package (user-packages))
                   (let ((in (package-name package)) (own nil))
                     (do-symbols (symbol package)
@@ -964,12 +978,32 @@
       name
       (concatenate 'string package "::" name)))
 
+;; The names of a line of the account that is a word and names, or NIL
+;; when there is no such line, or what it has is not names.
+(defun names-of (word carried)
+  (let ((names (cdr (assoc word carried))))
+    (and (every #'stringp names) names)))
+
+;; The launcher's list is in the order that the old world's had, when the
+;; account says that its lines were moved there: the text has defined what
+;; the list has by now, each name where it was first defined.
+(defun arrange (carried)
+  (when (or (assoc :applications carried) (assoc :commands carried))
+    (handler-case
+        (progn
+          (clara.windows::arrange (names-of :applications carried) (names-of :commands carried))
+          (tell "world: the launcher's list is in the order that its lines were moved into in the world before"))
+      (error (condition)
+        (tell "world: the launcher's list is not in the order that it had before: ~A" condition)))))
+
 ;; This world was made in the place of the one that left the account, and
-;; has the text of /home in it. The variables get the values that they had
-;; come to, where those were written down and are not the ones that the
-;; text gave them; and what the old world had and this one has not is
-;; said: a function that nothing defines here, a variable without a value.
+;; has the text of /home in it. The launcher's list gets the order that it
+;; had. The variables get the values that they had come to, where those
+;; were written down and are not the ones that the text gave them; and what
+;; the old world had and this one has not is said: a function that nothing
+;; defines here, a variable without a value.
 (defun arrive (carried)
+  (arrange carried)
   (let ((put nil) (made nil) (lost nil) (with-value nil))
     (dolist (form carried)
       (when (and (eq (car form) :value) (stringp (second form)) (stringp (third form)) (stringp (fourth form)))

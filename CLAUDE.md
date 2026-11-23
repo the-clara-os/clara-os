@@ -1056,6 +1056,26 @@ Rules:
   for an application's window. The tests' desk has the commands that a
   test gives it and no others (`new-desk :commands`), like its
   applications; `*defined-commands*` are the ones that the files defined.
+- The order of that list (Julio's issue #42) is the order of
+  `*applications*` and of `*commands*`, which `clara.windows:move-up` and
+  `move-down` change a place at a time, each by making a new list
+  (`exchanged`) and never by changing the one that is there: the tests
+  hand in lists of their own. Nothing leans on where an application
+  stands. START launches the one with the lowest `number`
+  (`first-defined`), which is the REPL, and not the first of the list. A
+  list that is open while its order changes is painted again where it is
+  (`rearranged`); it is not shut, as it is by what makes it longer or
+  shorter. `*arranged*` says that the order is the user's, which it is
+  once a line has moved. `clara.windows::arrangement` gives such an order
+  to lisp/system.lisp, which writes it into the account of a world that
+  leaves, `(:applications "REPL" ...)` and `(:commands ...)`, and
+  `clara.windows::arrange` puts it back in the world that is made again
+  (`in-order`: the account's names in their order, and what it does not
+  name behind the name that it was defined after). Those two are the
+  system's, like the account, and are not exported. `new-desk` of the
+  tests makes the order nobody's again. A session that moves a line does
+  it where no later line of the session clicks on the list by its place:
+  tools/upgrade.txt does, before and after its upgrade.
 - Assembly lives in kernel/arch/<arch>/entry.S and nowhere else. On x86_64
   it follows the Microsoft calling convention, like the C around it:
   arguments in rcx and rdx, 32 bytes of home space above the return

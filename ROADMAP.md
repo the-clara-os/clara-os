@@ -1199,6 +1199,55 @@ Infrastructure, done:
   host tests noticed all eleven, and passed with a comment changed, which
   was the control.
 
+- **The launcher's list, rearranged** (2026-11-23, version 0.0.51). A
+  line of the list under `Applications` can be moved (issue #42, "Perhaps
+  `move-up` and `move-down` functions"): `(clara.windows:move-up
+  "Galculator")` and `clara.windows:move-down` take the line of that name
+  one place up or down, among the lines of its kind, and answer with the
+  names of that kind as they stand then. An application stays over the
+  line across the list and a command under it; the first of a kind moved
+  up, and the last moved down, stay where they are; a name that the list
+  does not have is an error that says what it has. A list that is open
+  stays open and shows the move. Three things follow from a list that can
+  be put in another order. What the window manager launches as it starts
+  is the application that was defined first, the REPL, where it was the
+  first of the list: each application has a number for that. The order is
+  the world's: a world that is saved has it. And a world that leaves for
+  a newer system writes it into its account, `(:applications ...)` and
+  `(:commands ...)`, once a line was moved, and the system that comes puts
+  its list in that order when the text has defined what the user had in
+  it, with a name that the old world did not have behind the name that it
+  is defined after; it says so in its report. A list that nobody moved a
+  line of is not in the account, and is the newer system's to order. The
+  manual has a section, "The order of the list". What it left: whether
+  the first of the list should be what opens at the start (issue #107);
+  the order is not text, so a world that is made of the text alone, with
+  no account, has every name where it was first defined (issue #108); and
+  of an application and a command of one name it is the application that
+  moves (issue #109). `make test` passed on the Mac and in a container of
+  Ubuntu 26.04, the host tests with 16182 checks and all nineteen boots:
+  the boot that upgrades moves three lines before its upgrade and has to
+  find them where they were moved to after it, and after one more start
+  the REPL's window, although Emma stands first by then. A copy of the
+  disk of Julio's machine, which ran 0.0.50 with the window manager, was
+  started with this system beside it, as his next `make run-aarch64` does
+  it, and with a copy of `~/clara-work.dmg`: it took the system, made its
+  world again of `/home/defined.lisp`, and came up with his four
+  applications and eleven commands in the list. Three calls took
+  Galculator to the top and two took `Save Image` two places up; the
+  world that was saved there started again with that order and one REPL
+  window; and a second upgrade from there, to a system that the tests
+  build, carried the order across and said so. Mistakes that were
+  planted, one at a time, in copies of the tree, forty of them: in how a
+  line moves (not at all, the other way, with the lines beside it lost,
+  round the end of the list), in what is noted and what is painted, in
+  which of two lines of one name moves, in what START launches, in how an
+  order is put back (a name twice, a name in other letters, what it does
+  not name) and in the account (its two lines the other way round, one
+  of them missing, names as they print, a line that is no names, the
+  order put back before the text is loaded). The host tests noticed all
+  forty, and passed with a comment changed, which was the control.
+
 Infrastructure, for sessions with budget left over:
 
 - Read the UART base from ACPI (SPCR or DBG2) instead of assuming

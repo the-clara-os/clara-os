@@ -829,6 +829,24 @@ architectures (kernel/vm.c).
   application is ended, by its close box or by anybody. Applications are
   threads in the one world, with what protects any part of it from
   another: the language.
+- The launcher's list is in the order in which its names were defined,
+  until a line is moved (Julio's issue #42, 0.0.51): `move-up` and
+  `move-down` take a line one place, among the lines of its kind, so the
+  applications stay over the line across the list and the commands under
+  it. One place at a time is all there is: an order is a matter of a
+  dozen names, and two functions that answer with what they made of the
+  list are easier to hold in the head than a way of writing an order
+  down. Moving a line changes the list and nothing else. What the window
+  manager launches as it starts was the first of the list while the list
+  had one order, and is the application that was defined first, which
+  each has a number for: a machine whose list was put in another order
+  still starts with somewhere to type. The order is the user's once a
+  line was moved, and not before. It is saved with the world like
+  anything else, and a world that leaves for a newer system says it in
+  its account (below, under a world made again). It is not text: a
+  definition is written down because it says what a name is, and a move
+  says where a line went from where it stood, which means nothing in a
+  world that has its names in another order.
 - The listener in a window is the console's listener with other streams.
   A terminal (lisp/terminal.lisp) is a window with a grid of cells and a
   stream, and puts its lines together with the console's own function for
@@ -1522,6 +1540,17 @@ architectures (kernel/vm.c).
 - The window manager is started in the new world when it was running in
   the old one, before the text is loaded, so that a form of the text which
   opens a window finds a screen to open it on.
+- The order of the launcher's list comes across the same way, when it is
+  the user's (0.0.51): the account names the applications and the
+  commands in their order, and the system that comes puts its list in
+  that order once the text has defined what the user had in it. A name
+  that the old world did not have, an application that is new with the
+  system, stands behind the name that it is defined after, so the newer
+  system's own order holds wherever the user's says nothing; a name that
+  is gone is passed over. A list that nobody moved a line of is not in
+  the account, and is the newer system's to order. A world that is made
+  of the text alone, with no account, has every name where it was first
+  defined, as a variable there has what its DEFVAR gives it.
 - A saved world that does not come to its prompt is replaced, the second
   time. The first time the handoff passes it over, a world is made of the
   files and the text in its place, the saved one is kept and the next

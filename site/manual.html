@@ -871,7 +871,7 @@ AREA
   ;; of a rectangle
   (* width height))</code></pre>
     <ul>
-      <li>A form is written down when it was typed at a prompt, in any listener, on the serial port or in a window; when it stands by itself, and not inside a <code>progn</code> or a <code>let</code>; when it went well; and when its first word says that it defines something. That is a word of the language's own, <code>defun</code>, <code>defmacro</code>, <code>defvar</code>, <code>defparameter</code>, <code>defstruct</code>, <code>defpackage</code>, <code>define-condition</code>, <code>defclass</code>, <code>defgeneric</code>, <code>defmethod</code>; a macro of yours whose name begins with <code>def</code>; and anything whose name begins with <code>define-</code>, as <code>clara.windows:define-application</code>, and with it <code>clara.windows:install-application</code>. Any other call of a function is not written down, whatever the function is called. A <code>load</code> is, since what a file defined is in none of the forms that were typed, unless it is one of the two files of <code>/home</code> that is loaded.</li>
+      <li>A form is written down when it was typed at a prompt, in any listener, on the serial port or in a window; when it stands by itself, and not inside a <code>progn</code> or a <code>let</code>; when it went well; and when its first word says that it defines something. That is a word of the language's own, <code>defun</code>, <code>defmacro</code>, <code>defvar</code>, <code>defparameter</code>, <code>defstruct</code>, <code>defpackage</code>, <code>define-condition</code>, <code>defclass</code>, <code>defgeneric</code>, <code>defmethod</code>; a macro of yours whose name begins with <code>def</code>; and anything whose name begins with <code>define-</code>, as <code>clara.windows:define-application</code>, and with it <code>clara.windows:install-application</code>. Any other call of a function is not written down, whatever the function is called: <code>clara.windows:move-up</code> is none, and what it did to the list is <a href="#across">carried by an upgrade</a>. A <code>load</code> is, since what a file defined is in none of the forms that were typed, unless it is one of the two files of <code>/home</code> that is loaded.</li>
       <li>A form that defines a name again takes the place of the form that defined it before, so the file has every definition once, in the order in which each was first made. The <a href="#generic">methods</a> of a generic function are so many definitions: each <code>defmethod</code> is in the file, and one takes the place of another when it is the same method, for the same classes and with the same word before its parameters.</li>
       <li>Forms that were read in another package than the ones before them have a line <code>(cl:in-package "NAME")</code> before them.</li>
       <li>What is not a definition is not written down. A variable that was changed after its <code>defvar</code> is in the file with the value that the <code>defvar</code> gives it, and a world that is made of the text alone has that one; an upgrade <a href="#across">carries the value that it had come to</a> as well. What a <code>defvar</code> did to get its value, it does again. And what <kbd>Ctrl-E</kbd> evaluated in <a href="#editor">Emma</a> is in the file that Emma had open, and not here.</li>
@@ -1119,6 +1119,7 @@ system: {{version}}-41d0c97b has come to its prompt, and is the system of this m
       <li>What you defined at a prompt, as text: the newer system loads <a href="#home"><code>/home/init.lisp</code> and <code>/home/defined.lisp</code></a> into the world that it makes.</li>
       <li>What your variables had come to, as far as that is text: numbers, characters, strings, symbols, and lists of those. The old system writes those values down as it leaves, and the new one gives them to the variables once the text has defined them.</li>
       <li>The window manager: it is started when it was running, with one REPL window, and a form of your text that opens a window opens it.</li>
+      <li>The <a href="#order">order of the list</a> under <code>Applications</code>, when you moved a line of it: the names stand as they stood. An application or a command that is new with the system stands behind the name that it is defined after.</li>
       <li>Not the world itself. A world belongs to the system that saved it, so the newer system makes one of its own files, and saves it without being asked: the next start is in it. What is no text is not in it: a function that no form of the text defines, a thread, a lock, a list that leads back into itself. A variable that held such a thing has what its form makes anew.</li>
     </ul>
     <p>The newer system says which is which as it starts, by name:</p>
@@ -1425,7 +1426,7 @@ NIL</pre>
 ("REPL" "Emma" "Files" "Hello")
 &gt; (clara:join-thread (clara.windows:launch "Hello"))
 NIL</pre>
-    <p>The window is there for two seconds, and goes with its application. From now on <code>Hello</code> is in the list under <code>Applications</code>, below the three that come with the system. <code>REPL</code> is <code>clara.terminal:repl</code>, the first application and the one that is launched when the window manager starts; <code>Emma</code> and <code>Files</code> are the subject of <a href="#applications">the next chapter</a>.</p>
+    <p>The window is there for two seconds, and goes with its application. From now on <code>Hello</code> is in the list under <code>Applications</code>, below the three that come with the system, until it is <a href="#order">moved</a>. <code>REPL</code> is <code>clara.terminal:repl</code>, the first application and the one that is launched when the window manager starts; <code>Emma</code> and <code>Files</code> are the subject of <a href="#applications">the next chapter</a>.</p>
     <p>What the list has under its line are commands: a name and a function of no arguments, which is called in a thread of its own when the name is picked, and which opens no window that anything waits for.</p>
 <pre class="session">&gt; (clara.windows:commands)
 ("Restart" "Shut Down")
@@ -1433,6 +1434,22 @@ NIL</pre>
 "Collect"
 &gt; (clara.windows:remove-command "Collect")
 "Collect"</pre>
+
+    <h3 id="order">The order of the list</h3>
+    <p>A name stands in the list where it was first defined, under the ones that were there. <code>clara.windows:move-up</code> and <code>clara.windows:move-down</code> take a line one place up or down, by its name, and answer with the names of its kind as they stand then.</p>
+<pre class="session">&gt; (clara.windows:move-up "Hello")
+("REPL" "Emma" "Hello" "Files")
+&gt; (clara.windows:move-down "restart")
+("Shut Down" "Restart")
+&gt; (clara.windows:move-down "Restart")
+("Shut Down" "Restart")</pre>
+    <ul>
+      <li>An application moves among the applications and a command among the commands, on its side of the line. The first of its kind stays where it is when it is moved up, and the last when it is moved down, as <code>Restart</code> did the second time. A line goes further by being moved again.</li>
+      <li>The name is taken in letters of either case. When an application and a command have the same name, it is the application that moves. A name that the list does not have is an error, which says the names that it has.</li>
+      <li>A list that is open stays open, and shows the move.</li>
+      <li>Moving a line changes the list and nothing else. The application that is launched when the window manager starts is the one that was defined first, <code>REPL</code>, wherever it stands by then.</li>
+      <li>The order is part of the world. A <a href="#image">world that is saved</a> has it, and <a href="#across">an upgrade</a> carries it to the newer system. It is no definition, so it is not <a href="#defined">written down</a> as text: a world that is made of the text alone has every name where it was first defined.</li>
+    </ul>
 
     <h3 id="desk">Starting in it</h3>
     <p>A <a href="#image">world that is saved</a> while the window manager runs starts in it: the screen goes from the boot report straight to the windows.</p>
@@ -1442,11 +1459,11 @@ NIL</pre>
 <pre><code>windows: the window manager has the screen again, as it had when the world was saved</code></pre>
 <pre class="session again">&gt; (list (clara.windows:running-p) (mapcar #'clara.windows:window-title (clara.windows:windows)))
 (T ("REPL"))
-&gt; (clara.windows:applications)
-("REPL" "Emma" "Files" "Hello")
+&gt; (list (clara.windows:applications) (clara.windows:commands))
+(("REPL" "Emma" "Hello" "Files") ("Shut Down" "Restart"))
 &gt; (clara.windows:stop)
 T</pre>
-    <p>What is defined comes back, the applications among it. The windows that were open do not: a window is pixels and a thread, and an image has neither, so the window manager starts with one REPL, as it does the first time. <code>clara.windows:stop</code> ends the applications and gives the screen back to the console, cleared; a world that is saved after that starts at the console again.</p>
+    <p>What is defined comes back, the applications among it, in the order that the list was left in. The windows that were open do not: a window is pixels and a thread, and an image has neither, so the window manager starts with one REPL, as it does the first time. <code>clara.windows:stop</code> ends the applications and gives the screen back to the console, cleared; a world that is saved after that starts at the console again.</p>
     <p>A window is the size it was opened with. <kbd>Alt</kbd> and <kbd>Tab</kbd> is the one key that is the window manager's own: nothing on the keyboard opens the list of applications, moves a window or closes one, which the pointer does, and the pointer has one shape.</p>
   </section>
 
@@ -1535,7 +1552,7 @@ NIL
 &gt; (clara.windows:install-application "Greeting" "/greeting.lisp")
 "Greeting"
 &gt; (list (clara.windows:applications) (find-package "GREETING"))
-(("REPL" "Emma" "Files" "Hello" "Greeting") NIL)
+(("REPL" "Emma" "Hello" "Files" "Greeting") NIL)
 &gt; (clara.windows:launch "Greeting" "Good morning")
 #&lt;THREAD "Greeting"&gt;
 &gt; (list (package-name (find-package "GREETING"))
@@ -1545,11 +1562,11 @@ NIL
 <pre class="session">&gt; (clara.windows:unload-application "Greeting")
 "Greeting"
 &gt; (list (find-package "GREETING") (clara.windows:applications))
-(NIL ("REPL" "Emma" "Files" "Hello" "Greeting"))
+(NIL ("REPL" "Emma" "Hello" "Files" "Greeting"))
 &gt; (clara.windows:remove-application "Greeting")
 "Greeting"
 &gt; (clara.windows:applications)
-("REPL" "Emma" "Files" "Hello")</pre>
+("REPL" "Emma" "Hello" "Files")</pre>
     <ul>
       <li><code>clara.windows:unload-application</code> stops the application wherever it runs, which closes its windows, and deletes the packages that its file made: what the file defined is gone from the world, and the memory it took comes back. The application stays in the list, and the next launch loads the file as it is by then. That is how to try a change to an application: save the file, unload, launch.</li>
       <li><code>clara.windows:remove-application</code> does the same and takes the name out of the list. It is also what takes out an application that was defined at a prompt, like <code>Hello</code>.</li>
@@ -1773,7 +1790,7 @@ error: nothing is mapped at #x0</pre>
 
     <h3>The packages CLARA.WINDOWS and CLARA.TERMINAL</h3>
     <p><a href="#windows">Windows</a> says what each of these is for. <code>clara.windows:resume</code> is what the system calls as it starts, for a world that was saved with the window manager running.</p>
-    <p class="names" data-package="CLARA.WINDOWS"><code>clara.windows:start</code> <code>clara.windows:stop</code> <code>clara.windows:running-p</code> <code>clara.windows:resume</code> <code>clara.windows:open-window</code> <code>clara.windows:close-window</code> <code>clara.windows:show</code> <code>clara.windows:window-p</code> <code>clara.windows:window-title</code> <code>clara.windows:window-surface</code> <code>clara.windows:window-position</code> <code>clara.windows:move-window</code> <code>clara.windows:raise-window</code> <code>clara.windows:rename-window</code> <code>clara.windows:next-event</code> <code>clara.windows:windows</code> <code>clara.windows:focused-window</code> <code>clara.windows:define-application</code> <code>clara.windows:install-application</code> <code>clara.windows:unload-application</code> <code>clara.windows:remove-application</code> <code>clara.windows:applications</code> <code>clara.windows:launch</code> <code>clara.windows:*application-directory*</code> <code>clara.windows:define-command</code> <code>clara.windows:remove-command</code> <code>clara.windows:commands</code> <code>clara.windows:unfinished</code> <code>clara.windows:*font*</code> <code>clara.windows:key-typed</code> <code>clara.windows:pointer-moved</code></p>
+    <p class="names" data-package="CLARA.WINDOWS"><code>clara.windows:start</code> <code>clara.windows:stop</code> <code>clara.windows:running-p</code> <code>clara.windows:resume</code> <code>clara.windows:open-window</code> <code>clara.windows:close-window</code> <code>clara.windows:show</code> <code>clara.windows:window-p</code> <code>clara.windows:window-title</code> <code>clara.windows:window-surface</code> <code>clara.windows:window-position</code> <code>clara.windows:move-window</code> <code>clara.windows:raise-window</code> <code>clara.windows:rename-window</code> <code>clara.windows:next-event</code> <code>clara.windows:windows</code> <code>clara.windows:focused-window</code> <code>clara.windows:define-application</code> <code>clara.windows:install-application</code> <code>clara.windows:unload-application</code> <code>clara.windows:remove-application</code> <code>clara.windows:applications</code> <code>clara.windows:launch</code> <code>clara.windows:*application-directory*</code> <code>clara.windows:define-command</code> <code>clara.windows:remove-command</code> <code>clara.windows:commands</code> <code>clara.windows:move-up</code> <code>clara.windows:move-down</code> <code>clara.windows:unfinished</code> <code>clara.windows:*font*</code> <code>clara.windows:key-typed</code> <code>clara.windows:pointer-moved</code></p>
     <p class="names" data-package="CLARA.TERMINAL"><code>clara.terminal:open-terminal</code> <code>clara.terminal:terminal-p</code> <code>clara.terminal:terminal-stream</code> <code>clara.terminal:terminal-window</code> <code>clara.terminal:clear</code> <code>clara.terminal:repl</code></p>
 
     <h3>The package CLARA.SYSTEM</h3>
