@@ -61,10 +61,10 @@ on it, each a surface that its program draws on, with the focus, the keys
 and the pointer going to the one that is picked, a launcher along the top,
 and the REPL, a listener in a window (lisp/terminal.lisp), which is the
 same world as the prompt on the serial port. A world that is saved while it runs
-boots straight into it. Two applications come with it, a text editor
-(lisp/editor.lisp) and a file browser (lisp/files.lisp): each is a file on
+boots straight into it. Two applications come with it, Emma, a text editor
+(lisp/emma.lisp), and a file browser (lisp/files.lisp): each is a file on
 the boot volume that the launcher loads when it is first picked, and
-unloads again when asked, and `(clara.windows:launch "Editor" "/notes.txt")`
+unloads again when asked, and `(clara.windows:launch "Emma" "/notes.txt")`
 opens a file from a prompt. And there is a compiler, written in Lisp
 (lisp/compiler.lisp), which everything goes through: what is typed at a
 prompt or loaded from a file is compiled before it runs, and so are the
@@ -197,7 +197,7 @@ Layout:
                      the evaluator, and the machine that compiled code runs on (vm.c)
     lisp/            Lisp sources: the language's own part, the compiler, the object system, the console, drawing, the drivers, the
                      file system, the fonts, the network, sound, the listener, the window manager and the terminal in a window, which the kernel loads as it starts, and
-                     the two applications, editor.lisp and files.lisp, which the launcher loads when they are picked;
+                     the two applications, emma.lisp and files.lisp, which the launcher loads when they are picked;
                      the build copies them to the system's directory on the ESP, \clara\<its name>, read at boot
     fonts/           the console font, Spleen 8x16, which tools/bdf2c.py turns into kernel/font.c, and the
                      fonts of outlines, the Go fonts, which go onto the boot volume as they are

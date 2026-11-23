@@ -89,7 +89,7 @@
 (load-source "lisp/terminal.lisp")
 (load-source "lisp/system.lisp")
 (load-source "lisp/tls.lisp")
-(load-source "lisp/editor.lisp")               ; the two that the kernel leaves on the volume for the launcher to load
+(load-source "lisp/emma.lisp")               ; the two that the kernel leaves on the volume for the launcher to load
 (load-source "lisp/files.lisp")
 (defvar *defined-applications* clara.windows::*applications*) ; what the files defined, for the tests to put back
 (defvar *defined-commands* clara.windows::*commands*)
@@ -6343,12 +6343,12 @@
 (setq clara.windows::*applications* *defined-applications*)
 ;; What lisp/terminal.lisp defined and installed when it was loaded: the two
 ;; that are files have a function here because the tests loaded the files.
-(check '(("REPL" nil) ("Editor" "editor.lisp") ("Files" "files.lisp"))
+(check '(("REPL" nil) ("Emma" "emma.lisp") ("Files" "files.lisp"))
        (mapcar (lambda (application)
                  (list (clara.windows::application-name application) (clara.windows::application-file application)))
                clara.windows::*applications*))
-(check '("REPL" "Editor" "Files") (clara.windows:applications))
-(check (list #'clara.terminal:repl #'clara.editor:edit #'clara.files:browse)
+(check '("REPL" "Emma" "Files") (clara.windows:applications))
+(check (list #'clara.terminal:repl #'clara.emma:edit #'clara.files:browse)
        (mapcar #'clara.windows::application-function clara.windows::*applications*))
 
 ;;; What happens to a window, kept for its program: the keys that are typed
@@ -6565,45 +6565,45 @@
     wrong))
 
 (defun editor-state (editor)
-  (list (clara.editor::all-lines editor) (clara.editor::editor-row editor) (clara.editor::editor-column editor)))
+  (list (clara.emma::all-lines editor) (clara.emma::editor-row editor) (clara.emma::editor-column editor)))
 
 ;; The window of an editor against its text, after it was drawn.
 (defun editor-wrong (editor)
-  (clara.editor::render editor)
-  (let* ((lines (clara.editor::all-lines editor))
-         (top (clara.editor::editor-top editor)) (left (clara.editor::editor-left editor))
-         (columns (clara.editor::editor-columns editor)) (rows (clara.editor::editor-rows editor))
-         (asking (clara.editor::editor-asking editor)))
-    (wrong-cells (clara.editor::editor-surface editor)
+  (clara.emma::render editor)
+  (let* ((lines (clara.emma::all-lines editor))
+         (top (clara.emma::editor-top editor)) (left (clara.emma::editor-left editor))
+         (columns (clara.emma::editor-columns editor)) (rows (clara.emma::editor-rows editor))
+         (asking (clara.emma::editor-asking editor)))
+    (wrong-cells (clara.emma::editor-surface editor)
                  (append (loop for r below rows
                                collect (let ((line (or (nth (+ top r) lines) "")))
                                          (pad (if (< left (length line)) (subseq line left) "") columns)))
-                         (list (list (pad (clara.editor::status editor) columns))))
-                 (cons (list (- (clara.editor::editor-row editor) (clara.editor::editor-top editor))
-                             (- (clara.editor::editor-column editor) (clara.editor::editor-left editor)) +ink+)
+                         (list (list (pad (clara.emma::status editor) columns))))
+                 (cons (list (- (clara.emma::editor-row editor) (clara.emma::editor-top editor))
+                             (- (clara.emma::editor-column editor) (clara.emma::editor-left editor)) +ink+)
                        (and asking
-                            (list (list rows (+ 1 (length (car asking)) (length (clara.editor::editor-answer editor)))
+                            (list (list rows (+ 1 (length (car asking)) (length (clara.emma::editor-answer editor)))
                                         +paper+)))))))
 
 (defun keys (editor &rest codes)
   (dolist (code codes)
     (if (stringp code)
-        (map nil (lambda (character) (clara.editor::key editor (char-code character))) code)
-        (clara.editor::key editor code))))
+        (map nil (lambda (character) (clara.emma::key editor (char-code character))) code)
+        (clara.emma::key editor code))))
 
 (new-desk :width 300 :height 220)
 ;; An editor with no file: one line with nothing in it, the cursor at its
 ;; start, and words about the keys until the first of them.
-(let ((editor (clara.editor::open-editor nil :columns 30 :rows 4)))
-  (check '((("") 0 0) "Editor" 240 80)
-         (list (editor-state editor) (clara.windows:window-title (clara.editor::editor-window editor))
-               (clara.draw:surface-width (clara.editor::editor-surface editor))
-               (clara.draw:surface-height (clara.editor::editor-surface editor))))
+(let ((editor (clara.emma::open-editor nil :columns 30 :rows 4)))
+  (check '((("") 0 0) "Emma" 240 80)
+         (list (editor-state editor) (clara.windows:window-title (clara.emma::editor-window editor))
+               (clara.draw:surface-width (clara.emma::editor-surface editor))
+               (clara.draw:surface-height (clara.emma::editor-surface editor))))
   (check '(0 0 "Ctrl-S saves, Ctrl-O opens a file, Ctrl-E evaluates, Ctrl-Q closes")
-         (list (editor-wrong editor) (wrong-pixels) (clara.editor::editor-message editor)))
+         (list (editor-wrong editor) (wrong-pixels) (clara.emma::editor-message editor)))
   (keys editor "ab")
   (check '((("ab") 0 2) " a text with no file yet, not " nil 0)       ; the words, cut to the row
-         (list (editor-state editor) (clara.editor::status editor) (clara.editor::editor-message editor)
+         (list (editor-state editor) (clara.emma::status editor) (clara.emma::editor-message editor)
                (editor-wrong editor)))
   ;; Enter in the middle of a line makes two of it, and the new one begins
   ;; as far in as the one it came from, up to where the cursor was.
@@ -6631,60 +6631,60 @@
   ;; A tab is spaces up to the next column that is a multiple of eight.
   (keys editor clara.input:+right+ 9 "x" 9)
   (check '("a       x       b" 16 0)
-         (list (clara.editor::editor-line editor) (clara.editor::editor-column editor) (editor-wrong editor)))
+         (list (clara.emma::editor-line editor) (clara.emma::editor-column editor) (editor-wrong editor)))
   ;; A key that is no character and none of the editor's does nothing.
   (let ((state (editor-state editor)))
     (keys editor clara.input:+insert+ clara.input:+f1+ 27 1 (+ clara.input:+alt+ 97))
     (check state (editor-state editor)))
-  (clara.windows:close-window (clara.editor::editor-window editor)))
+  (clara.windows:close-window (clara.emma::editor-window editor)))
 
-(let ((editor (clara.editor::open-editor nil :columns 30 :rows 4)))
+(let ((editor (clara.emma::open-editor nil :columns 30 :rows 4)))
   (keys editor "one" 10 "two" 10 "three")
-  (check '((("one" "two" "three") 2 5) t) (list (editor-state editor) (clara.editor::editor-changed editor)))
+  (check '((("one" "two" "three") 2 5) t) (list (editor-state editor) (clara.emma::editor-changed editor)))
   ;; Ctrl-K takes the rest of the line, then the end of the line, and what
   ;; it took in a row comes back with Ctrl-Y, as often as is asked. At the
   ;; end of the text it takes nothing, and what it has stays.
   (keys editor clara.input:+up+ clara.input:+home+ clara.input:+right+ 11)
-  (check '("t" "wo") (list (clara.editor::editor-line editor) (clara.editor::editor-cut editor)))
+  (check '("t" "wo") (list (clara.emma::editor-line editor) (clara.emma::editor-cut editor)))
   (keys editor 11 11)
-  (check (list '(("one" "t") 1 1) (format nil "wo~%three")) (list (editor-state editor) (clara.editor::editor-cut editor)))
+  (check (list '(("one" "t") 1 1) (format nil "wo~%three")) (list (editor-state editor) (clara.emma::editor-cut editor)))
   (keys editor 11 clara.input:+end+ 11)
-  (check (list '(("one" "t") 1 1) (format nil "wo~%three")) (list (editor-state editor) (clara.editor::editor-cut editor)))
+  (check (list '(("one" "t") 1 1) (format nil "wo~%three")) (list (editor-state editor) (clara.emma::editor-cut editor)))
   (keys editor 25)
   (check '(("one" "two" "three") 2 5) (editor-state editor))
   (keys editor clara.input:+up+ clara.input:+up+ clara.input:+home+ 25)
   (check '(("wo" "threeone" "two" "three") 1 5) (editor-state editor))
   (keys editor clara.input:+home+ 11 clara.input:+down+ 11)                  ; a key in between, and it begins afresh
-  (check '((("wo" "" "" "three") 2 0) "two") (list (editor-state editor) (clara.editor::editor-cut editor)))
+  (check '((("wo" "" "" "three") 2 0) "two") (list (editor-state editor) (clara.emma::editor-cut editor)))
   ;; A click puts the cursor on the character it is on, or at the end of
   ;; its line; a button that comes up does nothing, and neither does a
   ;; click on the status row.
-  (clara.editor::point editor 17 5 1)
+  (clara.emma::point editor 17 5 1)
   (check '(0 2) (cdr (editor-state editor)))
-  (clara.editor::point editor 200 53 1)
+  (clara.emma::point editor 200 53 1)
   (check '(3 5) (cdr (editor-state editor)))
-  (clara.editor::point editor 0 20 1)
+  (clara.emma::point editor 0 20 1)
   (check '(1 0) (cdr (editor-state editor)))
-  (clara.editor::point editor 100 5 0)
-  (clara.editor::point editor 100 70 1)
+  (clara.emma::point editor 100 5 0)
+  (clara.emma::point editor 100 70 1)
   (check '(1 0 0 0) (append (cdr (editor-state editor)) (list (editor-wrong editor) (wrong-pixels))))
-  (clara.editor::go-to editor 99 99)                                         ; as near as there is a line, and a column
+  (clara.emma::go-to editor 99 99)                                         ; as near as there is a line, and a column
   (check '(3 5) (cdr (editor-state editor)))
   ;; The window follows the cursor: down past its last row and up again,
   ;; and along a line that is longer than it is wide.
   (keys editor 10 "five" 10 "six")
-  (check '(5 0 2) (list (clara.editor::editor-row editor) (editor-wrong editor) (clara.editor::editor-top editor)))
+  (check '(5 0 2) (list (clara.emma::editor-row editor) (editor-wrong editor) (clara.emma::editor-top editor)))
   (keys editor clara.input:+page-up+)
-  (check '(2 0 2) (list (clara.editor::editor-row editor) (editor-wrong editor) (clara.editor::editor-top editor)))
+  (check '(2 0 2) (list (clara.emma::editor-row editor) (editor-wrong editor) (clara.emma::editor-top editor)))
   (keys editor clara.input:+up+ clara.input:+up+ clara.input:+up+)
-  (check '(0 0 0) (list (clara.editor::editor-row editor) (editor-wrong editor) (clara.editor::editor-top editor)))
+  (check '(0 0 0) (list (clara.emma::editor-row editor) (editor-wrong editor) (clara.emma::editor-top editor)))
   (keys editor clara.input:+page-down+ clara.input:+page-down+ clara.input:+end+ " is a line of more than thirty characters")
   (check '(5 44 0 2 15)
-         (list (clara.editor::editor-row editor) (clara.editor::editor-column editor) (editor-wrong editor)
-               (clara.editor::editor-top editor) (clara.editor::editor-left editor)))
+         (list (clara.emma::editor-row editor) (clara.emma::editor-column editor) (editor-wrong editor)
+               (clara.emma::editor-top editor) (clara.emma::editor-left editor)))
   (keys editor clara.input:+home+)
-  (check '(0 0 0) (list (editor-wrong editor) (clara.editor::editor-left editor) (wrong-pixels)))
-  (clara.windows:close-window (clara.editor::editor-window editor)))
+  (check '(0 0 0) (list (editor-wrong editor) (clara.emma::editor-left editor) (wrong-pixels)))
+  (clara.windows:close-window (clara.emma::editor-window editor)))
 
 ;; The same keys to the editor and to one that is written here, a few
 ;; hundred of them as they come: the two have the same text, the cursor at
@@ -6766,7 +6766,7 @@
   (cond ((< (ref-column ref) (ref-left ref)) (setf (ref-left ref) (ref-column ref)))
         ((>= (ref-column ref) (+ (ref-left ref) columns)) (setf (ref-left ref) (- (ref-column ref) columns -1)))))
 
-(let ((editor (clara.editor::open-editor nil :columns 12 :rows 5 :x 20 :y 60))
+(let ((editor (clara.emma::open-editor nil :columns 12 :rows 5 :x 20 :y 60))
       (ref (make-ref)) (state (sb-ext:seed-random-state 13)) (apart 0) (wrong 0) (pixels 0) (most 0))
   (dotimes (step 700)
     (let* ((n (random 100 state))
@@ -6785,140 +6785,144 @@
                        ((< n 94) clara.input:+page-down+)
                        ((< n 97) 11)
                        (t 25))))
-      (clara.editor::key editor code)
+      (clara.emma::key editor code)
       (ref-key ref code 5)
       (unless (zerop (editor-wrong editor))     ; which draws it
         (incf wrong))
       (ref-view ref 5 12)
       (unless (equal (list (ref-lines ref) (ref-row ref) (ref-column ref) (ref-cut ref) (ref-top ref) (ref-left ref))
                      (append (editor-state editor)
-                             (list (clara.editor::editor-cut editor) (clara.editor::editor-top editor)
-                                   (clara.editor::editor-left editor))))
+                             (list (clara.emma::editor-cut editor) (clara.emma::editor-top editor)
+                                   (clara.emma::editor-left editor))))
         (incf apart))
       (setq most (max most (length (ref-lines ref))))
       (when (zerop (mod step 50))
         (unless (eql (wrong-pixels) 0)
           (incf pixels)))))
   (check '(0 0 0 t) (list apart wrong pixels (> most 12)))
-  (clara.windows:close-window (clara.editor::editor-window editor)))
+  (clara.windows:close-window (clara.emma::editor-window editor)))
 
 ;; The text of a file, read whole: after its last line comes one with
 ;; nothing in it, where the text ends, and saving writes every line but
 ;; that one. So a file comes back as it was, and a text with nothing in it
 ;; is a file with nothing in it.
 (let* ((poem (write-scratch "poem.txt" "roses" "  violets" ""))
-       (editor (clara.editor::open-editor poem :columns 90 :rows 4)))
-  (check (list '(("roses" "  violets" "" "") 0 0) poem nil "3 lines" poem 0)
-         (list (editor-state editor) (clara.editor::editor-name editor) (clara.editor::editor-changed editor)
-               (clara.editor::editor-message editor) (clara.windows:window-title (clara.editor::editor-window editor))
+       (editor (clara.emma::open-editor poem :columns 90 :rows 4)))
+  (check (list '(("roses" "  violets" "" "") 0 0) poem nil "3 lines" (concatenate 'string "Emma - " poem) 0)
+         (list (editor-state editor) (clara.emma::editor-name editor) (clara.emma::editor-changed editor)
+               (clara.emma::editor-message editor) (clara.windows:window-title (clara.emma::editor-window editor))
                (editor-wrong editor)))
   (keys editor 19)                                                           ; saved as it came
-  (check (list (format nil "roses~%  violets~%~%") "saved, 3 lines") (list (scratch-text "poem.txt") (clara.editor::editor-message editor)))
+  (check (list (format nil "roses~%  violets~%~%") "saved, 3 lines") (list (scratch-text "poem.txt") (clara.emma::editor-message editor)))
   (keys editor "red ")
   ;; The status: which file, that it has changed, and where the cursor is.
   (let ((words (concatenate 'string poem ", not saved")) (place "line 1, column 5 "))
     (check (list (concatenate 'string " " words (make-string (- 89 (length words) (length place)) :initial-element #\Space) place) 0)
-           (list (clara.editor::status editor) (editor-wrong editor))))
+           (list (clara.emma::status editor) (editor-wrong editor))))
   (keys editor 19)
   (check (list (format nil "red roses~%  violets~%~%") nil "saved, 3 lines" 0)
-         (list (scratch-text "poem.txt") (clara.editor::editor-changed editor) (clara.editor::editor-message editor)
+         (list (scratch-text "poem.txt") (clara.emma::editor-changed editor) (clara.emma::editor-message editor)
                (editor-wrong editor)))
   (keys editor clara.input:+page-down+ "end" 19)                             ; a last line with something in it gets its end
   (check (list (format nil "red roses~%  violets~%~%end~%") "saved, 4 lines")
-         (list (scratch-text "poem.txt") (clara.editor::editor-message editor)))
-  (clara.windows:close-window (clara.editor::editor-window editor)))
-(let ((editor (clara.editor::open-editor (scratch "empty.txt") :columns 70 :rows 3)))
+         (list (scratch-text "poem.txt") (clara.emma::editor-message editor)))
+  (clara.windows:close-window (clara.emma::editor-window editor)))
+(let ((editor (clara.emma::open-editor (scratch "empty.txt") :columns 70 :rows 3)))
   (check '((("") 0 0) "a new file: Ctrl-S makes it" nil nil)                 ; a file that is not there yet
-         (list (editor-state editor) (clara.editor::editor-message editor) (clara.editor::editor-changed editor)
+         (list (editor-state editor) (clara.emma::editor-message editor) (clara.emma::editor-changed editor)
                (probe-file (scratch "empty.txt"))))
   (keys editor 19)
-  (check '("" "saved, 0 lines") (list (scratch-text "empty.txt") (clara.editor::editor-message editor)))
+  (check '("" "saved, 0 lines") (list (scratch-text "empty.txt") (clara.emma::editor-message editor)))
   (keys editor "x" 19)
   (check (format nil "x~%") (scratch-text "empty.txt"))
-  (clara.windows:close-window (clara.editor::editor-window editor)))
-(let ((editor (clara.editor::open-editor (scratch "empty.txt") :columns 70 :rows 3)))
-  (check '((("x" "") 0 0) "1 lines") (list (editor-state editor) (clara.editor::editor-message editor)))
-  (clara.windows:close-window (clara.editor::editor-window editor)))
+  (clara.windows:close-window (clara.emma::editor-window editor)))
+(let ((editor (clara.emma::open-editor (scratch "empty.txt") :columns 70 :rows 3)))
+  (check '((("x" "") 0 0) "1 lines") (list (editor-state editor) (clara.emma::editor-message editor)))
+  (clara.windows:close-window (clara.emma::editor-window editor)))
 ;; An editor that is opened on what cannot be read, a directory for one,
-;; says so, and is an editor with no file: its window is not named after it.
-(let ((editor (clara.editor::open-editor *scratch* :columns 70 :rows 3)))
-  (check '((("") 0 0) t nil nil "Editor" 0)
-         (list (editor-state editor) (stringp (clara.editor::editor-message editor)) (clara.editor::editor-name editor)
-               (clara.editor::editor-changed editor) (clara.windows:window-title (clara.editor::editor-window editor))
+;; says so, and is an editor with no file: its window is not named after it,
+;; and is Emma and no more, as the window of a text with no file is.
+(let ((editor (clara.emma::open-editor *scratch* :columns 70 :rows 3)))
+  (check '((("") 0 0) t nil nil "Emma" 0)
+         (list (editor-state editor) (stringp (clara.emma::editor-message editor)) (clara.emma::editor-name editor)
+               (clara.emma::editor-changed editor) (clara.windows:window-title (clara.emma::editor-window editor))
                (editor-wrong editor)))
-  (clara.windows:close-window (clara.editor::editor-window editor)))
+  (clara.windows:close-window (clara.emma::editor-window editor)))
 
 ;; A question in the status row: a text that has no file is asked for a
 ;; name when it is saved. What is typed then is the answer, Backspace takes
 ;; a character of it back, Enter hands it over, and Escape gives it up.
-(let ((editor (clara.editor::open-editor nil :columns 70 :rows 3)) (note (scratch "note.txt")))
+(let ((editor (clara.emma::open-editor nil :columns 70 :rows 3)) (note (scratch "note.txt")))
   (flet ((asked ()
-           (list (car (clara.editor::editor-asking editor)) (clara.editor::editor-answer editor) (editor-wrong editor))))
+           (list (car (clara.emma::editor-asking editor)) (clara.emma::editor-answer editor) (editor-wrong editor))))
     (keys editor "note" 19)
     (check '("Save as: " "" 0) (asked))
     (keys editor "xyz" 8 clara.input:+up+ 9 1)
     (check '("Save as: " "xy" 0) (asked))
     (keys editor 8 8 8 10)                                                   ; no answer: nothing is saved, or tried
     (check '((nil "" 0) (("note") 0 4) t nil nil)
-           (list (asked) (editor-state editor) (clara.editor::editor-changed editor) (clara.editor::editor-name editor)
-                 (clara.editor::editor-message editor)))
+           (list (asked) (editor-state editor) (clara.emma::editor-changed editor) (clara.emma::editor-name editor)
+                 (clara.emma::editor-message editor)))
     (keys editor 19 note 27)                                                 ; given up
     (check '(nil 0 nil nil)
-           (list (car (asked)) (editor-wrong editor) (clara.editor::editor-name editor) (probe-file note)))
+           (list (car (asked)) (editor-wrong editor) (clara.emma::editor-name editor) (probe-file note)))
     (keys editor 19 note 10)
-    (check (list nil note nil "saved, 1 lines" note (format nil "note~%") 0)
-           (list (clara.editor::editor-asking editor) (clara.editor::editor-name editor) (clara.editor::editor-changed editor)
-                 (clara.editor::editor-message editor) (clara.windows:window-title (clara.editor::editor-window editor))
+    (check (list nil note nil "saved, 1 lines" (concatenate 'string "Emma - " note) (format nil "note~%") 0)
+           (list (clara.emma::editor-asking editor) (clara.emma::editor-name editor) (clara.emma::editor-changed editor)
+                 (clara.emma::editor-message editor) (clara.windows:window-title (clara.emma::editor-window editor))
                  (scratch-text "note.txt") (editor-wrong editor)))
     ;; Another file, in place of this text: refused once while the text is
     ;; not saved, and done when the key is typed again right after.
     (keys editor "s" 15)
     (check '(nil "the text is not saved: Ctrl-S saves it, and asking once more goes on without")
-           (list (clara.editor::editor-asking editor) (clara.editor::editor-message editor)))
+           (list (clara.emma::editor-asking editor) (clara.emma::editor-message editor)))
     (keys editor clara.input:+left+ 15)                                      ; a key in between: refused again
-    (check nil (clara.editor::editor-asking editor))
+    (check nil (clara.emma::editor-asking editor))
     (keys editor 15)
     (check '("Open: " "" 0) (asked))
     (keys editor (scratch "poem.txt") 10)
-    (check (list '(("red roses" "  violets" "" "end" "") 0 0) (scratch "poem.txt") nil "4 lines" (scratch "poem.txt") 0)
-           (list (editor-state editor) (clara.editor::editor-name editor) (clara.editor::editor-changed editor)
-                 (clara.editor::editor-message editor) (clara.windows:window-title (clara.editor::editor-window editor))
+    (check (list '(("red roses" "  violets" "" "end" "") 0 0) (scratch "poem.txt") nil "4 lines"
+                 (concatenate 'string "Emma - " (scratch "poem.txt")) 0)
+           (list (editor-state editor) (clara.emma::editor-name editor) (clara.emma::editor-changed editor)
+                 (clara.emma::editor-message editor) (clara.windows:window-title (clara.emma::editor-window editor))
                  (editor-wrong editor)))
-    ;; What cannot be read, a directory for one, is said, and the text stays.
+    ;; What cannot be read, a directory for one, is said, and the text stays,
+    ;; under the title that it had.
     (keys editor 15 *scratch* 10)
-    (check (list t '(("red roses" "  violets" "" "end" "") 0 0) (scratch "poem.txt") nil)
-           (list (stringp (clara.editor::editor-message editor)) (editor-state editor) (clara.editor::editor-name editor)
-                 (clara.editor::editor-asking editor)))
+    (check (list t '(("red roses" "  violets" "" "end" "") 0 0) (scratch "poem.txt") nil
+                 (concatenate 'string "Emma - " (scratch "poem.txt")))
+           (list (stringp (clara.emma::editor-message editor)) (editor-state editor) (clara.emma::editor-name editor)
+                 (clara.emma::editor-asking editor) (clara.windows:window-title (clara.emma::editor-window editor))))
     ;; Closing: at once when the text is saved; refused once when it is not,
     ;; whether it is Ctrl-Q or the close box that asks.
     (keys editor 17)
-    (check t (clara.editor::editor-done editor))
-    (setf (clara.editor::editor-done editor) nil)
+    (check t (clara.emma::editor-done editor))
+    (setf (clara.emma::editor-done editor) nil)
     (keys editor "!" 17)
-    (check '(nil t) (list (clara.editor::editor-done editor) (stringp (clara.editor::editor-message editor))))
-    (clara.editor::happened editor '(:close))
-    (check t (clara.editor::editor-done editor))
-    (setf (clara.editor::editor-done editor) nil)
-    (clara.editor::happened editor '(:close))
-    (clara.editor::happened editor (list :key clara.input:+down+))
-    (clara.editor::happened editor '(:close))
-    (check nil (clara.editor::editor-done editor))
-    (clara.editor::happened editor '(:pointer 9 20 1))                       ; and a button is the pointer's
+    (check '(nil t) (list (clara.emma::editor-done editor) (stringp (clara.emma::editor-message editor))))
+    (clara.emma::happened editor '(:close))
+    (check t (clara.emma::editor-done editor))
+    (setf (clara.emma::editor-done editor) nil)
+    (clara.emma::happened editor '(:close))
+    (clara.emma::happened editor (list :key clara.input:+down+))
+    (clara.emma::happened editor '(:close))
+    (check nil (clara.emma::editor-done editor))
+    (clara.emma::happened editor '(:pointer 9 20 1))                       ; and a button is the pointer's
     (check '(1 1) (cdr (editor-state editor))))
-  (clara.windows:close-window (clara.editor::editor-window editor)))
+  (clara.windows:close-window (clara.emma::editor-window editor)))
 
 ;; Ctrl-E evaluates the forms of the text, in order, as LOAD would: how
 ;; many there were is said; what goes wrong is said with the line that the
 ;; form begins on, where the cursor goes; and Ctrl-C stops them.
 (defvar *evaluated* nil)
-(let ((editor (clara.editor::open-editor nil :columns 70 :rows 4)))
+(let ((editor (clara.emma::open-editor nil :columns 70 :rows 4)))
   (flet ((said (prefix)
-           (let ((message (clara.editor::editor-message editor)))
+           (let ((message (clara.emma::editor-message editor)))
              (list (and (>= (length message) (length prefix)) (string= prefix message :end2 (length prefix)))
-                   (clara.editor::editor-row editor) (clara.editor::editor-column editor)))))
+                   (clara.emma::editor-row editor) (clara.emma::editor-column editor)))))
     (keys editor "(setq clara.tests::*evaluated* (list 1" 10 "2))" 10 10 "  (push 3 clara.tests::*evaluated*) ; and a comment" 10 5)
     (check '("2 forms evaluated" (3 1 2) 0)
-           (list (clara.editor::editor-message editor) *evaluated* (editor-wrong editor)))
+           (list (clara.emma::editor-message editor) *evaluated* (editor-wrong editor)))
     (keys editor "(car 5)" 5)
     (check '((t 4 0) (3 1 2)) (list (said "line 5: ") *evaluated*))
     (keys editor 11 "(list 1" 5)                                             ; a form that the text ends in the middle of
@@ -6929,13 +6933,13 @@
     (keys editor 11 "(defvar *in-the-editor* (package-name *package*))" 10 "(in-package \"CLARA.TESTS\")" 10
           "(setq *evaluated* (package-name *package*))" 5)
     (check '("5 forms evaluated" "COMMON-LISP-USER" "CLARA.TESTS" "COMMON-LISP-USER" "CLARA.TESTS")
-           (list (clara.editor::editor-message editor)
+           (list (clara.emma::editor-message editor)
                  (symbol-value (find-symbol "*IN-THE-EDITOR*" "COMMON-LISP-USER")) *evaluated*
                  (package-name (sb-ext:symbol-global-value '*package*)) (package-name *package*)))
     (keys editor clara.input:+up+ clara.input:+up+ clara.input:+home+ 11 11 11 11 11)
     (keys editor 11 "(loop (sleep 0.01))")
-    (let ((thread (clara:make-thread (lambda () (clara.editor::key editor 5)))))
-      (check t (eventually (lambda () (equal (clara.editor::editor-message editor) "evaluating: Ctrl-C stops it"))))
+    (let ((thread (clara:make-thread (lambda () (clara.emma::key editor 5)))))
+      (check t (eventually (lambda () (equal (clara.emma::editor-message editor) "evaluating: Ctrl-C stops it"))))
       (clara.windows:key-typed 65)                                           ; any other key is nothing to it
       (sleep 0.05)
       (check t (clara:thread-alive-p thread))
@@ -6945,21 +6949,21 @@
     ;; An editor that is stopped while its forms run takes them with it.
     (flet ((evaluating ()
              (find "evaluating" (clara:all-threads) :key #'clara:thread-name :test #'equal)))
-      (let ((thread (clara:make-thread (lambda () (clara.editor::key editor 5)))))
+      (let ((thread (clara:make-thread (lambda () (clara.emma::key editor 5)))))
         (check t (eventually (lambda ()
                                (and (evaluating) (clara:thread-alive-p (evaluating))
-                                    (equal (clara.editor::editor-message editor) "evaluating: Ctrl-C stops it")))))
+                                    (equal (clara.emma::editor-message editor) "evaluating: Ctrl-C stops it")))))
         (clara:destroy-thread thread)
         (check t (eventually (lambda () (and (not (clara:thread-alive-p thread)) (null (evaluating)))))))))
-  (clara.windows:close-window (clara.editor::editor-window editor)))
+  (clara.windows:close-window (clara.emma::editor-window editor)))
 
 ;; The application, as the launcher runs it: in a thread of its own, with
 ;; what is typed and pointed at coming to it from the window manager.
 (setq clara.windows::*applications* *defined-applications*)
-(let* ((thread (clara.windows:launch "editor" (scratch "poem.txt") :columns 30 :rows 3))
+(let* ((thread (clara.windows:launch "emma" (scratch "poem.txt") :columns 30 :rows 3))
        (window (clara.windows:focused-window))
        (face (clara.windows:window-surface window)))
-  (check (list (scratch "poem.txt") 240 64 t)
+  (check (list (concatenate 'string "Emma - " (scratch "poem.txt")) 240 64 t)
          (list (clara.windows:window-title window) (clara.draw:surface-width face) (clara.draw:surface-height face)
                (clara:thread-alive-p thread)))
   (check t (eventually (lambda () (zerop (wrong-cells face '("red roses " "  violets ") (list (list 0 0 +ink+)))))))
@@ -7073,7 +7077,7 @@
     (browser-keys browser 10)
     ;; A file is opened in the editor, which is launched for it.
     (browser-keys browser clara.input:+end+ clara.input:+up+ 10)
-    (check (list (concatenate 'string *shelf* "a.txt") (concatenate 'string "Files in " *shelf*)) (titles))
+    (check (list (concatenate 'string "Emma - " *shelf* "a.txt") (concatenate 'string "Files in " *shelf*)) (titles))
     (let ((face (clara.windows:window-surface (clara.windows:focused-window))))
       (check t (eventually (lambda () (zerop (wrong-cells face '("first " "second ") (list (list 0 0 +ink+))))))))
     (clara.windows:key-typed 17)                                             ; Ctrl-Q, to the editor
@@ -7155,21 +7159,22 @@
     (clara.windows:key-typed clara.input:+down+))
   (check t (eventually (lambda () (zerop (wrong-cells face (list " many/ " " sub/ " " Zed/ " (list (pad " new.txt" 30))))))))
   (clara.windows:key-typed 10)
-  (check t (eventually (lambda () (equal (titles) (list (concatenate 'string *shelf* "new.txt") (concatenate 'string "Files in " *shelf*))))))
+  (check t (eventually (lambda () (equal (titles) (list (concatenate 'string "Emma - " *shelf* "new.txt")
+                                                        (concatenate 'string "Files in " *shelf*))))))
   (check 0 (wrong-pixels))
   (clara.windows:key-typed (+ clara.input:+alt+ 9))                          ; back to the browser's window, by the keyboard
   (multiple-value-bind (x y) (clara.windows:window-position window)
     (click (+ x 235) (- y 10)))
   (check t (eventually (lambda () (not (clara:thread-alive-p thread)))))
-  (check (list (concatenate 'string *shelf* "new.txt")) (titles))
+  (check (list (concatenate 'string "Emma - " *shelf* "new.txt")) (titles))
   ;; Unloaded, the editor is stopped where it runs, and has no function
   ;; until its file is loaded again. Its package stays here, where the
   ;; tests loaded the file and not the launcher, whose file is one of
   ;; ClaraOS's own volume: so the tests give it its function back.
-  (clara.windows:unload-application "Editor")
-  (check '(nil t nil) (list (titles) (packagep (find-package "CLARA.EDITOR"))
-                            (clara.windows::application-function (clara.windows::find-application "Editor")))))
-(clara.windows:define-application "Editor" #'clara.editor:edit)
+  (clara.windows:unload-application "Emma")
+  (check '(nil t nil) (list (titles) (packagep (find-package "CLARA.EMMA"))
+                            (clara.windows::application-function (clara.windows::find-application "Emma")))))
+(clara.windows:define-application "Emma" #'clara.emma:edit)
 (clara.windows:stop)
 (setq clara.files::*names* #'clara.files::names-in)
 (sb-ext:delete-directory *scratch* :recursive t)
@@ -7305,24 +7310,24 @@
 ;; machine starts in it; then it is stopped, and then the disk is told.
 (start-files (fat-bytes (make-fat-volume 16 '(("clara" (("kept.txt" "x")))))))
 (new-desk :machine nil :width 300 :height 220)
-(let* ((editor (clara.editor::open-editor nil :columns 20 :rows 3))
-       (second (clara.editor::open-editor nil :columns 20 :rows 3))
+(let* ((editor (clara.emma::open-editor nil :columns 20 :rows 3))
+       (second (clara.emma::open-editor nil :columns 20 :rows 3))
        (plain (clara.windows:open-window "plain" 40 20))
        (seen nil))
   (check nil (clara.windows:unfinished))
   (keys editor "a")
-  (check '("plain" "Editor" "Editor") (titles))
-  (check (format nil "the machine is not shut down: the window \"Editor\" has text that is not saved. ~
+  (check '("plain" "Emma" "Emma") (titles))
+  (check (format nil "the machine is not shut down: the window \"Emma\" has text that is not saved. ~
                       Finish that, or ask with :FORCE T, which goes on without")
          (condition-text #'clara.system:shut-down))
-  (check (list (clara.editor::editor-window editor) plain (clara.editor::editor-window second)) (clara.windows:windows))
+  (check (list (clara.emma::editor-window editor) plain (clara.emma::editor-window second)) (clara.windows:windows))
   (keys second "b")
-  (check (format nil "the machine is not started again: the window \"Editor\" has text that is not saved, ~
+  (check (format nil "the machine is not started again: the window \"Emma\" has text that is not saved, ~
                       and 1 more have something too. Finish that, or ask with :FORCE T, which goes on without")
          (condition-text #'clara.system:start-again))
   (check '(nil t nil 0) (list (clara.host:power) (clara.windows:running-p) clara.system::*leaving* (wrong-pixels)))
   ;; The same from the launcher's list, where there is nobody to hand an error to: it is said.
-  (check t (and (search "clara: the machine is not shut down: the window \"Editor\" has text that is not saved"
+  (check t (and (search "clara: the machine is not shut down: the window \"Emma\" has text that is not saved"
                         (said-by-all (lambda () (clara.system::asked :off))))
                 t))
   (setf (vdev-watch *disk*)
@@ -7333,7 +7338,7 @@
          (list (car seen) (every #'cdr (remove 4 seen :key #'car)) (clara.host:power) (clara.windows:running-p)))
   (check t (and (member '(1 . t) seen :test #'equal) t))
   (mapc #'clara.windows:close-window
-        (list (clara.editor::editor-window editor) (clara.editor::editor-window second) plain)))
+        (list (clara.emma::editor-window editor) (clara.emma::editor-window second) plain)))
 
 ;; The launcher's list has the two commands that this file defined, and a
 ;; click on one is the same as asking at a prompt.

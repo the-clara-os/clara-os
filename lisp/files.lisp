@@ -4,7 +4,7 @@
 ;;;; directory holds, the directories first, with one of the names picked.
 ;;;; The arrows, Home, End, Page Up and Page Down pick another, and so does
 ;;;; a click. Enter goes into the directory that is picked, or opens the
-;;;; file that is in the editor, which is another application and is
+;;;; file that is in the editor, Emma, which is another application and is
 ;;;; launched for it; a click on the name that is picked does the same.
 ;;;; Backspace goes to the directory that this one is in, Delete deletes the
 ;;;; file that is picked, when asked twice, Ctrl-R reads the directory again
@@ -110,7 +110,7 @@
           ((directory-name-p name)
            (list-directory browser (concatenate 'string (browser-directory browser) name)))
           (t
-           (clara.windows:launch "Editor" (concatenate 'string (browser-directory browser) name))
+           (clara.windows:launch "Emma" (concatenate 'string (browser-directory browser) name))
            nil))))
 
 ;;; The window

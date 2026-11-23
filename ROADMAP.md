@@ -1152,6 +1152,53 @@ Infrastructure, done:
   function left under its old name, at either of which the host tests
   stop before their first check.
 
+- **The Editor is Emma** (2026-11-23, version 0.0.50). The text editor
+  was named Editor and is named Emma (issue #41): in the list under
+  `Applications`, for its threads, as its file, lisp/emma.lisp, which was
+  lisp/editor.lisp, and as its package, CLARA.EMMA, which was
+  CLARA.EDITOR, so that its function is `clara.emma:edit`. The file and
+  the package went with the name because they are the application's and
+  nobody else's, where the REPL's listener is the serial port's as well;
+  the file and the package of Julio's own calculator go by its name too.
+  The names inside the file say what it is, an editor, and stayed, and so
+  did the word wherever a document means the thing and not its name.
+  `(clara.windows:launch "Emma" "/notes.txt")` opens a file; the old name
+  is no application now and the old package is not there, and LAUNCH says
+  so with the names that there are. The file browser launches it by the
+  new name. A window of Emma's is titled `Emma`, and `Emma - ` and the
+  name of its file once the text has one (Julio, while it was being
+  renamed: "in the window title, i would like it to say `Emma - <name of
+  open file>`"), where the title was the file's name alone: from when a
+  file is read or a text is saved under a name, and not for a file that
+  could not be read. The window manager cuts a title short where the
+  window is narrower, as before. The file browser's title is as it was,
+  `Files in ` and the directory; issue #45 renames that application. The
+  manual's chapter is "Emma, the editor", under the id that it had,
+  `editor`, so that a link to it leads where it led. The sessions of
+  `make test`, the manual's transcripts and the host tests ask for the
+  new names and titles wherever they asked for the old ones, and the
+  titles are written out there, never made by the function that is
+  tested. A copy of the disk of Julio's machine, which ran 0.0.48 with
+  the window manager, was started with this system beside it, as his next
+  `make run-aarch64` does: it took the system, made its world again of
+  `/home/defined.lisp`, and came up with one REPL window, Emma in the
+  list, his nine commands and his calculator; `/init.lisp` opened under
+  the title `Emma - /init.lisp`. None of his files names the editor. His
+  calculator did not launch in the world that was made again, and that
+  is its file as it stood that night and not the system: two parentheses
+  out of place in `/galculator.lisp`, which the world that he had saved
+  does not show, having the function from an earlier load. With the two
+  put right in the copy it launched. Mistakes
+  that were planted, one at a time, in copies of the tree: the
+  application defined under its old name, installed under it, installed
+  with the old name of its file, and launched by the browser under it;
+  the package left with its old name; and of the title, the file's name
+  alone when a file is read, when a text is saved, and when the window is
+  opened, the name kept for a file that could not be read, the old name
+  for a text with no file, and another sign between the two parts. The
+  host tests noticed all eleven, and passed with a comment changed, which
+  was the control.
+
 Infrastructure, for sessions with budget left over:
 
 - Read the UART base from ACPI (SPCR or DBG2) instead of assuming

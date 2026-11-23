@@ -1,4 +1,4 @@
-;;;; editor.lisp: a text editor
+;;;; emma.lisp: Emma, a text editor
 ;;;;
 ;;;; An application (lisp/windows.lisp): a window of cells with the lines of
 ;;;; a text in it, a cursor where what is typed goes in, and a row below the
@@ -21,14 +21,14 @@
 ;;;; each. When the text moves up or down, the rows that stay are copied.
 ;;;;
 ;;;; This file is not part of the world that the kernel loads. The launcher
-;;;; loads it when the editor is first picked, and CLARA.WINDOWS:UNLOAD-APPLICATION
+;;;; loads it when Emma is first picked, and CLARA.WINDOWS:UNLOAD-APPLICATION
 ;;;; takes it out again. It loads under SBCL as well, where lisp/host/
 ;;;; stands in for the machine.
 
-(defpackage "CLARA.EDITOR"
+(defpackage "CLARA.EMMA"
   (:use "COMMON-LISP")
   (:export "EDIT"))
-(in-package "CLARA.EDITOR")
+(in-package "CLARA.EMMA")
 
 (defstruct editor
   window
@@ -208,6 +208,13 @@
 
 ;;; Files
 
+;; What the window of a text is called: Emma, and after that the name of
+;; the text's file, once it has one.
+(defun title (name)
+  (if name
+      (concatenate 'string "Emma - " name)
+      "Emma"))
+
 ;; The lines of the file of a name.
 (defun file-lines (name)
   (with-open-file (in name)
@@ -232,7 +239,7 @@
           (editor-row editor) 0
           (editor-column editor) 0
           (editor-changed editor) nil)
-    (clara.windows:rename-window (editor-window editor) name)
+    (clara.windows:rename-window (editor-window editor) (title name))
     (if there
         (format nil "~D lines" (length lines))
         "a new file: Ctrl-S makes it")))
@@ -251,7 +258,7 @@
           (setq count (1+ count)))))
     (setf (editor-name editor) name
           (editor-changed editor) nil)
-    (clara.windows:rename-window (editor-window editor) name)
+    (clara.windows:rename-window (editor-window editor) (title name))
     (format nil "saved, ~D lines" count)))
 
 ;;; Evaluating
@@ -533,7 +540,7 @@
          (columns (or columns (max 20 (min 80 (floor (- (clara.draw:surface-width screen) 48) clara.font:+width+)))))
          (rows (or rows (max 3 (min 24 (floor (- (clara.draw:surface-height screen) 136) clara.font:+height+)))))
          (holds (list nil))
-         (window (clara.windows:open-window (or name "Editor") (* columns clara.font:+width+)
+         (window (clara.windows:open-window (title name) (* columns clara.font:+width+)
                                             (* (1+ rows) clara.font:+height+) :x x :y y :events t
                                             :unfinished (lambda ()
                                                           (and (car holds) (editor-changed (car holds))
@@ -548,7 +555,7 @@
       (attempt editor (lambda () (read-in editor name)))
       ;; A file that could not be read is not what the window has.
       (unless (editor-name editor)
-        (clara.windows:rename-window window "Editor")))
+        (clara.windows:rename-window window (title nil))))
     editor))
 
 ;; What happens to the window is done to the text, and the window shows
@@ -575,4 +582,4 @@
       (clara.windows:close-window (editor-window editor)))
     name))
 
-(clara.windows:define-application "Editor" #'edit)
+(clara.windows:define-application "Emma" #'edit)

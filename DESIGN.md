@@ -872,8 +872,8 @@ architectures (kernel/vm.c).
 
 - An application that comes with the system is a file, and not part of
   the world. The kernel loads the console, the drivers, the file system and
-  the window manager as it starts, and leaves the editor and the file
-  browser on the boot volume. The launcher knows each by a name and the
+  the window manager as it starts, and leaves the editor, Emma, and the
+  file browser on the boot volume. The launcher knows each by a name and the
   name of its file, and loads the file when the application is first
   launched, in the thread that is to run it. So the world that starts is no
   larger for the applications it could run, an application can be changed
@@ -907,6 +907,17 @@ architectures (kernel/vm.c).
   opens a file by launching the editor with the file's name, and holds no
   symbol of the editor's: either can be unloaded, or be another program
   altogether under the same name, without the other knowing.
+- The editor is Emma. That is the application's name, in the launcher's
+  list and for its threads, and its file and its package go by it,
+  lisp/emma.lisp and CLARA.EMMA, the way the file and the package of an
+  application that a user writes go by that application's name (Julio's
+  issue #41; it was the Editor, lisp/editor.lisp and CLARA.EDITOR, until
+  0.0.50). What it is, is still an editor, which is what these notes and
+  the names inside its file go on calling it. Its window is titled `Emma`
+  while the text has no file, and `Emma - ` and the file's name from then
+  on (Julio, as it was being renamed: "in the window title, i would like
+  it to say `Emma - <name of open file>`"); before that the title was the
+  file's name alone.
 - The editor's text is its lines, around the cursor. The lines above the
   cursor's are a list, the nearest first, the line itself is a string, and
   the lines below are a list in order. Whatever is typed is done at the

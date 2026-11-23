@@ -436,7 +436,7 @@ OK
 > (defun k () (clara:signal-event *seen*) 'k)
 K
 > (list (clara.windows:running-p) (clara.windows:applications) (clara.windows:start) (clara.windows:start))
-(NIL ("REPL" "Editor" "Files") T T)
+(NIL ("REPL" "Emma" "Files") T T)
 > (list (clara.windows:stop) (clara.windows:running-p)                 ; and the console has the screen again, cleared
         (= (clara.draw:pixel (clara.draw:screen) 700 300) (clara.draw:color 30 27 46)) (clara.windows:start))
 (T NIL T T)
@@ -504,10 +504,10 @@ OK
 ((560 440) ("A picture" "REPL") T)
 > (list (clara.windows:close-window *window*) (length (clara.windows:windows)))
 (NIL 1)
-> (list (find-package "CLARA.EDITOR") (clara:thread-alive-p (clara.windows:launch "Editor" "/poem.txt" :x 96 :y 120)))
+> (list (find-package "CLARA.EMMA") (clara:thread-alive-p (clara.windows:launch "Emma" "/poem.txt" :x 96 :y 120)))
 (NIL T)
-> (list (package-name (find-package "CLARA.EDITOR")) (mapcar #'clara.windows:window-title (clara.windows:windows)))
-("CLARA.EDITOR" ("/poem.txt" "REPL"))
+> (list (package-name (find-package "CLARA.EMMA")) (mapcar #'clara.windows:window-title (clara.windows:windows)))
+("CLARA.EMMA" ("Emma - /poem.txt" "REPL"))
 > (defun cursor-at (column row)
     (until (= (clara.draw:pixel (clara.windows:window-surface (clara.windows:focused-window)) (* 8 column) (+ 15 (* 16 row)))
               (clara.draw:color 232 227 244))))
@@ -538,7 +538,7 @@ OK
 OK
 > (with-open-file (in "/poem.txt") (list (read-line in) (read-line in) (read-line in nil 'end)))
 ("red roses" "are red" END)
-> (list 'another (clara:thread-alive-p (clara.windows:launch "Editor")) (fboundp 'hi))
+> (list 'another (clara:thread-alive-p (clara.windows:launch "Emma")) (fboundp 'hi))
 (ANOTHER T NIL)
 > (list 'begun (cursor-at 0 1))
 ^T (defun hi
@@ -554,13 +554,13 @@ THERE
 > (clara:thread-alive-p (clara.windows:launch "Files"))
 T
 > (until (equal (mapcar #'clara.windows:window-title (clara.windows:windows))
-                '("/poem.txt" "Files in /" "Editor" "/poem.txt" "REPL")))
+                '("Emma - /poem.txt" "Files in /" "Emma" "Emma - /poem.txt" "REPL")))
 ^M sendkey end
 ^M sendkey ret
 OK
-> (list (clara.windows:unload-application "Editor") (find-package "CLARA.EDITOR")
+> (list (clara.windows:unload-application "Emma") (find-package "CLARA.EMMA")
         (mapcar #'clara.windows:window-title (clara.windows:windows)))
-("Editor" NIL ("Files in /" "REPL"))
+("Emma" NIL ("Files in /" "REPL"))
 > (until (equal (mapcar #'clara.windows:window-title (clara.windows:windows)) '("REPL" "Files in /")))
 ^M sendkey alt-tab
 OK
@@ -584,13 +584,13 @@ OK
     (write-line "(clara.windows:define-application \"Hello\" #'hello)" out))
 "(clara.windows:define-application \"Hello\" #'hello)"
 > (list (clara.windows:install-application "Hello" "/clara/hello.lisp") (clara.windows:applications) (find-package "HELLO"))
-("Hello" ("REPL" "Editor" "Files" "Hello") NIL)
+("Hello" ("REPL" "Emma" "Files" "Hello") NIL)
 > (list (clara:thread-alive-p (clara.windows:launch "Hello" "Hello, world")) (package-name (find-package "HELLO"))
         (clara.windows:window-title (clara.windows:focused-window)))
 (T "HELLO" "Hello, world")
 > (list (clara.windows:remove-application "Hello") (find-package "HELLO") (clara.windows:applications)
         (length (clara.windows:windows)))
-("Hello" NIL ("REPL" "Editor" "Files") 1)
+("Hello" NIL ("REPL" "Emma" "Files") 1)
 > (defpackage "PLAY" (:use "COMMON-LISP") (:export "BALL"))
 #<PACKAGE "PLAY">
 > (in-package "PLAY")
