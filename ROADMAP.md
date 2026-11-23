@@ -1109,6 +1109,23 @@ Infrastructure, done:
   trust; anything at all looked into; no test when none is named; and the
   name left out of what boot.lisp exports.
 
+- **The manual's way back to its top** (2026-11-22, issue #39; the system
+  is as it was, and so is its version). Once the first screen of the user
+  manual has gone by, a sun comes up at the lower right of the window with
+  the console font's arrow in it, and a click on it leads to the top of
+  the page; the browser's way back then leads to where the reader was. It
+  is a link and a few rules of the manual's style sheet, with no script:
+  its box reaches from two screens down to the end of the page, and the
+  link keeps to the bottom of the window while the box is under it. Looked
+  at in Chrome, in Firefox and in Safari's engine, as wide as a desk and
+  as a phone, light and dark, and the link tried in the first and the
+  last: out of sight at the top, a click leads to the top, and Back to the
+  place before. Found on the way: the id `listing` was in the manual
+  twice, so the two links to the list of the system's files led into the
+  compiler's chapter; `make site` now stops at an id that is there twice
+  and at a link into a page that names none. And three of the manual's
+  tables are wider than a phone's window, which is issue #97.
+
 Infrastructure, for sessions with budget left over:
 
 - Read the UART base from ACPI (SPCR or DBG2) instead of assuming

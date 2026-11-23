@@ -8,9 +8,10 @@
      kernel by `make test` and has to come back as written here; the ones
      of the class "session again" are typed after the machine has been
      started again from the world that the first ones saved. A line that is
-     <kbd>Ctrl-C</kbd> and nothing else is the key. Whatever a change to the
-     system gives a user to type, or to see, gets its words here in the
-     same change. -->
+     <kbd>Ctrl-C</kbd> and nothing else is the key. A link into the page
+     itself has to name an id that is there, and no id may be there twice.
+     Whatever a change to the system gives a user to type, or to see, gets
+     its words here in the same change. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -53,11 +54,24 @@ td:first-child { white-space: nowrap; }
 .names { max-width: 46rem; line-height: 1.95; }
 .names code { margin-right: .28em; white-space: nowrap; }
 .aside { color: var(--muted); }
+/* The way back to the top, at the lower right of the window: a sun, which
+   is what is round and warm here. It comes up once the first screen of the
+   manual has gone by, and no script moves it: its box reaches from two
+   screens down to the end of the page, and the link keeps to the bottom of
+   the window for as long as the box is under it. */
+body { position: relative; }
+.up { position: absolute; top: 200vh; right: clamp(1rem, 3vw, 2rem); bottom: 0; display: flex; align-items: flex-end; pointer-events: none; }
+.up a { --px: 2; position: sticky; bottom: clamp(1rem, 3vw, 2rem); display: grid; place-items: center; width: 2.75rem; height: 2.75rem; border-radius: 50%; background: var(--sun); color: var(--paper); pointer-events: auto; transition: transform .2s; }
+.up .spleen { transform: translateY(calc(var(--px) * 1px)); }  /* the arrow stands a pixel above the middle of its cell */
+.up a:hover { transform: translateY(-.2rem); }
+.up a:focus-visible { outline-color: var(--text); }
+@media (prefers-reduced-motion: reduce) { .up a { transition: none; } }
+@media print { .up { display: none; } }
 </style>
 </head>
 <body>
 
-<header class="screen">
+<header class="screen" id="top">
   <div class="frame">
     <p class="boot"><a href="./">{{spleen:ClaraOS {{version}} on aarch64: the machine is ours}}</a></p>
     <h1 class="ours">{{spleen:User manual}}</h1>
@@ -564,7 +578,7 @@ FIB
 832040</code></pre>
     <p>The interpreter that ClaraOS had before it had a compiler, which walked the text of <code>fib</code> at every call, took 390 milliseconds for the same on that machine, and the compiler's instructions took 70 when the kernel carried them out, before they were translated for the processor.</p>
 
-    <h3 id="listing">What it made of a function</h3>
+    <h3 id="disassemble">What it made of a function</h3>
     <p><code>disassemble</code> writes the instructions of a function out, with their numbers:</p>
 <pre class="session">&gt; (disassemble 'fact)
 FACT: 1 local variable, 4 words of stack, translated for the processor
@@ -1808,6 +1822,8 @@ error: nothing is mapped at #x0</pre>
 <footer class="frame">
   <p>This manual is for ClaraOS {{version}}, and is built from <a href="https://github.com/the-clara-os/clara-os">the repository</a> with the system. Its sessions are typed at a kernel every time the tests run, and its lists of names are held against the kernel's own and those of its Lisp files. <a href="./">ClaraOS</a></p>
 </footer>
+
+<div class="up"><a href="#top" title="Back to the top" aria-label="Back to the top">{{spleen:↑}}</a></div>
 
 </body>
 </html>

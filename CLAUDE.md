@@ -61,7 +61,12 @@ Rules:
   `make font`; never edit it by hand.
 - The version is `CLARA_VERSION` in kernel/kernel.h. Every finished piece
   of work bumps the patch number in the same change, and its ROADMAP.md
-  entry records the version. The picture on the website goes with it
+  entry records the version. Work that leaves the system as it was, a
+  page of the website or a document, bumps nothing, and its entry names
+  the issue: the number is the system's, a new one is published as a
+  release at the merge (below), and every machine that is told to upgrade
+  would take a system that differs from its own in the name alone. The
+  picture on the website goes with a new version
   (Julio, twice on 2026-11-17, about a caption that named an older version
   than the page: "this text is still out-of-sync with the version we're
   on"): after the last `make test` of the change, `make screenshot` makes
@@ -1800,7 +1805,11 @@ Rules:
   put a new name where its subject is, and say what it is for in the
   chapter that it belongs to, since the list alone only names it. The
   same goes for what the package of a file in lisp/ exports, which has a
-  list with `data-package` for each package. And
+  list with `data-package` for each package. `make site` also stops when
+  a link of a page into itself names an id that is not there, or an id is
+  there twice: a browser goes to the first of two, which is how the two
+  links to the list of the system's files came to lead into the
+  compiler's chapter. And
   what the manual shows of the prompt, every `<pre class="session">`, is
   typed at a kernel by `make test`, with the ones of the class
   "session again" typed after the machine was started again from the world
