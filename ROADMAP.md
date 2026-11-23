@@ -1126,6 +1126,32 @@ Infrastructure, done:
   and at a link into a page that names none. And three of the manual's
   tables are wider than a phone's window, which is issue #97.
 
+- **The Listener is the REPL** (2026-11-22, version 0.0.49). The first
+  application, the prompt in a window, was named Listener and is named
+  REPL (issue #40): in the list under `Applications`, on its window, for
+  its thread, and as a function, `clara.terminal:repl`, which was
+  `clara.terminal:listener`. `(clara.windows:launch "REPL")` opens
+  another; the old name is no application now, and LAUNCH says so with
+  the names that there are. Nothing leaned on the name: the window manager
+  launches the first application that is defined, whatever it is called,
+  and what a world carries to a newer system says that the window manager
+  ran and names no window. What the application runs kept its name, the
+  listener: lisp/listener.lisp with the package CLARA.LISTENER, and the
+  thread at the serial port. Whether those follow is issue #100. The
+  sessions of `make test`, the manual's transcripts and the host tests ask
+  for the new name wherever they asked for the old one. A copy of the
+  disk of Julio's machine, which ran 0.0.48 with the window manager, was
+  started with this system beside it, as his next `make run-aarch64` does:
+  it took the system, made its world again of `/home/defined.lisp`, and
+  came up with one REPL window, his nine commands in the list and his
+  calculator, which was launched. None of his files names the
+  application. Mistakes that were planted, one at a time: the window's
+  title left as it was, and the name in the launcher's list, both of which
+  the host tests noticed, and the second a kernel as well, by three lines
+  of its session; the old name left in what the package exports, and the
+  function left under its old name, at either of which the host tests
+  stop before their first check.
+
 Infrastructure, for sessions with budget left over:
 
 - Read the UART base from ACPI (SPCR or DBG2) instead of assuming

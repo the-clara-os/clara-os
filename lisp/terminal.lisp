@@ -9,18 +9,18 @@
 ;;;; its window's surface (lisp/draw.lisp), and shows what it has drawn
 ;;;; when a string is written (lisp/windows.lisp).
 ;;;;
-;;;; The listener in a window is the first application: a terminal, and a
-;;;; thread that reads forms from it, evaluates them and prints what they
-;;;; give (lisp/listener.lisp). It is the one world that every listener
-;;;; evaluates in: what is defined in one window is defined on the serial
-;;;; port, and in the next window.
+;;;; The REPL is the first application, the listener in a window: a
+;;;; terminal, and a thread that reads forms from it, evaluates them and
+;;;; prints what they give (lisp/listener.lisp). It is the one world that
+;;;; every listener evaluates in: what is defined in one window is defined
+;;;; on the serial port, and in the next window.
 ;;;;
 ;;;; This file loads under SBCL as well, where lisp/host/ stands in for the
 ;;;; machine.
 
 (defpackage "CLARA.TERMINAL"
   (:use "COMMON-LISP")
-  (:export "OPEN-TERMINAL" "TERMINAL-P" "TERMINAL-STREAM" "TERMINAL-WINDOW" "CLEAR" "LISTENER"))
+  (:export "OPEN-TERMINAL" "TERMINAL-P" "TERMINAL-STREAM" "TERMINAL-WINDOW" "CLEAR" "REPL"))
 (in-package "CLARA.TERMINAL")
 
 (defstruct terminal
@@ -233,18 +233,18 @@
                                                         :read-line (lambda () (read-text-line terminal))))
     terminal))
 
-;;; The listener in a window
+;;; The REPL
 ;;;
 ;;; An application, for the launcher: a terminal of 80 by 24 cells, or as
 ;;; many as the screen has room for, and the listener reading from it and
 ;;; writing to it, with a package of its own to be in. Ctrl-D at its prompt
 ;;; ends it, and so does the close box; either way the window goes with it.
 
-(defun listener ()
+(defun repl ()
   (let* ((screen (clara.draw:screen))
          (thread (clara:current-thread))
          (terminal (open-terminal
-                    "Listener"
+                    "REPL"
                     :columns (max 20 (min 80 (floor (- (clara.draw:surface-width screen) 48) clara.font:+width+)))
                     :rows (max 4 (min 24 (floor (- (clara.draw:surface-height screen) 120) clara.font:+height+)))
                     :close (lambda () (clara:destroy-thread thread))))
@@ -260,9 +260,9 @@
           (fresh-line)
           (format t "error: ~A~%" condition))))))
 
-(clara.windows:define-application "Listener" #'listener)
+(clara.windows:define-application "REPL" #'repl)
 
-;;; The applications that come with the system, after the listener in the
+;;; The applications that come with the system, after the REPL in the
 ;;; launcher's list. Each is a file of its own among the system's, which
 ;;; nobody loads until the application is picked: lisp/editor.lisp and
 ;;; lisp/files.lisp. They are installed by their bare names, which are the
