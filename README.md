@@ -194,6 +194,10 @@ Then, on either:
                       # this computer at 10.0.2.2 and whatever this computer reaches (NET= for none)
     FRESH=1 make run-aarch64
                       # the same with a new disk; the one that was there is kept under another name
+    SIZE=4096 make run-aarch64
+                      # the same with a disk of that many MiB, where it has 1024: a disk that is smaller,
+                      # as every disk was up to 0.0.54, is made again that large with its files, and
+                      # kept under another name too. A world is saved on that disk, beside the one before
     make run-x86_64   # same, emulated (TCG), so the firmware takes a few seconds
     WORK=~/clara-work.img make run-aarch64
                       # the same machine with a second disk, which is yours alone:

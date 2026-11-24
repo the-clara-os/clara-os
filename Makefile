@@ -140,7 +140,14 @@ host-test:
 # (tools/session.txt), and the second boot, from a copy of that disk, has
 # to find the image, start from it, and answer for what the first one
 # defined (tools/resumed.txt). After every boot the host's own checker of
-# FAT volumes looks at the disk. Then each of the three machines once more
+# FAT volumes looks at the disk. Three of the boots that follow start from
+# a disk of 300 MiB that tools/mkdisk.py made of a first session's, with
+# every file of it (--grow), which is how tools/run.sh gives a machine
+# whose disk is too small for its world a larger one: the second boot on
+# AArch64, and two of the boots with UTM's devices, so that a disk of each
+# of the three kinds is read that way, and a volume with clusters of
+# eight sectors is booted from, resumed from and written to on both
+# processors. Then each of the three machines once more
 # from that disk, with the devices that UTM gives a machine in place of
 # virtio's (UTM=1, tools/utm.txt): a USB controller with a tablet, a mouse
 # and a keyboard at its ports, and Intel's sound card. What is typed on
@@ -150,8 +157,12 @@ host-test:
 # that card plays by the clock. Then each kind of processor once more, from
 # the disk that its first session left, for what is done to a machine and
 # not in it (tools/power.txt): it is asked to shut down while Emma has
-# a text that is not saved, and has to refuse; it is told to start again,
-# and has to come up in the world that it saved on the way; and its power
+# a text that is not saved, and has to refuse; its volume is filled until
+# the world has no room there beside the one that was saved before, and
+# the world is made larger than even the two rooms together, which it has
+# to refuse to save, with the older world still there; it is told to start again,
+# and has to come up in the world that it saved on the way, where the older
+# one was, since there was no room for both; and its power
 # button is pressed, as a host does to stop a machine, after which it has
 # to save the world once more and be gone by itself, with its volume in
 # order. Then upgrades (lisp/system.lisp), for which the build makes two
@@ -227,6 +238,7 @@ host-test:
 test: export WORK :=
 test: export SOUND := capture
 test: export UTM :=
+GROWN := 300
 SECOND = -drive if=none,id=second,format=raw,readonly=on,file=$(BUILD)/$(1).img -device virtio-blk-pci,drive=second
 UPGRADED := EXPECT='^ClaraOS: starting the system that is to be tried;;^system: .*-other has come to its prompt;;^world: made anew by ClaraOS .*-other;;^home: /home/init.lisp is loaded, 1 form of it, and 3 were passed over:;;^home:     the stack is full;;^home:     /home/init.lisp is loaded into a new world by itself;;^home: /home/defined.lisp is loaded, [0-9]* forms[^ ]*$$;;^world: the launcher.s list is in the order that its lines were moved into in the world before;;^world:   .*\*JOBS\*;;^world:   .*\*WINDOW\*;;^world:   .*NOT-WRITTEN-DOWN;;^world: it is saved as it is now;;^home: /home/defined.lisp has 1 form that this world did not have, which is loaded now'
 POWER :=SESSION=tools/power.txt MARKER='^clara: turning the machine off' EXPECT='^lisp: the heap is an image'
@@ -236,13 +248,16 @@ test: all host-test release-test $(BUILD)/system-other/stamp $(BUILD)/system-bro
 	tools/boottest.sh x86_64
 	NAME=x86_64-resumed DISK=$(BUILD)/boot-x86_64.img $(RESUME) tools/boottest.sh x86_64
 	MKDISK="--fat 16 --table mbr" tools/boottest.sh aarch64 -machine gic-version=3
-	NAME=aarch64-resumed DISK=$(BUILD)/boot-aarch64.img $(RESUME) tools/boottest.sh aarch64 -machine gic-version=3
+	python3 -I tools/mkdisk.py --size $(GROWN) --grow $(BUILD)/boot-aarch64.img $(BUILD)/grown-aarch64.img
+	NAME=aarch64-resumed DISK=$(BUILD)/grown-aarch64.img $(RESUME) tools/boottest.sh aarch64 -machine gic-version=3
 	NAME=aarch64-gic2 NO_HVF=1 MKDISK="--fat 12 --table none" tools/boottest.sh aarch64 -machine gic-version=2
 	NAME=aarch64-gic2-resumed NO_HVF=1 DISK=$(BUILD)/boot-aarch64-gic2.img $(RESUME) \
 		tools/boottest.sh aarch64 -machine gic-version=2
-	NAME=x86_64-utm DISK=$(BUILD)/boot-x86_64.img $(AS_UTM) tools/boottest.sh x86_64
+	python3 -I tools/mkdisk.py --size $(GROWN) --grow $(BUILD)/boot-x86_64.img $(BUILD)/grown-x86_64.img
+	NAME=x86_64-utm DISK=$(BUILD)/grown-x86_64.img $(AS_UTM) tools/boottest.sh x86_64
 	NAME=aarch64-utm DISK=$(BUILD)/boot-aarch64.img $(AS_UTM) tools/boottest.sh aarch64 -machine gic-version=3
-	NAME=aarch64-gic2-utm NO_HVF=1 DISK=$(BUILD)/boot-aarch64-gic2.img $(AS_UTM) \
+	python3 -I tools/mkdisk.py --size $(GROWN) --grow $(BUILD)/boot-aarch64-gic2.img $(BUILD)/grown-aarch64-gic2.img
+	NAME=aarch64-gic2-utm NO_HVF=1 DISK=$(BUILD)/grown-aarch64-gic2.img $(AS_UTM) \
 		tools/boottest.sh aarch64 -machine gic-version=2
 	NAME=x86_64-power DISK=$(BUILD)/boot-x86_64.img $(POWER) tools/boottest.sh x86_64
 	NAME=aarch64-power DISK=$(BUILD)/boot-aarch64.img $(POWER) tools/boottest.sh aarch64 -machine gic-version=3

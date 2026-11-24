@@ -167,14 +167,16 @@
 ;; that is the user's is written down for that system first (CARRY). A
 ;; world that cannot be saved is
 ;; a reason to stop here, with everything as it was, so that whoever asked
-;; can do something about it; a machine without a disk has nowhere to save
+;; can do something about it, and is told how to go on without saving,
+;; which is the one thing that can always be done; a machine without a
+;; disk has nowhere to save
 ;; one, and goes all the same. After the window manager has stopped there
 ;; is no going back. Should the machine still be there after the substrate
 ;; was told, it has no way of doing it, and that is said.
 (defun finish (how save)
   (unwind-protect
        (handler-case
-           (progn
+           (let ((going t))
              (let ((next (waiting)))
                (when next
                  (handler-case (carry next)
@@ -182,21 +184,28 @@
                      (say "system: what this world has could not be written down for ~A: ~A" next condition)))))
              (when save
                (cond ((clara.fat:volumes)
-                      (clara:save-image)
-                      (say "clara: the world is saved"))
+                      (handler-case (progn
+                                      (clara:save-image)
+                                      (say "clara: the world is saved"))
+                        (error (condition)
+                          (setq going nil)
+                          (say "clara: the machine is not ~A: ~A" (done-to how) condition)
+                          (say "clara:   ~A does it without saving the world"
+                               (if (eq how :off) "(clara.system:shut-down :save nil)" "(clara.system:start-again :save nil)")))))
                      (t
                       (say "clara: there is no disk to save the world on"))))
-             (clara.windows:stop)
-             (dolist (disk (clara.disk:disks))
-               (clara.disk:flush disk))
-             (cond ((eq how :off)
-                    (say "clara: turning the machine off")
-                    (clara.unsafe:power-off)
-                    (say "clara: this machine cannot be turned off from inside: it can be switched off now"))
-                   (t
-                    (say "clara: starting the machine again")
-                    (clara.unsafe:reset)
-                    (say "clara: this machine cannot be started again from inside: that is for whoever runs it"))))
+             (when going
+               (clara.windows:stop)
+               (dolist (disk (clara.disk:disks))
+                 (clara.disk:flush disk))
+               (cond ((eq how :off)
+                      (say "clara: turning the machine off")
+                      (clara.unsafe:power-off)
+                      (say "clara: this machine cannot be turned off from inside: it can be switched off now"))
+                     (t
+                      (say "clara: starting the machine again")
+                      (clara.unsafe:reset)
+                      (say "clara: this machine cannot be started again from inside: that is for whoever runs it")))))
          (serious-condition (condition)
            (say "clara: the machine is not ~A: ~A" (done-to how) condition)))
     (setq *leaving* nil)))

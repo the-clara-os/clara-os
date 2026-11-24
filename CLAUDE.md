@@ -251,6 +251,33 @@ Rules:
   and why; a world that came as an image skips the tests of the reader,
   the collector and the evaluator, which `(cl::%self-test)` at its prompt
   makes up for.
+- Room for a world (issue #140; DESIGN.md, Images). Every file is
+  written beside the one that it replaces (`put-file` in lisp/fat.lisp),
+  and a world is the one file that goes where the one before it was when
+  the volume has no room for both (`write-image`, which is what
+  `clara:save-image` writes through): the older world's entry and
+  clusters go first, and a stop before the newer one has its entry
+  leaves a machine that starts from its files. Nothing else may be
+  written that way: a file that is half there is worse than one that is
+  not written. When there is no room even so, nothing is touched and the
+  error has the two sizes, to a tenth of a mebibyte, the one rounded up
+  and the other down so that they never read the same. `finish` in
+  lisp/system.lisp adds how the machine is stopped without saving, which
+  is said nowhere else at that moment. To fill a volume at a prompt,
+  `clara.unsafe:allocate-memory` and `clara.fat:write-file` (tools/power.txt
+  does it, and leaves half a world's room); to make a world larger than
+  what is left, a string in a variable, and NIL there again makes it
+  small, since an image is made after a collection. The numbers of such a
+  message differ from machine to machine, so a session asks for its end
+  and not for all of it. The host tests have a volume of 400 clusters for
+  the same (`world-of`, `world-on`), and a disk that stops at every
+  request of a save, both ways. Their machine has 4 MiB of memory, so
+  no world there is larger than that, and a volume of the kind 32, which
+  is 33 MiB at the least, is never full for one: what such a volume
+  keeps of its free clusters (`note-free`) is held to account by the
+  host's checker after the boots that fill a volume on x86_64. macOS's
+  checker ends well when that count is all that it would change, and
+  says `Fix?`; tools/boottest.sh takes the question for a finding.
 - LOAD is Lisp since boot.lisp defines it, over two functions in C:
   `%load`, the boot files, and `%load-text`, a text with a name. `%load`
   takes a name with `/clara/` before it as well, since those are the files
@@ -1015,10 +1042,25 @@ Rules:
   with no system that has a directory, one from before 0.0.26, is put
   aside under a name that is said (`-old`), and so is the disk when
   `FRESH=1` asks for a new one (`-before`): nothing of the machine's is
-  ever deleted there. No boot of `make test` goes that way, so after a
+  ever deleted there. The disk is made of `SIZE` MiB, 1024 unless that
+  says otherwise (`tools/mkdisk.py --size`, a volume of the kind 32 with
+  the clusters that the overview's table gives such a size, eight sectors
+  from 260 MiB on); one that is smaller is made again that large first,
+  with its files (`tools/mkdisk.py --grow`, which reads the new disk back
+  and holds it against the old one), and the smaller one is put aside
+  too (`-small`). `SIZE=` leaves a disk as it is. tools/mkdisk.py holds
+  nothing of a volume in memory but its tables and its files, and reads a
+  disk in place, so a disk that is mostly room costs what its files do;
+  the disks of the tests are the same bytes as before, which
+  `cmp` says of all nine kinds after a change there. No boot of `make
+  test` goes through tools/run.sh's own disk, so after a
   change it is run by hand, in a worktree of its own: twice with the same
   build, once with another (a line added to a file of lisp/ and taken out
-  again), with `FRESH=1`, and with a disk of the old kind.
+  again), with `FRESH=1`, with a disk of the old kind, and with a small
+  one (`SIZE=` makes one), which has to come back larger with every file.
+  Two boots of `make test` start from disks that `--grow` made of the
+  first sessions' (300 MiB, `GROWN` in the Makefile): the resumed one on
+  AArch64 and the one with UTM's devices on x86_64.
 - Shutting down (lisp/system.lisp, kernel/arch/<arch>/power.c,
   kernel/acpi.c). `leave` is the one procedure behind every way of asking,
   and `finish` its second half, in a thread of its own, since the thread

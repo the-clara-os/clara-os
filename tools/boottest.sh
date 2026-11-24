@@ -364,6 +364,11 @@ check_volume() {
     for checked in "$boot" ${work:+"$work"}; do
         python3 -I tools/mkdisk.py --volume "$checked" "build/volume-$name.img"
         "$fsck" -n "build/volume-$name.img" > "build/fsck-$name.log" 2>&1 || return 1
+        # macOS's checker ends well when all that it would change is the count
+        # of free clusters that a volume of the kind 32 keeps, where the one of
+        # the dosfstools does not: it asks whether to fix what it found all the
+        # same, and answers for itself that it is not to.
+        ! grep -q 'Fix?' "build/fsck-$name.log" || return 1
         rm -f "build/volume-$name.img"
     done
     volume="its volume is in order"

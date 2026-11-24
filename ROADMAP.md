@@ -1511,6 +1511,95 @@ Infrastructure, done:
   too, a command of the old name in the way, and both names kept. The
   host tests noticed all twenty, and passed with a comment changed, which
   was the control.
+- **Room for the saved world** (2026-11-24, version 0.0.55). A world that
+  had been worked in for three hours could not be saved a second time,
+  and its machine could be neither shut down nor started again (issue
+  #140): a file is written beside the one that it replaces, the world had
+  come to 30422 clusters of 512 bytes, 14.9 MiB, and the disk that
+  tools/run.sh made for a machine, 35 MiB, had 14.4 for the second copy.
+  Julio chose both of the ways that were put to him. A world that has no
+  room beside the one that was saved before goes where that one was: the
+  older one is taken away first (`put-file` in lisp/fat.lisp, and
+  `write-image`, which `clara:save-image` writes through), and a machine
+  that stops between the two starts from its files and from /home. Any
+  other file is written beside the one before it, as it was. A world
+  that has no room even so is not saved, nothing is touched, and the
+  error has the two sizes: `the world takes 14.6 MiB, and the disk that
+  it is saved on has room for 10.2 MiB, even with the world that was
+  saved before gone: files have to go from that disk, or the machine
+  needs a larger one`. A machine that was asked to stop and could not
+  save says in a second line how it goes without saving (`finish` in
+  lisp/system.lisp), which nothing said. And a machine's disk has 1024
+  MiB (`SIZE=`, tools/run.sh), room for the largest world that a machine
+  of 512 MiB can save, twice. tools/mkdisk.py makes a volume of any size
+  for that (`--size`, with the clusters that the overview's table gives
+  the size) and puts the files of a disk on a larger one (`--grow`),
+  which it reads back and holds against the old one; tools/run.sh does
+  that to a disk that is smaller than `SIZE` when the machine is next
+  run, and keeps the old one (`-small`). The tool holds no volume in
+  memory any more, only its tables and its files, and reads a disk in
+  place: a disk of a gibibyte is made in a second and takes 8 MiB of the
+  host, and the disks of the tests are the same bytes as before, of all
+  nine kinds (`cmp`). The manual has "Room for a world" and "A larger
+  disk" under "Saving the world", two rows in its table of what goes
+  wrong and `SIZE=` among the ways to run a machine; DESIGN.md has the
+  decision under Images. In `make test` the session of the two boots that
+  stop a machine (tools/power.txt) fills the volume until the world has
+  no room beside the older one, has a world refused that has no room at
+  all, and starts the machine again in a world that went where the older
+  one was, which the power button then saves once more; and three boots
+  start from disks of 300 MiB that `--grow` made of the first sessions',
+  one of each kind of volume, with the host's checker behind each. The
+  host tests have a volume of 400 clusters for the same, and a disk that
+  stops at every request of a save, with room for both worlds, with
+  exactly that, and without: 17837 checks, in the 80 s on the Mac that
+  they took before. `make test` passed on the Mac and in a container of
+  Ubuntu 26.04, the host tests and all nineteen boots, and in that
+  container tools/run.sh made a small disk larger under Linux's shell. A
+  save takes 30 to 40 ms on a disk of 1024 MiB under hvf, where it takes
+  20 to 30 on one of 35, and counting the free clusters of such a disk
+  30. By hand, in a scratch tree, tools/run.sh: twice with
+  the same build, with `FRESH=1` and `SIZE=`, a small disk with a file
+  and a saved world on it made larger, and larger again by `SIZE=2048`, a
+  size that is no number, a move that was stopped between its two steps,
+  a disk whose saved world the table has too few clusters for, which is
+  left as it is and said so, and a disk of the kind from before 0.0.26.
+  A copy of the disk of Julio's machine as it stood that afternoon
+  (0.0.54, 35 MiB, its world saved), with copies of its firmware's
+  variables and of `~/clara-work.dmg`, run as his next `make run-aarch64`
+  runs it: the disk came back with 1024 MiB and the small one beside it,
+  the machine started in the world that 0.0.54 had saved, took this
+  system, made its world again of his text, with his eleven commands in
+  his order and the package that he had installed, and saved it; macOS's
+  own reading of the small disk and of the larger one made of it
+  (`hdiutil attach`, `diff -r`) found the same 51 files on both. A copy
+  of his disk from the moment it stopped saving, made larger, went
+  through the upgrade that was waiting on it. At this system's prompt on
+  a disk of 35 MiB, a world of 15.2 MiB was saved twice, started again
+  in, and shut down with, which are the three things that his machine
+  refused. The disk that `make image` makes for UTM, made larger by
+  hand, started and saved; UTM itself was not tried. Mistakes that were
+  planted, one at a time, in copies of the tree, seventeen: the older
+  world first every time, or never; a world with no room tried all the
+  same; the two comparisons off by one; a size not rounded up; the older
+  world not spoken of; every file written like a world, and a world like
+  any file; the free clusters counted from the wrong one; the older
+  world's entry kept, its clusters kept, its clusters given back twice,
+  its deleted entry changed; a machine that stops although its world was
+  not saved; and the line that says how to go without saving, with its
+  two forms the other way round and not said at all. The host tests
+  noticed all seventeen, and passed with a comment changed. One more was
+  planted for the boots, since the host tests cannot see it (their
+  machine has 4 MiB of memory, and a volume of the kind 32 is 33): the
+  count of free clusters that such a volume keeps, not kept in step when
+  the older world goes first. Linux's checker refused the volume of the
+  boot that fills one on x86_64. macOS's said `Free space in FSInfo block
+  (8565) not correct (8564)` and ended well, so that boot passed on the
+  Mac: tools/boottest.sh now takes that checker's question, `Fix?`, for
+  a finding, the boot fails on the Mac as well, and none of the nineteen
+  volumes of a whole run has such a question. What it left is issue #142:
+  the disk that `make image` makes for UTM is 64 MiB as before, and
+  nothing but a line typed by hand makes a larger one of it.
 
 Infrastructure, for sessions with budget left over:
 
@@ -4242,7 +4331,9 @@ No milestone yet, to be picked up when they start to matter:
 - Writing files. A file is written whole, from page frames that hold all of
   it: there is no writing at the end of a file or in its middle, and a file
   that takes the place of another needs room for both until its entry has
-  changed. Directories are found and not made, and nothing is renamed or
+  changed, all but a world that is saved, which goes where the one before
+  it was when there is no room for both (0.0.55, above). Directories are
+  found and not made, and nothing is renamed or
   moved. There is no clock, so every file is of the first of January 1980. A
   volume is not marked as in use while it is written to, so nothing tells
   whoever mounts it next that a write was cut short; what is left then is

@@ -36,7 +36,9 @@
 ;;;; machine which stops halfway leaves a volume with clusters that belong
 ;;;; to nobody, and never an entry that leads to what is not there. A file
 ;;;; that was there before under the name keeps its entry, and its old
-;;;; clusters are free once the entry has the new ones. There is no clock
+;;;; clusters are free once the entry has the new ones, so a volume needs
+;;;; room for both. A world that is saved is the one file that goes first
+;;;; when the volume has no room for the one after it as well. There is no clock
 ;;;; here, so every file is of the first day that the format has a date
 ;;;; for. A directory is made the same way, its one cluster first, with the
 ;;;; two entries in it that every directory begins with, and it is taken
@@ -979,24 +981,60 @@
       (error "there is no directory for a file ~A to be in" name))
     (values directory own)))
 
-;; A file of that name, made of the SIZE bytes of memory at ADDRESS, which
-;; is page frames: in place of the file that was there under the name, or
-;; as a new one. The name is returned. An entry has 32 bits for the size
-;; of its file.
-(defun write-file (name address size)
-  (let ((volume (the-volume)))
-    (unless (and (integerp size) (<= 0 size #xffffffff))
-      (error "a file is 4294967295 bytes at most, and not ~S" size))
-    (clara:with-lock-held ((volume-lock volume))
-      (multiple-value-bind (directory own) (place-of volume name)
-        (check-name own)
-        (let ((old (find-in volume directory own)))
-          (when (and old (entry-directory-p old))
-            (error "~A is a directory, and not a file" name))
-          (with-table (volume)
-            (let* ((each (* 512 (volume-cluster-sectors volume)))
-                   (gone (if old (file-clusters volume (entry-cluster old)) nil))
-                   (clusters (free-clusters volume (floor (+ size each -1) each)))
+;; How many clusters of a volume are nobody's: counted in the table, and
+;; not taken from what the volume says of itself.
+(defun free-count (volume)
+  (let ((free 0))
+    (dotimes (i (volume-clusters volume) free)
+      (when (zerop (table-entry volume (+ i 2)))
+        (setq free (1+ free))))))
+
+;; So many bytes in mebibytes, to a tenth: what is left over is dropped,
+;; or with UP makes one tenth more, so that what is wanted and the less
+;; that there is never read as the same number.
+(defun mebibytes (bytes up)
+  (let ((tenths (floor (+ (* 10 bytes) (if up 1048575 0)) 1048576)))
+    (format nil "~D.~D MiB" (floor tenths 10) (mod tenths 10))))
+
+;; A file of that name on a volume, made of the SIZE bytes of memory at
+;; ADDRESS, which is page frames: in place of the file that was there under
+;; the name, or as a new one. An entry has 32 bits for the size of its
+;; file. The file that was there stays until the new one has its entry,
+;; so the volume needs room for both. A world is the one file that may be
+;; too large for that, and the one that a machine cannot go on without
+;; writing: when WORLD says that this is one, and the volume has no room
+;; for it beside the one that was saved before, that one goes first, and
+;; a machine that stops before the new one has its entry starts from its
+;; files the next time. When there is no room for it even so, nothing is
+;; touched, and the error says how much is missing.
+(defun put-file (volume name address size world)
+  (unless (and (integerp size) (<= 0 size #xffffffff))
+    (error "a file is 4294967295 bytes at most, and not ~S" size))
+  (clara:with-lock-held ((volume-lock volume))
+    (multiple-value-bind (directory own) (place-of volume name)
+      (check-name own)
+      (let ((old (find-in volume directory own)))
+        (when (and old (entry-directory-p old))
+          (error "~A is a directory, and not a file" name))
+        (with-table (volume)
+          (let* ((each (* 512 (volume-cluster-sectors volume)))
+                 (needed (floor (+ size each -1) each))
+                 (gone (if old (file-clusters volume (entry-cluster old)) nil)))
+            (when world
+              (let ((free (free-count volume)))
+                (when (< free needed)
+                  (when (< (+ free (length gone)) needed)
+                    (error "the world takes ~A, and the disk that it is saved on has room for ~A~A: files have to go from that disk, or the machine needs a larger one"
+                           (mebibytes size t) (mebibytes (* each (+ free (length gone))) nil)
+                           (if old ", even with the world that was saved before gone" "")))
+                  (when old
+                    (remove-entry volume directory old)
+                    (unlink-clusters volume gone)
+                    (flush-table volume)
+                    (note-free volume (length gone))
+                    (setq old nil
+                          gone nil)))))
+            (let* ((clusters (free-clusters volume needed))
                    (first (if clusters (car clusters) 0))
                    (entered nil))
               (write-clusters volume clusters (floor (+ size 511) 512) address)
@@ -1013,8 +1051,13 @@
                   (unlink-clusters volume clusters)
                   (flush-table volume)))
               (unlink-clusters volume gone)
-              (note-free volume (- (length gone) (length clusters))))))))
-    name))
+              (note-free volume (- (length gone) (length clusters)))))))))
+  name)
+
+;; A file of that name, on the volume that names are looked up on. The
+;; name is returned.
+(defun write-file (name address size)
+  (put-file (the-volume) name address size nil))
 
 ;; The file of that name is no more: its entry is deleted, and its clusters
 ;; are free.
@@ -1097,19 +1140,18 @@
 ;; How many bytes of the volume are nobody's: its free clusters, counted
 ;; in the table, and not taken from what the volume says of itself.
 (defun free-bytes ()
-  (let ((volume (the-volume)) (free 0))
-    (clara:with-lock-held ((volume-lock volume))
-      (dotimes (i (volume-clusters volume))
-        (when (zerop (table-entry volume (+ i 2)))
-          (setq free (1+ free)))))
-    (* free 512 (volume-cluster-sectors volume))))
+  (let ((volume (the-volume)))
+    (* 512 (volume-cluster-sectors volume)
+       (clara:with-lock-held ((volume-lock volume))
+         (free-count volume)))))
 
 ;; A file like WRITE-FILE makes, on the volume that a world is saved on,
 ;; whichever volume names are looked up on: a machine starts from one disk,
-;; and finds its world there or nowhere.
+;; and finds its world there or nowhere. It is a world, which goes where
+;; the one before it was when the volume has no room for the two.
 (defun write-image (name address size)
   (let ((*volume* (if (member *image-volume* *volumes*) *image-volume* (car *volumes*))))
-    (write-file name address size)))
+    (put-file (the-volume) name address size t)))
 
 ;;; Starting
 

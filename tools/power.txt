@@ -13,12 +13,30 @@ error: the machine is not shut down: the window "Emma" has text that is not save
 ("Emma" T)
 > (defvar *wanted* 'to-start-again)
 *WANTED*
+> (defun take-room (name bytes) (let* ((pages (floor (+ bytes 4095) 4096)) (memory (clara.unsafe:allocate-memory pages))) (unwind-protect (clara.fat:write-file name memory bytes) (clara.unsafe:free-memory memory pages))))
+TAKE-ROOM
+> (defun world-bytes () (clara.fat:entry-size (find-if (lambda (entry) (string-equal (clara.fat:entry-name entry) "clara.image")) (clara.fat:entries "/clara/"))))
+WORLD-BYTES
+> (defvar *before* (world-bytes))
+*BEFORE*
+> (take-room "/room taken" (- (clara.fat:free-bytes) (floor *before* 2)))
+"/room taken"
+> (< (clara.fat:free-bytes) *before*)
+T
+> (defvar *ballast* (make-string 3000000 :initial-element #\b))
+*BALLAST*
+> (handler-case (clara:save-image) (error (condition) (let ((text (princ-to-string condition))) (subseq text (- (length text) 66)))))
+"files have to go from that disk, or the machine needs a larger one"
+> (list (= (world-bytes) *before*) (setq *ballast* nil))
+(T NIL)
 > (clara.system:start-again :force t)
 clara: the world is saved
 clara: starting the machine again
 ^R
 > (list *wanted* (fact 6) (clara.windows:running-p) (mapcar #'clara.windows:window-title (clara.windows:windows)))
 (TO-START-AGAIN 720 T ("REPL"))
+> (list (fboundp 'take-room) *ballast* (< (clara.fat:free-bytes) (world-bytes)) (and (probe-file "/room taken") t))
+(T NIL T T)
 > (list 'the-button (clara:wait-event (clara:make-event) 60000))
 ^M system_powerdown
 clara: the power button was pressed

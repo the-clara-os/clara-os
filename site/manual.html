@@ -136,6 +136,7 @@ make run-x86_64    <span class="note"># emulated: the firmware takes a few secon
       <tr><td><kbd>Ctrl-A</kbd> <kbd>C</kbd></td><td>in the terminal: QEMU's own monitor, and back</td></tr>
       <tr><td><code>MEM=1G make run-aarch64</code></td><td>a machine with that much memory, where it has 512 MiB otherwise</td></tr>
       <tr><td><code>WORK=~/clara-work.img make run-aarch64</code></td><td>a machine with a second disk, <a href="#work">one of your own</a></td></tr>
+      <tr><td><code>SIZE=4096 make run-aarch64</code></td><td>a machine whose own disk has that many MiB, where it has 1024 otherwise: <a href="#larger">A larger disk</a></td></tr>
       <tr><td><code>NET= make run-aarch64</code></td><td>a machine without a <a href="#network">network card</a>, where it has one otherwise</td></tr>
       <tr><td><code>SOUND= make run-aarch64</code></td><td>a machine without a <a href="#sound">sound card</a>, where it has one otherwise, whose sound comes out of your computer</td></tr>
       <tr><td><code>UTM=1 make run-aarch64</code></td><td>a machine with the keyboard, the pointers and the sound card that <a href="#utm">UTM</a> gives one, in place of virtio's: a <a href="#usb">USB controller</a> with a tablet, a mouse and a keyboard, and Intel's sound card</td></tr>
@@ -201,8 +202,8 @@ lisp: objects are tagged 64-bit words, in a heap at 0x0000400000000000 that begi
 pci: 8 devices, by the configuration space at #x4010000000
 <span class="note">...</span>
 input: 00:03.0 is a keyboard, QEMU Virtio Keyboard
-disk: 00:02.0 has 72081 sectors of 512 bytes, 35 MiB
-files: a FAT32 volume of 33 MiB on the disk 00:02.0, from its sector 2048 on
+disk: 00:02.0 has 2097152 sectors of 512 bytes, 1024 MiB
+files: a FAT32 volume of 1020 MiB on the disk 00:02.0, from its sector 2048 on
 net: 00:05.0 is a network card, 52:54:00:12:34:56 on the wire
 sound: 00:07.0 is a sound card: 48000 frames a second, left and right
 draw: a screen of 800 by 600 pixels
@@ -722,12 +723,12 @@ NIL</pre>
     <h3 id="work">A disk of your own</h3>
     <p>The disk that the machine starts from is the system's, and your files are on it beside the system. A machine can have a second disk that is yours alone: nothing here ever makes it again, nothing is written to it that you did not write, and it can be given to another machine, or to a new disk of the system's. Make one once, a FAT volume with nothing on it, somewhere outside <code>build</code>:</p>
 <pre><code>mkdir -p build/empty &amp;&amp; python3 tools/mkdisk.py build/empty ~/clara-work.img</code></pre>
-    <p>Then name it when you start the machine:</p>
+    <p>That is a disk of 35 MiB; <code>--size 1024</code> before <code>build/empty</code> makes one of 1024, most of which takes no room on your computer until something is written there. Then name it when you start the machine:</p>
 <pre><code>WORK=~/clara-work.img make run-aarch64</code></pre>
     <p>With <code>export WORK=~/clara-work.img</code> in your shell's profile, every <code>make run-aarch64</code> has it. The report shows two disks then, each with a volume, and says where names are looked up:</p>
-<pre><code>disk: 00:02.0 has 72081 sectors of 512 bytes, 35 MiB
+<pre><code>disk: 00:02.0 has 2097152 sectors of 512 bytes, 1024 MiB
 disk: 00:06.0 has 72081 sectors of 512 bytes, 35 MiB
-files: a FAT32 volume of 33 MiB on the disk 00:02.0, from its sector 2048 on
+files: a FAT32 volume of 1020 MiB on the disk 00:02.0, from its sector 2048 on
 files: a FAT32 volume of 33 MiB on the disk 00:06.0, from its sector 2048 on
 files: names are looked up on the first of these volumes</code></pre>
     <p>The first is the system's, so nothing has changed for the files so far. <code>(clara.fat:volumes)</code> gives the volumes in that order, and <code>clara.fat:*volume*</code> holds the one that names are looked up on. Bind it to yours around a form, and the files of that form are the ones on your disk:</p>
@@ -809,6 +810,22 @@ NIL
       <li>What you defined after the world was saved, on a machine that was then stopped without a shutdown, is not in the image. It is in <a href="#home">the text</a>, and the start loads it from there.</li>
     </ul>
     <p>Saving again writes a new image in place of the old one. A world of this size takes a fraction of a second to save. <a href="#stop">Shutting the machine down</a> saves it as well, unless it is told not to.</p>
+
+    <h3 id="room">Room for a world</h3>
+    <p>A world is as large as what is in it. One that the system has just made takes some 7 MiB of the disk, and one that has been worked in for a few hours can take twice that. It is written beside the world that was saved before, which goes once the new one is whole, so that the disk has a world on it at every moment. When the disk has no room for the two, the older one goes first and the new one is written where it was. A machine that is switched off at that moment has no world on its disk, and its next start makes one from the Lisp files and from <a href="#home">the text</a>, as after an upgrade.</p>
+    <p>When the disk has no room for the world even so, the world is not saved, and the one that was saved before is still there:</p>
+<pre><code>error: the world takes 14.6 MiB, and the disk that it is saved on has room for 10.2 MiB, even with the world that was saved before gone: files have to go from that disk, or the machine needs a larger one</code></pre>
+    <p>A machine that is asked to <a href="#stop">shut down or to start again</a> saves first. So it stays, and says how it goes without saving:</p>
+<pre><code>clara: the machine is not shut down: the world takes 14.6 MiB, and the disk that it is saved on has room for 10.2 MiB, even with the world that was saved before gone: files have to go from that disk, or the machine needs a larger one
+clara:   (clara.system:shut-down :save nil) does it without saving the world</code></pre>
+    <p>Without saving, the next start is in the world that was saved last, and what was defined since comes from the text. <code>(clara.fat:free-bytes)</code> says how much room the disk has, and <a href="#browser">Jaid</a> or <code>delete-file</code> takes away what is not needed there.</p>
+
+    <h3 id="larger">A larger disk</h3>
+    <p>Under QEMU the machine's own disk, <code>build/disk-aarch64.img</code>, has 1024 MiB. That is room for the largest world that a machine of 512 MiB can save, twice, and for your files beside it. Most of such a disk is nothing, and takes no room on your computer until the machine writes there. <code>SIZE=4096 make run-aarch64</code> gives a machine more. A disk that is smaller than what is asked for, as every disk was that a ClaraOS up to 0.0.54 made, 35 MiB, is made again with every file that it holds the next time the machine is run, and the disk that was there is kept:</p>
+<pre><code>tools/run.sh: the disk of this machine had 35 MiB, and is to have 1024: every file of it is on a disk of that size now,
+    build/disk-aarch64.img, and the disk that was there is kept as build/disk-aarch64-small.img</code></pre>
+    <p>The machine starts from the new disk in the world that it saved on the old one. Once it has, the old disk is yours to delete. <code>SIZE= make run-aarch64</code> leaves a disk as it is.</p>
+    <p>A disk that <code>make</code> does not run is made larger by hand, with its machine shut down: <code>python3 tools/mkdisk.py --size 1024 --grow claraos.img larger.img</code> puts every file of the first disk on a second one of 1024 MiB, and only reads the first. The second is then given to the machine in place of the first; in UTM, as a drive that is imported, like the one that the machine was made with.</p>
 
     <h3 id="unsave">Going back to the files</h3>
 <pre class="session again">&gt; (delete-file "/clara/clara.image")
@@ -1859,6 +1876,8 @@ error: nothing is mapped at #x0</pre>
       <tr><td><code>sound: the sound card ... has not played what it was given</code>, or a line like it</td><td>The card stopped answering while something was played, and is asked nothing more: <code>(clara.sound:card)</code> says so too. The machine goes on without sound until it is started again.</td></tr>
       <tr><td><code>error: ... has no method for the arguments ...</code></td><td>A <a href="#generic">generic function</a> was called with arguments that none of its methods is for. Write a method for their classes, or for a class above them: one whose parameters name no class is for anything.</td></tr>
       <tr><td>An instance shows as <code>#&lt;STANDARD-OBJECT&gt;</code> in the text of an error.</td><td>The error is one of the system's own, which cannot ask a method of <code>print-object</code> how the instance is written: <code>error: CAR wants a list, and #&lt;STANDARD-OBJECT&gt; is not one</code>. It is an instance of some class, where a list, a number or a string was wanted.</td></tr>
+      <tr><td><code>error: the world takes ... MiB, and the disk that it is saved on has room for ... MiB</code>, also behind <code>clara: the machine is not shut down:</code></td><td>The world has outgrown its disk and was not saved; the one that was saved before is still there. Delete what is not needed on that disk, or give the machine a larger one: <a href="#room">Room for a world</a>. After a shutdown or a start that was refused for it, the next line has the form that does it without saving.</td></tr>
+      <tr><td><code>error: the volume is full: ... clusters are wanted, and ... are free</code></td><td>A file was to be written, and its disk has no room for it beside the file that it takes the place of. A cluster is 512 bytes on a disk of 35 MiB and 4096 on one of 1024. Delete what is not needed there; for the machine's own disk under QEMU, <a href="#larger">A larger disk</a>.</td></tr>
       <tr><td><code>error: the heap is full</code></td><td>A computation used the memory there is. It has been stopped, what it held is free again, and the prompt is back. A machine with more memory holds more.</td></tr>
       <tr><td><code>error: the stack is full</code></td><td>Forms nested too deep, or a function that calls itself without end.</td></tr>
       <tr><td>Boxes on the screen where characters should be.</td><td>The screen's font has the characters of ASCII. The characters themselves are right, and show on the serial port.</td></tr>
