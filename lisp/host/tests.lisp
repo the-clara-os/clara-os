@@ -6588,6 +6588,180 @@
          (list (clara.terminal::next-code *terminal*) (clara.terminal::terminal-reading *terminal*)
                (clara.terminal::next-code *terminal*) (clara.terminal::terminal-reading *terminal*)))
   (setf (clara.terminal::terminal-keys *terminal*) nil))
+
+;; The rows that have left the window are kept, and Page Up and Page Down
+;; show them again: a window's worth less one at a time, as far back as the
+;; first row that there is, and no further on than the last.
+(defun rows-show-p (&rest rows)
+  (loop for row from 0 for says in rows
+        always (row-shows-p *face* row (format nil "~10A" says))))
+(defun page-up () (clara.windows:key-typed clara.input:+page-up+))
+(defun page-down () (clara.windows:key-typed clara.input:+page-down+))
+(defun back () (clara.terminal::terminal-back *terminal*))
+(defun kept-rows ()
+  (loop for place below (clara.terminal::terminal-held *terminal*)
+        collect (clara.terminal::kept-row *terminal* place)))
+
+(check 100000 clara.terminal:*rows-kept*)
+(clara.terminal:clear *terminal*)
+(page-up)                                      ; nothing has left it yet
+(check '(0 0) (list (back) (wrong-pixels)))
+(dotimes (i 8)
+  (format *out* "row ~D~%" i))                 ; nine rows, the last of them empty
+(check '(t 0) (list (rows-show-p "row 6" "row 7" "") (back)))
+(page-up)
+(check '(t 2 0) (list (rows-show-p "row 4" "row 5" "row 6") (back) (wrong-pixels)))
+(page-up)
+(page-up)
+(check '(t 6) (list (rows-show-p "row 0" "row 1" "row 2") (back)))
+(page-up)                                      ; there is nothing before the first row
+(check '(t 6 0) (list (rows-show-p "row 0" "row 1" "row 2") (back) (wrong-pixels)))
+(page-down)
+(check '(t 4) (list (rows-show-p "row 2" "row 3" "row 4") (back)))
+;; What is written meanwhile goes to the last row, and the window goes on
+;; showing what it showed: nothing is drawn, and those rows are one row
+;; further back with every row that is finished.
+(clara.draw:take-damage *face*)
+(format *out* "row 8~%tail")
+(check '(t 5 nil 0) (list (rows-show-p "row 2" "row 3" "row 4") (back) (clara.draw:damage *face*) (wrong-pixels)))
+(page-down)
+(check '(t 3) (list (rows-show-p "row 4" "row 5" "row 6") (back)))
+(page-down)
+(page-down)                                    ; the last rows, with the one that is not finished
+(check '(t 0 0) (list (rows-show-p "row 7" "row 8" "tail") (back) (wrong-pixels)))
+(page-down)                                    ; and nothing after them
+(check '(t 0) (list (rows-show-p "row 7" "row 8" "tail") (back)))
+;; Any other key brings the last rows back, and is typed there.
+(terpri *out*)
+(page-up)
+(check '(t 2) (list (rows-show-p "row 6" "row 7" "row 8") (back)))
+(clara.windows:key-typed (char-code #\x))
+(check '(t 0 (120) 0)
+       (list (rows-show-p "row 8" "tail" "") (back) (clara.terminal::terminal-keys *terminal*) (wrong-pixels)))
+(setf (clara.terminal::terminal-keys *terminal*) nil)
+;; The cursor is where a line is read, in the last row: a window that shows
+;; rows from further back has none, until it shows the last ones again.
+(let ((reader (reads-a-line)))
+  (check t (eventually (lambda () (bar-at-p *face* 2 0 +ink+))))
+  (page-up)
+  (check '(t nil 0) (list (rows-show-p "row 6" "row 7" "row 8") (clara.terminal::terminal-cursor *terminal*) (wrong-pixels)))
+  (page-down)
+  (check '(t t 0) (list (rows-show-p "row 8" "tail") (bar-at-p *face* 2 0 +ink+) (wrong-pixels)))
+  (page-up)
+  (type-text (format nil "hi~%"))
+  (check "hi" (clara:join-thread reader))
+  (check '(t 0 nil) (list (rows-show-p "tail" "hi" "") (back) (clara.terminal::terminal-cursor *terminal*))))
+;; What a row says is kept as it stands when the row is finished, without
+;; the spaces at its end: a row that is too long for the window is as many
+;; rows as it takes, and what moves the place of the next character has
+;; done so.
+(clara.terminal:clear *terminal*)
+(write-string (format nil "0123456789ABCDEFGHIJxyz~%abc~Cx~%ab~Cc~%a~Cb~%pad   ~%~C~%~%" #\Return #\Backspace #\Tab (code-char 233))
+              *out*)
+(check (list "0123456789" "ABCDEFGHIJ" "xyz" "xbc" "ac" "a       b" "pad" (string (code-char 233)) "")
+       (kept-rows))
+(page-up)
+(page-up)
+(check '(t 4 0) (list (rows-show-p "xbc" "ac" "a       b") (back) (wrong-pixels)))
+(page-down)
+(check t (and (rows-show-p "a       b" "pad") (cell-shows-p *face* 2 0 (code-char 127)))) ; no glyph: a box
+;; CLARA.TERMINAL:*ROWS-KEPT* says how many rows are kept of the ones that
+;; have left the window, the newest of them. The oldest go as rows are
+;; finished, and a window that shows the oldest of all shows the ones that
+;; are the oldest by then.
+(setq clara.terminal:*rows-kept* 2)
+(clara.terminal:clear *terminal*)
+(dotimes (i 10)
+  (format *out* "a ~D~%" i))
+(check '(("a 6" "a 7" "a 8" "a 9") t) (list (kept-rows) (rows-show-p "a 8" "a 9" "")))
+(page-up)
+(page-up)
+(check '(t 2) (list (rows-show-p "a 6" "a 7" "a 8") (back)))
+(format *out* "a 10~%")
+(check '(t 2 0) (list (rows-show-p "a 7" "a 8" "a 9") (back) (wrong-pixels)))
+(dotimes (i 100)                               ; the ring's first place comes after its last
+  (format *out* "b ~D~%" i))
+(check '(("b 96" "b 97" "b 98" "b 99") t 2 64 4 0)   ; and nothing holds on to what the rows said that went
+       (list (kept-rows) (rows-show-p "b 96" "b 97" "b 98") (back) (length (clara.terminal::terminal-kept *terminal*))
+             (count-if (lambda (says) (plusp (length says))) (clara.terminal::terminal-kept *terminal*))
+             (wrong-pixels)))
+(page-down)
+(check '(t 0) (list (rows-show-p "b 98" "b 99" "") (back)))
+;; With 0, none is kept but the ones that the window shows.
+(setq clara.terminal:*rows-kept* 0)
+(format *out* "c~%")
+(page-up)
+(check '(("b 99" "c") t 0 0) (list (kept-rows) (rows-show-p "b 99" "c" "") (back) (wrong-pixels)))
+;; With NIL, all of them are, and so they are with what is no number of rows:
+;; the ring grows.
+(setq clara.terminal:*rows-kept* nil)
+(clara.terminal:clear *terminal*)
+(dotimes (i 300)
+  (format *out* "n ~D~%" i))
+(check '(300 512 298) (list (clara.terminal::terminal-held *terminal*) (length (clara.terminal::terminal-kept *terminal*))
+                            (clara.terminal::top *terminal*)))
+(dotimes (i 200)
+  (page-up))
+(check '(t 298 0) (list (rows-show-p "n 0" "n 1" "n 2") (back) (wrong-pixels)))
+(setq clara.terminal:*rows-kept* -1)
+(dotimes (i 5)
+  (format *out* "m ~D~%" i))
+(setq clara.terminal:*rows-kept* "many")
+(dotimes (i 5)
+  (format *out* "m ~D~%" (+ i 5)))
+(check '(310 t 308) (list (clara.terminal::terminal-held *terminal*) (rows-show-p "n 0" "n 1" "n 2") (back)))
+;; A smaller number takes the rows that are too many with the next row that
+;; is finished, from under a window that shows them.
+(setq clara.terminal:*rows-kept* 5)
+(format *out* "last~%")
+(check '(("m 4" "m 5" "m 6" "m 7" "m 8" "m 9" "last") t 5 0)
+       (list (kept-rows) (rows-show-p "m 4" "m 5" "m 6") (back) (wrong-pixels)))
+(setq clara.terminal:*rows-kept* 0)
+(format *out* "gone~%")                        ; and with none left to go back to, it shows the last rows
+(check '(("last" "gone") t 0 0) (list (kept-rows) (rows-show-p "last" "gone" "") (back) (wrong-pixels)))
+(setq clara.terminal:*rows-kept* 100000)
+;; CLEAR keeps nothing, and nothing of the row that was being written.
+(dotimes (i 70)
+  (format *out* "d ~D~%" i))
+(write-string "junk" *out*)
+(page-up)
+(check '(72 512 2) (list (clara.terminal::terminal-held *terminal*) (length (clara.terminal::terminal-kept *terminal*)) (back)))
+(clara.terminal:clear *terminal*)
+(check '(nil 64 0 t 0) (list (kept-rows) (length (clara.terminal::terminal-kept *terminal*)) (back) (rows-show-p "" "" "")
+                             (wrong-pixels)))
+(page-up)
+(write-string (format nil "e~%") *out*)
+(check '(("e") t 0 0) (list (kept-rows) (rows-show-p "e" "" "") (back) (wrong-pixels)))
+;; A ring that is full while its oldest row is not at its start grows with
+;; its rows in their order.
+(clara.terminal:clear *terminal*)
+(setq clara.terminal:*rows-kept* 10)
+(dotimes (i 30)
+  (format *out* "g ~D~%" i))
+(check '(12 18) (list (clara.terminal::terminal-held *terminal*) (clara.terminal::terminal-oldest *terminal*)))
+(setq clara.terminal:*rows-kept* nil)
+(dotimes (i 100)
+  (format *out* "h ~D~%" i))
+(check '(112 128 "g 18" "g 29" "h 0" "h 99")
+       (list (clara.terminal::terminal-held *terminal*) (length (clara.terminal::terminal-kept *terminal*))
+             (clara.terminal::kept-row *terminal* 0) (clara.terminal::kept-row *terminal* 11)
+             (clara.terminal::kept-row *terminal* 12) (clara.terminal::kept-row *terminal* 111)))
+(dotimes (i 60)
+  (page-up))
+(check '(t 110 0) (list (rows-show-p "g 18" "g 19" "g 20") (back) (wrong-pixels)))
+(setq clara.terminal:*rows-kept* 100000)
+(clara.terminal:clear *terminal*)
+;; A terminal of one row goes back a row at a time.
+(let* ((one (clara.terminal:open-terminal "One row" :columns 10 :rows 1 :x 150 :y 150))
+       (face (clara.windows:window-surface (clara.terminal:terminal-window one))))
+  (format (clara.terminal:terminal-stream one) "f 0~%f 1~%f 2")
+  (check t (row-shows-p face 0 "f 2       "))
+  (page-up)
+  (check '(t 1) (list (row-shows-p face 0 "f 1       ") (clara.terminal::terminal-back one)))
+  (page-up)
+  (page-up)
+  (check '(t 2 0) (list (row-shows-p face 0 "f 0       ") (clara.terminal::terminal-back one) (wrong-pixels)))
+  (clara.windows:close-window (clara.terminal:terminal-window one)))
 (clara.windows:close-window (clara.terminal:terminal-window *terminal*))
 
 ;; The REPL, the listener in a window: the application that START launches. It says
@@ -6623,6 +6797,17 @@
              (check t (eventually (lambda () (clara.terminal::terminal-reading *terminal*))))
              (type-text (format nil "(setq *in-a-window* 8)~%"))
              (check t (eventually (lambda () (eql (in-a-window) 8)))))
+           ;; Page Up goes back to what it said first, and Page Down to its prompt.
+           (check t (eventually (lambda () (clara.terminal::terminal-cursor *terminal*))))
+           (let ((prompt (cdr (clara.terminal::terminal-cursor *terminal*))))
+             (dotimes (i 4)
+               (clara.windows:key-typed clara.input:+page-up+))
+             (check '(t t nil 0)
+                    (list (row-shows-p face 0 "ClaraOS: a form is evaluated, C") (row-shows-p face 2 "es the window ")
+                          (clara.terminal::terminal-cursor *terminal*) (wrong-pixels)))
+             (dotimes (i 4)
+               (clara.windows:key-typed clara.input:+page-down+))
+             (check '(5 t t 0) (list prompt (row-shows-p face 5 "> ") (bar-at-p face 5 2 +ink+) (wrong-pixels))))
            (clara.windows:key-typed 4)             ; Ctrl-D at its prompt: it ends, and its window goes with it
            (check t (eventually (lambda () (and (null (clara.windows:windows)) (not (clara:thread-alive-p thread))))))
            (check '(0 nil) (list (wrong-pixels) clara.windows::*made*)))
