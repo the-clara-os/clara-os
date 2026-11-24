@@ -1584,8 +1584,9 @@ Rules:
   `(:key code)`, `(:pointer x y buttons)`, `(:close)`. That is how an
   application is written: a loop that waits, changes what it holds, and
   draws. The close box is told once until the program has taken it.
-- Applications in files (lisp/emma.lisp, lisp/files.lisp). They are in
-  lisp/, so the build puts them on the boot volume, and they are not in
+- Applications in files (lisp/emma.lisp, lisp/files.lisp, lisp/ares.lisp).
+  They are in lisp/, so the build puts them on the boot volume, and they
+  are not in
   `world` of lisp.c: the last lines of lisp/terminal.lisp install them
   (`clara.windows:install-application`), and the launcher loads the file
   when the application is launched and has no function. The file's last
@@ -1635,9 +1636,8 @@ Rules:
   between two waits stays under 64 events of the keyboard.
 - Packages (lisp/parker.lisp, the package CLARA.PARKER, Julio's issue #43;
   DESIGN.md has what was decided). Parker is a file of `world`, the last,
-  and its application is defined there like the REPL's: the launcher's
-  list has four applications of the system's, which the sessions and the
-  manual write out. A package is taken as a release is: HTTPS only, the
+  and its application is defined there like the REPL's, the last of the
+  system's in the launcher's list. A package is taken as a release is: HTTPS only, the
   index against its signature, every file against the index
   (`ask`, `fetch-files`). The index's form is read by every ClaraOS that
   there has been, so it is only ever added to: a line that `entry-line`
@@ -1688,6 +1688,71 @@ Rules:
   in the first line of its file `package`, and a machine that has the
   package takes a change only when that number is higher
   (`clara.parker:update`).
+- Ares, the web browser (lisp/ares.lisp, the package CLARA.ARES, Julio's
+  issue #44; DESIGN.md has what was decided). It is an application in a
+  file, installed by the last lines of lisp/terminal.lisp like Emma, so
+  the launcher's list has five applications of the system's, which the
+  sessions and the manual write out. A page goes through four steps, each
+  a function of what the one before made: `bytes-text`, `read-page`,
+  `lay-page`, `paint`; a change belongs to one of them, and so does its
+  test. Every page is asked for by HTTPS (`secure`): nothing in that file
+  hands `clara.net:fetch` an address that begins with `http://`, and what
+  is sent of an address has been through `sendable`, so that a page's
+  link cannot write a line of its own into a request.
+- The reader (`read-page` and what it calls) follows the rules that
+  browsers read a page by, the WHATWG's HTML Standard, 13.2, and the lists
+  at its top are that standard's lists: which kinds end a paragraph,
+  which end by themselves, which a tag cannot close an element across. A
+  change there is held against a browser, not against what seems right.
+  lisp/host/pages.lisp has the pages and the tree that Chrome makes of
+  each; add the page that a change is about, with an empty tree, and run
+  `python3 tools/pagecheck.py --write`, by hand, on a computer that has
+  Chrome: it is no part of `make test`. The two places where the reader
+  is not the standard's are written down in the tests with the trees
+  that it makes. That file cannot hold a return or a character of the
+  code 0; the tests make such pages themselves.
+- The kind of an element is a keyword for a kind that lisp/ares.lisp
+  names anywhere, and the name as a string for any other (`tag-of`): what
+  a page writes is never interned. So a kind that gets a clause of its
+  own becomes a keyword by being written there, and code that looks at a
+  kind compares with `same-tag` or `in`, never with `string=`. Under SBCL
+  far more keywords exist than on the machine, so a kind that the file
+  does not name is a keyword in the host tests and a string at a kernel:
+  what `lay` does with an element must not depend on which, which is why
+  the clause for a string stands behind the ones that look at what a tag
+  said.
+- Laying out (`lay` and what it calls). Whatever makes a line goes
+  through `add-piece` and `end-line`, and whatever leaves space through
+  `more-gap`, which keeps the largest. `measure` runs the same code with
+  nothing laid out, to find how wide a cell is at the least and at the
+  most: a new kind of element that makes something other than pieces
+  looks at `laying-measuring` before it makes it, or a table's cells are
+  laid out twice. The tests have `page-wrong`, what is out of order in
+  any page that was laid out (a piece outside the page, over another, or
+  not as wide as its text), `broken`, a second way of breaking words into
+  lines, and a page of everything that is laid out at every width: a new
+  kind goes into that page.
+- The window. `draw` draws and `render` draws and shows; the tests call
+  `draw` after each key and hold the surface against what drawing
+  everything anew gives (`ares-wrong`) and, where they say so, against
+  the page (`ares-unruly`), and `render` only where they look at the
+  screen (`screen-wrong`): showing a window on the tests' desk takes
+  twenty milliseconds under SBCL, and the host tests have little time
+  left (issue #122). A window fetches through `clara.ares::*take*`, where
+  the tests put a function that hands out a list of pages (`*ares-web*`);
+  one test calls the real one, on the made-up network. Whatever the
+  window keeps of what it drew (`view-shown`, the two rows) is set to NIL
+  by what changes it, or the window shows the page of before.
+- No test asks the Internet, and nothing typed by hand does: Ares names
+  ClaraOS to every web server. The boot that fetches (tools/network.txt)
+  has the test's name server, and launches Ares at the pages of
+  tools/pages, which the Makefile puts beside the release that
+  tools/serve.py hands out; the lines that the first of those pages comes
+  to at the prompt are the ones that SBCL makes of it, so a change to how
+  a page is laid out changes that line of the session. The manual's
+  transcript launches Ares with no address, since the machines that the
+  manual is typed at reach the Internet: with none, Ares shows the page
+  that it has of itself and asks nobody.
 - The Lisp runtime is kernel/lisp/, and lisp.h is its interface: the
   comment at its top says what a Lisp value is. In C a value is a `lisp`,
   one tagged word. Look at the tag (`lisp_is_cons`, `lisp_is_symbol`,

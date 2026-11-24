@@ -1338,6 +1338,120 @@ Infrastructure, done:
   better than the code, which was changed to it: with no source named,
   the window says so as it opens.
 
+- **Ares, a web browser** (2026-11-24, version 0.0.53). A window that
+  shows a page of the web and goes where its links lead (issue #44, "A web
+  browser"): lisp/ares.lisp, the package CLARA.ARES, an application that
+  the launcher loads when it is picked, like Emma, and the fourth in its
+  list, before Parker. `(clara.windows:launch "Ares" "claraos.org")` goes to a page from
+  a prompt; with no address the window shows a page that Ares has of
+  itself and asks nobody. A row at the top of the window has the address,
+  and takes another after Ctrl-L or a click; Tab picks the next link and
+  Enter follows it, as a click on a link does; Alt with an arrow, or
+  Backspace, goes back and on again through the last twenty pages, which
+  the window keeps as it showed them; Ctrl-R asks again; the arrows, Page
+  Up, Page Down, the space bar, Home and End move the page. Every page is
+  asked for by HTTPS and by nothing else: an address that is written with
+  `http://` is asked for with `https://` in its place. What arrives goes
+  through four steps. Its bytes are read as text, UTF-8 unless the page
+  says otherwise. The text is read into a tree of elements by the rules
+  that browsers read a page by (the HTML Standard, 13.2), so that a page
+  which leaves out what pages leave out is here what it is elsewhere. The
+  tree is laid out as lines of text for the width of the window, an
+  element as its kind looks: headings, paragraphs, lists with their marks
+  and numbers, tables with columns as wide as what is in them, text as it
+  is typed, links, and letters that are bold, slanted, underlined, struck
+  through, smaller or raised. And the lines are drawn in the system's two
+  fonts. Nothing that a page says about its looks is read, no picture is
+  fetched, which stands as the words that the page has for it, no script
+  is run, and a form shows its fields and cannot be sent.
+  `clara.net:fetch` has a keyword, `:any`, with which whatever a web
+  server answers is taken as it is, and three more values: the address
+  that answered, the number of the answer, and the lines of its head. The
+  manual has a section, "Ares, the web browser", and DESIGN.md has one.
+  What it left: style sheets (issue #123); pictures (#124); scripts
+  (#125); forms (#126); a page that is on its way holds its window
+  (#127); nothing outlasts a window, no addresses that are kept and no
+  list of where it was (#128); what is no page is not kept (#129); a
+  table's cell across rows, and where a cell's lines stand (#130); the
+  two rules of reading a page that are left out (#131); nothing picks the
+  link before (#132); where a link leads is said only for the one that
+  Tab picked (#133); the wheel of a mouse, which nothing reads (#134);
+  web servers that speak only TLS 1.2 (#135); pages that are written in
+  other ways than UTF-8 (#136); and what Ares says of itself to a web
+  server (#137). `make test` passed on the Mac and in a container of
+  Ubuntu 26.04, the host tests with 17756 checks, of which Ares's are
+  442, and all nineteen boots. The boot that fetches a release is given a
+  few pages by the test's web server (tools/pages): it launches Ares at
+  them by HTTPS, by way of an address that leads on to another, follows a
+  link and goes back with the keys, and lays the first page out at its
+  prompt, where the lines are the ones that the host tests make of the
+  same page; it takes 50 s in the container. The manual's transcript
+  launches Ares with no address. What it costs: the stress boot nothing,
+  since the file is not in the world (198 s in the container, 208 s with
+  Parker); the host tests four seconds, 80 on the Mac where they took 76,
+  of the 120 that they are given (issue #122). What holds the reader of
+  pages to the rules is Chrome: lisp/host/pages.lisp has 312 pages, each
+  with the tree that Chrome 158 makes of it, written by tools/pagecheck.py
+  and by nobody's hand, and the reader makes the same of every one. The
+  parser that is asked is the one that reads a page as it arrives
+  (`document.write`): the quicker one behind `DOMParser`, asked first,
+  differed from the standard, and from this reader, in two corners, the
+  name of a character before an `=` in what a tag says once another name
+  with its semicolon stands behind it, and white space that is written by
+  name before a page's first word. What was tried by hand, at a kernel:
+  ten pages of the web as they are, fetched with curl and given to the
+  machine on a second disk, claraos.org and its manual among them, an
+  article of Wikipedia, the front page of Hacker News and a specification
+  of 640 KiB. All were read and laid out with nothing outside the page;
+  the largest took 50 ms to read and 180 ms to lay out where the machine
+  is virtualized; and the window was looked at with each. That is how two
+  things were found that no test had asked for: a link that shows
+  nothing, as a link around a drawing does, had its whole address for a
+  label, and in a column of a table that was measured without it, a
+  letter to the line; it has the words that it or something in it has for
+  itself now, or the last step of its address, and is measured with them.
+  Nothing was fetched from the Internet with Ares: it names ClaraOS to
+  every web server that it asks, so the first pages of the web that it
+  shows are Julio's to open. A copy of the disk of Julio's machine, which
+  ran the published 0.0.52 with the window manager, was started with this
+  system beside it, as his next `make run-aarch64` does it, and with a
+  copy of `~/clara-work.dmg`: it took the system, made its world again of
+  the seventeen forms of `/home/defined.lisp`, loaded the package that he
+  has installed, and came up with the list in his order, Ares behind
+  Files, and his eleven commands; Ares and Galculator opened; the world
+  that it saved started again, ran his `Load Init` and `Load Galc`, and
+  opened both; and a second upgrade from there, to a system that the
+  tests build, carried all of it again. Mistakes that were planted, one
+  at a time, in copies of the tree, 304 of them: in the names and numbers
+  of characters, in how an address is taken apart, read from another and
+  sent, in bytes as text, in every list and rule of the reader, in how
+  words go onto lines and lines under each other, in lists, tables, links
+  and what stands for pictures and fields, in what is fetched and what it
+  is taken for, in what the window draws, moves and keeps, in every key
+  and in the pointer, and in the two other files that changed. The tests
+  noticed 300. The four that got through change nothing that a page could
+  show: the order in which the table of names is made, a cell as a wall
+  where a table is one around every cell, the rows that stay when the
+  page moves by exactly a window, and an item of a list among what ends
+  unasked, which only a list in small letters over a word would show. A
+  first round had let 43 through. Thirty-odd became tests or pages for
+  Chrome: a form feed as white space, a capital Z, bytes of Windows and a
+  byte that begins two before another that does, kinds of address that
+  begin with a digit or a colon, what is raised and lowered, a page
+  narrower than a letter, a size taken of the size that there is, a list
+  in a list, a heading of a column in its middle, a cell at the top of
+  its row whatever the cell before it left, a script among what is shown,
+  the bar at the window's right, the colours of the link that is picked,
+  a rectangle where the page has it, a link where its letters are and
+  nowhere else, a click where the window has moved, the part of a page
+  that is fetched, what cannot be gone on to, an address that is longer
+  than its row, and what a web server says of a page's kind in capitals
+  and with more behind it. And three showed code that did nothing, which
+  went: closing what ends unasked before closing everything, a guard
+  against white space at the beginning of a line that another guard
+  already was, and white space forgotten at the end of a line that the
+  same guard never looks at.
+
 Infrastructure, for sessions with budget left over:
 
 - Read the UART base from ACPI (SPCR or DBG2) instead of assuming

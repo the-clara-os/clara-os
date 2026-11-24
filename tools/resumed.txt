@@ -71,7 +71,7 @@ T
 > (list (load "/clara/kept.lisp") (load "/clara/listener.lisp"))
 (T T)
 > (list (clara.windows:applications) (find-package "CLARA.EMMA") (package-name (find-package "CLARA.FILES")) (hi))
-(("REPL" "Emma" "Files" "Parker") NIL "CLARA.FILES" THERE)
+(("REPL" "Emma" "Files" "Ares" "Parker") NIL "CLARA.FILES" THERE)
 > (list 'keyboards 'and 'pointers (length (clara.input:devices)))
 (KEYBOARDS AND POINTERS 3)
 > (clara:wait-event *seen* 60000)

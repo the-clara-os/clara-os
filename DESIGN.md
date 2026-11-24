@@ -2653,6 +2653,138 @@ architectures (kernel/vm.c).
   a newer version, upgrade the system and come up with the package
   loaded into the world that was made again, and take it out.
 
+## Ares, a web browser (decided for issue #44, 2026-11-23)
+
+- Ares is an application with a window that shows a page of the web and
+  goes where its links lead: lisp/ares.lisp, the package CLARA.ARES. The
+  name is Julio's ("Ares - Web Browser"). It is a file that the launcher
+  loads when the application is picked, like the editor, and no file of
+  the world: nothing that the system does needs it, and a browser is the
+  largest thing here that only its user wants.
+- Every page is asked for by HTTPS, and by nothing else (Julio,
+  2026-11-20, of releases by plain HTTP: "we don't do that here"). An
+  address that is written with `http://`, typed, in a link, or named by a
+  web server as the place to go on to, is asked for with `https://` in
+  its place, and a web server that does not answer so shows no page.
+  `clara.net:fetch` itself still takes `http://` from whoever types it at
+  a prompt, for a web server on the same computer; Ares hands it no such
+  address.
+- A page goes through four steps, each a function of what the one before
+  made, with nothing kept between two pages: bytes become text
+  (`bytes-text`), the text a tree of elements (`read-page`), the tree
+  lines of text for a width (`lay-page`), and the lines pixels in a
+  window (`paint`). The tests take each by itself.
+- Bytes are read as UTF-8 unless what came with them, or the page in its
+  first thousand bytes, says otherwise. A page that says UTF-8 and has
+  bytes that are none is read all the same, such a byte as the character
+  that Windows has there, which is what it nearly always was. Any other
+  way of writing is read a byte to the character, by that table: right
+  for western Europe, wrong for the rest, whose letters the system's two
+  fonts have no pictures of anyway.
+- The tree is made by the rules that browsers read a page by (the
+  WHATWG's HTML Standard, 13.2), and not by a simpler grammar of tags that
+  match. Pages leave tags out, close what they did not open, and put
+  things where they do not belong, and what such a page is elsewhere is
+  what those rules make of it: a paragraph ends where a list begins, a
+  cell is in a row that nobody wrote, and nothing that a page can say is
+  an error. Two of the rules are left out, both for elements that end in
+  another order than they began: letters that were made bold, or a link,
+  in a block that ended are not bold again behind it (the "active
+  formatting elements"), and what stands between the rows of a table
+  stays there and is not moved in front of the table ("foster
+  parenting"). A page that is well made never meets either.
+- The kind of an element is a keyword where the file names that kind
+  anywhere, and otherwise the name itself, a string. So nothing that a
+  page writes makes a symbol: a page with ten thousand kinds of its own
+  invention leaves nothing behind when it is gone.
+- What holds the reader to those rules is a browser. lisp/host/pages.lisp
+  has three hundred pages, each with the tree that Chrome makes of it,
+  written by tools/pagecheck.py and by nobody's hand, and the host tests
+  have the reader make the same of each. The parser that is asked is the
+  one that reads a page as it arrives (`document.write`). The quicker one
+  behind `DOMParser` was asked first and differs from the standard in two
+  corners that the pages happened to have, the name of a character before
+  an `=` in what a tag says and white space written by name before a
+  page's first word, where this reader was right and it was not: a second
+  opinion is worth what it is checked against.
+- Nothing that a page says about its looks is read, in a style sheet, in
+  an element or anywhere else. An element looks as its kind looks here: a
+  heading is larger, a list has its marks, a link is underlined. A style
+  sheet is a second language as large as the first, with rules of its own
+  for which of its sayings counts, and a page without it is still its
+  text, in the order in which it was written. What that costs: a page
+  that hides parts of itself by a rule shows them, and a page that puts
+  its parts side by side has them one under the other.
+- A page is laid out as lines, each a few pieces of text that look one
+  way, and rectangles for what is no text. The pieces of a line stand on
+  one line of their own whatever their sizes; the space between two
+  blocks is the larger of the two that they ask for and not the sum, as
+  on a page elsewhere. A table's columns are found before anything of it
+  is laid out: how wide each cell is at the least, when its lines are
+  broken wherever they can be, and at the most, when none is, both in one
+  pass over the cell that lays nothing out (`measure`); a column is then
+  as wide as its widest cell where the window has room, no narrower than
+  its longest word where it has room for that, and between the two by how
+  much it could do with. Where there is no room for the longest words
+  either, the columns are made narrower all the same and the words are
+  cut: there is no way to move a page sideways, so nothing may lie
+  outside it.
+- The letters are the system's two families of outlines (lisp/type.lisp),
+  Sans and Mono, at the sizes that the kinds of elements have. Where a
+  font cannot be had, the console's letters stand in, all of one size,
+  and a page is laid out all the same.
+- No picture is fetched: the system has nothing that reads a picture, and
+  what most pictures are packed with is not here either. The words that a
+  page has for a picture stand for it. No script is run, and none is
+  planned in this piece. A form shows what its fields are and cannot be
+  filled in or sent. Each of those is an issue.
+- `clara.net:fetch` got a keyword and three values for this, where Ares
+  could have had a client of its own: with `:any` what a web server
+  answers is taken whatever its number, with what it sent along, and the
+  values after the first three are the address that answered, the number,
+  and the lines of the head. One client means one place that opens a
+  connection, says who asks, and holds a certificate against a name. An
+  answer that leads on to another address is followed by Ares, which
+  reads an address the way RFC 3986 says, from the address of the page,
+  as it reads a link.
+- What is sent of an address is never what a page wrote as it stands
+  (`sendable`): a tab or the end of a line is taken out, and a space or a
+  letter that is not ASCII's is written as bytes with `%`. A link cannot
+  put a line of its own making into what the machine says to a web
+  server.
+- A window fetches in its own thread, the one that draws it: while a page
+  is on its way the window does nothing else, and what is typed waits.
+  The row at its bottom says so first.
+- A window keeps the pages that it was at as it showed them, twenty of
+  them, so that going back fetches nothing and shows the page where it
+  was. Nothing outlasts a window: no addresses, nothing that a web server
+  asked to have remembered.
+- Three limits, so that a page cannot take the machine with it: a page of
+  more than four megabytes is not taken, an address that leads on more
+  than ten times is not followed, and what lies deeper in a tree than two
+  hundred elements is not shown.
+- Ares says who asks to every web server, since the system's fetch does:
+  `ClaraOS` and its version. So no test goes further than this computer,
+  and nothing was fetched from the Internet with it while it was built:
+  the first pages of the web that it shows are Julio's to open.
+- How it is tested. Under SBCL: the names and numbers of characters;
+  addresses against the examples of RFC 3986, each also what Python's
+  `urljoin` gives; bytes of every kind as text; the three hundred trees
+  of Chrome's; the words of random paragraphs broken into lines against a
+  second way of breaking them that is written out in the tests; lists,
+  tables, typed text and the rest by where their lines lie; a page of
+  everything at every width, of which nothing may lie outside; and the
+  window, with a web that is a list in place of the network: every key,
+  the pointer, what the rows say, and its pixels held two ways, against
+  what drawing the whole window anew gives after every key, and against
+  the page, which says where a pixel may be another colour than the
+  paper's. One test fetches as the window does, from the made-up
+  network's web server over TLS. And by booting: the machine that fetches
+  (aarch64-network) is given a few pages by the test's web server
+  (tools/pages), launches Ares at them by HTTPS, follows a link and goes
+  back by the keys, and lays the first page out at the prompt, where its
+  lines have to be the ones that SBCL made of the same page.
+
 ## Conventions
 
 - C: lower_snake_case for functions and files. Kernel-wide symbols carry

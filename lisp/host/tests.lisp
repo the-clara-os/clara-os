@@ -90,8 +90,9 @@
 (load-source "lisp/system.lisp")
 (load-source "lisp/tls.lisp")
 (load-source "lisp/parker.lisp")
-(load-source "lisp/emma.lisp")               ; the two that the kernel leaves on the volume for the launcher to load
+(load-source "lisp/emma.lisp")               ; the three that the kernel leaves on the volume for the launcher to load
 (load-source "lisp/files.lisp")
+(load-source "lisp/ares.lisp")
 (defvar *defined-applications* clara.windows::*applications*) ; what the files defined, for the tests to put back
 (defvar *defined-commands* clara.windows::*commands*)
 
@@ -6505,14 +6506,14 @@
     (setf (symbol-function 'clara.terminal:open-terminal) open-terminal)))
 (setq clara.windows::*applications* *defined-applications*)
 ;; What lisp/terminal.lisp defined and installed when it was loaded, and
-;; after it lisp/parker.lisp: the two that are files have a function here
+;; after it lisp/parker.lisp: the three that are files have a function here
 ;; because the tests loaded the files.
-(check '(("REPL" nil) ("Emma" "emma.lisp") ("Files" "files.lisp") ("Parker" nil))
+(check '(("REPL" nil) ("Emma" "emma.lisp") ("Files" "files.lisp") ("Ares" "ares.lisp") ("Parker" nil))
        (mapcar (lambda (application)
                  (list (clara.windows::application-name application) (clara.windows::application-file application)))
                clara.windows::*applications*))
-(check '("REPL" "Emma" "Files" "Parker") (clara.windows:applications))
-(check (list #'clara.terminal:repl #'clara.emma:edit #'clara.files:browse #'clara.parker:parker)
+(check '("REPL" "Emma" "Files" "Ares" "Parker") (clara.windows:applications))
+(check (list #'clara.terminal:repl #'clara.emma:edit #'clara.files:browse #'clara.ares:browse #'clara.parker:parker)
        (mapcar #'clara.windows::application-function clara.windows::*applications*))
 
 ;;; What happens to a window, kept for its program: the keys that are typed
@@ -10513,6 +10514,28 @@
        (mapcar #'fetched '("http://releases.test/nothing" "http://releases.test/broken" "http://releases.test/short"
                            "http://releases.test/secure" "http://releases.test/round" "http://releases.test/nowhere"
                            "http://releases.test/no-http" "http://releases.test/endless-head")))
+;; What a fetch says beside the file: the address that it was had at in the
+;; end, the number that the other side answered with, and the lines of the
+;; head of its answer. And with :ANY, whatever the other side answers is
+;; taken as it is: a file that is not there with what was sent in its place,
+;; and an answer that leads on to another address as that answer, which is
+;; not followed. No page frame is kept.
+(let ((pages (clara.host:allocated-pages)))
+  (flet ((answered (address &rest options)
+           (multiple-value-bind (memory bytes pages at status lines) (apply #'clara.net:fetch address options)
+             (prog1 (list (clara.unsafe:memory-string memory bytes) at status lines)
+               (clara.unsafe:free-memory memory pages)))))
+    (check '(("hello from the made-up network" "http://releases.test/hello.txt" 200
+              ("HTTP/1.1 200 OK" "Server: made up" "Content-Length: 30" "Connection: close"))
+             ("hello from the made-up network" "http://releases.test/hello.txt" 200
+              ("HTTP/1.1 200 OK" "Server: made up" "Content-Length: 30" "Connection: close"))
+             ("not here." "http://releases.test/nothing" 404 ("HTTP/1.1 404 Not Found" "Content-Length: 9" "Connection: close"))
+             ("" "http://releases.test/moved" 301 ("HTTP/1.1 301 Moved Permanently" "Location: /hello.txt" "Content-Length: 0"))
+             ("" "http://releases.test/broken" 500 ("HTTP/1.1 500 Something" "Content-Length: 0")))
+           (list (answered "http://releases.test/hello.txt") (answered "http://releases.test/moved")
+                 (answered "http://releases.test/nothing" :any t) (answered "http://releases.test/moved" :any t)
+                 (answered "http://releases.test/broken" :any t))))
+  (check t (eventually (lambda () (= pages (clara.host:allocated-pages))))))
 ;; A file that comes in chunks is put together.
 (check '("a file that comes in chunks, each longer than the one before it" t ""
          (:error "releases.test sends /cut-chunks in chunks that do not come to an end"))
@@ -15828,6 +15851,954 @@ needs now
 (forget-world)
 (web nil)
 (setf (symbol-function 'clara.unsafe:ed25519) *ed25519*)
+(setq clara.windows::*running* nil)
+
+;;; Ares (lisp/ares.lisp): the text of a page read into a tree, the tree
+;;; laid out as lines, and the lines shown in a window that goes where the
+;;; page's links lead. The trees are held against the ones that a browser
+;;; makes (lisp/host/pages.lisp), the lines against a second way of
+;;; breaking them that is written out here, and the window's pixels against
+;;; what drawing the whole of it anew gives.
+
+;; The characters that a page writes by name: 324 names, of which the 106
+;; that pages wrote before there were more need no semicolon. Each stands
+;; for a character, and a name comes once.
+(check '(324 106 324)
+       (let ((old (loop for (name) on clara.ares::*old-names* by #'cddr collect name))
+             (others (loop for (name) on clara.ares::*names* by #'cddr collect name)))
+         (list (+ (length old) (length others)) (length old)
+               (length (remove-duplicates (append old others) :test #'string=)))))
+(check t (loop for (name code) on (append clara.ares::*old-names* clara.ares::*names*) by #'cddr
+               always (and (stringp name) (integerp code) (< 8 code char-code-limit)
+                           (equal (clara.ares::find-name name) (list* name code (and (member name clara.ares::*old-names* :test #'equal) t))))))
+(flet ((plain (text &optional said)
+         (clara.ares::decoded text 0 (length text) said)))
+  (check '("a&b<c>d\"e'f" "©®™€" "AAB" "&nope; &; & &# &#x;" "<x ©right ¬it; ∉ ¬in" "?a=1&copy=2©3&=4" "€‚–—™Ÿ")
+         (list (plain "a&amp;b&lt;c&gt;d&quot;e&apos;f") (plain "&copy;&reg;&trade;&euro;") (plain "&#65;&#x41;&#X42;")
+               (plain "&nope; &; & &# &#x;") (plain "&ltx &copyright &notit; &notin; &not;in")
+               (plain "?a=1&copy=2&copy;3&amp;=4" t) (plain "&#128;&#130;&#150;&#151;&#153;&#159;")))
+  ;; A number that is no character's is the character that stands for those.
+  (check (list 65533 65533 65533 65533 1114111)
+         (map 'list #'char-code (plain "&#0;&#xD800;&#x110000;&#99999999999;&#x10FFFF;"))))
+
+;; Where a word stands in a text, in letters of either kind, and where it
+;; first does.
+(check '(t t nil nil 3 nil)
+       (list (clara.ares::stands-at "AZaz09" 0 "azaz09") (clara.ares::stands-at "x</SCRIPT" 1 "</script") (clara.ares::stands-at "abc" 1 "bcd")
+             (clara.ares::stands-at "abc" 1 "bd") (clara.ares::seek "abcabc" "abc" 1) (clara.ares::seek "abcabc" "abd" 0)))
+
+;; Addresses. The examples of RFC 3986, 5.4, each read at the address that
+;; the RFC reads them at, and what Python's urljoin makes of the same.
+(check nil
+       (loop for (written whole) in '(("g:h" "g:h") ("g" "http://a/b/c/g") ("./g" "http://a/b/c/g") ("g/" "http://a/b/c/g/") ("/g" "http://a/g")
+                                      ("//g" "http://g") ("?y" "http://a/b/c/d;p?y") ("g?y" "http://a/b/c/g?y") ("#s" "http://a/b/c/d;p?q#s")
+                                      ("g#s" "http://a/b/c/g#s") ("g?y#s" "http://a/b/c/g?y#s") (";x" "http://a/b/c/;x") ("g;x" "http://a/b/c/g;x")
+                                      ("g;x?y#s" "http://a/b/c/g;x?y#s") ("" "http://a/b/c/d;p?q") ("." "http://a/b/c/") ("./" "http://a/b/c/")
+                                      (".." "http://a/b/") ("../" "http://a/b/") ("../g" "http://a/b/g") ("../.." "http://a/") ("../../" "http://a/")
+                                      ("../../g" "http://a/g") ("../../../g" "http://a/g") ("../../../../g" "http://a/g") ("/./g" "http://a/g")
+                                      ("/../g" "http://a/g") ("g." "http://a/b/c/g.") (".g" "http://a/b/c/.g") ("g.." "http://a/b/c/g..")
+                                      ("..g" "http://a/b/c/..g") ("./../g" "http://a/b/g") ("./g/." "http://a/b/c/g/") ("g/./h" "http://a/b/c/g/h")
+                                      ("g/../h" "http://a/b/c/h") ("g;x=1/./y" "http://a/b/c/g;x=1/y") ("g;x=1/../y" "http://a/b/c/y")
+                                      ("g?y/./x" "http://a/b/c/g?y/./x") ("g?y/../x" "http://a/b/c/g?y/../x") ("g#s/./x" "http://a/b/c/g#s/./x")
+                                      ("g#s/../x" "http://a/b/c/g#s/../x") ("http:g" "http:g"))
+             unless (equal (clara.ares::address-from "http://a/b/c/d;p?q" written) whole)
+               collect (list written (clara.ares::address-from "http://a/b/c/d;p?q" written))))
+(check '("https://a/g" "https://x/y?z#f" "https://a/b/c?" "https://a/b/c?q#" "mailto:somebody@claraos.org" "https://b/" "about:ares")
+       (list (clara.ares::address-from "https://a" "g") (clara.ares::address-from "https://a/b/" "//x/y?z#f")
+             (clara.ares::address-from "https://a/b/c" "?") (clara.ares::address-from "https://a/b/c?q" "#")
+             (clara.ares::address-from "https://a/b" "mailto:somebody@claraos.org") (clara.ares::address-from "https://a/b" "HTTPS://b/")
+             (clara.ares::address-from "https://a/b" "about:ares")))
+(check '(("https" "claraos.org:8080" "/a/b" "q=1" "top") (nil nil "a/b" nil nil) ("mailto" nil "x@y" nil nil) (nil "h" "" "" "")
+         (nil nil "1a:b" nil nil) (nil nil ":x" nil nil) ("a1+-." nil "b" nil nil))
+       (mapcar (lambda (address) (multiple-value-list (clara.ares::parts address)))
+               '("HTTPS://claraos.org:8080/a/b?q=1#top" "a/b" "mailto:x@y" "//h?#" "1a:b" ":x" "A1+-.:b")))
+;; What is sent of an address: nothing that an address cannot hold, and no
+;; line of the page's own making.
+(check (list "https://a/b%20c/%C3%A9%C4%80%E4%B8%AD%F0%9F%98%80?q=1%202#f" "https://a/xy%22%3C%3E%5C%5E%60%7B%7C%7D" "https://a/%41%zz")
+       (list (clara.ares::sendable (format nil "https://a/b c/~C~C~C~C?q=1 2#f" (code-char 233) (code-char 256) (code-char 20013) (code-char 128512)))
+             (clara.ares::sendable (format nil "https://a/x~C~C~Cy\"<>\\^`{|}" (code-char 13) (code-char 10) (code-char 9)))
+             (clara.ares::sendable "https://a/%41%zz")))
+(check '("https://claraos.org" "https://localhost:8000/x" "http://claraos.org/" "https://claraos.org/a?b#c" "about:ares" "https://a b")
+       (mapcar #'clara.ares::typed-address '("  claraos.org " "localhost:8000/x" "http://claraos.org/" "https://claraos.org/a?b#c" "about:ares" "a b")))
+(check '("https://claraos.org/x" "https://claraos.org:8080/" "https://a/" nil nil nil)
+       (mapcar #'clara.ares::secure '("https://claraos.org/x" "http://claraos.org:8080/" "HTTP://a/" "mailto:x@y" "ftp://a/" "claraos.org")))
+(check '(("https://a/b" "c") ("https://a/b" "") ("https://a/b" nil))
+       (mapcar (lambda (address) (multiple-value-list (clara.ares::without-part address))) '("https://a/b#c" "https://a/b#" "https://a/b")))
+
+;; Bytes as text. What OCTETS are when they arrive with SAID about how they
+;; are written.
+(defun bytes-read (octets &optional said)
+  (let ((memory (clara.unsafe:allocate-memory 1)))
+    (unwind-protect
+         (progn
+           (loop for octet in octets for i from 0
+                 do (setf (clara.unsafe:memory-8 (+ memory i)) octet))
+           (clara.ares::bytes-text memory (length octets) said))
+      (clara.unsafe:free-memory memory 1))))
+(check (list "café" "café" "café é" "€ ž Ÿ" "Ã©" "Ã©" "Ã" "é中😀" "caf" "plain" "€™" "Ãé")
+       (list (bytes-read '(99 97 102 #xc3 #xa9))                                  ; UTF-8, which is what a page is unless it says otherwise
+             (bytes-read '(99 97 102 #xe9))                                       ; a byte that is no UTF-8: the character that Windows has there
+             (bytes-read '(99 97 102 #xe9 32 #xc3 #xa9))                          ; and the same beside UTF-8 that is
+             (bytes-read '(#x80 32 #x9e 32 #x9f))
+             (bytes-read '(#xc3 #xa9) "text/html; charset=ISO-8859-1")            ; a page that says that it is written a byte to the character
+             (subseq (bytes-read (append (coerce (octets "<meta charset=\"windows-1252\">") 'list) '(#xc3 #xa9))) 29)
+             (subseq (bytes-read (append (coerce (octets "<meta http-equiv=Content-Type content='text/html; charset=latin1'>") 'list) '(#xc3))) 66)
+             (bytes-read '(#xc3 #xa9 #xe4 #xb8 #xad #xf0 #x9f #x98 #x80) "text/html; charset=utf-8")
+             (bytes-read '(#xef #xbb #xbf 99 97 102))                             ; the mark that some put before a text is not part of it
+             (bytes-read '(112 108 97 105 110) "text/plain")
+             (bytes-read '(#x80 #x99) "text/html; charset=windows-1252")           ; the characters that Windows has from 128 on
+             (bytes-read '(#xc3 #xc3 #xa9))))                                      ; a byte that begins two, before another that does
+;; UTF-8 that is cut short, that is longer than it has to be, or that names
+;; no character, is not UTF-8.
+(check '((195) (224 8364 175) (237 160 8364) (244 144 8364 8364) (192 175) (255 254))
+       (mapcar (lambda (octets) (cdr (map 'list #'char-code (bytes-read (cons 120 octets)))))
+               '((#xc3) (#xe0 #x80 #xaf) (#xed #xa0 #x80) (#xf4 #x90 #x80 #x80) (#xc0 #xaf) (#xff #xfe))))
+(check '("utf-8" "iso-8859-1" "x-sjis" nil nil nil)
+       (mapcar #'clara.ares::written-as '("text/html; charset=UTF-8" "text/html;charset = \"ISO-8859-1\"" "charset='x-sjis'" "text/html" "charset" "charset=")))
+
+;; The tree of a page, as tools/pagecheck.py writes one.
+(defun tree-quoted (text)
+  (with-output-to-string (out)
+    (write-char #\" out)
+    (loop for character across text
+          do (let ((code (char-code character)))
+               (cond ((char= character #\\) (write-string "\\\\" out))
+                     ((char= character #\") (write-string "\\\"" out))
+                     ((= code 10) (write-string "\\n" out))
+                     ((= code 9) (write-string "\\t" out))
+                     ((= code 13) (write-string "\\r" out))
+                     ((or (< code 32) (> code 126)) (format out "\\u{~(~x~)}" code))
+                     (t (write-char character out)))))
+    (write-char #\" out)))
+(defun tree-text (node)
+  (if (stringp node)
+      (tree-quoted node)
+      (format nil "(~A~{ ~A~}~{ ~A~})" (clara.ares::tag-name (clara.ares::node-tag node))
+              (mapcar (lambda (pair) (format nil "~A=~A" (car pair) (tree-quoted (cdr pair)))) (clara.ares::node-said node))
+              (mapcar #'tree-text (clara.ares::node-children node)))))
+(defun read-tree (page)
+  (tree-text (clara.ares::read-page page)))
+
+;; Every page of lisp/host/pages.lisp is read into the tree that Chrome
+;; reads it into.
+(let ((pages (with-open-file (in (source "lisp/host/pages.lisp") :external-format :utf-8)
+               (read in))))
+  (check t (> (length pages) 290))
+  (loop for (page tree) in pages
+        do (incf *checks*)
+           (let ((read (handler-case (read-tree page)
+                         (error (condition) (princ-to-string condition)))))
+             (unless (equal read tree)
+               (failed "the page ~S is read as ~A, and a browser reads it as ~A" page read tree)))))
+;; What that file cannot hold: a line that ends in a return, or in both,
+;; ends; and a character with the code 0 is nothing.
+(check '("(html (head) (body \"tab\\there\\nnew\\nline\\n\"))" "(html (head) (body (p \"ab\")))" "(html (head) (body (p title=\"ab\" \"c\")))")
+       (list (read-tree (format nil "tab~Chere~C~Cnew~Cline~C" (code-char 9) (code-char 13) (code-char 10) (code-char 13) (code-char 13)))
+             (read-tree (format nil "<p>a~Cb" (code-char 0)))
+             (read-tree (format nil "<p title=a~Cb>c" (code-char 0)))))
+;; The two places where this reader is not the standard's, written down so
+;; that a change to either is seen: letters that were made bold, or a link,
+;; in a block that ended are not bold again behind it; and what stands
+;; between the rows of a table stays there.
+(check '("(html (head) (body (p (b \"x\")) (p \"y\")))" "(html (head) (body (div (a href=\"1\" \"a\")) \"b\"))"
+         "(html (head) (body (table \"b\" (tbody (tr (td \"c\"))))))")
+       (mapcar #'read-tree '("<p><b>x<p>y" "<div><a href=1>a</div>b" "<!doctype html><table>b<tr><td>c")))
+;; A page of some size is read in no time that matters, and one that is
+;; nested deeper than anything is read all the same.
+(check '(2400 600)
+       (let ((tree (clara.ares::read-page (with-output-to-string (out)
+                                            (dotimes (i 600)
+                                              (write-string "<p class=\"x y\">Some <b>bold</b> text &amp; a <a href=\"/a\">link</a>.</p><ul><li>one<li>two</ul><br><hr>" out)))))
+             (deep (clara.ares::read-page (with-output-to-string (out)
+                                            (dotimes (i 600) (write-string "<div>" out))
+                                            (write-string "deep" out)))))
+         (list (length (clara.ares::node-children (second (clara.ares::node-children tree))))
+               (loop for node = (second (clara.ares::node-children deep)) then (first (clara.ares::node-children node))
+                     while (clara.ares::node-p node) count (eq (clara.ares::node-tag node) :div)))))
+
+;;; Laying out. A machine with a screen and the fonts that come with the
+;;; system, all eight of their files.
+(defun ares-desk (&rest options)
+  (apply #'new-desk :letters t options)
+  (dolist (file '("Go-Bold.ttf" "Go-Italic.ttf" "Go-Bold-Italic.ttf" "Go-Mono.ttf" "Go-Mono-Bold.ttf" "Go-Mono-Italic.ttf"
+                  "Go-Mono-Bold-Italic.ttf"))
+    (clara.host:put-system-file file (file-octets (concatenate 'string "fonts/" file)))))
+(defvar *ares-colors* (clara.ares::make-colors :paper 10 :ink 11 :dim 12 :link 13 :seen 14 :rule 15 :ground 16))
+(defun laid (text &key (width 400) (address "https://pages.test/dir/page.html") seen)
+  (clara.ares::lay-page (clara.ares::read-page text) address width *ares-colors* seen))
+;; The lines of a page: for each how far down it is, how high, and its
+;; pieces, each with where it begins.
+(defun lines-of (page)
+  (map 'list (lambda (line)
+               (list* (clara.ares::line-top line) (clara.ares::line-height line)
+                      (mapcar (lambda (piece) (list (clara.ares::piece-x piece) (clara.ares::piece-text piece)))
+                              (clara.ares::line-pieces line))))
+       (clara.ares::page-lines page)))
+(defun texts-of (page)
+  (clara.ares::page-text page))
+(defun boxes-of (page)
+  (mapcar (lambda (box) (list (clara.ares::box-x box) (clara.ares::box-y box) (clara.ares::box-width box) (clara.ares::box-height box)
+                              (clara.ares::box-color box)))
+          (clara.ares::page-boxes page)))
+;; What is out of order in a page that was laid out, as a count: lines that
+;; are not in the order of their tops, pieces that lie over each other or
+;; outside the page, a piece that is higher than its line, a piece that is
+;; not as wide as its text.
+(defun page-wrong (page)
+  (let ((wrong 0) (last 0))
+    (loop for line across (clara.ares::page-lines page)
+          do (when (< (clara.ares::line-top line) last) (incf wrong))
+             (setq last (clara.ares::line-top line))
+             (when (> (+ (clara.ares::line-top line) (clara.ares::line-height line)) (clara.ares::page-height page)) (incf wrong))
+             (let ((edge 0))
+               (dolist (piece (clara.ares::line-pieces line))
+                 (let ((look (clara.ares::piece-look piece)))
+                   (when (< (clara.ares::piece-x piece) edge) (incf wrong))
+                   (setq edge (+ (clara.ares::piece-x piece) (clara.ares::piece-width piece)))
+                   (when (> edge (clara.ares::page-width page)) (incf wrong))
+                   (unless (= (clara.ares::piece-width piece) (clara.ares::wide (clara.ares::piece-text piece) look)) (incf wrong))
+                   (when (or (< (clara.ares::piece-up piece) 0)
+                             (> (+ (clara.ares::piece-up piece) (clara.ares::above look) (clara.ares::below look))
+                                (clara.ares::line-height line)))
+                     (incf wrong))))))
+    wrong))
+(ares-desk)
+
+;; The words of a paragraph go onto its lines as many as there is room
+;; for: the same lines as a second way of breaking them gives, which is
+;; written out here, word by word.
+(defun broken (words width font)
+  (let ((lines nil) (line nil))
+    (dolist (word words)
+      (let ((longer (if line (concatenate 'string line " " word) word)))
+        (cond ((or (null line) (<= (clara.draw:text-width longer font) width))
+               (setq line longer))
+              (t
+               (push line lines)
+               (setq line word)))))
+    (when line
+      (push line lines))
+    (nreverse lines)))
+(let ((state (sb-ext:seed-random-state 44)) (font (clara.type:font "Sans" 16)) (wrong nil))
+  (dotimes (round 40)
+    (let* ((words (loop repeat (+ 1 (random 60 state))
+                        collect (coerce (loop repeat (+ 1 (random 9 state)) collect (code-char (+ 97 (random 26 state)))) 'string)))
+           (width (+ 120 (random 400 state)))
+           (page (laid (format nil "<p>~{~A~^ ~}" words) :width width)))
+      (unless (and (equal (texts-of page) (broken words (- width 16) font)) (= 0 (page-wrong page)))
+        (push (list width words) wrong))))
+  (check nil wrong))
+;; The first line of a page that begins at a place or below it.
+(check '(0 0 1 1 2 3)
+       (let ((lines (clara.ares::page-lines (laid "a<br>b<br>c"))))
+         (mapcar (lambda (y) (clara.ares::first-line lines y)) '(0 8 9 28 48 1000))))
+;; White space is one space, wherever it is and whatever it is, and none at
+;; the ends of a line; a space that does not break keeps its words in one
+;; line, and what only says where a word may be broken is not drawn.
+(check '("one two three" "four five" "six seven" "eight nine")
+       (texts-of (laid (format nil "<p>  one~C~C~Ctwo     <b> three</b>  </p><p>four~Cfive<p>six&shy;&#8203; se&shy;ven<p>eight~Cnine" (code-char 10) (code-char 9)
+                               (code-char 12) (code-char 160) (code-char 12)) :width 400)))
+(check '(("alpha" "beta gamma") ("alpha beta" "gamma"))
+       (list (texts-of (laid "alpha beta&nbsp;gamma" :width 120)) (texts-of (laid "alpha beta gamma" :width 120))))
+;; A word that no line has room for is cut where the line ends, as often as
+;; it takes, and nothing of it is lost.
+(let ((page (laid "<p>short averyveryveryveryverylongwordthatdoesnotfitintoanylineofthispageatall end" :width 120)))
+  (check '(0 t "shortaveryveryveryveryverylongwordthatdoesnotfitintoanylineofthispageatallend")
+         (list (page-wrong page) (> (length (texts-of page)) 6) (remove #\Space (apply #'concatenate 'string (texts-of page))))))
+
+;; On a page that is narrower than a letter every letter has a line, and
+;; laying it out comes to an end.
+(check '(t "widewords")
+       (let ((page (laid "wide words" :width 20)))
+         (list (every (lambda (text) (= (length text) 1)) (texts-of page)) (apply #'concatenate 'string (texts-of page)))))
+
+;; Paragraphs and headings, with the space that they leave: a gap is the
+;; larger of the two that meet, the first line of a page stands eight
+;; pixels down, and a heading is as high as its size.
+(check '((21 38 (8 "Head")) (80 20 (8 "one")) (116 20 (8 "two")) (156 29 (8 "Smaller")) (205 20 (8 "three")) (225 20 (8 "four")))
+       (lines-of (laid "<h1>Head</h1><p>one</p><p>two</p><h2>Smaller</h2><div>three</div><div>four</div>")))
+(check '(38 29 23 20 16 14)
+       (mapcar #'second (lines-of (laid "<h1>a</h1><h2>a</h2><h3>a</h3><h4>a</h4><h5>a</h5><h6>a</h6>"))))
+(check '((8 20 (8 "a")) (28 20 (8 "b")) (68 20 (8 "c")) (104 20 (8 "d")))
+       (lines-of (laid "a<br>b<br><br>c<p></p><p></p><div></div>d")))
+;; Looks: a piece of text for each run that looks one way, all on one line
+;; of their own whatever their sizes.
+(let* ((page (laid "<p>plain <b>bold <i>both</i></b> <code>typed</code> <u>under</u> <s>struck</s> x<sup>2</sup> y<sub>i</sub> <small>small</small>"))
+       (pieces (clara.ares::line-pieces (svref (clara.ares::page-lines page) 0))))
+  (check '(1 0)
+         (list (length (clara.ares::page-lines page)) (page-wrong page)))
+  (check '(("plain " "Sans" 16 nil nil nil nil 0) ("bold " "Sans" 16 t nil nil nil 0) ("both" "Sans" 16 t t nil nil 0) (" " "Sans" 16 nil nil nil nil 0)
+           ("typed" "Mono" 13 nil nil nil nil 0) (" " "Sans" 16 nil nil nil nil 0) ("under" "Sans" 16 nil nil t nil 0) (" " "Sans" 16 nil nil nil nil 0)
+           ("struck" "Sans" 16 nil nil nil t 0) (" x" "Sans" 16 nil nil nil nil 0) ("2" "Sans" 12 nil nil nil nil 5) (" y" "Sans" 16 nil nil nil nil 0)
+           ("i" "Sans" 12 nil nil nil nil -3) (" " "Sans" 16 nil nil nil nil 0) ("small" "Sans" 13 nil nil nil nil 0))
+         (mapcar (lambda (piece)
+                   (let ((look (clara.ares::piece-look piece)))
+                     (list (clara.ares::piece-text piece) (clara.ares::look-family look) (clara.ares::look-size look) (clara.ares::look-bold look)
+                           (clara.ares::look-italic look) (clara.ares::look-underline look) (clara.ares::look-strike look) (clara.ares::look-rise look))))
+                 pieces))
+  ;; What is raised stands that far above the line that the others stand on, and what is lowered below it.
+  (flet ((foot (piece)
+           (+ (clara.ares::piece-up piece) (clara.type:font-ascent (clara.ares::font-of (clara.ares::piece-look piece))))))
+    (check '(5 -3) (list (- (foot (first pieces)) (foot (nth 10 pieces))) (- (foot (first pieces)) (foot (nth 12 pieces))))))
+  ;; Every piece stands on the one line: its top and what it reaches above the line come to the same.
+  (check 1 (length (remove-duplicates (mapcar (lambda (piece)
+                                                (+ (clara.ares::piece-up piece) (clara.ares::above (clara.ares::piece-look piece))))
+                                              pieces)))))
+;; Smaller letters are smaller than the ones that they stand among.
+(check '(("big " 32) ("less" 27))
+       (mapcar (lambda (piece) (list (clara.ares::piece-text piece) (clara.ares::look-size (clara.ares::piece-look piece))))
+               (clara.ares::line-pieces (svref (clara.ares::page-lines (laid "<h1>big <small>less</small></h1>")) 0))))
+;; Lines that stand in the middle or at the right: the room that is left is
+;; halved, or all at the left.
+(let ((font (clara.type:font "Sans" 16)))
+  (check (list (list (list 8 20 (list (+ 8 (floor (- 384 (clara.draw:text-width "middle" font)) 2)) "middle"))
+                     (list 28 20 (list (- 392 (clara.draw:text-width "right" font)) "right"))
+                     (list 48 20 (list 8 "left")) (list 68 20 (list (+ 8 (floor (- 384 (clara.draw:text-width "again" font)) 2)) "again"))
+                     (list 88 20 (list 8 "after")))
+               0)
+         (let ((page (laid "<center>middle</center><div align=right>right</div><div align=center><div align=left>left</div>again</div>after")))
+           (list (lines-of page) (page-wrong page)))))
+
+;; Lists: an item's mark stands left of its first line, a number for a list
+;; that counts, from where the list says and on from what an item says; a
+;; list in a list stands further in, with another mark and no gap.
+(check '("•one" "•two" "9.nine" "20.twenty" "21.next" "◦deeper" "•three" "after")
+       (texts-of (laid "<ul><li>one<li>two<ol start=9><li>nine<li value=20>twenty<li>next</ol><ul><li>deeper</ul><li>three</ul>after")))
+(let ((lines (lines-of (laid "<ul><li>one<li><p>two<p>more</ul><ol><li>x<li></ol><li>alone"))))
+  (check '((16 48) (52 48) (88 48) (124 48) (144 nil) (180 48))
+         (mapcar (lambda (line)
+                   (list (first line) (first (find-if (lambda (piece) (and (> (length (second piece)) 0) (alpha-char-p (char (second piece) 0)))) (cddr line)))))
+                 lines))
+  ;; the mark is six pixels left of the block, whatever is in it
+  (check '(("•" 42) ("•" 42) ("1." 42) ("2." 42) ("•" 42))
+         (loop for line in lines
+               for mark = (find-if (lambda (piece) (and (> (length (second piece)) 0) (find (char (second piece) 0) "•123456789"))) (cddr line))
+               when mark collect (list (second mark) (+ (first mark) (clara.draw:text-width (second mark) (clara.type:font "Sans" 16)))))))
+;; A list in a list leaves no gap around it.
+(check '(16 36 56) (mapcar #'first (lines-of (laid "<ul><li>a<ul><li>b</ul><li>c</ul>"))))
+(check '("word" "what it means" "second" "and that")
+       (texts-of (laid "<dl><dt>word<dd>what it means<dt>second<dd>and that</dl>")))
+(check '((16 20 (8 "word")) (36 20 (48 "what it means")) (72 20 (48 "quoted")))
+       (lines-of (laid "<dl><dt>word<dd>what it means</dl><blockquote>quoted</blockquote>")))
+
+;; Text as it is typed: its lines as the page has them, a tab to the next
+;; column that eight goes into, on a ground of its own; and a line that is
+;; too long goes on in the next.
+(let ((page (laid (format nil "<pre>~%(defun f (x)~%~C(+ x 1))~%~%a~Cb</pre>after" (code-char 9) (code-char 9)))))
+  (check '(("(defun f (x)" "        (+ x 1))" "a       b" "after") ((8 16 384 76 16)) 0
+           (22 38 70 108))
+         (list (texts-of page) (boxes-of page) (page-wrong page) (mapcar #'first (lines-of page)))))
+(let ((page (laid "<pre>0123456789012345678901234567890123456789</pre>" :width 200)))
+  (check '(("012345678901234567890" "1234567890123456789") 0) (list (texts-of page) (page-wrong page))))
+;; A line across, as wide as its block.
+(check '(((8 36 384 1 15) (48 81 304 1 15)) ("above" "in" "below"))
+       (let ((page (laid "above<hr><blockquote>in<hr></blockquote>below")))
+         (list (boxes-of page) (texts-of page))))
+
+;; Links: each is a piece that looks like one and knows its number, and the
+;; page keeps what each is written as. One that was visited has another
+;; colour; one without an address is text.
+(let* ((page (laid "<a href=one.html>first</a> and <a href='/two#part'>the <b>second</b></a> <a name=here>no link</a> <a href=''>empty</a>"
+                   :seen '("https://pages.test/two")))
+       (pieces (clara.ares::line-pieces (svref (clara.ares::page-lines page) 0))))
+  (check '(("one.html" "/two#part" "") (("first" 0 13 t) (" and " nil 11 nil) ("the " 1 14 t) ("second" 1 14 t) (" no link " nil 11 nil) ("empty" 2 13 t))
+           (("here" . 8)))
+         (list (coerce (clara.ares::page-links page) 'list)
+               (mapcar (lambda (piece)
+                         (let ((look (clara.ares::piece-look piece)))
+                           (list (clara.ares::piece-text piece) (clara.ares::look-link look) (clara.ares::look-color look)
+                                 (clara.ares::look-underline look))))
+                       pieces)
+               (clara.ares::page-marks page))))
+;; A link that shows nothing gets the words that it has for itself, its
+;; own or those of something in it, or a name for where it leads, so that
+;; there is something of it to pick: the last step of its address, or the
+;; machine.
+(check '("[Home][a title]" "[upvote][x.html][b][claraos.org][link]")
+       (texts-of (laid "<a href=/ aria-label=Home><svg><path/></svg></a><a href=y title='a title'></a><a href='vote?id=1'><div title=upvote></div></a><a href=x.html><img alt=''></a><a href='/a/b/?q=1'></a><a href='https://claraos.org/'></a><a href='/'></a>"
+                       :width 700)))
+;; And a column of a table is as wide as that, which is found before the
+;; table is laid out.
+(check '(("[upvote]" "the title of a story") 0)
+       (let ((page (laid "<table><tr><td><a href='vote?id=1'><div title=upvote></div></a><td>the title of a story</table>")))
+         (list (texts-of page) (page-wrong page))))
+;; The address that a page's links are read from is its own, or the one
+;; that it names.
+(check '("https://pages.test/dir/page.html" "https://pages.test/dir/page.html" "https://other.test/base/" "https://pages.test/up/")
+       (list (clara.ares::page-address (laid "x")) (clara.ares::page-base (laid "x"))
+             (clara.ares::page-base (laid "<base href='https://other.test/base/'>x")) (clara.ares::page-base (laid "<base href='../up/'>x"))))
+;; What a page calls itself, and the places in it that have names.
+(check '("A title of words" nil nil (("end" . 64) ("mid" . 28) ("top" . 8)))
+       (list (clara.ares::page-title (laid (format nil "<title> A  title~%of words </title>x"))) (clara.ares::page-title (laid "<title> </title>x"))
+             (clara.ares::page-title (laid "x")) (clara.ares::page-marks (laid "<div id=top>a</div><span id=mid>b</span><p id=end>c"))))
+
+;; What is not shown: what a page says of itself and what it runs, what it
+;; says is not to be seen, and what stands in for what this does not do.
+(check '("seen" "and this")
+       (texts-of (laid "<head><title>t</title><style>p{}</style></head>seen<script>x</script><style>q{}</style><template>kept</template><div hidden>no</div><p style='display: none'>no</p><span style=\"VISIBILITY:hidden\">no</span><dialog>no</dialog><noframes>no</noframes><datalist><option>no</datalist><p>and this")))
+(check '("open") (texts-of (laid "<dialog open>open</dialog>")))
+;; A picture is the words that the page has for it; a field of a form, and a
+;; button, is what stands for it, in the colour of such things.
+(check '("[A sun] [picture]" "[typed___] [________] [Search…_] [Go] [reset] [x] [ ] (o) ( ) [send]" "[b] [some text] [Press me]")
+       (texts-of (laid "<p><img alt=' A  sun '> <img alt=''> <img src=x> <img src=y width=1 height=1><p><input value=typed> <input type=text> <input placeholder=Search…> <input type=hidden value=h><input type=submit value=Go> <input type=reset> <input type=checkbox checked> <input type=checkbox> <input type=radio checked> <input type=radio> <input type=image alt=send><p><select><option>a<option selected>b</select> <textarea>some
+text</textarea> <button>Press <b>me</b></button>" :width 700)))
+(check '(12 12 11)
+       (let ((pieces (clara.ares::line-pieces (svref (clara.ares::page-lines (laid "<img alt=sun> <input> word")) 0))))
+         (list (clara.ares::look-color (clara.ares::piece-look (first pieces))) (clara.ares::look-color (clara.ares::piece-look (third pieces)))
+               (clara.ares::look-color (clara.ares::piece-look (car (last pieces)))))))
+;; What stands for a picture and has words for it shows the words, as the
+;; headings of claraos.org do; a drawing shows its title or nothing; a page
+;; in a page is a link to it.
+(check '("ClaraOS: the machine is ours" "[A drawing]" "[a page in this one: /inner.html]" "“said”" "[video] [sound]")
+       (texts-of (laid "<h1><span role=img aria-label='ClaraOS: the machine is ours'><svg aria-hidden=true><path d='M0 0'/></svg></span></h1><p><svg><title>A drawing</title><circle/></svg><svg><circle/></svg><p><iframe src=/inner.html></iframe><p><q>said</q><p><video src=v>no</video> <audio>no</audio>" :width 700)))
+
+;; Tables. The columns are as wide as their widest cells where there is
+;; room, and what is in a column begins at one place in every row.
+(let* ((page (laid "<table><tr><th>Name<th>What<tr><td>REPL<td>forms<tr><td>Emma<td>a text</table>after"))
+       (lines (lines-of page)))
+  (check '(("Name" "What" "REPL" "forms" "Emma" "a text" "after") 0 nil)
+         (list (texts-of page) (page-wrong page) (boxes-of page)))
+  (check '(t t t t t)
+         (list (> (first (third (nth 1 lines)))                                      ; the second column lies right of the first
+                  (+ (first (third (nth 0 lines))) (clara.draw:text-width "Name" (clara.type:font "Sans" 16 :bold t))))
+               (= (first (third (nth 2 lines))) (first (third (nth 4 lines))))      ; REPL and Emma
+               (= (first (third (nth 3 lines))) (first (third (nth 5 lines))))      ; forms and a text
+               (= (first (nth 0 lines)) (first (nth 1 lines)))                       ; the two of a row are as far down
+               (< (first (nth 1 lines)) (first (nth 2 lines)) (first (nth 4 lines)) (first (nth 6 lines))))))
+;; A heading of a column stands in the middle of it; and each cell begins at
+;; the top of its row, whatever the cell before it left.
+(let ((font (clara.type:font "Sans" 16)) (bold (clara.type:font "Sans" 16 :bold t)))
+  (check (list (list 10 20 (list (+ 14 (floor (- (clara.draw:text-width "a much wider cell" font) (clara.draw:text-width "N" bold)) 2)) "N"))
+               (list 36 20 (list 14 "a much wider cell")))
+         (lines-of (laid "<table><tr><th>N<tr><td>a much wider cell</table>"))))
+(check '(10 26) (sort (mapcar #'first (lines-of (laid "<table><tr><td><p>a<td>b</table>"))) #'<))
+;; Where there is no room for that, a column is no narrower than its longest
+;; word, and gets of the rest by how much it could do with; the lines of a
+;; cell are broken in it.
+(let ((page (laid "<table border=1><tr><td>REPL<td>The listener in a window, where forms are typed and evaluated<tr><td colspan=2>across both</table>" :width 300)))
+  (check '(("REPL" "The listener in a window," "where forms are typed and" "evaluated" "across both") 0 12)
+         (list (texts-of page) (page-wrong page) (length (boxes-of page)))))
+;; And where there is not even room for the longest words, the columns are
+;; made narrower all the same, and the words are cut: nothing lies outside
+;; the page.
+(let ((page (laid "<table><tr><td>incomprehensibilities<td>counterrevolutionaries<td>x</table>" :width 160)))
+  (check '(0 t) (list (page-wrong page) (> (length (texts-of page)) 3))))
+;; How wide a table's columns are: in a table with room for everything,
+;; each is as wide as its widest cell; a cell across two makes them wider
+;; between them when it has to.
+(let* ((font (clara.type:font "Sans" 16)) (bold (clara.type:font "Sans" 16 :bold t))
+       (laying (clara.ares::make-laying :colors *ares-colors* :right 400))
+       (look (clara.ares::make-look :color 11)))
+  (flet ((widths (text room)
+           (multiple-value-bind (rows) (clara.ares::table-rows (clara.ares::find-element (clara.ares::read-page text) :table))
+             (multiple-value-bind (widths least most)
+                 (clara.ares::column-widths laying rows look (reduce #'max (mapcar (lambda (row) (reduce #'+ (mapcar #'clara.ares::span-of row))) rows)) room)
+               (list (coerce widths 'list) least most)))))
+    (let ((a (clara.draw:text-width "a" font)) (words (clara.draw:text-width "some words here" font)) (some (clara.draw:text-width "some" font))
+          (here (clara.draw:text-width "words" font)) (head (clara.draw:text-width "Head" bold)))
+      (check (list (list (list head words) (+ head here) (+ head words))
+                   (list (list head (+ here (floor (* (- words here) (- 100 head here)) (- words here)))) (+ head here) (+ head words))
+                   (list (list (floor (* head 30) (+ head here)) (floor (* here 30) (+ head here))) (+ head here) (+ head words)))
+             (list (widths "<table><tr><th>Head<td>some words here<tr><td>a<td>a</table>" 400)
+                   (widths "<table><tr><th>Head<td>some words here<tr><td>a<td>a</table>" 100)
+                   (widths "<table><tr><th>Head<td>some words here<tr><td>a<td>a</table>" 30)))
+      ;; a cell across two columns makes them wide enough for it between them, with what lies between two cells
+      (check (list t (list a a))
+             (let ((wide (first (widths "<table><tr><td>a<td>a<tr><td colspan=2>some words here</table>" 400))))
+               (list (<= words (+ (first wide) (second wide) 10) (+ words 1))
+                     (first (widths "<table><tr><td>a<td>a<tr><td colspan=2>a</table>" 400)))))
+      (check t (< a some here words)))))
+;; A table in a table, a row outside a table, and what stands in a table
+;; that is no row.
+(check '(("out" "next" "in" "in two" "after") 0)
+       (let ((page (laid "<table><tr><td>out<td><table><tr><td>in<tr><td>in two</table><td>next</table>after")))
+         (list (texts-of page) (page-wrong page))))
+(check '("stray" "a caption" "cell")
+       (texts-of (laid "<table><caption>a caption</caption><tr><td>cell</td></tr><div>stray</div></table>")))
+;; What is in a cell is laid out like anything else: a list, a paragraph,
+;; text as it is typed.
+(check '(("•one" "words" "•two" "typed" "end") 0)
+       (let ((page (laid "<table><tr><td><ul><li>one<li>two</ul><td><p>words<pre>typed</pre></table>end")))
+         (list (texts-of page) (page-wrong page))))
+
+;; A page of everything, at every width from narrow to wide: nothing lies
+;; outside it, and it has the same words at each.
+(let* ((everything "<title>All</title><h1>A heading that is long enough to break</h1><p>Some <b>bold</b>, <i>italic</i> and <code>typed</code> text with a <a href=x>link in it</a>.<ul><li>an item<ol><li>a numbered one with words<li>two</ol><li>another</ul><pre>typed text    that is long</pre><table border=1><tr><th>Name<th>What it is<tr><td>one<td>the first of them all<tr><td colspan=2>across</table><blockquote>quoted words here</blockquote><hr><dl><dt>word<dd>meaning</dl><center>middle</center><p align=right>right<img alt=sun><input value=x>")
+       (words (lambda (page) (remove #\Space (apply #'concatenate 'string (texts-of page))))))
+  (check nil
+         (loop for width from 150 to 700 by 37
+               for page = (laid everything :width width)
+               unless (and (= 0 (page-wrong page)) (equal (funcall words page) (funcall words (laid everything :width 700))))
+                 collect width)))
+;; What lies deeper in a page than anything that is written lies is not
+;; shown, and nothing goes wrong with it.
+(check '("shallow")
+       (texts-of (laid (with-output-to-string (out)
+                         (write-string "shallow" out)
+                         (dotimes (i 400) (write-string "<div>" out))
+                         (write-string "deep" out)))))
+;; Without the files of the fonts the letters are the console's, eight
+;; pixels to the character, and a page is laid out all the same.
+(new-desk)
+(check '(((21 16 (8 "Head")) (58 16 (8 "one two ") (72 "bold")) (74 16 (8 "three")) (106 16 (34 "*") (48 "item"))) 0)
+       (let ((page (laid "<h1>Head</h1><p>one two <b>bold</b> three<ul><li>item</ul>" :width 120)))
+         (list (lines-of page) (page-wrong page))))
+
+;;; The window. A web that is a list, for a window that fetches from
+;;; nowhere: what each address has, as text, and what kind of thing it is.
+(defvar *ares-web* nil)        ; (address text kind status) each: the kind :PAGE when none is said, the status 200
+(defvar *ares-asked* nil)      ; the addresses that were asked for, the last first
+(defvar *ares-when-asked* nil) ; a function that a test has called as something is asked for
+(defun ares-take (address)
+  (push address *ares-asked*)
+  (when *ares-when-asked*
+    (funcall *ares-when-asked*))
+  (let ((found (assoc address *ares-web* :test #'string=)))
+    (cond ((null found)
+           (error "there is no machine of the name ~A" (subseq address 8 (position #\/ address :start 8))))
+          ((eq (third found) :moved)
+           (ares-take (second found)))
+          (t (values (second found) (or (third found) :page) address (or (fourth found) 200) (length (second found)))))))
+(defvar *ares-take* clara.ares::*take*)
+(setq clara.ares::*take* #'ares-take)
+;; The pixels of a window's surface, as bytes.
+(defun surface-bytes (surface)
+  (let* ((bytes (* (clara.draw::surface-pitch surface) (clara.draw:surface-height surface)))
+         (index (clara.host::memory-index (clara.draw::surface-address surface) bytes)))
+    (subseq clara.host::*memory* index (+ index bytes))))
+;; How many pixels of a window are not what drawing everything of it anew
+;; gives: the window moves the rows that stay when the page moves, and
+;; draws its two rows only when they change.
+(defun ares-wrong (view)
+  (let ((before (surface-bytes (clara.ares::view-surface view))))
+    (setf (clara.ares::view-shown view) nil
+          (clara.ares::view-row-above view) nil
+          (clara.ares::view-row-below view) nil)
+    (clara.ares::draw view)
+    (let ((after (surface-bytes (clara.ares::view-surface view))))
+      (loop for i from 0 below (length before) by 4
+            count (or (/= (aref before i) (aref after i)) (/= (aref before (+ i 1)) (aref after (+ i 1)))
+                      (/= (aref before (+ i 2)) (aref after (+ i 2))))))))
+;; And how many are not what the page says is there: under the row of the
+;; address and left of the bar, a pixel that is not the paper's is inside
+;; a piece of text or a rectangle that the page has there; and every piece
+;; that is wholly in sight has left a pixel of another colour than the
+;; paper's.
+(defun ares-unruly (view)
+  (let* ((surface (clara.ares::view-surface view)) (page (clara.ares::view-page view)) (top (clara.ares::view-top view))
+         (paper (clara.ares::colors-paper (clara.ares::view-colors view)))
+         (row clara.ares::+row+) (area (clara.ares::area view)) (width (- (clara.ares::view-width view) clara.ares::+bar+))
+         (bytes (surface-bytes surface)) (pitch (clara.draw::surface-pitch surface))
+         (wrong 0) (places nil))
+    (flet ((paper-p (x y)
+             (let ((i (+ (* y pitch) (* 4 x))))
+               (= paper (logior (aref bytes i) (ash (aref bytes (+ i 1)) 8) (ash (aref bytes (+ i 2)) 16) (ash (aref bytes (+ i 3)) 24))))))
+      (loop for line across (clara.ares::page-lines page)
+            do (dolist (piece (clara.ares::line-pieces line))
+                 (let ((look (clara.ares::piece-look piece)))
+                   (push (list (clara.ares::piece-x piece) (+ row (- (+ (clara.ares::line-top line) (clara.ares::piece-up piece)) top))
+                               (clara.ares::piece-width piece) (+ (clara.ares::above look) (clara.ares::below look)) t)
+                         places))))
+      (dolist (box (clara.ares::page-boxes page))
+        (push (list (clara.ares::box-x box) (+ row (- (clara.ares::box-y box) top)) (clara.ares::box-width box) (clara.ares::box-height box) nil) places))
+      (setq places (remove-if (lambda (place) (or (>= (second place) (+ row area)) (<= (+ (second place) (fourth place)) row))) places))
+      (dotimes (y area)
+        (dotimes (x width)
+          (unless (paper-p x (+ row y))
+            (unless (some (lambda (place)
+                            (and (<= (first place) x) (< x (+ (first place) (third place)))
+                                 (<= (second place) (+ row y)) (< (+ row y) (+ (second place) (fourth place)))))
+                          places)
+              (incf wrong)))))
+      (dolist (place places)
+        (when (and (fifth place) (> (third place) 4) (>= (second place) row) (<= (+ (second place) (fourth place)) (+ row area))
+                   (<= (+ (first place) (third place)) width))
+          (unless (loop for y from (second place) below (+ (second place) (fourth place))
+                        thereis (loop for x from (first place) below (+ (first place) (third place))
+                                      thereis (not (paper-p x y))))
+            (incf wrong)))
+        ;; and a rectangle is there where its first pixel is in sight
+        (when (and (not (fifth place)) (>= (second place) row) (< (second place) (+ row area)) (< -1 (first place) width)
+                   (paper-p (first place) (second place)))
+          (incf wrong))))
+    wrong))
+;; The two ends of the bar at a window's right: for each, whether the part
+;; of the bar that says where the window is lies there.
+(defun bar-ends (view)
+  (let* ((surface (clara.ares::view-surface view)) (x (- (clara.ares::view-width view) 3))
+         (colors (clara.ares::view-colors view)) (row clara.ares::+row+))
+    (list (= (clara.draw:pixel surface x (+ row 1)) (clara.ares::colors-rule colors))
+          (= (clara.draw:pixel surface x (+ row (clara.ares::area view) -2)) (clara.ares::colors-rule colors)))))
+;; Where a link first stands in the window: the place of a pixel in its
+;; first piece, three to the right and five down from that piece's corner.
+(defun link-place (view number)
+  (let* ((line (clara.ares::link-line (clara.ares::view-page view) number))
+         (piece (find-if (lambda (piece) (eql (clara.ares::look-link (clara.ares::piece-look piece)) number)) (clara.ares::line-pieces line))))
+    (list (+ (clara.ares::piece-x piece) 3)
+          (+ clara.ares::+row+ (- (+ (clara.ares::line-top line) (clara.ares::piece-up piece)) (clara.ares::view-top view)) 5)
+          (clara.ares::piece-width piece) (clara.ares::line-height line))))
+;; The colour under the first letters of a link, at the corner of its first
+;; piece: the link's own when it is picked, and the paper's otherwise.
+(defun link-ground (view number)
+  (let ((place (link-place view number)))
+    (clara.draw:pixel (clara.ares::view-surface view) (- (first place) 3) (- (second place) 5))))
+;; The keys are typed in a window, one after the other, and the window
+;; draws what came of them: how far down its page it is then, which link is
+;; picked, and what is wrong with its pixels, which has to be nothing. What
+;; the screen has of the window is looked at where a check says so.
+(defun screen-wrong (view)
+  (clara.ares::render view)
+  (wrong-pixels))
+(defun ares-keys (view &rest codes)
+  (dolist (code codes)
+    (clara.ares::key view code))
+  (clara.ares::draw view)
+  (list (clara.ares::view-top view) (clara.ares::view-picked view) (ares-wrong view)))
+(defun ares-typed (view text)
+  (apply #'ares-keys view (append (list 12) (map 'list #'char-code text) (list 10))))
+(defun ares-state (view)
+  (list (clara.ares::page-address (clara.ares::view-page view)) (clara.windows:window-title (clara.ares::view-window view))
+        (clara.ares::below-words view)))
+(defvar *long-page*
+  (format nil "<title>Long</title><h1 id=top>A long page</h1>~{<p id=p~D>Paragraph ~:*~D of a page that is long, with a <a href=\"other.html\">link to another page</a> and <b>bold</b> words in it.</p>~}<hr><p id=end>The <a href=\"#top\">top</a>, <a href=\"#p7\">the seventh</a>, <a href=\"#nowhere\">nowhere</a>, <a href=\"/root.html\">the root</a>, <a href=\"mailto:somebody@pages.test\">a letter</a>, <a href=\"http://pages.test/open.html\">an open page</a>."
+          (loop for i from 1 to 14 collect i)))
+(setq *ares-web*
+      (list (list "https://pages.test/dir/long.html" *long-page*)
+            (list "https://pages.test/dir/other.html" "<title>Other</title><p>The other page, with <a href=long.html>a way back</a>.")
+            (list "https://pages.test/root.html" "<p>A page without a title.")
+            (list "https://pages.test/open.html" "<title>Opened</title><p>Asked for by HTTPS.")
+            (list "https://pages.test/plain.txt" (format nil "plain  text~%  as it is <b>written</b>") :text)
+            (list "https://pages.test/picture.png" "" "image/png")
+            (list "https://pages.test/gone.html" "<title>Not here</title><h1>404</h1><p>No such page." :page 404)
+            (list "https://pages.test/broken" "" :page 500)
+            (list "https://pages.test/moved" "https://pages.test/dir/other.html" :moved)
+            (list "https://pages.test/two.html"
+                  "<title>Two</title><h1>Two</h1><a href=one.html>first</a><br>plain words under it, and more of them<br>and a <a href=dir/other.html>second</a>")))
+;; Where the window should be when it was TOP pixels down and the link of
+;; a number is picked: where it was while the line of the link is in sight,
+;; and forty pixels above that line otherwise.
+(defun top-with (view number top)
+  (let ((line (clara.ares::link-line (clara.ares::view-page view) number)) (area (clara.ares::area view)))
+    (min (clara.ares::lowest view)
+         (if (or (< (clara.ares::line-top line) top) (> (+ (clara.ares::line-top line) (clara.ares::line-height line)) (+ top area)))
+             (max 0 (- (clara.ares::line-top line) 40))
+             top))))
+;; The first link that a window which is TOP pixels down its page has
+;; below its upper edge.
+(defun first-shown (view top)
+  (loop for line across (clara.ares::page-lines (clara.ares::view-page view))
+        do (when (>= (clara.ares::line-top line) top)
+             (dolist (piece (clara.ares::line-pieces line))
+               (when (clara.ares::look-link (clara.ares::piece-look piece))
+                 (return-from first-shown (clara.ares::look-link (clara.ares::piece-look piece))))))))
+;; Tab is typed: T when the link is picked then that should be, the one
+;; behind the one that was, or the first that is in sight, and the window
+;; is where it should be for it.
+(defun tabbed (view)
+  (let* ((count (length (clara.ares::page-links (clara.ares::view-page view))))
+         (before (clara.ares::view-picked view)) (top (clara.ares::view-top view))
+         (next (if before (mod (+ before 1) count) (first-shown view top))))
+    (clara.ares::key view 9)
+    (equal (list (min (clara.ares::lowest view) (clara.ares::view-top view)) (clara.ares::view-picked view))
+           (list (top-with view next top) next))))
+(ares-desk :width 400 :height 300)
+(let* ((view (clara.ares::open-view :width 300 :height 204 :x 40 :y 60))
+       (window (clara.ares::view-window view)))
+  ;; As it opens it shows the page that Ares has of itself, and has asked nobody.
+  (clara.ares::render view)
+  (check '(("about:ares" "Ares" "2 links") (0 nil 0) 0 0 nil 300 204 160)
+         (list (ares-state view) (ares-keys view) (ares-unruly view) (screen-wrong view) *ares-asked*
+               (clara.draw:surface-width (clara.windows:window-surface window))
+               (clara.draw:surface-height (clara.windows:window-surface window)) (clara.ares::area view)))
+  ;; Ctrl-L asks for an address, which is typed where the address stands, and Enter goes there: the page is asked for
+  ;; over HTTPS whatever was typed, and the window is called by the page's title.
+  (check '(0 nil 0) (ares-keys view 12 112 97 103))
+  (check '("Address: pag" t "2 links") (list (clara.ares::above-words view) (clara.ares::view-asking view) (clara.ares::below-words view)))
+  (check '(0 nil 0) (ares-keys view 8 8 127 8 8 8))                             ; taken back, further than there is
+  (check "Address: " (clara.ares::above-words view))
+  (check '(0 nil 0) (ares-keys view 27))                                         ; Escape: nothing is asked for
+  (check '(nil ("about:ares" "Ares" "2 links") nil) (list (clara.ares::view-asking view) (ares-state view) *ares-asked*))
+  (check '(0 nil 0) (ares-keys view 12 10))                                      ; and Enter on nothing
+  (check '(nil nil) (list (clara.ares::view-asking view) *ares-asked*))
+  ;; While a page is fetched, the row at the bottom says so.
+  (setq *ares-when-asked* (lambda () (push (clara.ares::below-words view) *ares-asked*)))
+  (check '(0 nil 0) (ares-typed view "pages.test/dir/long.html"))
+  (setq *ares-when-asked* nil)
+  (check '(("https://pages.test/dir/long.html" "Ares - Long" "20 links") ("fetching https://pages.test/dir/long.html" "https://pages.test/dir/long.html") 0 0)
+         (list (ares-state view) *ares-asked* (ares-unruly view) (screen-wrong view)))
+  (setq *ares-asked* nil)
+  ;; The page moves by the arrows, by Page Down and the space bar, by Page Up, Home and End, and no further than it reaches.
+  (let ((lowest (clara.ares::lowest view)))
+    (check t (> lowest 600))
+    (check (list (list 40 nil 0) (list 80 nil 0) (list 40 nil 0) (list 0 nil 0) (list 0 nil 0) (list 120 nil 0) (list 240 nil 0) (list 120 nil 0)
+                 (list lowest nil 0) (list lowest nil 0) (list (- lowest 40) nil 0) (list 0 nil 0))
+           (list (ares-keys view clara.input:+down+) (ares-keys view clara.input:+down+) (ares-keys view clara.input:+up+)
+                 (ares-keys view clara.input:+up+) (ares-keys view clara.input:+up+) (ares-keys view clara.input:+page-down+) (ares-keys view 32)
+                 (ares-keys view clara.input:+page-up+) (ares-keys view clara.input:+end+) (ares-keys view clara.input:+down+)
+                 (ares-keys view clara.input:+up+) (ares-keys view clara.input:+home+)))
+    (check 0 (progn (ares-keys view clara.input:+page-down+ clara.input:+down+) (ares-unruly view)))
+    ;; The bar at the right says where the window is: at the page's end, where its line across is in sight, and at its top.
+    (check '(0 (nil t) 0 (t nil))
+           (list (progn (ares-keys view clara.input:+end+) (ares-unruly view)) (bar-ends view)
+                 (progn (ares-keys view clara.input:+home+) (ares-unruly view)) (bar-ends view)))
+    ;; Tab picks the first link that the window shows, then the next, and the row at the bottom says where the one that is
+    ;; picked leads; the window goes to where it stands.
+    (check (list t 0 "https://pages.test/dir/other.html" (clara.ares::colors-link (clara.ares::view-colors view))
+                 (clara.ares::colors-paper (clara.ares::view-colors view)) t t t 2 0 0)
+           (list (tabbed view) (clara.ares::view-picked view) (clara.ares::below-words view)
+                 (progn (clara.ares::draw view) (link-ground view 0))                ; the link that is picked shows the other way round,
+                 (progn (ares-keys view 27) (link-ground view 0))                    ; and no longer when it is let go of
+                 (tabbed view) (tabbed view) (tabbed view) (clara.ares::view-picked view) (third (ares-keys view)) (ares-unruly view)))
+    ;; Escape picks none; and from further down the page, the first is the first that is in sight there.
+    (check '((0 nil 0) "20 links" t t)
+           (list (ares-keys view clara.input:+home+ 27) (clara.ares::below-words view)
+                 (progn (ares-keys view clara.input:+page-down+ clara.input:+page-down+) (tabbed view))
+                 (< 0 (clara.ares::view-picked view) 6)))
+    ;; Behind the last link of the page comes its first.
+    (check '(t 19 "https://pages.test/open.html" t 0)
+           (list (loop until (eql (clara.ares::view-picked view) 19) always (tabbed view)) (clara.ares::view-picked view)
+                 (clara.ares::below-words view) (tabbed view) (clara.ares::view-picked view)))
+    ;; Enter follows the link that is picked, which is read from the address of the page: the page that was shown is the
+    ;; one to go back to, where the window was on it.
+    (let ((left-at (clara.ares::view-top view)))
+      (check '((0 nil 0) ("https://pages.test/dir/other.html" "Ares - Other" "1 link") ("https://pages.test/dir/other.html"))
+             (list (ares-keys view 10) (ares-state view) *ares-asked*))
+      (check '((0 nil 0) "no link is picked: Tab picks one, and Ctrl-L asks for an address" (0 nil 0) "1 link")
+             (list (ares-keys view 10) (clara.ares::below-words view) (ares-keys view clara.input:+down+) (clara.ares::below-words view)))
+      ;; Alt and the left arrow, or Backspace, go back to the page before, and Alt and the right arrow go on again;
+      ;; nothing is asked for.
+      (check (list (list left-at nil 0) '("https://pages.test/dir/long.html" "Ares - Long" "20 links") '(0 nil 0)
+                   '("https://pages.test/dir/other.html" "Ares - Other" "1 link") '(0 nil 0) "there is no page to go on to"
+                   (list left-at nil 0) '(0 nil 0) '("about:ares" "Ares" "2 links") '(0 nil 0) "there is no page before this one"
+                   '("https://pages.test/dir/other.html"))
+             (list (ares-keys view (+ clara.input:+alt+ clara.input:+left+)) (ares-state view)
+                   (ares-keys view (+ clara.input:+alt+ clara.input:+right+)) (ares-state view)
+                   (ares-keys view (+ clara.input:+alt+ clara.input:+right+)) (clara.ares::below-words view)
+                   (ares-keys view 8) (ares-keys view 8) (ares-state view) (ares-keys view 8) (clara.ares::below-words view) *ares-asked*))
+      (check (list (list left-at nil 0) (list left-at nil 0) '("https://pages.test/dir/long.html" "Ares - Long" "20 links"))
+             (list (ares-keys view (+ clara.input:+alt+ clara.input:+right+)) (ares-keys view clara.input:+left+ clara.input:+right+ 65 clara.input:+f1+)
+                   (ares-state view))))
+    ;; Once the window has gone somewhere else from a page that it went back to, there is nothing to go on to.
+    (check '(("https://pages.test/dir/other.html" "Ares - Other" "1 link") ("https://pages.test/dir/long.html" "Ares - Long" "20 links")
+             ("https://pages.test/root.html" "Ares - https://pages.test/root.html" "no links") "there is no page to go on to"
+             ("https://pages.test/dir/long.html" "Ares - Long" "20 links"))
+           (list (progn (ares-typed view "pages.test/dir/other.html") (ares-state view)) (progn (ares-keys view 8) (ares-state view))
+                 (progn (ares-typed view "pages.test/root.html") (ares-state view))
+                 (progn (ares-keys view (+ clara.input:+alt+ clara.input:+right+)) (clara.ares::below-words view))
+                 (progn (ares-keys view 8) (ares-state view))))
+    (setq *ares-asked* nil)
+    ;; A link to a part of the page itself only moves the window there, and back goes back to where it was; a part that
+    ;; the page has not is said. The links at the end of the page are, by their numbers: 14 to its top, 15 to its seventh
+    ;; paragraph, 16 to a part that it has not, 17 to another page, 18 to somebody's letters, 19 to a page by http://.
+    (let ((seventh (cdr (assoc "p7" (clara.ares::page-marks (clara.ares::view-page view)) :test #'equal))))
+      (check (list t (list seventh nil 0) (list lowest nil 0) (list 21 nil 0) (list lowest nil 0) "this page has no part of the name nowhere"
+                   nil)
+             (list (< 300 seventh lowest)
+                   (progn (clara.ares::follow view 15) (ares-keys view))
+                   (ares-keys view clara.input:+end+)
+                   (progn (clara.ares::follow view 14) (ares-keys view))
+                   (progn (ares-keys view 8) (clara.ares::follow view 16) (clara.ares::render view)
+                          (list (clara.ares::view-top view) (clara.ares::view-picked view) 0))
+                   (clara.ares::below-words view) *ares-asked*))
+      ;; A page that is fetched shows the part that its address names.
+      (check (list '(0 nil 0) (list seventh nil 0) (list seventh nil 0))
+             (list (ares-typed view "pages.test/dir/other.html") (ares-typed view "pages.test/dir/long.html#p7")
+                   (progn (ares-typed view "pages.test/root.html") (ares-typed view "http://pages.test/dir/long.html#p7")))))
+    ;; An address of another kind than a page's is not fetched, and said; one that is written with http:// is asked for
+    ;; with https:// in its place.
+    (setq *ares-asked* nil)
+    (check '("mailto:somebody@pages.test is no address of a page: Ares fetches what begins with https://" nil
+             ("https://pages.test/open.html" "Ares - Opened" "no links") ("https://pages.test/open.html"))
+           (list (progn (clara.ares::follow view 18) (clara.ares::render view) (clara.ares::below-words view)) *ares-asked*
+                 (progn (clara.ares::follow view 19) (ares-keys view) (ares-state view)) *ares-asked*))
+    (check '(("https://pages.test/root.html" "Ares - https://pages.test/root.html" "no links") ("about:ares" "Ares" "2 links"))
+           (list (progn (ares-typed view "http://pages.test/root.html") (ares-state view)) (progn (ares-typed view "about:ares") (ares-state view))))
+    ;; What is no page: a text is shown as it is written; something else is said to be what it is; an answer that is not
+    ;; "here it is" is shown when it sent a page, and said; and a machine that is not there leaves the window where it was.
+    (check '(("plain  text" "  as it is <b>written</b>") ("https://pages.test/plain.txt" "Ares - https://pages.test/plain.txt" "no links"))
+           (list (progn (ares-typed view "pages.test/plain.txt") (texts-of (clara.ares::view-page view))) (ares-state view)))
+    (check '(("Nothing to show" "What is at this address is no page and" "no text: image/png, 0 bytes.") "no links")
+           (list (progn (ares-typed view "pages.test/picture.png") (texts-of (clara.ares::view-page view))) (clara.ares::below-words view)))
+    (check '(("404" "No such page.") ("https://pages.test/gone.html" "Ares - Not here" "pages.test answered 404") "no links")
+           (list (progn (ares-typed view "pages.test/gone.html") (texts-of (clara.ares::view-page view))) (ares-state view)
+                 (progn (ares-keys view clara.input:+down+) (clara.ares::below-words view))))
+    (check '(("pages.test answered" "500" "And it sent nothing to show.") "pages.test answered 500")
+           (list (progn (ares-typed view "pages.test/broken") (texts-of (clara.ares::view-page view))) (clara.ares::below-words view)))
+    (check '(("https://pages.test/broken" "Ares - https://pages.test/broken" "there is no machine of the name nowhere.test") 0 0)
+           (list (progn (ares-typed view "nowhere.test/x") (ares-state view)) (third (ares-keys view)) (ares-unruly view)))
+    (check '("https://pages.test/dir/other.html" "Ares - Other" "1 link") (progn (ares-typed view "pages.test/moved") (ares-state view)))
+    ;; Ctrl-R asks for the page once more, and the window is where it was on it. A link to a page that the window was at
+    ;; has another colour from then on.
+    (ares-typed view "pages.test/dir/long.html")
+    (setq *ares-asked* nil)
+    (flet ((colors ()
+             (remove-duplicates
+              (loop for line across (clara.ares::page-lines (clara.ares::view-page view))
+                    append (loop for piece in (clara.ares::line-pieces line)
+                                 when (eql (clara.ares::look-link (clara.ares::piece-look piece)) 0)
+                                   collect (clara.ares::look-color (clara.ares::piece-look piece)))))))
+      (check (list (list (clara.ares::colors-seen (clara.ares::view-colors view))) '(200 nil 0) '("https://pages.test/dir/long.html")
+                   '("https://pages.test/dir/long.html" "Ares - Long" "20 links") 0)
+             (list (colors) (ares-keys view clara.input:+down+ clara.input:+down+ clara.input:+down+ clara.input:+down+ clara.input:+down+ 18)
+                   *ares-asked* (ares-state view) (ares-unruly view))))
+    ;; A walk of thirty keys that move the page, pick links and let go of them: the window shows what it should after each.
+    (let ((state (sb-ext:seed-random-state 7)) (wrong 0)
+          (keys (vector clara.input:+down+ clara.input:+down+ clara.input:+up+ clara.input:+page-down+ clara.input:+page-up+ 32 9 9 27
+                        clara.input:+home+ clara.input:+end+)))
+      (dotimes (step 30)
+        (incf wrong (third (ares-keys view (svref keys (random (length keys) state)))))
+        (when (= 0 (mod step 6))
+          (incf wrong (ares-unruly view))))
+      (check '(0 0) (list wrong (screen-wrong view))))
+    ;; A click on a link follows it; a click on anything else is nothing, and neither is the button coming up. A link is
+    ;; where its letters are: not right of them, not in the line under them, and where the window has it, however far
+    ;; down the page that is.
+    (ares-typed view "pages.test/two.html")
+    (setq *ares-asked* nil)
+    (destructuring-bind (x y width height) (link-place view 0)
+      (check '(0 0 nil nil nil 1)
+             (list (clara.ares::link-at view x y) (clara.ares::link-at view (+ x width -4) y) (clara.ares::link-at view (+ x width) y)
+                   (clara.ares::link-at view x (+ y height)) (clara.ares::link-at view x (- y height))
+                   (clara.ares::link-at view (first (link-place view 1)) (second (link-place view 1)))))
+      (clara.ares::point view x y 0)
+      (clara.ares::point view x y 2)
+      (clara.ares::point view (+ x width) y 1)
+      (clara.ares::point view x (+ y height) 1)
+      (check '(nil "Ares - Two") (list *ares-asked* (clara.windows:window-title window)))
+      (destructuring-bind (x y width height) (link-place view 1)
+        (declare (ignore width height))
+        (clara.ares::point view x y 1))
+      (check '(("https://pages.test/dir/other.html") ("https://pages.test/dir/other.html" "Ares - Other" "1 link") (0 nil 0))
+             (list *ares-asked* (ares-state view) (ares-keys view))))
+    (ares-typed view "pages.test/dir/long.html")
+    (ares-keys view clara.input:+page-down+ clara.input:+page-down+ clara.input:+down+)
+    (setq *ares-asked* nil)
+    (let ((shown (first-shown view (clara.ares::view-top view))))
+      (destructuring-bind (x y width height) (link-place view shown)
+        (declare (ignore width height))
+        (check (list t shown '("https://pages.test/dir/other.html"))
+               (list (< clara.ares::+row+ y (- 204 clara.ares::+row+)) (clara.ares::link-at view x y)
+                     (progn (clara.ares::point view x y 1) *ares-asked*)))))
+    ;; A click on the row of the address asks for one; while it is typed, a click on a link is nothing.
+    (setq *ares-asked* nil)
+    (clara.ares::point view 100 10 1)
+    (check '(t "Address: ") (list (clara.ares::view-asking view) (clara.ares::above-words view)))
+    (destructuring-bind (x y width height) (link-place view 0)
+      (declare (ignore width height))
+      (clara.ares::point view x y 1))
+    (check '(t nil) (list (clara.ares::view-asking view) *ares-asked*))
+    ;; Ctrl-L once more puts the address of the page there, to be changed.
+    (check '((0 nil 0) "Address: https://pages.test/dir/other.html") (list (ares-keys view 12) (clara.ares::above-words view)))
+    (check '("https://pages.test/dir/long.html" "Ares - Long" "20 links")
+           (progn (apply #'ares-keys view (append (loop repeat 10 collect 8) (map 'list #'char-code "long.html") (list 13))) (ares-state view))))
+  ;; What the row at the top shows of an address that is longer than it: the end, while it is typed.
+  (ares-keys view 27)
+  (apply #'ares-keys view 12 (map 'list #'char-code "pages.test/a/long/address/that/has/no/room/in/the/row/of/a/window.html"))
+  (check '(t t t)
+         (let ((shown (car (clara.ares::view-row-above view))))
+           (list (< 10 (length shown) 60) (string= (subseq shown (- (length shown) 12)) "/window.html")
+                 (<= (clara.draw:text-width shown (clara.ares::font-of (clara.ares::view-letters view))) 284))))
+  (ares-keys view 27)
+  ;; An address that is longer than the row shows its beginning, and its end while it is typed.
+  (let ((look (clara.ares::view-letters view)) (long "https://pages.test/a/long/address/that/has/no/room/in/the/row/of/a/window.html"))
+    (check '(t t t t "short")
+           (let ((head (clara.ares::fitted long look 120 nil)) (tail (clara.ares::fitted long look 120 t)))
+             (list (and (< 5 (length head) (length long)) (string= head (subseq long 0 (length head))))
+                   (and (< 5 (length tail) (length long)) (string= tail (subseq long (- (length long) (length tail)))))
+                   (<= (clara.draw:text-width head (clara.ares::font-of look)) 120) (<= (clara.draw:text-width tail (clara.ares::font-of look)) 120)
+                   (clara.ares::fitted "short" look 120 t)))))
+  ;; What happens to the window, as its program takes it; Ctrl-Q and the x close it.
+  (check '(nil 40 t) (list (clara.ares::view-done view) (progn (clara.ares::happened view (list :key clara.input:+down+)) (clara.ares::view-top view))
+                           (progn (clara.ares::happened view '(:key 17)) (clara.ares::view-done view))))
+  (setf (clara.ares::view-done view) nil)
+  (check '(t t) (list (progn (clara.ares::happened view '(:pointer 100 10 1)) (clara.ares::view-asking view))
+                      (progn (clara.ares::happened view '(:close)) (clara.ares::view-done view))))
+  (check '(0 0) (list (third (ares-keys view 27)) (screen-wrong view)))
+  (clara.windows:close-window window))
+;; A window is as large as a page reads well, or as the screen has room
+;; for, and stands where all of it is on the screen.
+(ares-desk :width 400 :height 300)
+(check '((352 164) t)
+       (let* ((view (progn (clara.windows:open-window "one" 60 40) (clara.windows:open-window "two" 60 40) (clara.ares::open-view)))
+              (window (clara.ares::view-window view)))
+         (multiple-value-bind (x y) (clara.windows:window-position window)
+           (prog1 (list (list (clara.ares::view-width view) (clara.ares::view-height view))
+                        (and (<= (+ x 352) 399) (<= (+ y 164) 299) (>= x 1) (>= y 41)))
+             (clara.windows:close-window window)))))
+;; The application, launched with an address: its window is there at once,
+;; shows the page when it has come, and goes where the keys lead; its thread
+;; is stopped like any other's, and its window goes with it.
+(ares-desk :width 400 :height 300)
+(setq clara.windows::*applications* *defined-applications*
+      *ares-asked* nil)
+(let* ((thread (clara.windows:launch "ares" "pages.test/dir/other.html" :width 300 :height 200))
+       (window (clara.windows:focused-window)))
+  (check '("Ares" t) (list (clara:thread-name thread) (clara:thread-alive-p thread)))
+  (check t (eventually (lambda () (equal (clara.windows:window-title window) "Ares - Other"))))
+  (clara.windows:key-typed 9)
+  (clara.windows:key-typed 10)
+  (check t (eventually (lambda () (equal (clara.windows:window-title window) "Ares - Long"))))
+  (check '("https://pages.test/dir/long.html" "https://pages.test/dir/other.html") *ares-asked*)
+  (clara.windows:key-typed 17)
+  (check t (eventually (lambda () (not (clara:thread-alive-p thread)))))
+  (check '(nil 0) (list (clara.windows:windows) (wrong-pixels))))
+;; Launched with nothing, it shows the page that it has of itself and asks
+;; nobody; with an address for such a window, it goes there.
+(setq *ares-asked* nil)
+(let* ((thread (clara.windows:launch "Ares" nil :width 300 :height 200))
+       (window (clara.windows:focused-window)))
+  (check '("Ares" nil) (list (clara.windows:window-title window) *ares-asked*))
+  (clara.windows:key-typed 17)
+  (check t (eventually (lambda () (not (clara:thread-alive-p thread))))))
+(check nil clara.ares:*home*)
+(setq clara.ares:*home* "https://pages.test/root.html")
+(let* ((thread (clara.windows:launch "Ares"))
+       (window (clara.windows:focused-window)))
+  (check t (eventually (lambda () (equal (clara.windows:window-title window) "Ares - https://pages.test/root.html"))))
+  (clara:destroy-thread thread)
+  (check t (eventually (lambda () (and (not (clara:thread-alive-p thread)) (null (clara.windows:windows)))))))
+(setq clara.ares:*home* nil
+      clara.ares::*take* *ares-take*
+      clara.windows::*running* nil)
+
+;; What the real one fetches, from a web server of the made-up network that
+;; keeps its side of a connection closed: a page with what kind of thing it
+;; is and where it was had in the end, by way of an address that leads on
+;; to it; a page that is not there, with what was sent in its place; and
+;; the page frames that are in use are the ones that were before.
+(flet ((answer (status type text)
+         (list :raw (format nil "HTTP/1.1 ~A~C~C~@[Content-Type: ~A~C~C~]Content-Length: ~D~C~CConnection: close~C~C~C~C~A" status
+                            (code-char 13) (code-char 10) type (code-char 13) (code-char 10) (length (octets text)) (code-char 13) (code-char 10)
+                            (code-char 13) (code-char 10) (code-char 13) (code-char 10) text))))
+  (new-network :files (list (cons "/page.html" "<title>A page</title><p>caf&eacute;")
+                            (cons "/typed" (answer "200 OK" "Text/Plain; charset=utf-8" "as it is"))
+                            (cons "/picture" (answer "200 OK" "image/png" "not shown"))
+                            (cons "/gone" (answer "404 Not Found" "TEXT/HTML; Charset=UTF-8" "<p>not here"))
+                            (cons "/moved" (list :moved "/there/../page.html"))
+                            (cons "/on" (list :moved "moved"))
+                            (cons "/open" (list :moved "http://releases.test/page.html"))
+                            (cons "/round" (list :moved "/round"))
+                            (cons "/letter" (list :moved "mailto:somebody@releases.test")))))
+(said-by #'clara.net:up)
+(let ((pages (clara.host:allocated-pages)))
+  (flet ((taken (address)
+           (handler-case (multiple-value-list (clara.ares::take address))
+             (error (condition) (princ-to-string condition)))))
+    (check '(("<title>A page</title><p>caf&eacute;" :page "https://releases.test/page.html" 200 35)
+             ("as it is" :text "https://releases.test/typed" 200 8)
+             ("" "image/png" "https://releases.test/picture" 200 9)
+             ("<p>not here" :page "https://releases.test/gone" 404 11)
+             ("<title>A page</title><p>caf&eacute;" :page "https://releases.test/page.html" 200 35)
+             ("<title>A page</title><p>caf&eacute;" :page "https://releases.test/page.html" 200 35)
+             ("<title>A page</title><p>caf&eacute;" :page "https://releases.test/page.html" 200 35)
+             "https://releases.test/round is said to be somewhere else more often than is followed"
+             "https://releases.test/letter leads on to mailto:somebody@releases.test, which is no address of a page"
+             "there is no machine of the name nowhere.test")
+           (mapcar #'taken '("https://releases.test/page.html" "https://releases.test/typed" "https://releases.test/picture"
+                             "https://releases.test/gone" "https://releases.test/moved" "https://releases.test/on"
+                             "https://releases.test/open" "https://releases.test/round" "https://releases.test/letter"
+                             "https://nowhere.test/"))))
+  (check t (eventually (lambda () (= pages (clara.host:allocated-pages))))))
 (setq clara.windows::*running* nil)
 
 ;; The network's thread and the card's go with the machine.

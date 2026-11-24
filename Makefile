@@ -188,7 +188,11 @@ host-test:
 # version (lisp/parker.lisp): the machine has to refuse them by plain
 # HTTP, without a key and with another one, install the package that
 # there is, launch its application, and put the newer version in its
-# place. Then it has to refuse the release while it has no key or
+# place. The web server also has a few pages (tools/pages), for the web
+# browser (lisp/ares.lisp): the machine launches it at them by HTTPS,
+# follows a link and goes back with the keys, and lays the first page out
+# at its prompt, where the lines have to be the ones that the host tests
+# make of the same page. Then it has to refuse the release while it has no key or
 # another one, take it, by HTTPS, and come up as the other system, with
 # the package loaded into the world that was made again, and take the
 # package out (tools/network.txt). Then the user
@@ -263,6 +267,7 @@ test: all host-test release-test $(BUILD)/system-other/stamp $(BUILD)/system-bro
 	rm -rf $(BUILD)/packages-newer && cp -R packages $(BUILD)/packages-newer
 	sed -i.bak 's/^package sun .*/package sun 9.0.0/' $(BUILD)/packages-newer/sun/package && rm $(BUILD)/packages-newer/sun/package.bak
 	python3 -I tools/release.py packages $(BUILD)/packages-newer $(BUILD)/releases/newer $(BUILD)/release-key
+	cp -R tools/pages $(BUILD)/releases/pages
 	python3 -I tools/certs.py $(BUILD)/certs releases.test rsa.test:rsa large.test:large old.test:old six.test
 	mkdir -p $(BUILD)/trusted && cp $(BUILD)/certs/root.pem $(BUILD)/trusted/ && python3 -I tools/mkdisk.py $(BUILD)/trusted $(BUILD)/trusted.img
 	NAME=aarch64-network SERVE=$(BUILD)/releases CERTS=$(BUILD)/certs WORK=$(BUILD)/trusted.img KEY=$$(cat $(BUILD)/release-key.public) \

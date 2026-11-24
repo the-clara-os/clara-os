@@ -670,8 +670,8 @@ NIL</pre>
 &gt; (clara.system:system-file "boot.lisp")
 "/clara/{{version}}-8f3a1c2e/boot.lisp"</code></pre>
 <pre class="session">&gt; (clara.fat:names (clara.system:system-file ""))
-("arm64.lisp" "boot.lisp" "BOOTAA64.EFI" "BOOTX64.EFI" "clos.lisp" "compiler.lisp" "console.lisp" "disk.lisp" "draw.lisp" "emma.lisp" "fat.lisp" "files.lisp" "font.lisp" "Go-Bold-Italic.ttf" "Go-Bold.ttf" "Go-Italic.ttf" "Go-Mono-Bold-Italic.ttf" "Go-Mono-Bold.ttf" "Go-Mono-Italic.ttf" "Go-Mono.ttf" "Go-Regular.ttf" "hda.lisp" "input.lisp" "listener.lisp" "manifest" "native.lisp" "net.lisp" "parker.lisp" "pci.lisp" "random.lisp" "roots.pem" "self-test.lisp" "sound.lisp" "system.lisp" "terminal.lisp" "tls.lisp" "type.lisp" "usb.lisp" "virtio.lisp" "windows.lisp" "x86-64.lisp")</pre>
-    <p>Those are the system's Lisp files: the language's part that is written in Lisp, the compiler, the console, the drivers, the file system, the window manager, what sees to <a href="#stop">the machine as a whole</a> and what installs <a href="#parker">packages</a>, and two that are not loaded until they are wanted, the <a href="#applications">applications</a> <code>emma.lisp</code> and <code>files.lisp</code>. <code>native.lisp</code> is what <a href="#processor">translates for the processor</a>, with a file for each kind of processor, <code>arm64.lisp</code> and <code>x86-64.lisp</code>, of which a machine loads its own. Beside them are a second copy of the kernels and <code>manifest</code>, the list of what the system is made of, which is what <a href="#upgrade">another machine reads</a> when it takes this system from this disk. The eight files whose names end in <code>.ttf</code> are the system's <a href="#fonts">fonts</a>, and <code>roots.pem</code> is the list of whom it <a href="#https">trusts</a>. Everything outside <code>/clara</code> and <code>/EFI</code> is yours, and no system writes there but for one file in <code>/home</code>.</p>
+("ares.lisp" "arm64.lisp" "boot.lisp" "BOOTAA64.EFI" "BOOTX64.EFI" "clos.lisp" "compiler.lisp" "console.lisp" "disk.lisp" "draw.lisp" "emma.lisp" "fat.lisp" "files.lisp" "font.lisp" "Go-Bold-Italic.ttf" "Go-Bold.ttf" "Go-Italic.ttf" "Go-Mono-Bold-Italic.ttf" "Go-Mono-Bold.ttf" "Go-Mono-Italic.ttf" "Go-Mono.ttf" "Go-Regular.ttf" "hda.lisp" "input.lisp" "listener.lisp" "manifest" "native.lisp" "net.lisp" "parker.lisp" "pci.lisp" "random.lisp" "roots.pem" "self-test.lisp" "sound.lisp" "system.lisp" "terminal.lisp" "tls.lisp" "type.lisp" "usb.lisp" "virtio.lisp" "windows.lisp" "x86-64.lisp")</pre>
+    <p>Those are the system's Lisp files: the language's part that is written in Lisp, the compiler, the console, the drivers, the file system, the window manager, what sees to <a href="#stop">the machine as a whole</a> and what installs <a href="#parker">packages</a>, and three that are not loaded until they are wanted, the <a href="#applications">applications</a> <code>emma.lisp</code>, <code>files.lisp</code> and <code>ares.lisp</code>. <code>native.lisp</code> is what <a href="#processor">translates for the processor</a>, with a file for each kind of processor, <code>arm64.lisp</code> and <code>x86-64.lisp</code>, of which a machine loads its own. Beside them are a second copy of the kernels and <code>manifest</code>, the list of what the system is made of, which is what <a href="#upgrade">another machine reads</a> when it takes this system from this disk. The eight files whose names end in <code>.ttf</code> are the system's <a href="#fonts">fonts</a>, and <code>roots.pem</code> is the list of whom it <a href="#https">trusts</a>. Everything outside <code>/clara</code> and <code>/EFI</code> is yours, and no system writes there but for one file in <code>/home</code>.</p>
 
     <h3 id="reading">Reading and loading</h3>
 <pre class="session">&gt; (with-open-file (in (clara.system:system-file "listener.lisp")) (list (read-line in) (read-line in)))
@@ -927,7 +927,7 @@ T</pre>
 "185.199.108.153"</code></pre>
     <ul>
       <li><code>clara.net:fetch-text</code> gives a file that is a text, as a string. An address is <code>http://</code> or <code>https://</code>, the machine's name or its address, a port when it is not 80, or 443 for <code>https://</code>, and the file's name there. An address of IPv6 stands between brackets: <code>http://[fec0::2]:8000/hello.txt</code>.</li>
-      <li><code>clara.net:fetch</code> gives any file, as memory: three values, the address of page frames that hold it, how many bytes it is, and how many page frames those are, which are yours to give back with <code>clara.unsafe:free-memory</code>. <code>:limit</code> says how many bytes are taken at most, 16 MiB when nothing is said, and 1 MiB for a text.</li>
+      <li><code>clara.net:fetch</code> gives any file, as memory: three values, the address of page frames that hold it, how many bytes it is, and how many page frames those are, which are yours to give back with <code>clara.unsafe:free-memory</code>. <code>:limit</code> says how many bytes are taken at most, 16 MiB when nothing is said, and 1 MiB for a text. Three more values follow for whoever wants them: the address that the file was had at in the end, the number that the web server answered with, 200 for a file that is there, and the lines of the head of its answer, as strings. With <code>:any t</code> an answer that is no 200 is no error: what the server sent along comes back as the file, with that number, and an answer that names another address is not followed. That is what <a href="#ares">Ares</a> asks with.</li>
       <li><code>clara.net:resolve</code> gives the address of a name, as the network's name servers have it: when the network named several, the next is asked when one cannot say or says nothing. What they say of a name is remembered for as long as the answer says that it holds. <code>clara.net:*name-server*</code> names another one to ask, by its address, and <code>clara.net:*name-port*</code> the port to ask it at.</li>
       <li>What is fetched from an address that begins with <code>http://</code> comes as the other side sends it, and anybody on the way can read it and change it. That is good enough for a web server on your own computer, and for little else: <a href="#https">HTTPS</a> is the other way.</li>
       <li>A web server may say that a file is to be had at another address, and the machine asks there, three times at most. It goes from <code>http://</code> to <code>https://</code>, as most web servers send it, and never the other way.</li>
@@ -1424,10 +1424,10 @@ NIL</pre>
         (sleep 2))))
 "Hello"
 &gt; (clara.windows:applications)
-("REPL" "Emma" "Files" "Parker" "Hello")
+("REPL" "Emma" "Files" "Ares" "Parker" "Hello")
 &gt; (clara:join-thread (clara.windows:launch "Hello"))
 NIL</pre>
-    <p>The window is there for two seconds, and goes with its application. From now on <code>Hello</code> is in the list under <code>Applications</code>, below the four that come with the system, until it is <a href="#order">moved</a>. <code>REPL</code> is <code>clara.terminal:repl</code>, the first application and the one that is launched when the window manager starts; <code>Emma</code> and <code>Files</code> are the subject of <a href="#applications">the next chapter</a>, and <code>Parker</code> of <a href="#parker">the one after it</a>.</p>
+    <p>The window is there for two seconds, and goes with its application. From now on <code>Hello</code> is in the list under <code>Applications</code>, below the five that come with the system, until it is <a href="#order">moved</a>. <code>REPL</code> is <code>clara.terminal:repl</code>, the first application and the one that is launched when the window manager starts; <code>Emma</code> and <code>Files</code> are the subject of <a href="#applications">the next chapter</a>, and <code>Parker</code> of <a href="#parker">the one after it</a>.</p>
     <p>What the list has under its line are commands: a name and a function of no arguments, which is called in a thread of its own when the name is picked, and which opens no window that anything waits for.</p>
 <pre class="session">&gt; (clara.windows:commands)
 ("Restart" "Shut Down")
@@ -1439,7 +1439,7 @@ NIL</pre>
     <h3 id="order">The order of the list</h3>
     <p>A name stands in the list where it was first defined, under the ones that were there. <code>clara.windows:move-up</code> and <code>clara.windows:move-down</code> take a line one place up or down, by its name, and answer with the names of its kind as they stand then.</p>
 <pre class="session">&gt; (clara.windows:move-up "Hello")
-("REPL" "Emma" "Files" "Hello" "Parker")
+("REPL" "Emma" "Files" "Ares" "Hello" "Parker")
 &gt; (clara.windows:move-down "restart")
 ("Shut Down" "Restart")
 &gt; (clara.windows:move-down "Restart")
@@ -1461,7 +1461,7 @@ NIL</pre>
 <pre class="session again">&gt; (list (clara.windows:running-p) (mapcar #'clara.windows:window-title (clara.windows:windows)))
 (T ("REPL"))
 &gt; (list (clara.windows:applications) (clara.windows:commands))
-(("REPL" "Emma" "Files" "Hello" "Parker") ("Shut Down" "Restart"))
+(("REPL" "Emma" "Files" "Ares" "Hello" "Parker") ("Shut Down" "Restart"))
 &gt; (clara.windows:stop)
 T</pre>
     <p>What is defined comes back, the applications among it, in the order that the list was left in. The windows that were open do not: a window is pixels and a thread, and an image has neither, so the window manager starts with one REPL, as it does the first time. <code>clara.windows:stop</code> ends the applications and gives the screen back to the console, cleared; a world that is saved after that starts at the console again.</p>
@@ -1470,7 +1470,7 @@ T</pre>
 
   <section id="applications">
     <h2>{{spleen:Applications}}</h2>
-    <p>Two applications come with the system besides the REPL: Emma, an editor for text, and a browser for the files of the disk. Each is a file of Lisp among <a href="#listing">the system's own</a>, <code>emma.lisp</code> and <code>files.lisp</code>, which the system does not load as it starts. The file is loaded the first time its application is picked from <code>Applications</code>, or launched from a prompt, and the application can be unloaded again while everything else goes on.</p>
+    <p>Three applications come with the system besides the REPL: Emma, an editor for text, a browser for the files of the disk, and Ares, a browser for the web. Each is a file of Lisp among <a href="#listing">the system's own</a>, <code>emma.lisp</code>, <code>files.lisp</code> and <code>ares.lisp</code>, which the system does not load as it starts. The file is loaded the first time its application is picked from <code>Applications</code>, or launched from a prompt, and the application can be unloaded again while everything else goes on.</p>
 
     <h3 id="editor">Emma, the editor</h3>
     <p><code>Emma</code> in the list opens a window with no text in it yet, whose title is <code>Emma</code>. From a prompt, Emma is launched with the name of a file, and the window's title is <code>Emma - </code> and that name:</p>
@@ -1529,8 +1529,50 @@ NIL
     </table>
     <p>Every file opens in Emma, also one that is no text, which Emma says it cannot read. Directories are not made or deleted here, which <a href="#writing">two functions</a> do at a prompt, and the window shows names and no sizes or dates.</p>
 
+    <h3 id="ares">Ares, the web browser</h3>
+    <p><code>Ares</code> in the list opens a window on a page that Ares has of itself, which says what it is and which keys it has. Nothing is fetched until it is told where to go. From a prompt it is launched like that too, or with an address, which it goes to as its window opens:</p>
+<pre class="session">&gt; (find-package "CLARA.ARES")
+NIL
+&gt; (clara.windows:launch "Ares")
+#&lt;THREAD "Ares"&gt;
+&gt; (list (package-name (find-package "CLARA.ARES"))
+        (clara.windows:window-title (clara.windows:focused-window)))
+("CLARA.ARES" "Ares")</pre>
+<pre><code>&gt; (clara.windows:launch "Ares" "claraos.org")
+#&lt;THREAD "Ares"&gt;</code></pre>
+    <p>After the address, <code>:width</code> and <code>:height</code> say how large the window's inside is, in pixels, and <code>:x</code> and <code>:y</code> where the window goes. Without them it is 760 wide, which a page reads well at, or what the screen has room for. <code>clara.ares:*home*</code> is the address that a window goes to when it is given none: <code>(setq clara.ares:*home* "claraos.org")</code>.</p>
+    <p>The window has a row at its top with the address of the page, the page under it, with a bar at its right edge that says how much of the page the window shows and where, and a row at its bottom. That row says what is going on: that a page is being fetched, what went wrong with it, where the link that is picked leads; and otherwise how many links the page has. The window is called by the title of its page, <code>Ares - ClaraOS</code>, or by the page's address when it has no title.</p>
+    <table class="wrap">
+      <tr><td><kbd>Ctrl-L</kbd>, a click on the row at the top</td><td>asks for an address. What is typed is the address: <kbd>Enter</kbd> goes there, <kbd>Backspace</kbd> takes a character of it back, <kbd>Escape</kbd> gives it up. <code>claraos.org</code> is enough: an address that does not say what kind it is gets <code>https://</code> before it. <kbd>Ctrl-L</kbd> a second time puts the address of the page there, to be changed.</td></tr>
+      <tr><td><kbd>Tab</kbd></td><td>picks the next link, which shows the other way round, and the row at the bottom says where it leads. The first that is picked is the first that the window shows; behind the last link of the page comes its first. The window goes to where the link stands.</td></tr>
+      <tr><td><kbd>Enter</kbd>, a click on a link</td><td>follow the link: the one that is picked, or the one under the pointer.</td></tr>
+      <tr><td><kbd>Escape</kbd></td><td>picks no link.</td></tr>
+      <tr><td><kbd>Alt</kbd> and the arrow to the left, <kbd>Backspace</kbd></td><td>go back to the page before, where the window was on it. Nothing is fetched for that: the window keeps the last twenty pages as it showed them.</td></tr>
+      <tr><td><kbd>Alt</kbd> and the arrow to the right</td><td>goes on again, to the page that the window went back from.</td></tr>
+      <tr><td><kbd>Ctrl-R</kbd></td><td>asks for the page once more.</td></tr>
+      <tr><td>The arrows up and down</td><td>move the page by two lines.</td></tr>
+      <tr><td><kbd>Page Up</kbd>, <kbd>Page Down</kbd>, the space bar</td><td>move it by a window's worth, the space bar downwards.</td></tr>
+      <tr><td><kbd>Home</kbd>, <kbd>End</kbd></td><td>the top and the bottom of the page.</td></tr>
+      <tr><td><kbd>Ctrl-Q</kbd>, the <code>x</code> in the title</td><td>close the window.</td></tr>
+    </table>
+    <p>A page shows as what it says, in the letters and the colours of this system: headings, paragraphs, lists with their marks and numbers, tables, whose columns are as wide as what is in them where the window has room for that, text as it is typed, on a ground of its own, and lines across. Letters are bold, slanted, underlined, struck through, smaller, raised or as they are typed where the page makes them so. A link is underlined and has a colour of its own, and another once the window has been where it leads. A link to a part of the page that is shown moves the window there.</p>
+    <p>What to know about Ares as it is now:</p>
+    <ul>
+      <li>Every page is asked for by <a href="#https">HTTPS</a>, and by nothing else. An address that is written with <code>http://</code>, typed or in a link, is asked for with <code>https://</code> in its place, and a web server that does not answer that way shows no page here. What that section says of certificates, of the time and of servers that only have an older TLS holds for every page.</li>
+      <li>Nothing that a page says about its looks is read, in a style sheet or anywhere else: no colours, no letters of the page's choosing, no columns, nothing that is put beside something else or hidden by a rule. A page that hides parts of itself that way shows them here.</li>
+      <li>No picture is fetched. Where a page has words for a picture, those stand for it, between brackets, <code>[A sun over its horizon]</code>, and <code>[picture]</code> where it has none.</li>
+      <li>No script is run. A page that is put together by its scripts shows what it has without them, which can be nothing.</li>
+      <li>A form shows what its fields and buttons are, <code>[________]</code> and <code>[Search]</code>, and nothing can be typed into one or sent: nothing is searched for and nothing is signed in to.</li>
+      <li>A page that does not say how it is written is read as UTF-8, and any other way of writing as that of western Europe, a byte to the character. A character that the system's two fonts have no picture of shows as a box: they have the letters of Latin, Greek and Cyrillic writing.</li>
+      <li>A page is fetched whole before any of it shows, and the window does nothing else meanwhile: what is typed waits. A page of more than four megabytes is not taken. What is neither a page nor a text is said to be what it is, and not kept anywhere.</li>
+      <li>Where a page has another page in it, a link to that one stands in its place.</li>
+      <li>Nothing outlasts a window: no list of where it was, no addresses that are kept, nothing that a web server asked it to remember. The window is the size that it opened with.</li>
+      <li>Every web server that is asked is told who asks, as by anything that this system fetches: <code>ClaraOS</code> and its version.</li>
+      <li>Each Ares window is a thread of its own. Its function is <code>clara.ares:browse</code>, which takes what <code>launch</code> takes after the name and comes back when the window closes.</li>
+    </ul>
+
     <h3 id="installed">Applications in files</h3>
-    <p>The launcher knows Emma and the browser by a name and the name of a file. <code>clara.windows:install-application</code> says so for any file, and the file itself says <code>clara.windows:define-application</code> for the function, under the same name, as its last form. Here is such a file, written from the prompt, a line of it to the string, so that this page can be tried as it stands; Emma is the place to write one.</p>
+    <p>The launcher knows Emma, the browser of files and Ares by a name and the name of a file. <code>clara.windows:install-application</code> says so for any file, and the file itself says <code>clara.windows:define-application</code> for the function, under the same name, as its last form. Here is such a file, written from the prompt, a line of it to the string, so that this page can be tried as it stands; Emma is the place to write one.</p>
 <pre class="session">&gt; (defvar *greeting*
     '("(defpackage \"GREETING\" (:use \"COMMON-LISP\"))"
       "(in-package \"GREETING\")"
@@ -1553,7 +1595,7 @@ NIL
 &gt; (clara.windows:install-application "Greeting" "/greeting.lisp")
 "Greeting"
 &gt; (list (clara.windows:applications) (find-package "GREETING"))
-(("REPL" "Emma" "Files" "Hello" "Parker" "Greeting") NIL)
+(("REPL" "Emma" "Files" "Ares" "Hello" "Parker" "Greeting") NIL)
 &gt; (clara.windows:launch "Greeting" "Good morning")
 #&lt;THREAD "Greeting"&gt;
 &gt; (list (package-name (find-package "GREETING"))
@@ -1563,17 +1605,17 @@ NIL
 <pre class="session">&gt; (clara.windows:unload-application "Greeting")
 "Greeting"
 &gt; (list (find-package "GREETING") (clara.windows:applications))
-(NIL ("REPL" "Emma" "Files" "Hello" "Parker" "Greeting"))
+(NIL ("REPL" "Emma" "Files" "Ares" "Hello" "Parker" "Greeting"))
 &gt; (clara.windows:remove-application "Greeting")
 "Greeting"
 &gt; (clara.windows:applications)
-("REPL" "Emma" "Files" "Hello" "Parker")</pre>
+("REPL" "Emma" "Files" "Ares" "Hello" "Parker")</pre>
     <ul>
       <li><code>clara.windows:unload-application</code> stops the application wherever it runs, which closes its windows, and deletes the packages that its file made: what the file defined is gone from the world, and the memory it took comes back. The application stays in the list, and the next launch loads the file as it is by then. That is how to try a change to an application: save the file, unload, launch.</li>
       <li><code>clara.windows:remove-application</code> does the same and takes the name out of the list. It is also what takes out an application that was defined at a prompt, like <code>Hello</code>.</li>
       <li>What is typed at a prompt to define an application or to install one is <a href="#defined">written down</a> with everything else that you define, so the launcher of a world that is made again, after <a href="#upgrade">an upgrade</a> for one, has it in its list. <code>clara.windows:remove-application</code> and <code>clara.windows:remove-command</code>, typed at a prompt with the name written out, take the form that put it there out of <code>/home/defined.lisp</code> again.</li>
       <li>An application that fails, in its file or later, ends with its windows closed. The reason is said on the console, as for any thread: <code>error in #&lt;THREAD "Greeting"&gt;:</code> and what went wrong.</li>
-      <li>Emma and the browser are unloaded and launched again the same way, and the system's <code>emma.lisp</code> can be changed in Emma: <code>(clara.system:system-file "emma.lisp")</code> is its name. A file that is installed by a name without a directory, as those two are, is one of the system's own.</li>
+      <li>Emma, the browser of files and Ares are unloaded and launched again the same way, and the system's <code>emma.lisp</code> can be changed in Emma: <code>(clara.system:system-file "emma.lisp")</code> is its name. A file that is installed by a name without a directory, as those two are, is one of the system's own.</li>
       <li>What an application is installed as is part of the world, and is saved with it. Whether its file has been loaded is too: a world that is saved after Emma was used starts with Emma in it.</li>
     </ul>
   </section>
@@ -1918,6 +1960,7 @@ error: nothing is mapped at #x0</pre>
     <p>The two <a href="#applications">applications</a> that are files. Each package is there once its application has been launched, and gone again when it is unloaded; the one name of each is the function that <code>clara.windows:launch</code> calls.</p>
     <p class="names" data-package="CLARA.EMMA"><code>clara.emma:edit</code></p>
     <p class="names" data-package="CLARA.FILES"><code>clara.files:browse</code></p>
+    <p class="names" data-package="CLARA.ARES"><code>clara.ares:browse</code> <code>clara.ares:*home*</code></p>
 
     <h3>The package CLARA.PARKER</h3>
     <p><a href="#parker">Packages</a> says what each of these is for. <code>clara.parker:parker</code> is the function of the application, which <code>clara.windows:launch</code> calls.</p>
