@@ -922,14 +922,30 @@
   (clara:with-lock-held (*lock*)
     (and *arranged* (list (applications) (commands)))))
 
+;; The names that applications of the system's had in the systems before
+;; this one, each with the name that the application has now: a world that
+;; left for this system wrote its order down in the names that it knew.
+;; (The file browser was Files until 0.0.54.)
+(defvar *former-names* '(("Files" . "Jaid")))
+
+;; What a name of such an order names here: the application that had the
+;; name then, under the name that it has now. A name that something here
+;; has is that thing's, whatever it was the name of before.
+(defun present-name (name)
+  (let ((former (assoc name *former-names* :test #'string-equal)))
+    (if (and former (not (find-application name)))
+        (cdr former)
+        name)))
+
 ;; And an order that was written down is the list's again, in a world that
 ;; was made in the place of the one that had it: the names are in the order
-;; that they had there. What that world did not have keeps its place behind
-;; the name that it was defined after, and what this one does not have is
-;; passed over.
+;; that they had there, an application that was renamed since in the place
+;; that it had under its old name. What that world did not have keeps its
+;; place behind the name that it was defined after, and what this one does
+;; not have is passed over.
 (defun arrange (applications commands)
   (clara:with-lock-held (*lock*)
-    (setq *applications* (in-order *applications* applications #'application-name)
+    (setq *applications* (in-order *applications* (mapcar #'present-name applications) #'application-name)
           *commands* (in-order *commands* commands #'car))
     (rearranged))
   (arrangement))

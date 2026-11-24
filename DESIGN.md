@@ -891,7 +891,7 @@ architectures (kernel/vm.c).
 - An application that comes with the system is a file, and not part of
   the world. The kernel loads the console, the drivers, the file system and
   the window manager as it starts, and leaves the editor, Emma, and the
-  file browser on the boot volume. The launcher knows each by a name and the
+  file browser, Jaid, on the boot volume. The launcher knows each by a name and the
   name of its file, and loads the file when the application is first
   launched, in the thread that is to run it. So the world that starts is no
   larger for the applications it could run, an application can be changed
@@ -936,6 +936,26 @@ architectures (kernel/vm.c).
   on (Julio, as it was being renamed: "in the window title, i would like
   it to say `Emma - <name of open file>`"); before that the title was the
   file's name alone.
+- The file browser is Jaid, by the same rule (Julio's issue #45; it was
+  Files, lisp/files.lisp and CLARA.FILES, until 0.0.54): its file and its
+  package are lisp/jaid.lisp and CLARA.JAID, and its window is titled
+  `Jaid - ` and the directory that it lists, the way Emma's names its
+  file, where the title was `Files in ` and the directory. What it is, is
+  still a browser of files, which is what these notes and the names
+  inside its file go on calling it.
+- An old name of an application is kept for one thing, the order of the
+  launcher's list. A world that leaves for a newer system writes that
+  order into its account once its user has moved a line, in the names
+  that it knows, and the newer system may know the application by
+  another. So the window manager has a list of the names that the
+  system's applications had before, each with the one that it has now,
+  and reads `Files` in such an account as Jaid: the browser stands where
+  its user put it, whatever it is called by then. A world that has an
+  application of the old name, one of the user's own, means that one.
+  Nothing else answers to an old name. LAUNCH says that there is no such
+  application and which ones there are, and a file of the user's that
+  launches the browser by its old name is the user's to change: an old
+  name that went on working would be a second name for good.
 - The editor's text is its lines, around the cursor. The lines above the
   cursor's are a list, the nearest first, the line itself is a string, and
   the lines below are a list in order. Whatever is typed is done at the
@@ -1547,7 +1567,9 @@ architectures (kernel/vm.c).
   that the old world did not have, an application that is new with the
   system, stands behind the name that it is defined after, so the newer
   system's own order holds wherever the user's says nothing; a name that
-  is gone is passed over. A list that nobody moved a line of is not in
+  is gone is passed over, and the name that an application of the
+  system's had before is read as the one that it has now (above, under
+  applications; 0.0.54). A list that nobody moved a line of is not in
   the account, and is the newer system's to order. A world that is made
   of the text alone, with no account, has every name where it was first
   defined, as a variable there has what its DEFVAR gives it.

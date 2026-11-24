@@ -674,7 +674,7 @@
 
 ;;; The window
 ;;;
-;;; An application, like the file browser (lisp/files.lisp), and written
+;;; An application, like the file browser (lisp/jaid.lisp), and written
 ;;; the same way: OPEN-VIEW makes the window and what it holds, KEY, POINT
 ;;; and HAPPENED change that, RENDER draws it, and RUN is the loop that the
 ;;; launcher's thread sits in.

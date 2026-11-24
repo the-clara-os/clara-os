@@ -1,4 +1,4 @@
-;;;; files.lisp: a file browser
+;;;; jaid.lisp: Jaid, a file browser
 ;;;;
 ;;;; An application (lisp/windows.lisp): a window that lists what a
 ;;;; directory holds, the directories first, with one of the names picked.
@@ -15,14 +15,14 @@
 ;;;; knows nothing of disks.
 ;;;;
 ;;;; This file is not part of the world that the kernel loads. The launcher
-;;;; loads it when the browser is first picked, and CLARA.WINDOWS:UNLOAD-APPLICATION
+;;;; loads it when Jaid is first picked, and CLARA.WINDOWS:UNLOAD-APPLICATION
 ;;;; takes it out again. It loads under SBCL as well, where lisp/host/
 ;;;; stands in for the machine.
 
-(defpackage "CLARA.FILES"
+(defpackage "CLARA.JAID"
   (:use "COMMON-LISP")
   (:export "BROWSE"))
-(in-package "CLARA.FILES")
+(in-package "CLARA.JAID")
 
 (defstruct browser
   window
@@ -79,6 +79,11 @@
       (setq end (1- end)))
     (subseq place 0 (max end 1))))
 
+;; What the window of a directory is called: Jaid, and after that the name
+;; of the directory that it lists.
+(defun title (place)
+  (concatenate 'string "Jaid - " place))
+
 ;; The directory of a name is the one that is listed from now on: its
 ;; directories in the order of their names, then its files, and before
 ;; them the way up, where there is one. PICK is the name to have picked, if
@@ -92,7 +97,7 @@
           (browser-names browser) all
           (browser-picked browser) (or (and pick (position pick all :test #'string-equal)) 0)
           (browser-top browser) 0)
-    (clara.windows:rename-window (browser-window browser) (concatenate 'string "Files in " place))
+    (clara.windows:rename-window (browser-window browser) (title place))
     nil))
 
 ;; To the directory that this one is in, with this one picked there.
@@ -228,7 +233,7 @@
 ;; the window goes. The window is the thread's that calls.
 (defun open-browser (place &key (columns 48) (rows 16) x y)
   (let* ((place (if (directory-name-p place) place (concatenate 'string place "/")))
-         (window (clara.windows:open-window (concatenate 'string "Files in " place) (* columns clara.font:+width+)
+         (window (clara.windows:open-window (title place) (* columns clara.font:+width+)
                                             (* (1+ rows) clara.font:+height+) :x x :y y :events t))
          (browser (make-browser :window window :surface (clara.windows:window-surface window)
                                 :columns columns :rows rows :directory place
@@ -261,4 +266,4 @@
       (clara.windows:close-window (browser-window browser)))
     nil))
 
-(clara.windows:define-application "Files" #'browse)
+(clara.windows:define-application "Jaid" #'browse)

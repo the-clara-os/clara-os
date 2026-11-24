@@ -1584,7 +1584,7 @@ Rules:
   `(:key code)`, `(:pointer x y buttons)`, `(:close)`. That is how an
   application is written: a loop that waits, changes what it holds, and
   draws. The close box is told once until the program has taken it.
-- Applications in files (lisp/emma.lisp, lisp/files.lisp, lisp/ares.lisp).
+- Applications in files (lisp/emma.lisp, lisp/jaid.lisp, lisp/ares.lisp).
   They are in lisp/, so the build puts them on the boot volume, and they
   are not in
   `world` of lisp.c: the last lines of lisp/terminal.lisp install them
@@ -1610,10 +1610,25 @@ Rules:
   the same day: "in the window title, i would like it to say `Emma -
   <name of open file>`"). The host tests and the sessions write such a
   title out; none of them calls `title` for what it expects.
+- The file browser is Jaid (Julio's issue #45; it was Files until 0.0.54),
+  the same way: lisp/jaid.lisp and CLARA.JAID, where they were
+  lisp/files.lisp and CLARA.FILES, with the names inside the file and in
+  the tests as they were (the struct `browser`, `open-browser`,
+  `browser-wrong`), and a window titled `Jaid - ` and the directory that
+  it lists, by a `title` of its own.
+- An application of the system's that is renamed gets a line in
+  `clara.windows::*former-names*`, the old name and the new one. The
+  account of a world that leaves an older system says the order of the
+  launcher's list in the names of that system, and `arrange` reads them
+  through `present-name`: without the line the application is one that
+  the account does not name, and goes back behind the name that it was
+  defined after, wherever its user had put it. That is all an old name
+  is kept for. Nothing is launched by one, and a session or a test that
+  asks for the old name has to be told that there is no such application.
 - An application is written so that the tests can drive it without its
   thread: `open-editor` makes the window and the state, `key`, `point` and
   `happened` change the state, `render` draws, and `run` is the loop that
-  the launcher's thread sits in. The same in lisp/files.lisp. A window of
+  the launcher's thread sits in. The same in lisp/jaid.lisp. A window of
   cells is drawn a row at a time, by `shown`, the strings that were drawn
   last: whatever changes what a row shows has to make the string another,
   or set the row's place to NIL, and what moves pixels moves `shown` with
@@ -1625,7 +1640,7 @@ Rules:
   below it. Under SBCL the files are the host's, in a directory that the
   tests make under /tmp and delete (`scratch`, `write-scratch`), and the
   one function that lists a directory is replaced by `host-names`
-  (`clara.files::*names*`): SBCL's DIRECTORY gives pathnames.
+  (`clara.jaid::*names*`): SBCL's DIRECTORY gives pathnames.
 - What an application does with a file it does with the language: OPEN,
   READ-LINE, PROBE-FILE, DIRECTORY, DELETE-FILE. So it only ever sees what
   lisp/boot.lisp makes of the file system, on ClaraOS, and that side is

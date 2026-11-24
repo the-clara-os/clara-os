@@ -436,7 +436,7 @@ OK
 > (defun k () (clara:signal-event *seen*) 'k)
 K
 > (list (clara.windows:running-p) (clara.windows:applications) (clara.windows:start) (clara.windows:start))
-(NIL ("REPL" "Emma" "Files" "Ares" "Parker") T T)
+(NIL ("REPL" "Emma" "Jaid" "Ares" "Parker") T T)
 > (list (clara.windows:stop) (clara.windows:running-p)                 ; and the console has the screen again, cleared
         (= (clara.draw:pixel (clara.draw:screen) 700 300) (clara.draw:color 30 27 46)) (clara.windows:start))
 (T NIL T T)
@@ -551,23 +551,25 @@ OK
 OK
 > (hi)
 THERE
-> (clara:thread-alive-p (clara.windows:launch "Files"))
+> (clara.windows:launch "Files")
+error: there is no application "Files": the ones that there are are ("REPL" "Emma" "Jaid" "Ares" "Parker")
+> (clara:thread-alive-p (clara.windows:launch "Jaid"))
 T
 > (until (equal (mapcar #'clara.windows:window-title (clara.windows:windows))
-                '("Emma - /poem.txt" "Files in /" "Emma" "Emma - /poem.txt" "REPL")))
+                '("Emma - /poem.txt" "Jaid - /" "Emma" "Emma - /poem.txt" "REPL")))
 ^M sendkey end
 ^M sendkey ret
 OK
 > (list (clara.windows:unload-application "Emma") (find-package "CLARA.EMMA")
         (mapcar #'clara.windows:window-title (clara.windows:windows)))
-("Emma" NIL ("Files in /" "REPL"))
-> (until (equal (mapcar #'clara.windows:window-title (clara.windows:windows)) '("REPL" "Files in /")))
+("Emma" NIL ("Jaid - /" "REPL"))
+> (until (equal (mapcar #'clara.windows:window-title (clara.windows:windows)) '("REPL" "Jaid - /")))
 ^M sendkey alt-tab
 OK
-> (list 'files-closed (until (= (length (clara.windows:windows)) 1)))
+> (list 'jaid-closed (until (= (length (clara.windows:windows)) 1)))
 ^M sendkey alt-tab
 ^M sendkey ctrl-q
-(FILES-CLOSED OK)
+(JAID-CLOSED OK)
 > (with-open-file (out "/clara/hello.lisp" :direction :output)
     (write-line ";;;; hello.lisp: an application" out)
     (write-line "(defpackage \"HELLO\" (:use \"COMMON-LISP\"))" out)
@@ -584,13 +586,13 @@ OK
     (write-line "(clara.windows:define-application \"Hello\" #'hello)" out))
 "(clara.windows:define-application \"Hello\" #'hello)"
 > (list (clara.windows:install-application "Hello" "/clara/hello.lisp") (clara.windows:applications) (find-package "HELLO"))
-("Hello" ("REPL" "Emma" "Files" "Ares" "Parker" "Hello") NIL)
+("Hello" ("REPL" "Emma" "Jaid" "Ares" "Parker" "Hello") NIL)
 > (list (clara:thread-alive-p (clara.windows:launch "Hello" "Hello, world")) (package-name (find-package "HELLO"))
         (clara.windows:window-title (clara.windows:focused-window)))
 (T "HELLO" "Hello, world")
 > (list (clara.windows:remove-application "Hello") (find-package "HELLO") (clara.windows:applications)
         (length (clara.windows:windows)))
-("Hello" NIL ("REPL" "Emma" "Files" "Ares" "Parker") 1)
+("Hello" NIL ("REPL" "Emma" "Jaid" "Ares" "Parker") 1)
 > (defpackage "PLAY" (:use "COMMON-LISP") (:export "BALL"))
 #<PACKAGE "PLAY">
 > (in-package "PLAY")

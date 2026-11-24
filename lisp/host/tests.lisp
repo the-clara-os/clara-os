@@ -91,7 +91,7 @@
 (load-source "lisp/tls.lisp")
 (load-source "lisp/parker.lisp")
 (load-source "lisp/emma.lisp")               ; the three that the kernel leaves on the volume for the launcher to load
-(load-source "lisp/files.lisp")
+(load-source "lisp/jaid.lisp")
 (load-source "lisp/ares.lisp")
 (defvar *defined-applications* clara.windows::*applications*) ; what the files defined, for the tests to put back
 (defvar *defined-commands* clara.windows::*commands*)
@@ -5151,6 +5151,32 @@
        (list (clara.windows::arrange '("four" "Gone" "ONE" "Four" "Three") '("Right" "Left" "Right"))
              clara.windows::*menu* (wrong-pixels)))
 (check '(("Four" "One" "Two" "Three") ("Right" "Left")) (list (clara.windows:applications) (clara.windows:commands)))
+;; An application of the system's that was renamed since the order was
+;; written down has the place that it had under its old name: the file
+;; browser was Files until 0.0.54 and is Jaid. A name that the order has
+;; in both ways counts once, where it first stands; a command of the old
+;; name is a command and nothing else; and where an application here has
+;; the old name, the order means that one.
+(check '(("Files" . "Jaid")) clara.windows::*former-names*)
+(flet ((arranged (applications commands order &optional command-order)
+         (new-desk :applications (mapcar (lambda (name) (cons name (picks name))) applications)
+                   :commands (mapcar (lambda (name) (cons name (picks name))) commands))
+         (clara.windows::arrange order command-order)))
+  (check '((("Jaid" "REPL" "Emma" "Ares") nil)
+           (("REPL" "Ares" "Jaid" "Emma") nil)
+           (("REPL" "Emma" "Ares" "Jaid") nil)
+           (("Jaid" "Ares" "REPL" "Emma") nil)
+           (("Jaid" "Ares" "REPL" "Emma") ("Other" "Files"))
+           (("Files" "Jaid" "REPL") nil)
+           (("REPL" "Emma" "Ares") nil))
+         (list (arranged '("REPL" "Emma" "Jaid" "Ares") nil '("Files" "REPL" "Emma" "Ares"))
+               (arranged '("REPL" "Emma" "Jaid" "Ares") nil '("REPL" "Ares" "files" "Emma"))
+               (arranged '("REPL" "Emma" "Jaid" "Ares") nil '("Ares" "FILES"))
+               (arranged '("REPL" "Emma" "Jaid" "Ares") nil '("Jaid" "REPL" "Files"))
+               (arranged '("REPL" "Emma" "Jaid" "Ares") '("Files" "Other") '("Files" "REPL") '("Other" "Files"))
+               (arranged '("REPL" "Files" "Jaid") nil '("Files" "Jaid" "REPL"))
+               (arranged '("REPL" "Emma" "Ares") nil '("Files" "REPL" "Emma" "Ares")))))
+(check '("Jaid" "Jaid" "REPL" "Gone") (mapcar #'clara.windows::present-name '("Files" "files" "REPL" "Gone")))
 ;; A line that stays where it is leaves the order nobody's. An order that
 ;; names nothing leaves the list as it is, and is the user's all the same:
 ;; it was moved into, in the world before.
@@ -6276,7 +6302,7 @@
 ;;; The window manager in a font of outlines: the bar, the list and the
 ;;; titles. The rule for what the screen should show is the one above, with
 ;;; letters that have shades.
-(new-desk :letters t :applications (list (cons "REPL" (lambda () nil)) (cons "Files" (lambda () nil))
+(new-desk :letters t :applications (list (cons "REPL" (lambda () nil)) (cons "Jaid" (lambda () nil))
                                          (cons "An application with a long name" (lambda () nil)))
           :commands (list (cons "Shut Down" (lambda () nil))))
 (check '(t 0) (list (clara.type:font-p clara.windows::*letters*) (wrong-pixels)))
@@ -6508,12 +6534,17 @@
 ;; What lisp/terminal.lisp defined and installed when it was loaded, and
 ;; after it lisp/parker.lisp: the three that are files have a function here
 ;; because the tests loaded the files.
-(check '(("REPL" nil) ("Emma" "emma.lisp") ("Files" "files.lisp") ("Ares" "ares.lisp") ("Parker" nil))
+(check '(("REPL" nil) ("Emma" "emma.lisp") ("Jaid" "jaid.lisp") ("Ares" "ares.lisp") ("Parker" nil))
        (mapcar (lambda (application)
                  (list (clara.windows::application-name application) (clara.windows::application-file application)))
                clara.windows::*applications*))
-(check '("REPL" "Emma" "Files" "Ares" "Parker") (clara.windows:applications))
-(check (list #'clara.terminal:repl #'clara.emma:edit #'clara.files:browse #'clara.ares:browse #'clara.parker:parker)
+(check '("REPL" "Emma" "Jaid" "Ares" "Parker") (clara.windows:applications))
+;; The name that the file browser had before is no application's, and
+;; whoever asks for it is told which ones there are.
+(check "there is no application \"Files\": the ones that there are are (\"REPL\" \"Emma\" \"Jaid\" \"Ares\" \"Parker\")"
+       (handler-case (clara.windows:launch "Files")
+         (error (condition) (let ((*print-pretty* nil)) (princ-to-string condition)))))
+(check (list #'clara.terminal:repl #'clara.emma:edit #'clara.jaid:browse #'clara.ares:browse #'clara.parker:parker)
        (mapcar #'clara.windows::application-function clara.windows::*applications*))
 
 ;;; What happens to a window, kept for its program: the keys that are typed
@@ -7160,7 +7191,7 @@
                              (concatenate 'string (car (last (pathname-directory path))) "/"))))
           (directory (concatenate 'string place "*.*"))))
 
-(setq clara.files::*names* #'host-names)
+(setq clara.jaid::*names* #'host-names)
 (defvar *shelf* (scratch "tree/"))
 (write-scratch "tree/b.txt" "b")
 (write-scratch "tree/a.txt" "first" "second")
@@ -7170,43 +7201,43 @@
   (write-scratch (format nil "tree/many/f~2,'0D" i) "x"))
 
 (defun browser-state (browser)
-  (list (clara.files::browser-names browser) (clara.files::browser-picked browser)))
+  (list (clara.jaid::browser-names browser) (clara.jaid::browser-picked browser)))
 
 ;; The window of a browser against its list, after it was drawn: the names
 ;; from the first in the window on, the one that is picked with its colours
 ;; the other way round, and the status.
 (defun browser-wrong (browser)
-  (clara.files::render browser)
-  (let ((names (clara.files::browser-names browser)) (top (clara.files::browser-top browser))
-        (columns (clara.files::browser-columns browser)))
-    (wrong-cells (clara.files::browser-surface browser)
-                 (append (loop for r below (clara.files::browser-rows browser)
+  (clara.jaid::render browser)
+  (let ((names (clara.jaid::browser-names browser)) (top (clara.jaid::browser-top browser))
+        (columns (clara.jaid::browser-columns browser)))
+    (wrong-cells (clara.jaid::browser-surface browser)
+                 (append (loop for r below (clara.jaid::browser-rows browser)
                                collect (let* ((name (nth (+ top r) names))
                                               (text (pad (if name (concatenate 'string " " name) "") columns)))
-                                         (if (and name (= (+ top r) (clara.files::browser-picked browser))) (list text) text)))
-                         (list (list (pad (concatenate 'string " " (clara.files::status browser)) columns)))))))
+                                         (if (and name (= (+ top r) (clara.jaid::browser-picked browser))) (list text) text)))
+                         (list (list (pad (concatenate 'string " " (clara.jaid::status browser)) columns)))))))
 
 (defun browser-keys (browser &rest codes)
   (dolist (code codes)
-    (clara.files::key browser code)))
+    (clara.jaid::key browser code)))
 
-(check '("/" "/" "/a/" "/clara/") (mapcar #'clara.files::parent '("/" "/clara/" "/a/b/" "/clara/apps/")))
+(check '("/" "/" "/a/" "/clara/") (mapcar #'clara.jaid::parent '("/" "/clara/" "/a/b/" "/clara/apps/")))
 (new-desk :width 300 :height 220)
 (setq clara.windows::*applications* *defined-applications*)
-(let ((browser (clara.files::open-browser *shelf* :columns 30 :rows 4)))
+(let ((browser (clara.jaid::open-browser *shelf* :columns 30 :rows 4)))
   ;; The directories first, in the order of their names whatever the case of
   ;; their letters, then the files, and before them all the way up.
-  (check (list '(("../" "many/" "sub/" "Zed/" "a.txt" "b.txt") 0) *shelf* (concatenate 'string "Files in " *shelf*)
+  (check (list '(("../" "many/" "sub/" "Zed/" "a.txt" "b.txt") 0) *shelf* (concatenate 'string "Jaid - " *shelf*)
                "6 names" 240 80 0 0)               ; and no more, in a row of 30 cells
-         (list (browser-state browser) (clara.files::browser-directory browser)
-               (clara.windows:window-title (clara.files::browser-window browser)) (clara.files::status browser)
-               (clara.draw:surface-width (clara.files::browser-surface browser))
-               (clara.draw:surface-height (clara.files::browser-surface browser))
+         (list (browser-state browser) (clara.jaid::browser-directory browser)
+               (clara.windows:window-title (clara.jaid::browser-window browser)) (clara.jaid::status browser)
+               (clara.draw:surface-width (clara.jaid::browser-surface browser))
+               (clara.draw:surface-height (clara.jaid::browser-surface browser))
                (browser-wrong browser) (wrong-pixels)))
   ;; The keys that pick another name, which the window follows.
   (flet ((picked (&rest codes)
            (apply #'browser-keys browser codes)
-           (list (clara.files::browser-picked browser) (browser-wrong browser) (clara.files::browser-top browser))))
+           (list (clara.jaid::browser-picked browser) (browser-wrong browser) (clara.jaid::browser-top browser))))
     (check '(2 0 0) (picked clara.input:+down+ clara.input:+down+))
     (check '(1 0 0) (picked clara.input:+up+))
     (check '(0 0 0) (picked clara.input:+up+ clara.input:+up+))
@@ -7222,27 +7253,27 @@
     ;; the one it is in, with the one it came from picked there.
     (check '(1 0 0) (picked clara.input:+down+))
     (browser-keys browser 10)
-    (check (list (concatenate 'string *shelf* "many/") (concatenate 'string "Files in " *shelf* "many/") 13 "../" "f00" 0 0)
-           (list (clara.files::browser-directory browser) (clara.windows:window-title (clara.files::browser-window browser))
-                 (length (clara.files::browser-names browser)) (first (clara.files::browser-names browser))
-                 (second (clara.files::browser-names browser)) (clara.files::browser-picked browser)
+    (check (list (concatenate 'string *shelf* "many/") (concatenate 'string "Jaid - " *shelf* "many/") 13 "../" "f00" 0 0)
+           (list (clara.jaid::browser-directory browser) (clara.windows:window-title (clara.jaid::browser-window browser))
+                 (length (clara.jaid::browser-names browser)) (first (clara.jaid::browser-names browser))
+                 (second (clara.jaid::browser-names browser)) (clara.jaid::browser-picked browser)
                  (browser-wrong browser)))
     (check '(12 0 9) (picked clara.input:+end+))
     (browser-keys browser 8)
-    (check (list *shelf* 1 0) (list (clara.files::browser-directory browser) (clara.files::browser-picked browser)
+    (check (list *shelf* 1 0) (list (clara.jaid::browser-directory browser) (clara.jaid::browser-picked browser)
                                    (browser-wrong browser)))
     (browser-keys browser clara.input:+end+ clara.input:+up+ clara.input:+up+ 13)  ; Zed, by a carriage return
     (check '(("../" "z.txt") 0) (browser-state browser))
     (browser-keys browser 10)                                                ; the way up is a name like the others,
-    (check (list *shelf* 3) (list (clara.files::browser-directory browser) (clara.files::browser-picked browser)))
+    (check (list *shelf* 3) (list (clara.jaid::browser-directory browser) (clara.jaid::browser-picked browser)))
     (browser-keys browser clara.input:+left+)                                ; and so is the arrow to the left
     (check (list *scratch* "tree/" 0)
-           (list (clara.files::browser-directory browser)
-                 (nth (clara.files::browser-picked browser) (clara.files::browser-names browser)) (browser-wrong browser)))
+           (list (clara.jaid::browser-directory browser)
+                 (nth (clara.jaid::browser-picked browser) (clara.jaid::browser-names browser)) (browser-wrong browser)))
     (browser-keys browser 10)
     ;; A file is opened in the editor, which is launched for it.
     (browser-keys browser clara.input:+end+ clara.input:+up+ 10)
-    (check (list (concatenate 'string "Emma - " *shelf* "a.txt") (concatenate 'string "Files in " *shelf*)) (titles))
+    (check (list (concatenate 'string "Emma - " *shelf* "a.txt") (concatenate 'string "Jaid - " *shelf*)) (titles))
     (let ((face (clara.windows:window-surface (clara.windows:focused-window))))
       (check t (eventually (lambda () (zerop (wrong-cells face '("first " "second ") (list (list 0 0 +ink+))))))))
     (clara.windows:key-typed 17)                                             ; Ctrl-Q, to the editor
@@ -7251,18 +7282,18 @@
     ;; is not deleted.
     (check '(4 0 1) (picked 127))
     (check (list (concatenate 'string "delete " *shelf* "a.txt? y deletes it") (concatenate 'string *shelf* "a.txt"))
-           (list (clara.files::status browser) (clara.files::browser-doomed browser)))
+           (list (clara.jaid::status browser) (clara.jaid::browser-doomed browser)))
     (browser-keys browser 110)                                               ; n, or any other key
-    (check '(nil t) (list (clara.files::browser-doomed browser) (and (probe-file (concatenate 'string *shelf* "a.txt")) t)))
+    (check '(nil t) (list (clara.jaid::browser-doomed browser) (and (probe-file (concatenate 'string *shelf* "a.txt")) t)))
     (browser-keys browser 127 121)
     (check (list '(("../" "many/" "sub/" "Zed/" "b.txt") 4) nil (concatenate 'string "deleted " *shelf* "a.txt") 0)
            (list (browser-state browser) (probe-file (concatenate 'string *shelf* "a.txt"))
-                 (clara.files::browser-message browser) (browser-wrong browser)))
+                 (clara.jaid::browser-message browser) (browser-wrong browser)))
     (browser-keys browser 127 89)                                            ; the last of the names goes: the one before is picked
     (check '(("../" "many/" "sub/" "Zed/") 3) (browser-state browser))
     (browser-keys browser 127)
     (check '("a directory is not deleted from here" nil 0)
-           (list (clara.files::browser-message browser) (clara.files::browser-doomed browser) (browser-wrong browser)))
+           (list (clara.jaid::browser-message browser) (clara.jaid::browser-doomed browser) (browser-wrong browser)))
     ;; Ctrl-R reads the directory again, with the same name picked.
     (write-scratch "tree/new.txt" "new")
     (check '(("../" "many/" "sub/" "Zed/") 3) (browser-state browser))
@@ -7271,52 +7302,56 @@
     ;; A click picks the name it is on, and on the name that is picked
     ;; opens it; below the names, on the status and with a button that comes
     ;; up it does nothing.
-    (clara.files::point browser 20 1)
-    (check '(1 0) (list (clara.files::browser-picked browser) (browser-wrong browser)))
-    (clara.files::point browser 60 1)
-    (check 3 (clara.files::browser-picked browser))
-    (clara.files::point browser 20 0)
-    (clara.files::point browser 70 1)
-    (check (list 3 *shelf*) (list (clara.files::browser-picked browser) (clara.files::browser-directory browser)))
-    (clara.files::point browser 60 1)
-    (check (list (concatenate 'string *shelf* "Zed/") '("../" "z.txt")) (list (clara.files::browser-directory browser) (clara.files::browser-names browser)))
-    (clara.files::point browser 40 1)                                        ; two names, and this is the third row
-    (check '(0 0) (list (clara.files::browser-picked browser) (browser-wrong browser)))
+    (clara.jaid::point browser 20 1)
+    (check '(1 0) (list (clara.jaid::browser-picked browser) (browser-wrong browser)))
+    (clara.jaid::point browser 60 1)
+    (check 3 (clara.jaid::browser-picked browser))
+    (clara.jaid::point browser 20 0)
+    (clara.jaid::point browser 70 1)
+    (check (list 3 *shelf*) (list (clara.jaid::browser-picked browser) (clara.jaid::browser-directory browser)))
+    (clara.jaid::point browser 60 1)
+    (check (list (concatenate 'string *shelf* "Zed/") '("../" "z.txt")) (list (clara.jaid::browser-directory browser) (clara.jaid::browser-names browser)))
+    (clara.jaid::point browser 40 1)                                        ; two names, and this is the third row
+    (check '(0 0) (list (clara.jaid::browser-picked browser) (browser-wrong browser)))
     ;; Closing, by the key and by the box.
     (browser-keys browser 17)
-    (check t (clara.files::browser-done browser))
-    (setf (clara.files::browser-done browser) nil)
-    (clara.files::happened browser '(:close))
-    (check t (clara.files::browser-done browser))
-    (clara.files::happened browser (list :key clara.input:+down+))
-    (clara.files::happened browser '(:pointer 5 4 1))
-    (check 0 (clara.files::browser-picked browser)))
-  (clara.windows:close-window (clara.files::browser-window browser)))
+    (check t (clara.jaid::browser-done browser))
+    (setf (clara.jaid::browser-done browser) nil)
+    (clara.jaid::happened browser '(:close))
+    (check t (clara.jaid::browser-done browser))
+    (clara.jaid::happened browser (list :key clara.input:+down+))
+    (clara.jaid::happened browser '(:pointer 5 4 1))
+    (check 0 (clara.jaid::browser-picked browser)))
+  (clara.windows:close-window (clara.jaid::browser-window browser)))
 ;; A name without the slash at its end is a directory's all the same; a
 ;; directory with nothing in it has the way up; and where nothing is listed
 ;; at all, or the file system fails, that is said.
-(let ((browser (clara.files::open-browser (scratch "tree/sub"))))            ; as large as it is when nothing is said
+(let ((browser (clara.jaid::open-browser (scratch "tree/sub"))))            ; as large as it is when nothing is said
   (check (list (scratch "tree/sub/") '("../" "inner.txt") 384 272 "2 names: Enter opens, Backspace goes up" 0)
-         (list (clara.files::browser-directory browser) (clara.files::browser-names browser)
-               (clara.draw:surface-width (clara.files::browser-surface browser))
-               (clara.draw:surface-height (clara.files::browser-surface browser))
-               (clara.files::status browser) (browser-wrong browser)))
-  (clara.windows:close-window (clara.files::browser-window browser)))
-(let ((clara.files::*names* (lambda (place) (declare (ignore place)) nil)))
-  (let ((browser (clara.files::open-browser "/" :columns 30 :rows 2)))
-    (check '((nil 0) "nothing here" 0) (list (browser-state browser) (clara.files::status browser) (browser-wrong browser)))
+         (list (clara.jaid::browser-directory browser) (clara.jaid::browser-names browser)
+               (clara.draw:surface-width (clara.jaid::browser-surface browser))
+               (clara.draw:surface-height (clara.jaid::browser-surface browser))
+               (clara.jaid::status browser) (browser-wrong browser)))
+  (clara.windows:close-window (clara.jaid::browser-window browser)))
+(let ((clara.jaid::*names* (lambda (place) (declare (ignore place)) nil)))
+  (let ((browser (clara.jaid::open-browser "/" :columns 30 :rows 2)))
+    (check '((nil 0) "nothing here" 0) (list (browser-state browser) (clara.jaid::status browser) (browser-wrong browser)))
     (browser-keys browser 10 127 clara.input:+down+ 8)
-    (clara.files::point browser 5 1)
-    (check '((nil 0) "/" nil) (list (browser-state browser) (clara.files::browser-directory browser) (clara.files::browser-message browser)))
-    (clara.windows:close-window (clara.files::browser-window browser))))
-(let ((clara.files::*names* (lambda (place) (error "the disk of ~A does not answer" place))))
-  (let ((browser (clara.files::open-browser "/" :columns 40 :rows 2)))
-    (check '("the disk of / does not answer" 0) (list (clara.files::status browser) (browser-wrong browser)))
-    (clara.windows:close-window (clara.files::browser-window browser))))
+    (clara.jaid::point browser 5 1)
+    (check '((nil 0) "/" nil) (list (browser-state browser) (clara.jaid::browser-directory browser) (clara.jaid::browser-message browser)))
+    (clara.windows:close-window (clara.jaid::browser-window browser))))
+;; The window has its title from when it is opened, also where nothing
+;; could be listed: Jaid, and the directory that was asked for.
+(let ((clara.jaid::*names* (lambda (place) (error "the disk of ~A does not answer" place))))
+  (let ((browser (clara.jaid::open-browser "/away" :columns 40 :rows 2)))
+    (check '("the disk of /away/ does not answer" "Jaid - /away/" 0)
+           (list (clara.jaid::status browser) (clara.windows:window-title (clara.jaid::browser-window browser))
+                 (browser-wrong browser)))
+    (clara.windows:close-window (clara.jaid::browser-window browser))))
 
 ;; The application, as the launcher runs it, and the two together: a file
 ;; that is picked in the browser's window opens in a window of the editor's.
-(let* ((thread (clara.windows:launch "files" *shelf* :columns 30 :rows 4))
+(let* ((thread (clara.windows:launch "jaid" *shelf* :columns 30 :rows 4))
        (window (clara.windows:focused-window))
        (face (clara.windows:window-surface window)))
   (check t (eventually (lambda () (zerop (wrong-cells face (list (list (pad " ../" 30)) " many/ " " sub/ " " Zed/ "))))))
@@ -7325,7 +7360,7 @@
   (check t (eventually (lambda () (zerop (wrong-cells face (list " many/ " " sub/ " " Zed/ " (list (pad " new.txt" 30))))))))
   (clara.windows:key-typed 10)
   (check t (eventually (lambda () (equal (titles) (list (concatenate 'string "Emma - " *shelf* "new.txt")
-                                                        (concatenate 'string "Files in " *shelf*))))))
+                                                        (concatenate 'string "Jaid - " *shelf*))))))
   (check 0 (wrong-pixels))
   (clara.windows:key-typed (+ clara.input:+alt+ 9))                          ; back to the browser's window, by the keyboard
   (multiple-value-bind (x y) (clara.windows:window-position window)
@@ -7341,7 +7376,7 @@
                             (clara.windows::application-function (clara.windows::find-application "Emma")))))
 (clara.windows:define-application "Emma" #'clara.emma:edit)
 (clara.windows:stop)
-(setq clara.files::*names* #'clara.files::names-in)
+(setq clara.jaid::*names* #'clara.jaid::names-in)
 (sb-ext:delete-directory *scratch* :recursive t)
 (check nil (probe-file *scratch*))
 
@@ -8363,6 +8398,16 @@
               t))
 (check '(("Mine" "One" "New" "Two") ("Tidy" "Left" "Right") (("Mine" "One" "New" "Two") ("Tidy" "Left" "Right")))
        (list (clara.windows:applications) (clara.windows:commands) (clara.windows::arrangement)))
+;; The account of an older system names the file browser as that system
+;; did, Files, and the list of this one has Jaid where that name stood.
+(trial-disk (format nil "(:carried \"0.0.0-host\" \"0.0.1-new\")~%(:applications \"Files\" \"Mine\" \"REPL\")~%")
+            (list "defined.lisp" (format nil "(clara.windows:define-application \"Mine\" #'car)~%")))
+(new-desk :machine nil :start nil :applications (list (cons "REPL" #'list) (cons "Emma" #'list) (cons "Jaid" #'list)))
+(check '(t ("Jaid" "Mine" "REPL" "Emma"))
+       (list (and (search "world: the launcher's list is in the order that its lines were moved into in the world before"
+                          (said-by-all #'clara.system:start))
+                  t)
+             (clara.windows:applications)))
 ;; An account that does not speak of the list leaves it as the files and
 ;; the text made it, and nobody's. A line of it that is more than names is
 ;; passed over, the other one counts; and what is no list at all is said,

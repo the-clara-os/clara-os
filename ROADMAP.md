@@ -1171,8 +1171,9 @@ Infrastructure, done:
   open file>`"), where the title was the file's name alone: from when a
   file is read or a text is saved under a name, and not for a file that
   could not be read. The window manager cuts a title short where the
-  window is narrower, as before. The file browser's title is as it was,
-  `Files in ` and the directory; issue #45 renames that application. The
+  window is narrower, as before. The file browser's title stayed as it
+  was, `Files in ` and the directory, until that application was renamed
+  in its turn (0.0.54, below). The
   manual's chapter is "Emma, the editor", under the id that it had,
   `editor`, so that a link to it leads where it led. The sessions of
   `make test`, the manual's transcripts and the host tests ask for the
@@ -1451,6 +1452,65 @@ Infrastructure, done:
   against white space at the beginning of a line that another guard
   already was, and white space forgotten at the end of a line that the
   same guard never looks at.
+
+- **Files is Jaid** (2026-11-24, version 0.0.54). The file browser was
+  named Files and is named Jaid (issue #45): in the list under
+  `Applications`, for its threads, as its file, lisp/jaid.lisp, which was
+  lisp/files.lisp, and as its package, CLARA.JAID, which was CLARA.FILES,
+  so that its function is `clara.jaid:browse`. The file and the package
+  went with the name as Emma's did, and the names inside the file say
+  what it is, a browser, and stayed, like the word wherever a document
+  means the thing and not its name. A window of Jaid's is titled `Jaid -
+  ` and the directory that it lists, `Jaid - /clara/`, where the title
+  was `Files in /clara/`: that is the form that Julio asked for when the
+  editor became Emma, taken here without his having said it of this
+  window. `(clara.windows:launch "Jaid" "/clara/")` opens a directory.
+  The old name is no application now and the old package is not there:
+  LAUNCH says so with the names that there are, the first session of
+  `make test` asks for exactly that, and the manual's table of what goes
+  wrong has a row for it, which names the three applications that have
+  been renamed. One thing is kept of an old name. A world that leaves for
+  a newer system writes the order of the launcher's list into its account
+  once a line was moved (0.0.51), in the names that it knows; a 0.0.53
+  says `"Files"`, which nothing here is called, and the browser would
+  have gone back behind Emma wherever its user had put it. So the window
+  manager has the names that the system's applications had before
+  (`clara.windows::*former-names*`, one line: the Listener and the Editor
+  were renamed before a list could be put in another order) and reads
+  such a name as the one that the application has now, unless the world
+  has an application of the old name, which is then what was meant. The
+  manual's chapter is "Jaid, the file browser", under the id that it had,
+  `browser`, and its section on what an upgrade carries says where a
+  renamed application stands. The sessions of `make test`, the manual's
+  transcripts and the host tests ask for the new names and the new title
+  wherever they asked for the old ones, with the titles written out.
+  `make test` passed on the Mac and in a container of Ubuntu 26.04, the
+  host tests with 17765 checks and all nineteen boots. A copy of the disk
+  of Julio's machine, which ran 0.0.53 with the window manager and a list
+  whose commands he had moved, was started with this system beside it, as
+  his next `make run-aarch64` does it, and with a copy of
+  `~/clara-work.dmg`: it took the system, made its world again of
+  `/home/defined.lisp`, and came up with one REPL window, Jaid where
+  Files had stood, his eleven commands in his order and his calculator,
+  which launched. None of his files names the browser, its file or its
+  package. The world that was saved there started again the same, his
+  two commands that load a file ran, and a second upgrade from there, to
+  a system that the tests build, carried the order across. On a second
+  copy Files was moved to the top of the list under 0.0.53 and the world
+  saved: after the upgrade Jaid stood at the top. Mistakes that were
+  planted, one at a time, in copies of the tree, twenty: the application
+  defined under its old name, installed under it, installed with the old
+  name of its file, and installed behind Ares; the package left with its
+  old name; of the title, the old words, another sign between its two
+  parts, the name alone, a title that stays when the directory changes,
+  and a window opened under the name alone or under the name as it was
+  asked for, without the slash; and of an older system's order, no old
+  name known, the two names the other way round, the order taken as it
+  is written, the old name read also where something has it and only
+  where something has it, in its own letters only, read for a command
+  too, a command of the old name in the way, and both names kept. The
+  host tests noticed all twenty, and passed with a comment changed, which
+  was the control.
 
 Infrastructure, for sessions with budget left over:
 
@@ -4029,7 +4089,7 @@ No milestone yet, to be picked up when they start to matter:
   tested under SBCL on the host's own files, in a directory under /tmp that
   the run makes and deletes: OPEN, PROBE-FILE and DELETE-FILE are SBCL's
   there, and DIRECTORY, which gives pathnames under SBCL, is replaced by a
-  function of the tests' (`clara.files::*names*`). So the one line of the
+  function of the tests' (`clara.jaid::*names*`). So the one line of the
   browser that asks the language is tested by the boots alone, and so is
   everything that lisp/boot.lisp does between an application and the file
   system. An application that the launcher loads from its file is tested
