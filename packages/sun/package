@@ -1,0 +1,5 @@
+package sun 1.0.0
+about The sun of ClaraOS over its horizon
+system 0.0.52
+load disc.lisp
+application sun.lisp Sun

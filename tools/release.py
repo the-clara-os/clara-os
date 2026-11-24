@@ -17,6 +17,26 @@ by which the files came.
       <name>/manifest.sig  the signature of those bytes
       <name>/<file>        every file that the manifest lists
 
+Packages are published the same way (lisp/parker.lisp): a directory that
+a web server hands out, with an index of what is there and a signature of
+the index. A package is written as a directory of its name, with its
+files and a file "package" that says what it is:
+
+    package sun 1.0.0                 its name, which is the directory's, and its version
+    about The sun, in a window        what it is, in a line of 44 characters at the most
+    system 0.0.52                     the oldest ClaraOS that it is for; this line and the next three are as many as are wanted
+    needs another                     a package that is installed with it
+    load disc.lisp                    a file that is loaded when it is installed, and into every world after that
+    application sun.lisp Sun          a name for the launcher's list, and the file that defines the application
+
+The index has those lines for every package, and after them a line for
+each of its files, with the file's length and its SHA-512:
+
+    packages/
+      index                      "ClaraOS packages", and then what there is
+      index.sig                  the signature of those bytes
+      <name>/<version>/<file>    every file that the index lists
+
 usage: release.py key <file>              a new key: the secret half goes into the file, the public half is printed
        release.py public <file>           the public half of the key in that file
        release.py sign <file> <what>      the signature of the file <what>, with the key in <file>, printed
@@ -24,6 +44,9 @@ usage: release.py key <file>              a new key: the secret half goes into t
        release.py make <system directory> <releases directory> <key file> [<public>]
                                           the system becomes the newest release there; with a public half,
                                           only when the key is the one that it is the half of
+       release.py packages <directory of packages> <where> <key file> [<public>]
+                                          the packages of that directory are laid out in <where>, which is made
+                                          anew, with their index and its signature; with a public half, as above
 
 The key file holds the secret half: 64 digits in base sixteen, and nothing
 else. Whoever has it can publish a ClaraOS that every machine takes for
@@ -38,6 +61,7 @@ somebody who can time it: sign where nobody is watching.
 """
 import hashlib
 import os
+import re
 import shutil
 import sys
 
@@ -164,6 +188,93 @@ def read_key(path):
     return bytes.fromhex(text)
 
 
+def described(directory, name):
+    """What the file "package" of a package's directory says, as lines, when
+    every line is what lisp/parker.lisp takes such a line to be; and the
+    names of the package's files. Whatever is wrong ends the run: a package
+    that no machine would install is not published."""
+    def wrong(what):
+        sys.exit("release.py: %s: %s" % (os.path.join(directory, "package"), what))
+
+    def file_name(text):
+        return re.fullmatch(r"[A-Za-z0-9_-][A-Za-z0-9._-]{0,63}", text) and text.lower() != "package"
+
+    path = os.path.join(directory, "package")
+    if not os.path.isfile(path):
+        sys.exit("release.py: %s has no file \"package\" that says what it is" % directory)
+    files = sorted(entry for entry in os.listdir(directory) if entry != "package" and not entry.startswith("."))
+    for entry in files:
+        if not os.path.isfile(os.path.join(directory, entry)) or not file_name(entry):
+            sys.exit("release.py: %s is not something that a package can have: a file, with a name of letters, digits, "
+                     "\".\", \"-\" and \"_\"" % os.path.join(directory, entry))
+    if len(set(entry.lower() for entry in files)) != len(files):
+        sys.exit("release.py: %s has two files whose names differ in nothing but the case of their letters" % directory)
+    lines = open(path, encoding="utf-8").read().split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()
+    first = lines[0].split(" ") if lines else []
+    if len(first) != 3 or first[0] != "package":
+        wrong("its first line is not \"package <name> <version>\"")
+    if first[1] != name or not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,31}", name):
+        wrong("the package is named %s, and its directory %s: one name, of small letters, digits and hyphens" % (first[1], name))
+    if not re.fullmatch(r"[0-9]+(\.[0-9]+)*", first[2]) or len(first[2]) > 24:
+        wrong("%s is no version: numbers with dots between them" % first[2])
+    said = {"about": 0}
+    needs, titles = [], []
+    for line in lines[1:]:
+        word, _, rest = line.partition(" ")
+        if word == "about":
+            if not rest.strip() or len(rest) > 44:
+                wrong("what the package is, is said in 44 characters at the most, which is what a row of Parker's window "
+                      "has room for: \"about ...\"")
+            said["about"] += 1
+        elif word == "system" and re.fullmatch(r"[0-9]+(\.[0-9]+)*", rest):
+            pass
+        elif word == "needs" and re.fullmatch(r"[a-z0-9][a-z0-9-]{0,31}", rest) and rest != name and rest not in needs:
+            needs.append(rest)
+        elif word == "load" and rest in files:
+            pass
+        elif word == "application" and rest.partition(" ")[0] in files and 0 < len(rest.partition(" ")[2]) <= 40 \
+                and not rest.partition(" ")[2].startswith(" ") and rest.partition(" ")[2].lower() not in titles:
+            titles.append(rest.partition(" ")[2].lower())
+        else:
+            wrong("\"%s\" is no line of a package: about, system, needs, load and application are, each with what it "
+                  "names, and a file that is named is one of the directory's" % line)
+    if said["about"] != 1:
+        wrong("it has to say what the package is, once: \"about ...\"")
+    return lines, files
+
+
+def packages(source, where, key):
+    """The packages of the directory SOURCE, laid out in WHERE, which is made anew."""
+    source, where = os.path.realpath(source), os.path.realpath(where)
+    if where == source or where.startswith(source + os.sep) or source.startswith(where + os.sep):
+        sys.exit("release.py: %s is laid out somewhere else than in itself: %s is made anew" % (source, where))
+    names = sorted(entry for entry in os.listdir(source)
+                   if os.path.isdir(os.path.join(source, entry)) and not entry.startswith("."))
+    index, laid = ["ClaraOS packages"], []
+    shutil.rmtree(where, ignore_errors=True)
+    os.makedirs(where)
+    for name in names:
+        lines, files = described(os.path.join(source, name), name)
+        version = lines[0].split(" ")[2]
+        to = os.path.join(where, name, version)
+        os.makedirs(to)
+        index.extend(lines)
+        for entry in files:
+            data = open(os.path.join(source, name, entry), "rb").read()
+            index.append("file %d %s %s" % (len(data), hashlib.sha512(data).hexdigest(), entry))
+            shutil.copyfile(os.path.join(source, name, entry), os.path.join(to, entry))
+        laid.append("%s %s" % (name, version))
+    text = ("\n".join(index) + "\n").encode()
+    with open(os.path.join(where, "index"), "wb") as out:
+        out.write(text)
+    with open(os.path.join(where, "index.sig"), "w") as out:
+        out.write(sign(key, text).hex() + "\n")
+    print("%s in %s, signed by %s%s" % ("1 package is laid out" if len(laid) == 1 else "%d packages are laid out" % len(laid),
+                                         where, public_of(key).hex(), ": " + ", ".join(laid) if laid else ""))
+
+
 def main(argv):
     if len(argv) == 3 and argv[1] == "key":
         if os.path.exists(argv[2]):
@@ -206,6 +317,12 @@ def main(argv):
         with open(os.path.join(releases, "latest"), "w") as out:
             out.write(name + "\n")
         print("%s is the newest release in %s, signed by %s" % (name, releases, public_of(key).hex()))
+    elif len(argv) in (5, 6) and argv[1] == "packages":
+        key = read_key(argv[4])
+        if len(argv) == 6 and public_of(key).hex() != argv[5]:
+            sys.exit("release.py: the key in %s has the public half %s, and not \"%s\", which is the one to hold it against: "
+                     "nothing is laid out" % (argv[4], public_of(key).hex(), argv[5]))
+        packages(argv[2], argv[3], key)
     elif len(argv) == 2 and argv[1] == "constants":
         # What kernel/ed25519.c has as numbers: worked out here, and held against what is written there.
         print("D  = {%s}" % limbs(D))

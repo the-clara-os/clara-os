@@ -38,7 +38,7 @@ WRITTEN-DOWN
 > (clara.windows:define-command "Tidy" (lambda () 'tidied))
 "Tidy"
 > (list (clara.windows:move-down "REPL") (clara.windows:move-up "Tidy") (clara.windows:move-up "tidy") (clara.windows:move-up "Tidy"))
-(("Emma" "REPL" "Files") ("Restart" "Tidy" "Shut Down") ("Tidy" "Restart" "Shut Down") ("Tidy" "Restart" "Shut Down"))
+(("Emma" "REPL" "Files" "Parker") ("Restart" "Tidy" "Shut Down") ("Tidy" "Restart" "Shut Down") ("Tidy" "Restart" "Shut Down"))
 > (clara.system:upgrade :from (first (clara.fat:volumes)))
 error: that volume holds no ClaraOS other than this one, {{system}}
 > (clara.system:upgrade)
@@ -57,7 +57,7 @@ clara: starting the machine again
 > (list (clara.windows:running-p) (clara.windows:window-title *window*) (> (length clara.system::*report*) 10))
 (T "A picture" T)
 > (list (clara.windows:applications) (clara.windows:commands) (clara.windows:move-down "Tidy"))
-(("Emma" "REPL" "Files") ("Tidy" "Restart" "Shut Down") ("Restart" "Tidy" "Shut Down"))
+(("Emma" "REPL" "Files" "Parker") ("Tidy" "Restart" "Shut Down") ("Restart" "Tidy" "Shut Down"))
 > (list *from-a-file* (written-down "(load (concatenate 'string \"/clara/\" \"kept.lisp\"))") (written-down "(default-of 4)") (written-down "(defun default-of (value) value)"))
 ("written by ClaraOS" 1 0 1)
 > (list (with-open-file (in "/letters/first.txt") (read-line in)) (with-open-file (in "/clara/kept.lisp") (read-line in)))
@@ -72,7 +72,7 @@ clara: starting the machine again
 > (list (clara.system:system) (getf (clara.unsafe:start-state) :resumed) (getf (clara.unsafe:start-state) :trial) (since-the-upgrade))
 ("{{version}}-other" T NIL DEFINED-IN-THE-NEW-SYSTEM)
 > (list (clara.windows:applications) (clara.windows:commands) (mapcar #'clara.windows:window-title (clara.windows:windows)))
-(("Emma" "REPL" "Files") ("Tidy" "Restart" "Shut Down") ("REPL"))
+(("Emma" "REPL" "Files" "Parker") ("Tidy" "Restart" "Shut Down") ("REPL"))
 > (setq clara.system:*releases* nil)
 NIL
 > (clara.system:upgrade)

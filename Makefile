@@ -183,9 +183,15 @@ host-test:
 # looks a name up, fetches files both ways, is given the root of those
 # certificates on a disk and told to trust it, has to refuse a server
 # whose certificate is too old, is for another name or was signed by
-# nobody it knows, and the release while it has no key or another one,
-# and then takes it, by HTTPS, and comes up as the other system
-# (tools/network.txt). Then the user
+# nobody it knows. The same web server has the packages of packages/,
+# laid out and signed with that key, and a second time under a higher
+# version (lisp/parker.lisp): the machine has to refuse them by plain
+# HTTP, without a key and with another one, install the package that
+# there is, launch its application, and put the newer version in its
+# place. Then it has to refuse the release while it has no key or
+# another one, take it, by HTTPS, and come up as the other system, with
+# the package loaded into the world that was made again, and take the
+# package out (tools/network.txt). Then the user
 # manual: what it shows of
 # the prompt (site/manual.html) is typed at a machine, which saves its
 # world, and at the same machine started again. That machine has a second
@@ -253,11 +259,15 @@ test: all host-test release-test $(BUILD)/system-other/stamp $(BUILD)/system-bro
 	rm -rf $(BUILD)/releases $(BUILD)/release-key $(BUILD)/certs $(BUILD)/trusted
 	python3 -I tools/release.py key $(BUILD)/release-key > $(BUILD)/release-key.public
 	python3 -I tools/release.py make $(BUILD)/system-other/esp/clara/$(VERSION)-other $(BUILD)/releases $(BUILD)/release-key
+	python3 -I tools/release.py packages packages $(BUILD)/releases/packages $(BUILD)/release-key
+	rm -rf $(BUILD)/packages-newer && cp -R packages $(BUILD)/packages-newer
+	sed -i.bak 's/^package sun .*/package sun 9.0.0/' $(BUILD)/packages-newer/sun/package && rm $(BUILD)/packages-newer/sun/package.bak
+	python3 -I tools/release.py packages $(BUILD)/packages-newer $(BUILD)/releases/newer $(BUILD)/release-key
 	python3 -I tools/certs.py $(BUILD)/certs releases.test rsa.test:rsa large.test:large old.test:old six.test
 	mkdir -p $(BUILD)/trusted && cp $(BUILD)/certs/root.pem $(BUILD)/trusted/ && python3 -I tools/mkdisk.py $(BUILD)/trusted $(BUILD)/trusted.img
 	NAME=aarch64-network SERVE=$(BUILD)/releases CERTS=$(BUILD)/certs WORK=$(BUILD)/trusted.img KEY=$$(cat $(BUILD)/release-key.public) \
 		SESSION=tools/network.txt TIMEOUT=300 \
-		EXPECT='^random: .* makes numbers that nobody can guess;;^ClaraOS: starting the system that is to be tried;;^system: .*-other has come to its prompt;;^world: 1 variable has the value that it had come to;;^world: it is saved as it is now' \
+		EXPECT='^random: .* makes numbers that nobody can guess;;^ClaraOS: starting the system that is to be tried;;^system: .*-other has come to its prompt;;^packages: sun 9.0.0 is installed, and is loaded into this world;;^world: 1 variable has the value that it had come to;;^world: it is saved as it is now' \
 		tools/boottest.sh aarch64 -machine gic-version=3
 	python3 -I site/build.py --sessions $(BUILD)
 	rm -rf $(BUILD)/empty && mkdir -p $(BUILD)/empty && python3 -I tools/mkdisk.py $(BUILD)/empty $(BUILD)/work.img
@@ -283,35 +293,48 @@ image: all
 # out: no ClaraOS would take a release that another key signed, so there
 # must be none to publish. And what was laid out is held against that half
 # once more, the way a machine will hold it. PUBLIC= names another public
-# half, for a key that was made for a test, which `make test` does.
+# half, for a key that was made for a test, which `make test` does. With
+# PACKAGES=, the packages of the directory packages/ are laid out there as
+# well, with their index, signed with the same key and held against the
+# same half: that is what the workflow publishes at
+# https://claraos.org/packages/, where Parker looks for what can be
+# installed (lisp/parker.lisp).
 PUBLIC := $(shell sed -n 's/^(defvar \*release-key\* "\([0-9a-f]*\)").*/\1/p' lisp/system.lisp)
 release: all
 	@[ -n "$(KEY)" ] && [ -n "$(RELEASES)" ] || { \
-		echo "usage: make release KEY=<the file that holds the secret half of the key> RELEASES=<a directory>" >&2; exit 1; }
+		echo "usage: make release KEY=<the file that holds the secret half of the key> RELEASES=<a directory> [PACKAGES=<a directory>]" >&2; exit 1; }
 	@[ $$(printf %s "$(PUBLIC)" | wc -c) -eq 64 ] || { \
 		echo "make release: lisp/system.lisp has no public half of a key where the Makefile reads it, 64 digits, so there is nothing to hold the key against" >&2; exit 1; }
 	python3 -I tools/release.py make $(BOOTDIR) $(RELEASES) $(KEY) "$(PUBLIC)"
 	python3 -I tools/release.py verify "$(PUBLIC)" $(RELEASES)/$(SYSTEM)/manifest $(RELEASES)/$(SYSTEM)/manifest.sig
+ifneq ($(PACKAGES),)
+	python3 -I tools/release.py packages packages $(PACKAGES) $(KEY) "$(PUBLIC)"
+	python3 -I tools/release.py verify "$(PUBLIC)" $(PACKAGES)/index $(PACKAGES)/index.sig
+endif
 
 # `make release` as the website's workflow runs it, with a key that is made
 # for the purpose, since the workflow has its key from an environment that
 # only main deploys to and so cannot be tried anywhere else. Told that the
 # public half of that key is the one to go by, it has to lay the build out
-# as a release that names this system. Left to read the half that the
-# system has, it has to refuse the key for not being that one, and to lay
-# nothing out. `make test` begins with it. The make that it calls has
+# as a release that names this system, and the packages with an index that
+# has every one of them. Left to read the half that the system has, it has
+# to refuse the key for not being that one, and to lay nothing out, neither
+# a release nor packages. `make test` begins with it. The make that it calls has
 # another name here than the one that make knows its own by: a line with
 # that name in it is run even when make was asked to run nothing and to
 # say what it would (-n), and what these lines look at is not there then.
 AGAIN = $(MAKE) --no-print-directory
 release-test: all
-	rm -rf $(BUILD)/try-key $(BUILD)/published $(BUILD)/refused
+	rm -rf $(BUILD)/try-key $(BUILD)/published $(BUILD)/published-packages $(BUILD)/refused $(BUILD)/refused-packages
 	python3 -I tools/release.py key $(BUILD)/try-key > $(BUILD)/try-key.public
-	$(AGAIN) release KEY=$(BUILD)/try-key PUBLIC=$$(cat $(BUILD)/try-key.public) RELEASES=$(BUILD)/published
+	$(AGAIN) release KEY=$(BUILD)/try-key PUBLIC=$$(cat $(BUILD)/try-key.public) RELEASES=$(BUILD)/published \
+		PACKAGES=$(BUILD)/published-packages
 	[ "$$(cat $(BUILD)/published/latest)" = "$(SYSTEM)" ]
-	if $(AGAIN) release KEY=$(BUILD)/try-key RELEASES=$(BUILD)/refused > $(BUILD)/release-refused.log 2>&1 \
+	[ "$$(grep -c '^package ' $(BUILD)/published-packages/index)" -eq "$$(ls packages/*/package | wc -l)" ]
+	if $(AGAIN) release KEY=$(BUILD)/try-key RELEASES=$(BUILD)/refused PACKAGES=$(BUILD)/refused-packages \
+			> $(BUILD)/release-refused.log 2>&1 \
 		|| ! grep -q "and not \"$(PUBLIC)\", which is the one to hold it against" $(BUILD)/release-refused.log \
-		|| [ -e $(BUILD)/refused ]; then \
+		|| [ -e $(BUILD)/refused ] || [ -e $(BUILD)/refused-packages ]; then \
 		cat $(BUILD)/release-refused.log; \
 		echo "make release: a key that is not the one which the system has was not refused for being that, or something was laid out with it"; \
 		exit 1; fi

@@ -88,6 +88,7 @@
 (defvar *system-packages* nil) ; the names of the packages that were there when this world was made
 (defvar *releases* "https://claraos.org/releases/") ; where ClaraOS is published: the address of a directory there, or NIL for a system that is to know of no such place
 (defvar *release-key* "2c67792528bac0b3570bb966e176e9b60ee04bfa0084ce50676db6cd8fca8dc6") ; the public half of the key that what is published there is signed with: 64 digits, or NIL
+(defvar *parker* nil)       ; what lisp/parker.lisp hands over as it is loaded, two functions: :START, and :PACKAGES
 
 ;; A line for whoever is watching, on the console: the serial port, and the
 ;; screen once the window manager has given it back.
@@ -856,13 +857,16 @@
 ;; The packages whose symbols are the user's: COMMON-LISP-USER, and every
 ;; package that was made since this world was, apart from the ones that
 ;; are called CLARA, which the launcher makes when it loads an application
-;; of the system's.
+;; of the system's, and the ones that came of a package which is installed
+;; (lisp/parker.lisp): those are on the disk, and the world that is made
+;; again has them from there.
 (defun user-packages ()
-  (let ((found nil))
+  (let ((found nil) (installed (and *parker* (funcall (getf *parker* :packages)))))
     (dolist (package (list-all-packages))
       (let ((name (package-name package)))
         (when (or (string= name "COMMON-LISP-USER")
-                  (not (or (starts-with "CLARA" name) (member name *system-packages* :test #'string=))))
+                  (not (or (starts-with "CLARA" name) (member name *system-packages* :test #'string=)
+                           (member name installed :test #'string=))))
           (setq found (cons package found)))))
     (sort found #'string-lessp :key #'package-name)))
 
@@ -1048,6 +1052,18 @@
                     (reverse lost))
         (tell "world: every function and every variable that the world before had is defined in this one"))))
 
+;; The packages that are installed are told what kind of start this is
+;; (lisp/parker.lisp): :MADE for a world that this start made from the
+;; files, which loads them all; :RESUMED for one that came back as an image,
+;; which takes what was installed since it was saved and lets go of what
+;; was taken out; and :BARE for a world that is to be the system's alone.
+;; They come before the text of /home, which may be written with them.
+(defun packages (how)
+  (when *parker*
+    (handler-case (funcall (getf *parker* :start) how)
+      (error (condition)
+        (tell "packages: ~A" condition)))))
+
 ;; The world as it is now becomes the world that the machine starts in.
 (defun save-world ()
   (tell "world: it is saved as it is now, and the next start is in it; (clara.system:report) says this again")
@@ -1108,6 +1124,7 @@
     (when (assoc :windows carried)
       (unless (handler-case (clara.windows:start) (error () nil))
         (tell "world: the window manager was running in the world before, and could not be started in this one")))
+    (packages :made)
     (load-home)
     (when (state :trial)
       (if carried
@@ -1123,7 +1140,8 @@
 ;; what to do about it.
 (defun make-bare-world ()
   (tell "home: the two starts before this one did not come to a prompt: what is in ~A is not loaded" (home))
-  (tell "home:   this world is the system's alone. Put the files right, and (clara.system:load-home) loads them"))
+  (tell "home:   this world is the system's alone. Put the files right, and (clara.system:load-home) loads them")
+  (packages :bare))
 
 ;;; An upgrade
 
@@ -1415,6 +1433,7 @@
     (when (state :trial)
       (commit))
     (when (state :resumed)
+      (packages :resumed)
       (catch-up))
     (let ((source (and (not (state :trial)) (at-once-source))))
       (when source
