@@ -436,7 +436,7 @@ OK
 > (defun k () (clara:signal-event *seen*) 'k)
 K
 > (list (clara.windows:running-p) (clara.windows:applications) (clara.windows:start) (clara.windows:start))
-(NIL ("REPL" "Emma" "Files" "Parker") T T)
+(NIL ("REPL" "Emma" "Files" "Ares" "Parker") T T)
 > (list (clara.windows:stop) (clara.windows:running-p)                 ; and the console has the screen again, cleared
         (= (clara.draw:pixel (clara.draw:screen) 700 300) (clara.draw:color 30 27 46)) (clara.windows:start))
 (T NIL T T)
@@ -584,13 +584,13 @@ OK
     (write-line "(clara.windows:define-application \"Hello\" #'hello)" out))
 "(clara.windows:define-application \"Hello\" #'hello)"
 > (list (clara.windows:install-application "Hello" "/clara/hello.lisp") (clara.windows:applications) (find-package "HELLO"))
-("Hello" ("REPL" "Emma" "Files" "Parker" "Hello") NIL)
+("Hello" ("REPL" "Emma" "Files" "Ares" "Parker" "Hello") NIL)
 > (list (clara:thread-alive-p (clara.windows:launch "Hello" "Hello, world")) (package-name (find-package "HELLO"))
         (clara.windows:window-title (clara.windows:focused-window)))
 (T "HELLO" "Hello, world")
 > (list (clara.windows:remove-application "Hello") (find-package "HELLO") (clara.windows:applications)
         (length (clara.windows:windows)))
-("Hello" NIL ("REPL" "Emma" "Files" "Parker") 1)
+("Hello" NIL ("REPL" "Emma" "Files" "Ares" "Parker") 1)
 > (defpackage "PLAY" (:use "COMMON-LISP") (:export "BALL"))
 #<PACKAGE "PLAY">
 > (in-package "PLAY")

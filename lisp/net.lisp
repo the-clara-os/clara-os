@@ -2531,7 +2531,14 @@
 ;; than LIMIT bytes is not taken. Where the other side says that the file
 ;; is to be had at another address, that one is asked, three times at
 ;; most; but never from an address that is kept closed at one that is not.
-(defun fetch (address &key (limit 16777216))
+;; Three more values say what a browser wants to know: the address that
+;; the file was had at in the end, the number that the other side answered
+;; with, and the lines of the head of its answer. With ANY, whatever the
+;; other side answers is taken as it is, with what it sent along as the
+;; file: a page that is not there is a page all the same, and where the
+;; other side says that the file is somewhere else, that is for the caller
+;; to read from those lines and to follow.
+(defun fetch (address &key (limit 16777216) any)
   (let ((moves 0))
     (loop
       (multiple-value-bind (host port path secure) (parse-address address)
@@ -2584,7 +2591,7 @@
                      ;; A file in chunks says how long it is as it goes, and is over when the connection is.
                      (when chunked
                        (setq length nil))
-                     (cond ((= status 200)
+                     (cond ((or any (= status 200))
                             (when (and length (> length limit))
                               (error "~A is ~D bytes, and more than ~D are not taken" address length limit))
                             (wait-for connection (lambda () (and length (>= (- (said connection) end) length))))
@@ -2608,7 +2615,8 @@
                                   (setq length (or (join-chunks memory bytes)
                                                    (error "~A sends ~A in chunks that do not come to an end" host path))))
                                 (setq kept t)
-                                (return (values memory (or length bytes) (floor (connection-room connection) 4096))))))
+                                (return (values memory (or length bytes) (floor (connection-room connection) 4096)
+                                                address status (remove "" lines :test #'string=))))))
                            ((and (member status '(301 302 303 307 308)) place (> (length place) 0))
                             (when (>= moves 3)
                               (error "~A is said to be somewhere else more often than is followed" address))
