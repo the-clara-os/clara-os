@@ -493,6 +493,37 @@ OK
 > (list 'closed (pointer-at 696 76 0) (where))
 ^M mouse_button 0
 (CLOSED OK (100 104))
+> (defun shows (row says)                                               ; a row of the window on top begins with that
+    (let* ((face (clara.windows:window-surface (clara.windows:focused-window)))
+           (width (* 8 (length says))) (scratch (clara.draw:allocate-surface width 16)) (same t))
+      (clara.draw:draw-text scratch 0 0 says (clara.draw:color 232 227 244) (clara.draw:color 30 27 46))
+      (dotimes (y 16)
+        (dotimes (x width)
+          (unless (= (clara.draw:pixel scratch x y) (clara.draw:pixel face x (+ (* 16 row) y)))
+            (setq same nil))))
+      (clara.draw:free-surface scratch)
+      same))
+SHOWS
+> (defun bar-p ()                                                       ; the cursor is after the prompt of its last row
+    (= (clara.draw:pixel (clara.windows:window-surface (clara.windows:focused-window)) 16 383) (clara.draw:color 232 227 244)))
+BAR-P
+> (defun p () (dotimes (i 60) (print i)) (k))
+P
+> (list (clara:wait-event *seen* 60000) (until (bar-p)) (shows 0 "38 ") (shows 21 "59 ") (shows 23 "> "))
+^T (p)
+(T OK T T T)
+> (list (until (shows 0 "15 ")) (shows 23 "38 ") (bar-p))                ; Page Up: the rows that had left the window
+^M sendkey pgup
+(OK T NIL)
+> (list (until (bar-p)) (shows 0 "38 ") (shows 23 "> "))                 ; Page Down: the last rows, and the cursor
+^M sendkey pgdn
+(OK T T)
+> (until (shows 0 "15 "))
+^M sendkey pgup
+OK
+> (list (clara:wait-event *seen* 60000) (until (bar-p)) (shows 21 "> (k)") (shows 22 "K ")) ; any other key: the last rows
+^T (k)
+(T OK T T)
 > (defvar *window* (clara.windows:open-window "A picture" 200 120 :x 500 :y 400))
 *WINDOW*
 > (list (picture (clara.windows:window-surface *window*)) (clara.windows:show *window*) (clara.windows:show *window*)

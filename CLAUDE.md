@@ -1573,7 +1573,14 @@ Rules:
   reads, evaluates and prints there and at the serial port is still the
   listener (lisp/listener.lisp, the package CLARA.LISTENER), and the
   thread at the serial port is still named so. Ctrl-C there is
-  `clara:interrupt-thread`. What
+  `clara:interrupt-thread`. A terminal keeps what its rows say (issue
+  #46): `line` is the row that is being written, `kept` a ring of the
+  finished ones (`keep-row`, `kept-row`), and `back` how many rows before
+  the last ones the window shows, which Page Up and Page Down change in
+  the thread of the keyboard (`scroll`, with the terminal's lock). Whatever
+  draws a character checks `back` first, and whatever changes what a row
+  says changes `line` as well as the pixels: the tests hold the pixels
+  against the rows after going back and forth (`rows-show-p`). What
   the bar, the list and the titles say goes through `label`, which writes
   halfway up a strip in the window manager's letters: the font that
   `clara.windows:*font*` names, which START makes (`*letters*`), or the

@@ -907,6 +907,48 @@ architectures (kernel/vm.c).
   and the threads having stayed behind, and it starts afresh, with one
   REPL. A world that is made from the files starts at the console, and
   the window manager is started from there.
+- A terminal keeps what its rows say (Julio's issue #46, 0.0.56: "Let
+  the REPL scroll up, infinitely preferably"). Until then it knew nothing
+  of what it had drawn, like the console, and a row that moved out at the
+  top was gone. The row that is being written is a string now, a row
+  that is finished joins a ring of strings, and the window can show any
+  of them: Page Up and Page Down. What is kept is rows as they were
+  drawn, and not lines as they were written. A window has one width for
+  as long as it is open, so nothing is ever laid out again, a long line
+  is as many rows as it took, and going back is drawing strings that are
+  there. The day a window can be made wider, the rows have to say where
+  a line went on.
+- The rows are in the heap. The collector frees them with the terminal,
+  whichever way the window went, where page frames would have to be
+  given back by hand, as a surface's are, by everything that can close a
+  window. The price is that all the rows there are means the heap: a
+  loop that prints without end was harmless until somebody typed Ctrl-C,
+  and with every row kept it fills the heap. On a machine of 128 MiB
+  that took 227124 lines of 81 characters, about a minute, and from then
+  on the prompt at the serial port answered `the heap is full` to every
+  form, the one that would have cleared the window among them, until the
+  window was closed by its box. So a terminal keeps a number of rows
+  beyond its window,
+  `clara.terminal:*rows-kept*`, and the number is 100000 unless somebody
+  says another; NIL is all of them, for whoever takes that price. With
+  the number the same machine wrote 400000 such lines and answered as
+  before. A window that has had 100000 rows of thirty characters holds
+  13 MiB of them, and the heap is 33 MiB long where it was 5, since the
+  collector lets as much be made as is in use before it looks again. A
+  world that is saved then has the rows of its open windows in it, like
+  everything else in the heap: 34.0 MiB where it was 6.9. And it is 32.3
+  MiB with the window closed again, an image being the heap as far as
+  its last object.
+- The two keys are heard where they arrive, in the thread of the
+  keyboard, which draws the rows: the one thing that a window is told
+  and that is not handed on to the window's own thread. That thread is
+  the one that computes, and the rows are wanted while it does. The
+  drawing has the lock that every writer has, so it comes between two
+  strings. While the window shows rows from further back, a writer draws
+  nothing: it finishes rows, and the window's place goes back by one with
+  each, so the window goes on showing what it showed, until the oldest of
+  those rows is no longer kept. Any other key shows the last rows first,
+  since that is where what it types is echoed.
 - The window manager has one key of its own, Tab with Alt held, which
   brings the lowest window to the top and so each in turn. Every other key
   is the focused window's, as it comes.

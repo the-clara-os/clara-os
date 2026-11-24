@@ -1600,6 +1600,88 @@ Infrastructure, done:
   volumes of a whole run has such a question. What it left is issue #142:
   the disk that `make image` makes for UTM is 64 MiB as before, and
   nothing but a line typed by hand makes a larger one of it.
+- **The REPL looks back** (2026-11-24, version 0.0.56). What left a REPL
+  window by its top was gone (issue #46: "Let the REPL scroll up,
+  infinitely preferably"). A terminal keeps what its rows say now
+  (lisp/terminal.lisp): the row that is being written as a string, and
+  the finished ones in a ring of strings. Page Up shows the rows before
+  the ones that the window shows, a window's worth less one, as far back
+  as the first, and Page Down the rows after them, down to the last. What
+  is written meanwhile is written and not drawn, and the window goes on
+  showing what it showed, so what a form prints can be looked at while it
+  goes by; any other key brings the last rows back, where it is typed.
+  The two keys are the window's own and never reach its stream: they are
+  heard in the thread of the keyboard, which draws the rows with the lock
+  that a writer has, since the thread that reads there is the one that
+  computes. `clara.terminal:*rows-kept*` says how many rows are kept
+  beyond the window, 100000 unless it says otherwise, and NIL for all of
+  them; every terminal goes by it as a row is finished, and
+  `clara.terminal:clear` forgets them all. It is not all of them from the
+  start, which the issue would rather have, because the rows are in the
+  heap: with NIL, a machine of 128 MiB had its heap full after 227124
+  lines of 81 characters, about a minute of a loop that writes, and from
+  then on its prompt answered `the heap is full` to every form, the one
+  that clears the window among them, until the window was closed by its
+  box, which gave the machine back; with 100000 the same machine wrote
+  400000 such lines and answered as before. Writing costs what it cost:
+  20000 rows of thirty characters take 4.85 s in a window of 80 by 24
+  under hvf, where 0.0.55 takes 4.82, and 100000 take 24.8 s, where it
+  takes 25.0. The memory is the price: 100000 rows of thirty characters
+  are 13 MiB, the heap of a world that was 5 MiB long is 33 with them,
+  and that world is 34.0 MiB when it is saved, where it was 6.9, and 32.3
+  with the window closed again, so the disk of 35 MiB that the tests'
+  machines have no longer holds it. The screen of the first prompt,
+  before there are windows, keeps nothing, as before. The manual says it
+  under "The prompt", "Windows" and "Text in a window", whose transcript
+  asks for the variable, and in a row of its table of what goes wrong;
+  DESIGN.md has the decision under Windows. The host tests go back and
+  forth in a terminal of three rows and hold its pixels against what the
+  rows say: with rows written meanwhile, with a line that is read, with
+  2, 0, NIL and no number in the variable and a smaller number under a
+  window that looks back, a ring that grows and one that comes round, a
+  terminal of one row, and the REPL itself; 17909 checks, in 82 s on the
+  Mac where they took 80. The first session of `make test` types a form
+  that prints sixty rows into the REPL's window by QEMU's keyboard, then
+  Page Up, Page Down, Page Up and a line, and holds the pixels of the
+  window's rows against the same letters drawn beside them, on all three
+  machines of that session. `make test` passed on the Mac, the host tests
+  and all nineteen boots; the container of Ubuntu was not run. Mistakes
+  that were planted, one at a time, in copies of the tree, forty-nine:
+  the window's first row off by one, a page that is a whole window, the
+  two keys the other way round, a key that is handed on, a key that
+  leaves the window looking back, rows drawn or pixels moved while it
+  looks back, the place not moved with a row, or not held to the rows
+  there are, the cursor drawn or not taken away or not put back, the
+  spaces kept, the string not made blank, the limit one more and one
+  less, 0 for all, a negative number and what is no number taken as they
+  come, the ring's oldest place not moved, not brought round, its count
+  not lowered, a row put or read past its end or from its start, a longer
+  ring with the old order, or one place longer, a row that went still
+  held, CLEAR keeping the rows, the place, the ring, the oldest place or
+  the string, a character not kept, kept at the start of the row, or the
+  wrong one, the row that is being written left out, the rows drawn from
+  the last, or over what was there, a window that goes back before the
+  first row or on past the last, rows not shown, a new row that keeps
+  nothing, another default and another first ring. The host tests noticed
+  all of them, and passed with a comment changed. Three of them they
+  could not have noticed as first written, which is why they have a ring
+  that grows while its oldest row is not at its start, a CLEAR with a row
+  half written, and a count of the places that still hold something. By
+  hand, at a kernel under QEMU: a terminal of the session's own, paged by
+  QEMU's keyboard, with rows written under it, 3 and NIL in the variable,
+  and CLEAR. A copy of the disk of Julio's machine as it stood that
+  afternoon (0.0.55-8183adea, 1024 MiB), with a copy of
+  `~/clara-work.dmg`: it took this system at once, made its world again
+  of his text, 17 forms, the package that he had installed, his list in
+  his order and two variables with their values, came up with one REPL
+  window, and that window went back and forth by QEMU's keyboard as the
+  session's does; the world that it saved is 7.0 MiB, and 1009 MiB of the
+  disk are free. On Julio's own keyboard nothing was typed. What it left
+  is in the issues: #144, how many rows are kept; #145, the world that is
+  saved with them; #146, that nothing says when a window looks back;
+  #147, the screen of the first prompt; and a line each on #134, the
+  wheel, which has something to move here now, and on #99, since a window
+  that changes its width has rows of the old one.
 
 Infrastructure, for sessions with budget left over:
 
