@@ -112,6 +112,17 @@ one that runs, its manifest is signed with the key that the system has
 (Ed25519, checked in the kernel), and every file is what the manifest
 says. `:from "https://.../"` names another place. What a connection is kept closed with is in the kernel too,
 each piece held against the examples of its standard at every boot.
+And something can be added to a system that runs (lisp/parker.lisp): a
+package is a name, a version and files of Lisp, some of which are loaded
+when it is installed and some of which are applications for the
+launcher's list. Packages are published as the system is, and beside it,
+at `https://claraos.org/packages/`: an index of what there is, signed
+with the key of the releases, and the files, each of which a machine
+holds against the index. Parker, an application in the launcher's list,
+shows what is installed and what can be had, and installs the package
+that is picked; `(clara.parker:install "sun")` does the same at a prompt.
+What is installed is a directory of the disk, which an upgrade leaves
+alone, and every world that is made from the files loads it.
 And the machine plays sound (lisp/sound.lisp): a driver for virtio's sound
 card and one for Intel's (lisp/hda.lisp), and a thread that adds up what
 is sounding, a hundredth of a second at a time. `(clara.sound:tone 440 500)` is a tone, of one of five shapes;
@@ -162,9 +173,10 @@ Then, on either:
                       # turned off by its power button (tools/power.txt); a machine of each kind takes
                       # another system from a second disk and has to come up as it, and one takes a
                       # system that does not start and has to be the old one again (tools/upgrade.txt,
-                      # tools/at-once.txt, tools/trial.txt); one fetches a signed release of another
-                      # system from a web server on this computer, and has to come up as it
-                      # (tools/network.txt, tools/serve.py);
+                      # tools/at-once.txt, tools/trial.txt); one installs a package from a web server
+                      # on this computer, fetches a signed release of another system from it, and has to
+                      # come up as that system with the package in its world (tools/network.txt,
+                      # tools/serve.py);
                       # and what the user manual shows of the prompt is typed at one more machine,
                       # which has a second disk, as WORK= below gives one
     make run-aarch64  # QEMU window, serial on the terminal: type a form in either; Ctrl-C stops a form
@@ -187,7 +199,9 @@ Then, on either:
     make screenshot   # after make test: site/boot.png, the website's picture, of the screen as it was left
     make release KEY=my.key RELEASES=releases
                       # the build as a release in that directory, signed with the key in that file: what the
-                      # website's workflow publishes at https://claraos.org/releases/, with the project's key
+                      # website's workflow publishes at https://claraos.org/releases/, with the project's key;
+                      # with PACKAGES=<a directory> the packages of packages/ are laid out there as well,
+                      # with their index and its signature, which is what https://claraos.org/packages/ has
 
 Layout:
 
@@ -196,11 +210,13 @@ Layout:
     kernel/lisp/     the Lisp runtime: objects and the heap, symbols and packages, the reader, the printer,
                      the evaluator, and the machine that compiled code runs on (vm.c)
     lisp/            Lisp sources: the language's own part, the compiler, the object system, the console, drawing, the drivers, the
-                     file system, the fonts, the network, sound, the listener, the window manager and the terminal in a window, which the kernel loads as it starts, and
-                     the two applications, emma.lisp and files.lisp, which the launcher loads when they are picked;
+                     file system, the fonts, the network, sound, the listener, the window manager, the terminal in a window and Parker, which installs packages,
+                     all of which the kernel loads as it starts, and the two applications, emma.lisp and files.lisp, which the launcher loads when they are picked;
                      the build copies them to the system's directory on the ESP, \clara\<its name>, read at boot
     fonts/           the console font, Spleen 8x16, which tools/bdf2c.py turns into kernel/font.c, and the
                      fonts of outlines, the Go fonts, which go onto the boot volume as they are
+    packages/        the packages that https://claraos.org/packages/ has, a directory each: the package's
+                     files, and a file "package" that says what it is (the manual, "A package of your own")
     site/            the website: the front page and the user manual (manual.html), filled in from the
                      repository and held against it by site/build.py (`make site`)
     tools/           run.sh (QEMU), mkdisk.py (the disk a machine boots from), system.py (the name of a build
@@ -208,8 +224,8 @@ Layout:
                      screenshot), session.txt and resumed.txt (what the check types and what must come
                      back, at a new world and at one that was saved), power.txt, upgrade.txt, at-once.txt,
                      trial.txt and network.txt (the same for shutting down and for upgrades), serve.py (the
-                     web server that a boot fetches from), release.py (a key, a signature, and a system
-                     laid out as a release), heard.py (what a machine played, from the file that QEMU wrote
+                     web server that a boot fetches from), release.py (a key, a signature, a system
+                     laid out as a release, and packages laid out with their index), heard.py (what a machine played, from the file that QEMU wrote
                      of it), mkimage.sh (UTM disk), fontcheck.c (what FreeType says of a
                      font file, for the tests of lisp/type.lisp; built by hand, and no part of `make test`)
 

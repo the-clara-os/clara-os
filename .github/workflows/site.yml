@@ -20,6 +20,7 @@ on:
       - 'tools/**'
       - 'Makefile'
       - 'fonts/**'
+      - 'packages/**'
       - '.github/workflows/site.yml'
   workflow_dispatch:
 
@@ -86,7 +87,7 @@ jobs:
           key="$RUNNER_TEMP/release-key"
           trap 'rm -f "$key"' EXIT
           (umask 077 && printf '%s\n' "$RELEASE_KEY" > "$key")
-          make release KEY="$key" RELEASES=_site/releases
+          make release KEY="$key" RELEASES=_site/releases PACKAGES=_site/packages
 
       - name: Upload the Site
         uses: actions/upload-pages-artifact@v5

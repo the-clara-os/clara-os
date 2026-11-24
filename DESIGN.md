@@ -2546,6 +2546,113 @@ architectures (kernel/vm.c).
   and has its power button pressed, after which it has to save once more
   and be gone by itself, with its volume in order.
 
+## Packages (decided for issue #43, 2026-11-23)
+
+- A package is a name, a version and files of Lisp: files that are loaded
+  when it is installed, and applications for the launcher's list. The
+  word is Julio's ("Parker - Package Management"), and the language has
+  it already for a set of names, so the sources and the manual say "a
+  package of the language" where they mean that one. What installs
+  packages is Parker: lisp/parker.lisp, the package CLARA.PARKER, and an
+  application of that name with a window.
+- Parker is a file of the world and not one that the launcher loads when
+  it is picked, because a start needs it: the packages that are installed
+  have to be in a world before the text of `/home` is loaded, which may
+  be written with them.
+- Packages are published the way the system is, and beside it:
+  `https://claraos.org/packages/`, laid out and signed by the workflow
+  that lays out the release, with the same key, from the directory
+  `packages/` of the repository. A machine takes them the way it takes a
+  release: by HTTPS and no other road, the index held against its
+  signature, every file against the index by its length and its SHA-512.
+  The same key signs two kinds of text, and neither can be offered as the
+  other: a manifest begins "ClaraOS system: " and an index "ClaraOS
+  packages", and each reader takes its own first line and nothing else.
+  One key is what was there; whether packages should have a key of their
+  own is an open question (issue #111).
+- A source is an address and the public half of a key, and a machine can
+  name several (`clara.parker:*sources*`): whoever wants to publish
+  packages needs a web server and a key, and nothing of ClaraOS's. Of two
+  sources with a package of one name the first is asked.
+- A package is code, and has the whole machine, like everything here:
+  there is one address space and no protection but the language's. So
+  what is trusted is a source's key, and the manual says that plainly.
+- The index is lines of words, like a manifest, and is read without the
+  Lisp reader, which would intern whatever arrived. A line that Parker
+  does not know is passed over, so that a later one can say more: every
+  ClaraOS that there has been reads the index of the day, so its form is
+  only ever added to. A package with a line that is known and wrong, or
+  that names a file it has not, is left out of what a machine is shown:
+  it could not be installed as written. The tool that lays packages out
+  (tools/release.py) refuses to publish such a one.
+- A file is published under its package's version,
+  `<name>/<version>/<file>`. A website is not replaced in one instant,
+  and an index that is a moment older or newer than the files then names
+  files that are either whole or not there, never the ones of another
+  version, which would fail their sums for no reason that a user can
+  see.
+- On the machine a package is a directory, `/packages/<name>`, on the
+  disk that the machine was started from, with its files and a file
+  `package`: what the index said of it, word for word, with the lines
+  that this Parker passed over, which a later one may read. That file is
+  written last and deleted first, so a machine that stops on the way has
+  a package that is not installed, and never one that is and lacks a
+  file. Every file is fetched, and held against the index, before the
+  first is written: a package that cannot be had whole leaves the disk as
+  it was, also where it was to replace an older version.
+- The disk says what is installed, and a world follows it (`follow`). A
+  world is its system's and is made again at every upgrade, so what a
+  world has cannot be what counts; and a world that was saved can be
+  older than the disk, in either direction. So a world that a start made
+  loads every package that the disk has, each after the ones that it
+  needs, and a world that came back as an image takes what was installed
+  since it was saved and lets go of what was taken out. A package is
+  given as long as a file of `/home`, in a thread of its own, and after
+  two starts that did not come to a prompt none is loaded: a package may
+  be the reason.
+- Of a package's files, the ones that it says are to be loaded are loaded
+  at once, and an application's file when the application is first
+  picked, which is the launcher's own way with a file and needed nothing
+  new: an application of a package is installed with the full name of
+  its file.
+- What loading made is remembered by the world, as the names of the
+  packages of the language that were new afterwards. Taking a package
+  out deletes those, so what the files defined is gone, and takes its
+  applications out of the list. What a file defined in a package of the
+  language that was there before stays: nothing says whose it is.
+- A package that fails as it is loaded when it is installed is not
+  installed, and the disk has nothing of it. One that fails as a start
+  loads it stays installed, is said, and is tried again at the next
+  start. A newer version that fails is the second case: the older one is
+  gone by then (issue #112).
+- What a package defined is not the user's: the world that leaves for a
+  newer system does not write the packages of the language that came of
+  installed packages into its account, since the newer system has them
+  from the disk. lisp/system.lisp is loaded before lisp/parker.lisp and
+  knows of it what it hands over as it is loaded, two functions
+  (`clara.system::*parker*`), as lisp/net.lisp knows of TLS.
+- Parker's window asks the sources as it opens, and its last row says
+  whom it asks, before it does. That is the second address which a
+  machine asks without somebody having typed it; the first is the place
+  of the releases. Nothing asks while the window is not open.
+- No test asks the place. The host tests take the sources away from the
+  system as they do the place of the releases, and a session names the
+  test's own web server, or has the test's name server, which knows no
+  name outside this computer.
+- How it is tested. Under SBCL the made-up network's web server hands out
+  sources, with TLS, signed with the tests' key: what an index says and
+  what it leaves out; every refusal, each with the disk and the world
+  held to having nothing of the package afterwards and no page frame
+  kept; a disk that stops at each request in turn while a package is
+  written; versions that replace each other; every kind of start; and
+  the window, cell by cell. And by booting: the machine that fetches a
+  release (aarch64-network) is first given the repository's own packages
+  by the test's web server. It has to refuse a source by plain HTTP, one
+  without a key and one signed with another key, install `sun`, find its
+  files on the volume, launch its application in a window, replace it by
+  a newer version, upgrade the system and come up with the package
+  loaded into the world that was made again, and take it out.
+
 ## Conventions
 
 - C: lower_snake_case for functions and files. Kernel-wide symbols carry

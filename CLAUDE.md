@@ -882,8 +882,9 @@ Rules:
   a tool either, and the secret RELEASE_KEY of the environment
   `github-pages`. `make release KEY=<file> RELEASES=<directory>` lays
   the build out as a release, with no other key than the one whose half
-  is in the source, and holds what it laid out against that half; it is
-  what .github/workflows/site.yml runs, and that workflow cannot be
+  is in the source, and holds what it laid out against that half; with
+  `PACKAGES=<directory>` it does the same for the packages of packages/
+  (below, under packages). It is what .github/workflows/site.yml runs, and that workflow cannot be
   tried before a merge, so whatever it is to do goes into `make
   release`, which `make release-test` runs with a key of its own, at the
   beginning of `make test` (`PUBLIC=` on the command line says which
@@ -1210,7 +1211,7 @@ Rules:
   is the machine's in `*features*`, then clos, which is the exception
   above, and then the console, draw, pci,
   virtio, usb, input, disk, fat, type, random, net, hda, sound, the listener,
-  windows, terminal, system and tls), and
+  windows, terminal, system, tls and parker), and
   lisp/host/tests.lisp loads the same files: a new one goes into both, and what its package exports goes into
   a list of names in the manual, or `make site` stops. A file that is an
   application is not in `world`, and the launcher loads it (below). What `lisp_main`
@@ -1632,6 +1633,61 @@ Rules:
   editor through the screen: `cursor-at` (defined there) looks for the
   cursor's bar at a cell of the focused window's surface. What is typed
   between two waits stays under 64 events of the keyboard.
+- Packages (lisp/parker.lisp, the package CLARA.PARKER, Julio's issue #43;
+  DESIGN.md has what was decided). Parker is a file of `world`, the last,
+  and its application is defined there like the REPL's: the launcher's
+  list has four applications of the system's, which the sessions and the
+  manual write out. A package is taken as a release is: HTTPS only, the
+  index against its signature, every file against the index
+  (`ask`, `fetch-files`). The index's form is read by every ClaraOS that
+  there has been, so it is only ever added to: a line that `entry-line`
+  does not know is passed over, and a package with a line that it knows
+  and that is wrong is left out (`whole-p`). `described` in
+  tools/release.py holds what is published to the same rules, so a
+  change to what a line may say is a change to both. On the disk the
+  file `package` is written last and deleted first (`take`, `erase`), and
+  every file is fetched before the first is written.
+- The disk says what is installed, and a world follows it (`follow`).
+  lisp/system.lisp calls it at every start, before the text of `/home`,
+  through `clara.system::*parker*`, which lisp/parker.lisp sets as it is
+  loaded: `:start`, with `:made`, `:resumed` or `:bare`, and `:packages`,
+  the names of the packages of the language that are an installed
+  package's and so not the user's (`user-packages`). What a world has is
+  `*loaded*`, a variable of the world's like any other. What a start says
+  of packages goes through `clara.system::tell`, so the report has it,
+  and begins with `packages: `.
+- The tests of Parker (lisp/host/tests.lisp, "Parker"). `published` is
+  what a web server has of a source, signed with the tests' key, or wrong
+  in the ways its options say; `installed-tree` what a disk has of a
+  package; `parker-machine` a machine with such a disk on such a network,
+  started as its state says; `not-installed` what a refusal leaves, which
+  has to be nothing, on the disk and in the world. Under SBCL the world
+  is one for all machines, so the packages of the language that a test's
+  package makes are named in `forget-world`, which takes them away
+  between machines. LOAD is the host's there: `clara.parker::*load*` is
+  given a function that reads the machine's disk, and an application's
+  file, which the launcher loads with LOAD, is never loaded by a host
+  test. That is the boot's to try: tools/network.txt installs `sun` from
+  the test's web server, launches its application, replaces it by a
+  newer version (`packages-newer` in the Makefile, the same package under
+  a higher number), upgrades the system and takes it out. A package that
+  is added to packages/ gets its lines there.
+- No test asks the place where packages are published, as none asks the
+  place of the releases. lisp/host/tests.lisp takes
+  `clara.parker:*sources*` away once it has looked at it. A session that
+  types `clara.parker:available`, `install` or `update`, or launches
+  Parker, whose window asks as it opens, has set that variable first, or
+  has the test's name server, which knows no name outside this computer.
+- What claraos.org has of packages is the directory packages/, laid out
+  by `python3 tools/release.py packages` and signed with the release's
+  key: `make release PACKAGES=<directory>`, which the website's workflow
+  runs and `make release-test` tries with a key of its own. The
+  directory that is laid out is made anew each time, so it is never one
+  that holds anything else. A change to packages/ alone is no change to
+  the system and bumps no version of it: a package has its own version,
+  in the first line of its file `package`, and a machine that has the
+  package takes a change only when that number is higher
+  (`clara.parker:update`).
 - The Lisp runtime is kernel/lisp/, and lisp.h is its interface: the
   comment at its top says what a Lisp value is. In C a value is a `lisp`,
   one tagged word. Look at the tag (`lisp_is_cons`, `lisp_is_symbol`,
@@ -1825,9 +1881,10 @@ Rules:
   site/build.py from ROADMAP.md, kernel/kernel.h (the version)
   and the console font (`make site`, then open build/site/index.html), and
   published by .github/workflows/site.yml on every push to main that touches
-  them, or the system: the same workflow builds the system of that
-  commit and publishes it beside the pages, as the release at
-  `https://claraos.org/releases/` (above). The page reads the milestone
+  them, the system, or packages/: the same workflow builds the system of
+  that commit and publishes it beside the pages, as the release at
+  `https://claraos.org/releases/` (above), and the packages at
+  `https://claraos.org/packages/`. The page reads the milestone
   entries of ROADMAP.md, so keep their form.
 - The user manual is site/manual.html, the second page of the website
   (Julio, 2026-11-17: it "should have everything a user needs to operate

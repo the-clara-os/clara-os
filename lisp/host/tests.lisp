@@ -89,6 +89,7 @@
 (load-source "lisp/terminal.lisp")
 (load-source "lisp/system.lisp")
 (load-source "lisp/tls.lisp")
+(load-source "lisp/parker.lisp")
 (load-source "lisp/emma.lisp")               ; the two that the kernel leaves on the volume for the launcher to load
 (load-source "lisp/files.lisp")
 (defvar *defined-applications* clara.windows::*applications*) ; what the files defined, for the tests to put back
@@ -107,6 +108,11 @@
              (and (every (lambda (digit) (digit-char-p digit 16)) clara.system:*release-key*) t)))
 (setq clara.system:*releases* nil
       clara.system:*release-key* nil)
+;; The same for where packages are published (lisp/parker.lisp): one source,
+;; beside the releases, whose index is signed with the key of the releases.
+(check '(("https://claraos.org/packages/" "2c67792528bac0b3570bb966e176e9b60ee04bfa0084ce50676db6cd8fca8dc6"))
+       clara.parker:*sources*)
+(setq clara.parker:*sources* nil)
 
 ;;; Names. boot.lisp is the part of Common Lisp that ClaraOS has in Lisp,
 ;;; and SBCL has all of it already, so it is read here as text. What it
@@ -6498,14 +6504,15 @@
          (clara.windows:stop))
     (setf (symbol-function 'clara.terminal:open-terminal) open-terminal)))
 (setq clara.windows::*applications* *defined-applications*)
-;; What lisp/terminal.lisp defined and installed when it was loaded: the two
-;; that are files have a function here because the tests loaded the files.
-(check '(("REPL" nil) ("Emma" "emma.lisp") ("Files" "files.lisp"))
+;; What lisp/terminal.lisp defined and installed when it was loaded, and
+;; after it lisp/parker.lisp: the two that are files have a function here
+;; because the tests loaded the files.
+(check '(("REPL" nil) ("Emma" "emma.lisp") ("Files" "files.lisp") ("Parker" nil))
        (mapcar (lambda (application)
                  (list (clara.windows::application-name application) (clara.windows::application-file application)))
                clara.windows::*applications*))
-(check '("REPL" "Emma" "Files") (clara.windows:applications))
-(check (list #'clara.terminal:repl #'clara.emma:edit #'clara.files:browse)
+(check '("REPL" "Emma" "Files" "Parker") (clara.windows:applications))
+(check (list #'clara.terminal:repl #'clara.emma:edit #'clara.files:browse #'clara.parker:parker)
        (mapcar #'clara.windows::application-function clara.windows::*applications*))
 
 ;;; What happens to a window, kept for its program: the keys that are typed
@@ -14916,6 +14923,912 @@
 (check "that volume holds no ClaraOS other than this one, 0.0.0-host"
        (condition-text (lambda () (clara.system:upgrade :from (clara.system:boot-volume)))))
 (setq clara.system:*releases* nil)
+
+;;; Parker (lisp/parker.lisp): packages, which a source publishes as files
+;;; with an index of them and a signature of the index. What arrives is
+;;; held against both, like a release; what is installed is a directory of
+;;; the machine's disk; and a world follows the disk.
+
+(check '(t t t t nil nil nil nil nil nil)
+       (mapcar (lambda (name) (and (clara.parker::name-p name) t))
+               (list "sun" "a" "7-zip" (make-string 32 :initial-element #\x) "" "-sun" "Sun" "su n" "sün" (make-string 33 :initial-element #\x))))
+(check '(t t t t nil nil nil nil nil nil nil nil)
+       (mapcar (lambda (name) (and (clara.parker::file-name-p name) t))
+               (list "sun.lisp" "README" "a_b-c.TXT" (make-string 64 :initial-element #\x) "" ".hidden" "package" "Package" "in/side.lisp"
+                     "..\\up" "a name" (make-string 65 :initial-element #\x))))
+(check '(t t t nil nil nil nil nil)
+       (mapcar (lambda (text) (and (clara.parker::version-p text) t)) '("1" "1.0.2" "10.20.30.40" "" "1.x" "v1" "1.0-2" "1..2")))
+(check '(t t nil nil nil)
+       (mapcar (lambda (name) (and (clara.parker::title-p name) t))
+               (list "Sun" "Load Init - First" "" " Sun" (make-string 41 :initial-element #\x))))
+
+;; What an index says, line by line; what it passes over; and which of its
+;; packages it leaves out: one with a line that is not what such a line has
+;; to be, one that names a file it has not, and the second of a name.
+(defvar *sum* (make-string 128 :initial-element #\a))
+(defun read-entries (control &rest arguments)
+  (mapcar (lambda (entry)
+            (list (clara.parker::entry-name entry) (clara.parker::entry-version entry) (clara.parker::entry-about entry)
+                  (clara.parker::entry-system entry) (clara.parker::entry-needs entry) (clara.parker::entry-loads entry)
+                  (clara.parker::entry-applications entry)
+                  (subst "sum" *sum* (clara.parker::entry-files entry) :test #'equal)))
+          (clara.parker::read-index (apply #'format nil control arguments))))
+(check '(("sun" "1.0.0" "The sun, in a window" "0.0.52" ("moon" "stars") ("disc.lisp" "more.lisp") (("Sun" . "sun.lisp") ("Sun - Twice" . "sun.lisp"))
+          (("disc.lisp" 12 "sum") ("more.lisp" 0 "sum") ("sun.lisp" 3 "sum")))
+         ("bare" "2" "" nil nil nil nil nil))
+       (read-entries "ClaraOS packages~%a line before the first package~%package sun 1.0.0~%about The sun, in a window~%system 0.0.52~%~
+                      needs moon~%needs stars~%signed by somebody~%load disc.lisp~%load more.lisp~%application sun.lisp Sun~%~
+                      application sun.lisp Sun - Twice~%file 12 ~A disc.lisp~%file 0 ~A more.lisp~%file 3 ~A sun.lisp~%~
+                      package bare 2~%" *sum* *sum* *sum*))
+(check '(nil nil (nil t) (nil nil) (nil nil) (nil nil))
+       (list (read-entries "ClaraOS packages~%") (read-entries "ClaraOS packages~%about nothing~%file 3 ~A x.lisp~%" *sum*)
+             (multiple-value-list (clara.parker::read-index (format nil "ClaraOS packages~%")))
+             (multiple-value-list (clara.parker::read-index ""))
+             (multiple-value-list (clara.parker::read-index (format nil "ClaraOS system: 0.0.1-new~%package sun 1.0.0~%")))
+             (multiple-value-list (clara.parker::read-index (format nil "package sun 1.0.0~%")))))
+(dolist (lines (list "package Sun 1.0.0~%" "package sun~%" "package sun one~%" "package sun 1.0.0 and more~%" "package  1.0.0~%"
+                     "package sun 1.0.0~%system newest~%" "package sun 1.0.0~%needs The Moon~%" "package sun 1.0.0~%needs sun~%"
+                     "package sun 1.0.0~%needs moon~%needs moon~%" "package sun 1.0.0~%load disc.lisp~%"
+                     "package sun 1.0.0~%load ../disc.lisp~%" "package sun 1.0.0~%application sun.lisp Sun~%"
+                     "package sun 1.0.0~%application sun.lisp~%file 3 ~A sun.lisp~%" "package sun 1.0.0~%application package Sun~%"
+                     "package sun 1.0.0~%file 3 ~A sun.lisp~%application sun.lisp  Sun~%"
+                     (concatenate 'string "package sun 1.0.0~%file 3 ~A sun.lisp~%application sun.lisp " (make-string 41 :initial-element #\x) "~%")
+                     "package sun 1.0.0~%file 3 ~A sun.lisp~%application sun.lisp Sun~%application sun.lisp SUN~%"
+                     "package sun 1.0.0~%file three ~A sun.lisp~%" "package sun 1.0.0~%file 3 short-sum sun.lisp~%"
+                     "package sun 1.0.0~%file 3 ~A in/side.lisp~%" "package sun 1.0.0~%file 3 ~A package~%"
+                     "package sun 1.0.0~%file 3 ~A sun.lisp~%file 4 ~A SUN.LISP~%" "package sun 1.0.0~%file 7~%"))
+  (check '(("after" "1")) (mapcar (lambda (entry) (list (first entry) (second entry)))
+                                  (read-entries (concatenate 'string "ClaraOS packages~%" lines "package after 1~%") *sum* *sum*))))
+(check '(("sun" "1.0.0") ("moon" "2")) (mapcar (lambda (entry) (list (first entry) (second entry)))
+                                               (read-entries "ClaraOS packages~%package sun 1.0.0~%package moon 2~%package sun 3.0.0~%")))
+;; What a package said comes back from the text that is written of it, word for word, with the lines that this passed over.
+(let ((text (format nil "ClaraOS packages~%package sun 1.0.0~%about The sun~%signed by somebody~%file 3 ~A sun.lisp~%" *sum*)))
+  (check text (clara.parker::entry-text (car (clara.parker::read-index (concatenate 'string text (format nil "package moon 2~%")))))))
+;; Each after what it needs, where the list has that; a ring comes out all the same.
+(flet ((ordered (&rest packages)
+         (mapcar #'clara.parker::entry-name
+                 (clara.parker::in-order (mapcar (lambda (package) (clara.parker::make-entry :name (car package) :needs (cdr package)))
+                                                 packages)))))
+  (check '(("a" "b" "c") ("c" "b" "a") ("b" "a" "c") ("a" "b") ("a" "b"))
+         (list (ordered '("a") '("b") '("c")) (ordered '("a" "b") '("b" "c") '("c")) (ordered '("a" "b") '("b") '("c" "a"))
+               (ordered '("a" "elsewhere") '("b")) (ordered '("a" "b") '("b" "a")))))
+
+;; Under SBCL, LOAD reads the host's files. A file of a package is on the
+;; machine's disk, and is read from there, a form at a time.
+(defun load-from-disk (name)
+  (let ((text (clara.fat:file-text name)) (*package* *package*) (start 0) (end (list 'end)))
+    (loop
+      (multiple-value-bind (form position) (read-from-string text nil end :start start)
+        (when (eq form end)
+          (return t))
+        (eval form)
+        (setq start position)))))
+(setq clara.parker::*load* #'load-from-disk)
+
+(defvar *brought* nil)    ; what the files of the tests' packages say as they are loaded, the last first
+
+;; What a source has of a package, as its index says it: NAME, VERSION,
+;; the LINES after the first, and its FILES, each (name contents); with
+;; WRONG, the name of a file whose sum the index has wrong.
+(defun entry-of (package &key wrong)
+  (destructuring-bind (name version lines files) package
+    (format nil "package ~A ~A~%~{~A~%~}~{~A~%~}" name version lines
+            (loop for (file contents) in files
+                  collect (format nil "file ~D ~A ~A" (length (octets contents))
+                                  (if (equal file wrong) (make-string 128 :initial-element #\0) (clara.host:sha-512-of (octets contents)))
+                                  file)))))
+
+;; A signature takes the tests an eighth of a second to make, and as long
+;; to hold something against: the arithmetic is big numbers here. Most of
+;; what follows is not about signatures, and a hundred machines write a
+;; package while their disk stops. So an index is signed in earnest where a
+;; test says so, and otherwise by a rule of these tests' own, which the
+;; function that holds a signature is taught for as long as they run: a
+;; sum over the key and the text. Whoever hands that function another
+;; text, another signature or another key than the right ones is still
+;; told no.
+(defvar *ed25519* #'clara.unsafe:ed25519)
+(defun quick-signature (key text)
+  (format nil "quick: ~A" (clara.host:sha-512-of (octets (concatenate 'string key ":" text)))))
+(defun quick-ed25519 (memory size signature key)
+  (if (eql 0 (search "quick: " signature))
+      (and (stringp key) (string= signature (quick-signature key (clara.unsafe:memory-string memory size))))
+      (funcall *ed25519* memory size signature key)))
+(setf (symbol-function 'clara.unsafe:ed25519) #'quick-ed25519)
+
+;; What a web server has of a source: the index of those packages, the
+;; signature of the index, and the files. The signature is made in earnest
+;; with SECRET, or when EARNEST says so.
+(defun published (packages &key (at "/packages/") secret earnest signature index wrong without)
+  (let ((text (or index (format nil "ClaraOS packages~%what a later Parker may say, and this one passes over~%~{~A~}"
+                                (mapcar (lambda (package) (entry-of package :wrong wrong)) packages)))))
+    (append (list (cons (concatenate 'string at "index") text)
+                  (cons (concatenate 'string at "index.sig")
+                        (cond (signature)
+                              ((or secret earnest)
+                               (format nil "~A~%" (digits-of (clara.host:ed25519-sign (or secret *secret*) (octets text)))))
+                              (t (format nil "~A~%" (quick-signature *public* text))))))
+            (loop for (name version nil files) in packages
+                  append (loop for (file contents) in files
+                               unless (equal file without)
+                                 collect (cons (format nil "~A~A/~A/~A" at name version file) contents))))))
+
+;; What a disk has of a package that is installed.
+(defun installed-tree (package)
+  (list (first package) (append (fourth package) (list (list "package" (format nil "ClaraOS packages~%~A" (entry-of package)))))))
+
+(defvar *lib-file* (format nil "(defpackage \"PARKER.LIB\" (:use \"COMMON-LISP\") (:export \"TWICE\"))~%(in-package \"PARKER.LIB\")~%~
+                                (defun twice (n) (* 2 n))~%(push :lib clara.tests::*brought*)~%"))
+(defvar *app-file* (format nil "(defpackage \"PARKER.APP\" (:use \"COMMON-LISP\"))~%(in-package \"PARKER.APP\")~%~
+                                (push (list :app (parker.lib:twice 21)) clara.tests::*brought*)~%"))
+(defvar *lib* (list "lib" "1.0.0" '("about A library of the tests" "load lib.lisp") (list (list "lib.lisp" *lib-file*) (list "data.txt" *long-text*))))
+(defvar *after-file* (format nil "(in-package \"PARKER.APP\")~%(push :after clara.tests::*brought*)~%"))
+(defvar *app* (list "app" "2.1.0" '("about An application of the tests" "needs lib" "load start.lisp" "application app.lisp The App"
+                                    "load after.lisp" "application more.lisp One More")
+                    (list (list "app.lisp" "(the application)") (list "start.lisp" *app-file*) (list "more.lisp" "")
+                          (list "after.lisp" *after-file*))))
+(defun lib-text ()
+  (format nil "ClaraOS packages~%~A" (entry-of *lib*)))
+(defun app-text ()
+  (format nil "ClaraOS packages~%~A" (entry-of *app*)))
+
+;; The packages of the language that the tests' packages make go with the
+;; world: the next machine is another one.
+(defun forget-world ()
+  (dolist (name '("PARKER.USER" "PARKER.APP" "PARKER.LIB" "PARKER.HALF"))
+    (when (find-package name)
+      (delete-package name)))
+  (setq clara.parker::*loaded* nil
+        *brought* nil))
+
+;; A connection that is kept closed takes the tests a tenth of a second
+;; to open, and a machine on a network as long to make. So one machine of
+;; these tests fetches over the made-up network, as a machine does, and the
+;; others have the two functions that fetch replaced: by ones that hand out
+;; what a web server named releases.test would, from a list, and note what
+;; they were asked for.
+(defvar *web* nil)        ; what that web server has: (path . contents) each
+(defvar *asked* nil)      ; and what it was asked for, the last first
+(defvar *net-fetch* #'clara.net:fetch)
+(defvar *net-fetch-text* #'clara.net:fetch-text)
+(defvar *when-asked* nil) ; a function that a test has it call as it is asked
+(defun web-file (address)
+  (let* ((host "https://releases.test") (path (and (eql 0 (search host address)) (subseq address (length host)))))
+    (unless path
+      (error "there is no machine of the name ~A" (subseq address 8 (position #\/ address :start 8))))
+    (push path *asked*)
+    (when *when-asked*
+      (funcall *when-asked*))
+    (let ((file (assoc path *web* :test #'string=)))
+      (unless file
+        (error "releases.test answers 404 to the request for ~A" path))
+      (cdr file))))
+(defun web-fetch (address &key (limit 16777216))
+  (let* ((text (web-file address)) (bytes (clara.unsafe:string-bytes text)) (pages (max 1 (ceiling bytes 4096))))
+    (when (> bytes limit)
+      (error "releases.test has more than ~D bytes at ~A" limit address))
+    (let ((memory (clara.unsafe:allocate-memory pages)))
+      (clara.unsafe:string-memory text memory)
+      (values memory bytes pages))))
+(defun web-fetch-text (address &key limit)
+  (declare (ignore limit))
+  (web-file address))
+(defun web (on)
+  (setf (symbol-function 'clara.net:fetch) (if on #'web-fetch *net-fetch*)
+        (symbol-function 'clara.net:fetch-text) (if on #'web-fetch-text *net-fetch-text*)))
+
+;; A machine whose disk has TREE beside what a machine's own disk has,
+;; started as STATE says, in a world that has nothing of any package unless
+;; KEEP says that it is the world of the machine before. A web server has
+;; FILES: the one of the made-up network when NETWORK says so, and otherwise
+;; the list above. What the machine's start says; and Parker knows of the
+;; one source that there is, with the key that the tests sign with.
+(defun parker-machine (files &key tree state keep clusters network)
+  (unless keep
+    (forget-world))
+  (setq *machine-disk* (fat-bytes (if clusters
+                                      (make-fat-volume 12 (append (machine-tree) tree) :clusters clusters)
+                                      (make-fat-volume 16 (append (machine-tree) tree)))))
+  (web (not network))
+  (cond (network
+         (new-network :disk *machine-disk* :files files))
+        (t
+         (stop-network)
+         (setq *web* files
+               *asked* nil
+               *disk* (car (new-disks (list 3 *machine-disk*))))
+         (said-by #'clara.disk:start)
+         (said-by #'clara.fat:start)))
+  (setq clara.windows::*running* nil
+        clara.windows::*applications* *defined-applications*)
+  (apply #'clara.host:set-start-state state)
+  (prog1 (said-by-all #'clara.system:start)
+    (when network
+      (said-by #'clara.net:up))
+    ;; the system has no key of its own here: an index is held against the key that its source is named with
+    (setq clara.system:*release-key* nil
+          clara.system:*releases* nil
+          clara.parker:*sources* (list (list "https://releases.test/packages/" *public*)))))
+
+;; What was asked of the web server, in the order of the names, and how
+;; many things that is.
+(defun asked-for ()
+  (sort (if (eq (symbol-function 'clara.net:fetch) *net-fetch*)
+            (mapcar #'second (remove :get (network-heard *network*) :key #'car :test-not #'eq))
+            (copy-list *asked*))
+        #'string<))
+(defun asked-count ()
+  (length (asked-for)))
+
+;; What the launcher's list has that the files did not define, each with its file.
+(defun added-applications ()
+  (loop for application in clara.windows::*applications*
+        unless (member application *defined-applications*)
+          collect (list (clara.windows::application-name application) (clara.windows::application-file application))))
+
+;; What a source has, and what is installed; then a package that needs
+;; another, installed: the other one first, every file of both asked for
+;; once, each on the disk as the index says, the file that says that a
+;; package is installed with what the index said of it, the files that are
+;; to be loaded loaded in their order, the applications in the launcher's
+;; list, each with its file, and no page frame kept.
+(parker-machine (published (list *lib* *app*) :earnest t) :network t)
+(check '((("app" "2.1.0" "An application of the tests") ("lib" "1.0.0" "A library of the tests")) nil nil)
+       (list (clara.parker:available) (clara.parker:installed) (on-disk *machine-disk* "/packages/lib/package")))
+(check '("/packages/index" "/packages/index.sig") (asked-for))
+(let ((pages (clara.host:allocated-pages)) (said nil) (names nil))
+  (setq said (said-by (lambda () (setq names (clara.parker:install "app")))))
+  (check (list (format nil "parker: lib 1.0.0 is installed~%parker: app 2.1.0 is installed, with the applications The App, One More~%")
+               '("lib" "app") '(("app" "2.1.0") ("lib" "1.0.0")))
+         (list said names (clara.parker:installed)))
+  (check t (eventually (lambda () (= pages (clara.host:allocated-pages))))))
+(check (list *lib-file* *long-text* (lib-text) "(the application)" *app-file* "" *after-file* (app-text) t)
+       (list (on-disk *machine-disk* "/packages/lib/lib.lisp") (on-disk *machine-disk* "/packages/lib/data.txt")
+             (on-disk *machine-disk* "/packages/lib/package") (on-disk *machine-disk* "/packages/app/app.lisp")
+             (on-disk *machine-disk* "/packages/app/start.lisp") (on-disk *machine-disk* "/packages/app/more.lisp")
+             (on-disk *machine-disk* "/packages/app/after.lisp") (on-disk *machine-disk* "/packages/app/package")
+             (in-order-p *machine-disk*)))
+(check '("/packages/app/2.1.0/after.lisp" "/packages/app/2.1.0/app.lisp" "/packages/app/2.1.0/more.lisp" "/packages/app/2.1.0/start.lisp"
+         "/packages/index" "/packages/index" "/packages/index.sig" "/packages/index.sig" "/packages/lib/1.0.0/data.txt"
+         "/packages/lib/1.0.0/lib.lisp")
+       (asked-for))
+;; The files that are to be loaded were, each package's in the order of its lines, and the package that the other one needs first.
+(check '((:after (:app 42) :lib) (("The App" "/packages/app/app.lisp") ("One More" "/packages/app/more.lisp")) 4
+         (("app" "2.1.0" ("PARKER.APP") ("The App" "One More")) ("lib" "1.0.0" ("PARKER.LIB") nil)))
+       (list *brought* (added-applications) (funcall (intern "TWICE" "PARKER.LIB") 2)
+             (mapcar (lambda (loaded) (list (clara.parker::loaded-name loaded) (clara.parker::loaded-version loaded)
+                                            (clara.parker::loaded-packages loaded) (clara.parker::loaded-applications loaded)))
+                     clara.parker::*loaded*)))
+;; What is installed already is said to be, and nothing is asked of anybody; in letters of either case.
+(let ((asked (asked-count)))
+  (check (list (format nil "parker: lib 1.0.0 is installed already: (clara.parker:update) looks for a newer one~%") nil asked)
+         (let ((names :none))
+           (list (said-by (lambda () (setq names (clara.parker:install "LIB")))) names (asked-count)))))
+;; What is in the packages of the language that the packages made is theirs and not the user's: the world that leaves for a
+;; newer system does not write it into its account, and what the launcher made of an application's file is among it.
+(make-package "PARKER.HALF")
+(let ((application (clara.windows::find-application "The App")))
+  (setf (clara.windows::application-packages application) (list (find-package "PARKER.HALF")))
+  (check '(("PARKER.APP" "PARKER.HALF" "PARKER.LIB") ("COMMON-LISP-USER") ("COMMON-LISP-USER" "PARKER.APP" "PARKER.HALF" "PARKER.LIB"))
+         (flet ((parker (names)
+                  (remove-if-not (lambda (name) (or (string= name "COMMON-LISP-USER") (eql 0 (search "PARKER." name)))) names)))
+           (list (sort (parker (clara.parker::language-packages)) #'string<)
+                 (parker (mapcar #'package-name (clara.system::user-packages)))
+                 (let ((clara.system::*parker* nil))
+                   (parker (mapcar #'package-name (clara.system::user-packages)))))))
+  (setf (clara.windows::application-packages application) nil))
+;; A package that another one needs stays; the other one goes first: its applications leave the list, the packages of the
+;; language that it made are deleted, and the disk has nothing of it. Then the first.
+(check '("lib is needed by app, which is installed: that one goes first" "no package moon is installed: the ones that are are (\"app\" \"lib\")"
+         "a package is taken out by its name, a string, and LIB is not one")
+       (list (condition-text (lambda () (clara.parker:uninstall "lib"))) (condition-text (lambda () (clara.parker:uninstall "moon")))
+             (condition-text (lambda () (clara.parker:uninstall 'lib)))))
+(check (list (format nil "parker: app 2.1.0 is no longer installed~%") "app" '(("lib" "1.0.0")) nil nil nil nil t t)
+       (let ((name nil))
+         (list (said-by (lambda () (setq name (clara.parker:uninstall "app")))) name (clara.parker:installed)
+               (on-disk *machine-disk* "/packages/app/package") (on-disk *machine-disk* "/packages/app/app.lisp") (added-applications)
+               (find-package "PARKER.APP") (and (find-package "PARKER.LIB") t) (in-order-p *machine-disk*))))
+;; A package of the language that another one uses cannot be deleted: that is said, and the package is taken out all the same.
+(make-package "PARKER.USER" :use '("PARKER.LIB"))
+(check '(0 "lib" nil nil nil t t)
+       (let ((name nil))
+         (list (search "parker: PARKER.LIB, a package of the language that lib made, stays in this world: "
+                       (said-by (lambda () (setq name (clara.parker:uninstall "lib")))))
+               name (clara.parker:installed) clara.parker::*loaded* (on-disk *machine-disk* "/packages/lib/package")
+               (and (find-package "PARKER.LIB") t) (in-order-p *machine-disk*))))
+(check '("no package lib is installed: the ones that are are NIL" nil)
+       (list (condition-text (lambda () (clara.parker:uninstall "lib"))) (clara.parker:load-installed)))
+
+;; A package that the one to be installed needs, and that is there already,
+;; is not fetched again; and one that two others need is installed once,
+;; before both.
+(parker-machine (published (list *lib* *app*)) :tree (list (list "packages" (list (installed-tree *lib*)))))
+(check (list (format nil "parker: app 2.1.0 is installed, with the applications The App, One More~%") '("app")
+             '("/packages/app/2.1.0/after.lisp" "/packages/app/2.1.0/app.lisp" "/packages/app/2.1.0/more.lisp" "/packages/app/2.1.0/start.lisp"
+               "/packages/index" "/packages/index.sig"))
+       (let ((names nil))
+         (list (said-by (lambda () (setq names (clara.parker:install "app")))) names (asked-for))))
+(flet ((one (name &rest needs)
+         (list name "1" (mapcar (lambda (need) (format nil "needs ~A" need)) needs) (list (list (format nil "~A.txt" name) name)))))
+  (parker-machine (published (list (one "a" "b" "c") (one "b" "d") (one "c" "d") (one "d"))))
+  (check '(("d" "b" "c" "a") ("/packages/a/1/a.txt" "/packages/b/1/b.txt" "/packages/c/1/c.txt" "/packages/d/1/d.txt" "/packages/index"
+                             "/packages/index.sig"))
+         (list (let ((names nil))
+                 (said-by (lambda () (setq names (clara.parker:install "a"))))
+                 names)
+               (asked-for))))
+;; Wherever names of files are looked up by whoever asks, a package goes to
+;; the disk that the machine was started from, and is loaded from there.
+(parker-machine (published (list *lib*)))
+(check '(("lib") (("lib" "1.0.0")) (:lib) "lib" nil)
+       (let ((clara.fat:*volume* nil) (names nil) (name nil))
+         (said-by (lambda () (setq names (clara.parker:install "lib"))))
+         (let ((installed (clara.parker:installed)) (brought *brought*))
+           (said-by (lambda () (setq name (clara.parker:uninstall "lib"))))
+           (list names installed brought name (clara.parker:installed)))))
+
+;; What is not installed, and what the disk and the world have of it
+;; afterwards: nothing.
+(defun not-installed (name files &rest options)
+  (apply #'parker-machine files options)
+  (let ((pages (clara.host:allocated-pages)) (complaint nil) (said nil))
+    (setq said (said-by (lambda () (setq complaint (condition-text (lambda () (clara.parker:install name)))))))
+    (prog1 (list complaint said (clara.parker:installed) clara.parker::*loaded* (added-applications)
+                 (remove-if-not (lambda (file) (eql 0 (search "/packages/" (car file)))) (inspect-volume *machine-disk*))
+                 (in-order-p *machine-disk*))
+      (unless (eventually (lambda () (= pages (clara.host:allocated-pages))))
+        (failed "a package that was not installed kept ~D page frames" (- (clara.host:allocated-pages) pages))))))
+(defun refused (complaint)
+  (list complaint "" nil nil nil nil t))
+
+;; An index that somebody else signed; one whose signature is none; one
+;; that was changed after it was signed, in earnest and by the tests' rule;
+;; and something that was signed and is no index.
+(dolist (files (list (published (list *lib*) :secret (loop for i from 2 to 33 collect i))
+                     (published (list *lib*) :signature "this is no signature")
+                     (published (list *lib*) :signature "")
+                     (published (list *lib*) :signature (format nil "~A~%" (digits-of (clara.host:ed25519-sign *secret* (octets "something else")))))
+                     (published (list *lib*) :signature (format nil "~A~%" (quick-signature *public* "something else")))
+                     (published (list *lib*) :signature (format nil "~A~%" (quick-signature "another key" (cdr (first (published (list *lib*)))))))))
+  (check (refused "the index at https://releases.test/packages/ is not signed with the key that the source is named with: nothing of it is believed")
+         (not-installed "lib" files))
+  (check '("/packages/index" "/packages/index.sig") (asked-for)))
+(check (refused "what is at https://releases.test/packages/index, and signed, is no index of packages")
+       (not-installed "lib" (published nil :index (format nil "ClaraOS system: 0.0.1-new~%package lib 1.0.0~%"))))
+;; A file that is not what the signed index says, by its sum or by its
+;; length; and one that the server does not have. The disk is not touched:
+;; every file is had before the first is written.
+(check (refused "the file lib.lisp of lib 1.0.0 is not what the index at https://releases.test/packages/ says it is")
+       (not-installed "lib" (published (list *lib*) :wrong "lib.lisp")))
+(check (refused "the file data.txt of lib 1.0.0 is not what the index at https://releases.test/packages/ says it is")
+       (not-installed "lib" (published (list *lib*) :wrong "data.txt")))
+(check (refused "the file lib.lisp of lib 1.0.0 is not what the index at https://releases.test/packages/ says it is")
+       (not-installed "lib" (mapcar (lambda (file)
+                                      (if (string= (car file) "/packages/lib/1.0.0/lib.lisp") (cons (car file) "(shorter)") file))
+                                    (published (list *lib*)))))
+(check (refused "releases.test answers 404 to the request for /packages/lib/1.0.0/data.txt")
+       (not-installed "lib" (published (list *lib*) :without "data.txt")))
+;; And as a machine fetches.
+(check (refused "releases.test answers 404 to the request for /packages/lib/1.0.0/data.txt")
+       (not-installed "lib" (published (list *lib*) :without "data.txt") :network t))
+;; A package that no source has, and one that needs such a one; two that
+;; need each other; one that is for a ClaraOS that is newer than this.
+(check (refused "there is no package moon: the sources have (\"app\" \"lib\")") (not-installed "moon" (published (list *lib* *app*))))
+(check (refused "there is no package moon: the sources have none at all") (not-installed "moon" (published nil)))
+(check (refused "app needs the package lib, which is not installed, and which no source has") (not-installed "app" (published (list *app*))))
+(check (refused "the packages b and a need each other, so neither can be installed first")
+       (not-installed "a" (published (list (list "a" "1" '("needs b") nil) (list "b" "1" '("needs a") nil)))))
+(check (refused "later 1.0 is for ClaraOS 0.0.1 and newer, and this is 0.0.0-host")
+       (not-installed "later" (published (list (list "later" "1.0" '("system 0.0.1") (list (list "later.lisp" "(later)")))))))
+(check '("/packages/index" "/packages/index.sig") (asked-for))
+(check '("a package is installed by its name, a string, and LIB is not one" nil)
+       (list (condition-text (lambda () (clara.parker:install 'lib))) (clara.parker:installed)))
+;; A package that is for this very ClaraOS, or for an older one, is installed.
+(parker-machine (published (list (list "now" "1.0" '("system 0.0.0") nil) (list "then" "0.1" '("needs now") nil))))
+(check '(("now" "then") (("now" "1.0") ("then" "0.1")) "ClaraOS packages
+package then 0.1
+needs now
+")
+       (list (progn (said-by (lambda () (clara.parker:install "then"))) (mapcar #'clara.parker::loaded-name (reverse clara.parker::*loaded*)))
+             (clara.parker:installed) (on-disk *machine-disk* "/packages/then/package")))
+;; A file of a package that fails as it is loaded: the package is not
+;; installed, and the packages of the language that the file had made by
+;; then are gone. The same for an application whose name the launcher's
+;; list has already, which is somebody else's: Emma stays what it was.
+(check (list "broken 1.0 was fetched, and did not load, so it is not installed: this file is broken" "" nil nil nil nil t nil)
+       (append (not-installed "broken" (published (list (list "broken" "1.0" '("load broken.lisp")
+                                                              (list (list "broken.lisp" "(make-package \"PARKER.HALF\") (error \"this file is broken\")"))))))
+               (list (find-package "PARKER.HALF"))))
+(check (list "thief 1.0 was fetched, and did not load, so it is not installed: the launcher's list has an application emma already, which is not this package's"
+             "" nil nil nil nil t "emma.lisp")
+       (append (not-installed "thief" (published (list (list "thief" "1.0" '("application thief.lisp emma") (list (list "thief.lisp" "(thief)"))))))
+               (list (clara.windows::application-file (clara.windows::find-application "Emma")))))
+;; Packages are fetched over a connection that is kept closed, and over no
+;; other; and from a source that is named with a key, since what came
+;; could otherwise be held against nothing. Nothing is asked of the network
+;; before either is seen to.
+(parker-machine (published (list *lib*)))
+(flet ((complaints (&rest sources)
+         (let ((clara.parker:*sources* sources))
+           (list (condition-text #'clara.parker:available) (condition-text (lambda () (clara.parker:install "lib")))
+                 (asked-count)))))
+  (check '("http://releases.test/packages/ does not begin with https://: packages are fetched over a connection that is kept closed, and over no other"
+           "http://releases.test/packages/ does not begin with https://: packages are fetched over a connection that is kept closed, and over no other" 0)
+         (complaints (list "http://releases.test/packages/" *public*)))
+  (check '("the source https://releases.test/packages/ is named without the public half of a key, 64 digits: what it has could be held against nothing"
+           "the source https://releases.test/packages/ is named without the public half of a key, 64 digits: what it has could be held against nothing" 0)
+         (complaints (list "https://releases.test/packages/" nil)))
+  (check '("the source https://releases.test/packages/ is named without the public half of a key, 64 digits: what it has could be held against nothing" 0)
+         (cdr (complaints (list "https://releases.test/packages/" "c0ffee"))))
+  (check '("a source is the address of a directory and the public half of a key, two strings in a list, and \"https://releases.test/packages/\" is not that" 0)
+         (cdr (complaints "https://releases.test/packages/")))
+  ;; With no source named, nothing is available, and nothing can be installed.
+  (check '(nil "there is no package lib: no source is named, CLARA.PARKER:*SOURCES*" 0)
+         (let ((clara.parker:*sources* nil))
+           (list (clara.parker:available) (condition-text (lambda () (clara.parker:install "lib"))) (asked-count)))))
+;; Of two sources that have a package of one name, the first is asked for
+;; it; what only the second has is taken from there.
+(parker-machine (append (published (list *lib*))
+                        (published (list (list "lib" "9.9" '("about The same name, somewhere else") nil)
+                                         (list "only" "1" '("about Only there" "application only.lisp Only") (list (list "only.lisp" "(only)"))))
+                                   :at "/elsewhere/")))
+(setq clara.parker:*sources* (list (list "https://releases.test/packages/" *public*) (list "https://releases.test/elsewhere/" *public*)))
+(check (list '(("lib" "1.0.0" "A library of the tests") ("only" "1" "Only there"))
+             (format nil "parker: lib 1.0.0 is installed~%parker: only 1 is installed, with the application Only~%")
+             '(("lib" "1.0.0") ("only" "1")))
+       (list (clara.parker:available)
+             (said-by (lambda () (clara.parker:install "lib") (clara.parker:install "only")))
+             (clara.parker:installed)))
+;; A disk without room for a package is not written to.
+(check t (let ((result (not-installed "lib" (published (list *lib*)) :clusters 40)))
+           (and (search "KiB free, and lib 1.0.0 takes" (first result)) (equal (cdr result) (cdr (refused nil))))))
+;; A machine that was not started from a disk has nowhere to put a package.
+(parker-machine (published (list *lib*)))
+(new-disks)
+(said-by #'clara.disk:start)
+(said-by #'clara.fat:start)
+(forget-world)
+(clara.host:set-start-state)
+(said-by-all #'clara.system:start)
+(check '(nil "the machine was not started from a disk that is known here, so there is nowhere to put a package" nil)
+       (list (clara.parker:installed) (condition-text (lambda () (clara.parker:install "lib"))) (clara.parker:load-installed)))
+
+;; A machine that stops while something is done about a package, at each
+;; request of its disk in turn: while one is written, while a newer version
+;; takes the place of the one that is installed, and while one is taken
+;; out. Whenever the disk says afterwards that the package is installed, it
+;; is one version of it, whole: every file there, and what the index said.
+;; The volume is in no worse order than a stop leaves any volume in. The
+;; start after it has what the disk says, and nothing else. And what is
+;; left of a package that is not installed any more is in nobody's way:
+;; the package is installed over it.
+(defvar *lib-later* (list "lib" "1.2.0" '("about A library of the tests, later still" "load lib.lisp")
+                          (list (list "lib.lisp" (format nil "(defpackage \"PARKER.LIB\" (:use \"COMMON-LISP\"))~%~
+                                                              (push :lib-later clara.tests::*brought*)~%")))))
+(defun lib-on-disk ()
+  (let ((says (on-disk *machine-disk* "/packages/lib/package")))
+    (cond ((null says) nil)
+          ((and (equal says (lib-text)) (equal (on-disk *machine-disk* "/packages/lib/lib.lisp") *lib-file*)
+                (equal (on-disk *machine-disk* "/packages/lib/data.txt") *long-text*))
+           "1.0.0")
+          ((and (equal says (format nil "ClaraOS packages~%~A" (entry-of *lib-later*)))
+                (equal (on-disk *machine-disk* "/packages/lib/lib.lisp") (second (first (fourth *lib-later*))))
+                (null (on-disk *machine-disk* "/packages/lib/data.txt")))
+           "1.2.0")
+          (t :not-whole))))
+(defun stopped-order-p (bytes)
+  (every (lambda (problem)
+           (or (search "are in no file, and not free" problem) (search "the copies of the table differ" problem)))
+         (nth-value 1 (inspect-volume bytes))))
+;; WORDS say what is done, by ACTION, on a machine whose disk has TREE and
+;; whose network has FILES, until it is done without a stop and the disk
+;; has the version LAST of the package. How many stops there were, and
+;; which versions the disk was found to have, NIL for none. With ONCE the
+;; disk fails one request and answers the ones after it: the world then
+;; has what the disk has of the package without a start in between, or the
+;; machine has said that the package is installed and did not load.
+(defun stops-while (words files tree action last &key once)
+  (let ((stopped 0) (seen nil))
+    (loop for allowed from 0 below 400
+          do (parker-machine files :tree tree)
+             (let ((before (length (vdev-requests *disk*))))
+               (setf (vdev-watch *disk*) (lambda ()
+                                           (let ((count (- (length (vdev-requests *disk*)) before)))
+                                             (setf (vdev-answer *disk*) (cond ((<= count allowed) 0)
+                                                                              ((and once (> count (1+ allowed))) 0)
+                                                                              (t 1))))))
+               (let ((complaint (condition-text (lambda () (said-by action)))))
+                 (setf (vdev-watch *disk*) nil
+                       (vdev-answer *disk*) 0)
+                 (let ((state (lib-on-disk)))
+                   (pushnew state seen :test #'equal)
+                   (unless (and (not (eq state :not-whole)) (stopped-order-p *machine-disk*))
+                     (failed "a disk that stopped after ~D requests while a package was ~A has ~S of it, and the volume has ~S"
+                             allowed words state (nth-value 1 (inspect-volume *machine-disk*))))
+                   ;; unless the package was written whole and then could not be loaded, which is what was said
+                   (when (and once (not (equal (mapcar #'clara.parker::loaded-version clara.parker::*loaded*) (and state (list state))))
+                              (not (and complaint (search ", and did not load: " complaint) (equal state last))))
+                     (failed "after one request of ~D that a disk failed while a package was ~A, the disk has ~S of it and the world ~S"
+                             allowed words state (mapcar #'clara.parker::loaded-version clara.parker::*loaded*)))
+                   (forget-world)
+                   (clara.host:set-start-state)
+                   (said-by-all #'clara.system:start)
+                   (unless (and (equal (clara.parker:installed) (and state (list (list "lib" state))))
+                                (equal *brought* (cond ((equal state "1.0.0") '(:lib)) ((equal state "1.2.0") '(:lib-later)))))
+                     (failed "after a disk that stopped after ~D requests while a package was ~A, the next start has ~S installed, and loaded ~S"
+                             allowed words (clara.parker:installed) *brought*))
+                   (when (and (null complaint) (equal state last))
+                     (return))
+                   (incf stopped)
+                   (when (and (null state) (= (mod allowed 5) 0))
+                     (said-by (lambda () (clara.parker:install "lib")))
+                     (unless (and (member (lib-on-disk) '("1.0.0" "1.2.0") :test #'equal) (stopped-order-p *machine-disk*))
+                       (failed "after a disk that stopped after ~D requests while a package was ~A, the package could not be installed: ~S"
+                               allowed words (lib-on-disk))))))))
+    (list (> stopped 5) (< stopped 399) (sort seen (lambda (a b) (string< (or a "") (or b "")))))))
+(check '(t t (nil "1.0.0")) (stops-while "written" (published (list *lib*)) nil (lambda () (clara.parker:install "lib")) "1.0.0"))
+(check '(t t (nil "1.0.0" "1.2.0"))
+       (stops-while "replaced" (published (list *lib-later*)) (list (list "packages" (list (installed-tree *lib*)))) #'clara.parker:update "1.2.0"))
+(check '(t t (nil "1.0.0"))
+       (stops-while "taken out" (published (list *lib-later*)) (list (list "packages" (list (installed-tree *lib*))))
+                    (lambda () (clara.parker:uninstall "lib")) nil))
+(check '(t t (nil "1.0.0" "1.2.0"))
+       (stops-while "replaced" (published (list *lib-later*)) (list (list "packages" (list (installed-tree *lib*)))) #'clara.parker:update "1.2.0"
+                    :once t))
+(check '(t t (nil "1.0.0"))
+       (stops-while "taken out" (published (list *lib-later*)) (list (list "packages" (list (installed-tree *lib*))))
+                    (lambda () (clara.parker:uninstall "lib")) nil :once t))
+
+;; A newer version takes the place of the one that is installed: its files
+;; are the disk's, the ones that only the older one had are gone, and the
+;; world has the newer one's definitions. Nothing happens while the source
+;; has what is installed, or something older; and a package that the newer
+;; one needs and the older one did not comes with it.
+(defvar *lib-newer* (list "lib" "1.1.0" '("about A library of the tests, a later one" "load lib.lisp" "needs base")
+                          (list (list "lib.lisp" (format nil "(defpackage \"PARKER.LIB\" (:use \"COMMON-LISP\") (:export \"TWICE\" \"THRICE\"))~%~
+                                                              (in-package \"PARKER.LIB\")~%(defun twice (n) (+ n n))~%(defun thrice (n) (* 3 n))~%~
+                                                              (push :lib-newer clara.tests::*brought*)~%")))))
+(defvar *base* (list "base" "0.1" '("about What the later library needs") (list (list "base.txt" "the base"))))
+(parker-machine (append (published (list *lib* *app*))
+                        (published (list *lib-newer* *base* *app*) :at "/newer/")
+                        (published (list (list "lib" "0.9" '("about An older one") nil)) :at "/older/")))
+(said-by (lambda () (clara.parker:install "app")))
+(setq *brought* nil)
+(check '(nil "" nil "" "no package moon is installed: the ones that are are (\"app\" \"lib\")")
+       (let ((names :none))
+         (list (progn (said-by (lambda () (setq names (clara.parker:update)))) names)
+               (said-by #'clara.parker:update)
+               (let ((clara.parker:*sources* (list (list "https://releases.test/older/" *public*)))) (clara.parker:update))
+               (let ((clara.parker:*sources* nil)) (said-by #'clara.parker:update))
+               (condition-text (lambda () (clara.parker:update "moon"))))))
+(setq clara.parker:*sources* (list (list "https://releases.test/newer/" *public*)))
+(check (list (format nil "parker: base 0.1 is installed~%parker: lib 1.1.0 is installed~%") '("lib")
+             '(("app" "2.1.0") ("base" "0.1") ("lib" "1.1.0")) nil "the base" '(:lib-newer) 9 t
+             '(("app" "2.1.0") ("base" "0.1") ("lib" "1.1.0")))
+       (let ((names nil))
+         (list (said-by (lambda () (setq names (clara.parker:update)))) names (clara.parker:installed)
+               (on-disk *machine-disk* "/packages/lib/data.txt") (on-disk *machine-disk* "/packages/base/base.txt") *brought*
+               (funcall (intern "THRICE" "PARKER.LIB") 3) (in-order-p *machine-disk*)
+               (sort (mapcar (lambda (loaded) (list (clara.parker::loaded-name loaded) (clara.parker::loaded-version loaded)))
+                             clara.parker::*loaded*)
+                     #'string< :key #'car))))
+(check (format nil "ClaraOS packages~%~A" (entry-of *lib-newer*)) (on-disk *machine-disk* "/packages/lib/package"))
+;; Only the ones that are named, when some are.
+(parker-machine (append (published (list *lib* *base*))
+                        (published (list *lib-newer* (list "base" "0.2" '("about A later base") nil)) :at "/newer/")))
+(said-by (lambda () (clara.parker:install "lib") (clara.parker:install "base")))
+(setq clara.parker:*sources* (list (list "https://releases.test/newer/" *public*)))
+(check '(("base") (("base" "0.2") ("lib" "1.0.0")) ("lib") (("base" "0.2") ("lib" "1.1.0")))
+       (list (progn (said-by (lambda () (setq *brought* (clara.parker:update "BASE")))) *brought*) (clara.parker:installed)
+             (progn (said-by (lambda () (setq *brought* (clara.parker:update "lib" "base")))) *brought*) (clara.parker:installed)))
+;; A newer version that does not load has taken the older one's place by
+;; then: it stays installed, that is said, and every start tries it again.
+(parker-machine (append (published (list *lib*))
+                        (published (list (list "lib" "2.0" '("about One that does not load" "load lib.lisp")
+                                               (list (list "lib.lisp" "(error \"not this time\")"))))
+                                   :at "/newer/")))
+(said-by (lambda () (clara.parker:install "lib")))
+(setq clara.parker:*sources* (list (list "https://releases.test/newer/" *public*)))
+(check '("lib 2.0 is installed in the place of 1.0.0, and did not load: not this time" (("lib" "2.0")) nil nil)
+       (list (condition-text #'clara.parker:update) (clara.parker:installed) clara.parker::*loaded* (find-package "PARKER.LIB")))
+(clara.host:set-start-state)
+(check t (and (search (format nil "packages: lib 2.0 is installed, and did not load:~%packages:   not this time~%")
+                      (said-by-all #'clara.system:start))
+              t))
+
+;; A start. A world that it made from the files loads every package that
+;; the disk has, each after the ones that it needs, before the text of
+;; /home, which may be written with them; and says so, in lines that the
+;; report keeps. What is in /packages and is no package is passed over: a
+;; directory that does not say that it is installed, one that says so of
+;; another package, one that says so of two, and a file.
+(defvar *home-text* (format nil "(push (list :home (parker.lib:twice 4)) clara.tests::*brought*)~%"))
+(defun both-installed (&rest more)
+  (list (list "packages" (append (list (installed-tree *app*) (installed-tree *lib*)) more))
+        (list "home" (list (list "init.lisp" *home-text*)))))
+(check (format nil "system: this is ClaraOS 0.0.0-host~%~
+                    packages: lib 1.0.0 is installed, and is loaded into this world~%~
+                    packages: app 2.1.0 is installed, and is loaded into this world~%~
+                    home: /home/init.lisp is loaded, 1 form~%")
+       (parker-machine nil :tree (both-installed '("half" (("half.lisp" "(not installed)")))
+                                                 (list "other" (list (list "package" (lib-text))))
+                                                 '("notes.txt" "no package")
+                                                 '("libx" "a file, whose name is a package's and a letter")
+                                                 (list "base" (list (list "package" (format nil "ClaraOS packages~%~A~A" (entry-of *base*)
+                                                                                            (entry-of *lib-later*)))
+                                                                    (list "base.txt" "the base")))
+                                                 '("junk" (("package" "this says nothing"))))))
+(check '(((:home 8) :after (:app 42) :lib) (("app" "2.1.0") ("lib" "1.0.0")) (("The App" "/packages/app/app.lisp") ("One More" "/packages/app/more.lisp")) t)
+       (list *brought* (clara.parker:installed) (added-applications)
+             (and (search (format nil "packages: lib 1.0.0 is installed, and is loaded into this world~%packages: app 2.1.0")
+                          (said-by #'clara.system:report))
+                  t)))
+;; What goes wrong as a start sees to the packages is said, and the start
+;; goes on to the text.
+(let ((clara.system::*parker* (list :start (lambda (how) (error "the packages cannot be looked at, ~S" how)) :packages (lambda () nil))))
+  (check (format nil "system: this is ClaraOS 0.0.0-host~%packages: the packages cannot be looked at, :MADE~%~
+                      home: /home/init.lisp is loaded, 1 form~%")
+         (parker-machine nil :tree (list (list "home" (list (list "init.lisp" "(push :home clara.tests::*brought*)")))))))
+(parker-machine nil :tree (both-installed))
+;; The same world, started again as one that was saved: it has what the
+;; disk has, and nothing is said or loaded.
+(setq *brought* nil)
+(check (list (format nil "system: this is ClaraOS 0.0.0-host~%") nil 2)
+       (list (parker-machine nil :tree (both-installed) :state '(:resumed t) :keep t) *brought* (length clara.parker::*loaded*)))
+;; A world that was saved before a package was taken out, and one that was
+;; saved before one was installed: it lets go of the one and takes the
+;; other, and says both. What is installed in another version by now goes
+;; and comes.
+(check (list (format nil "system: this is ClaraOS 0.0.0-host~%packages: app 2.1.0 is no longer installed, and has left this world~%")
+             nil nil '("lib") nil)
+       (list (parker-machine nil :tree (list (list "packages" (list (installed-tree *lib*)))) :state '(:resumed t) :keep t)
+             *brought* (added-applications) (mapcar #'clara.parker::loaded-name clara.parker::*loaded*) (find-package "PARKER.APP")))
+(check (list (format nil "system: this is ClaraOS 0.0.0-host~%~
+                          packages: app 2.1.0 was installed since this world was saved, and is loaded now~%")
+             '(:after (:app 42)) '("app" "lib"))
+       (list (parker-machine nil :tree (both-installed) :state '(:resumed t) :keep t)
+             *brought* (mapcar #'clara.parker::loaded-name clara.parker::*loaded*)))
+(setq *brought* nil)
+(check (list (format nil "system: this is ClaraOS 0.0.0-host~%~
+                          packages: app 2.1.0 is no longer installed, and has left this world~%~
+                          packages: lib 1.0.0 is no longer installed, and has left this world~%~
+                          packages: base 0.1 was installed since this world was saved, and is loaded now~%~
+                          packages: lib 1.1.0 was installed since this world was saved, and is loaded now~%")
+             '(:lib-newer) '(("lib" "1.1.0") ("base" "0.1")) nil)
+       (list (parker-machine nil :tree (list (list "packages" (list (installed-tree *lib-newer*) (installed-tree *base*))))
+                             :state '(:resumed t) :keep t)
+             *brought*
+             (mapcar (lambda (loaded) (list (clara.parker::loaded-name loaded) (clara.parker::loaded-version loaded))) clara.parker::*loaded*)
+             (added-applications)))
+;; A package that fails as it is loaded, and one that never comes to an
+;; end, which is given as long as a file of /home and no longer: each is
+;; said, with the reason in a line of its own, the others are loaded, and
+;; the start comes to its end. A reason is cut where the line would be
+;; wider than a screen.
+(defvar *broken* (list "broken" "1.0" '("load broken.lisp") (list (list "broken.lisp" "(error \"this file is broken\")"))))
+(check (list (make-string 84 :initial-element #\a) (concatenate 'string (make-string 80 :initial-element #\a) " ...") "one line ...")
+       (list (clara.parker::short (make-string 84 :initial-element #\a)) (clara.parker::short (make-string 85 :initial-element #\a))
+             (clara.parker::short (format nil "  one line~%and another"))))
+(defvar *endless* (list "endless" "1.0" '("load endless.lisp") (list (list "endless.lisp" "(loop (sleep 0.01))"))))
+(let ((clara.system:*patience* 1000))
+  (check (list (format nil "system: this is ClaraOS 0.0.0-host~%~
+                            packages: base 0.1 is installed, and is loaded into this world~%~
+                            packages: broken 1.0 is installed, and did not load:~%~
+                            packages:   this file is broken~%~
+                            packages: endless 1.0 is installed, and did not load:~%~
+                            packages:   it took more than 1 second~%")
+               '("base") '(("base" "0.1") ("broken" "1.0") ("endless" "1.0")))
+         (list (parker-machine nil :tree (list (list "packages" (list (installed-tree *broken*) (installed-tree *endless*)
+                                                                      (installed-tree *base*)))))
+               (mapcar #'clara.parker::loaded-name clara.parker::*loaded*) (clara.parker:installed))))
+(check t (eventually (lambda () (not (find "packages" (clara:all-threads) :key #'clara:thread-name :test #'equal)))))
+;; After two starts that did not come to a prompt, a package may be the
+;; reason: none is loaded, which is said, and LOAD-INSTALLED loads them.
+(check (list (format nil "system: this is ClaraOS 0.0.0-host~%~
+                          home: the two starts before this one did not come to a prompt: what is in /home/ is not loaded~%~
+                          home:   this world is the system's alone. Put the files right, and (clara.system:load-home) loads them~%~
+                          packages: 2 are installed, and none of that is loaded: (clara.parker:load-installed) loads it~%")
+             nil nil)
+       (list (parker-machine nil :tree (both-installed) :state '(:starts 2)) *brought* clara.parker::*loaded*))
+(check (list (format nil "packages: lib 1.0.0 is installed, and is loaded into this world~%~
+                          packages: app 2.1.0 is installed, and is loaded into this world~%")
+             '("lib" "app") '(:after (:app 42) :lib) "" '("lib" "app"))
+       (let ((names nil))
+         (list (said-by-all (lambda () (setq names (clara.parker:load-installed)))) names *brought*
+               (said-by-all #'clara.parker:load-installed) (clara.parker:load-installed))))
+(check (format nil "system: this is ClaraOS 0.0.0-host~%~
+                    home: the two starts before this one did not come to a prompt: what is in /home/ is not loaded~%~
+                    home:   this world is the system's alone. Put the files right, and (clara.system:load-home) loads them~%~
+                    packages: 1 is installed, and none of that is loaded: (clara.parker:load-installed) loads it~%")
+       (parker-machine nil :tree (list (list "packages" (list (installed-tree *base*)))) :state '(:starts 2)))
+;; A world that came back on a machine whose disk is not known keeps what
+;; it has: nothing says what is installed there.
+(parker-machine nil :tree (both-installed))
+(new-disks)
+(said-by #'clara.disk:start)
+(said-by #'clara.fat:start)
+(clara.host:set-start-state :resumed t)
+(check (list (format nil "system: this is ClaraOS 0.0.0-host~%") '("app" "lib") nil)
+       (list (said-by-all #'clara.system:start) (mapcar #'clara.parker::loaded-name clara.parker::*loaded*) (clara.parker:installed)))
+(check '(("lib" "app") "" ("app" "lib"))
+       (let ((names nil))
+         (list (progn (said-by-all (lambda () (setq names (clara.parker:load-installed)))) names)
+               (said-by-all #'clara.parker:load-installed) (mapcar #'clara.parker::loaded-name clara.parker::*loaded*))))
+
+;; The window (lisp/parker.lisp, "The window"): what is installed and what
+;; the sources have, a row each, with the package that is picked the other
+;; way round; over them what the columns are, and under them the status.
+(defun view-rows (view)
+  (mapcar (lambda (row) (list (clara.parker::row-name row) (clara.parker::row-here row) (clara.parker::row-offered row)))
+          (clara.parker::view-lines view)))
+(defun view-wrong (view)
+  (clara.parker::render view)
+  (let ((lines (clara.parker::view-lines view)) (top (clara.parker::view-top view)) (columns (clara.parker::view-columns view)))
+    (wrong-cells (clara.parker::view-surface view)
+                 (append (list (pad (clara.parker::heading) columns))
+                         (loop for r below (clara.parker::view-rows view)
+                               collect (let* ((row (nth (+ top r) lines))
+                                              (text (pad (if row (clara.parker::row-text row) "") columns)))
+                                         (if (and row (= (+ top r) (clara.parker::view-picked view))) (list text) text)))
+                         (list (list (pad (concatenate 'string " " (clara.parker::status view)) columns)))))))
+;; Keys, typed: the package that is picked afterwards, the one in the
+;; list's first row once the window has shown that, and how many cells of
+;; the window are not what they should be.
+(defun view-keys (view &rest codes)
+  (dolist (code codes)
+    (clara.parker::key view code))
+  (let ((wrong (view-wrong view)))
+    (list (clara.parker::view-picked view) (clara.parker::view-top view) wrong)))
+(defun parker-desk (files &rest options)
+  (apply #'parker-machine files options)
+  (new-desk :width 700 :height 300 :machine nil)
+  (setq clara.windows::*applications* *defined-applications*))
+
+(check '(" package          here     offered  about" " lib              1.0.0    1.1.0    A library of the tests"
+         " only-here        0.1      -        " " a-name-that-is-l -        12.0.1   Only there")
+       (list (clara.parker::heading)
+             (clara.parker::row-text (clara.parker::make-row :name "lib" :here "1.0.0" :offered "1.1.0" :about "A library of the tests"))
+             (clara.parker::row-text (clara.parker::make-row :name "only-here" :here "0.1" :about ""))
+             (clara.parker::row-text (clara.parker::make-row :name "a-name-that-is-longer" :offered "12.0.1" :about "Only there"))))
+(defvar *many* (loop for i from 1 to 7 collect (list (format nil "p~D" i) "1" (list (format nil "about Package ~D" i)) nil)))
+(parker-desk (append (published (append (list *lib* *app*) *many*)) (published (list *lib-newer* *base* *app*) :at "/newer/"))
+             :tree (list (list "packages" (list (installed-tree *base*)))))
+(let ((view (clara.parker::open-view :rows 4)))
+  ;; As it opens it lists what is installed, and has asked nobody.
+  (check '((("base" "0.1" nil)) "Parker" 640 96 "1 package: Enter installs, Delete takes out, Ctrl-R asks again" 0 0 0)
+         (list (view-rows view) (clara.windows:window-title (clara.parker::view-window view))
+               (clara.draw:surface-width (clara.parker::view-surface view)) (clara.draw:surface-height (clara.parker::view-surface view))
+               (clara.parker::status view) (asked-count) (view-wrong view) (wrong-pixels)))
+  ;; Ctrl-R asks the sources, and the list has what they have as well, in the order of the names, with the package picked
+  ;; that was. While they are asked, the status row says whom.
+  (setq *when-asked* (lambda () (pushnew (clara.parker::status view) *brought* :test #'equal)))
+  (check '(1 0 0) (view-keys view 18))
+  (check '((("app" nil "2.1.0") ("base" "0.1" nil) ("lib" nil "1.0.0") ("p1" nil "1") ("p2" nil "1") ("p3" nil "1") ("p4" nil "1")
+            ("p5" nil "1") ("p6" nil "1") ("p7" nil "1"))
+           "10 packages: Enter installs, Delete takes out, Ctrl-R asks again" 2)
+         (list (view-rows view) (clara.parker::status view) (asked-count)))
+  ;; The keys that pick another package, which the window follows.
+  (check '(3 0 0) (view-keys view clara.input:+down+ clara.input:+down+))
+  (check '(2 0 0) (view-keys view clara.input:+up+))
+  (check '(0 0 0) (view-keys view clara.input:+up+ clara.input:+up+ clara.input:+up+))
+  (check '(9 6 0) (view-keys view clara.input:+end+))
+  (check '(9 6 0) (view-keys view clara.input:+down+))
+  (check '(6 6 0) (view-keys view clara.input:+page-up+))
+  (check '(3 3 0) (view-keys view clara.input:+page-up+))
+  (check '(0 0 0) (view-keys view clara.input:+page-up+))
+  (check '(3 0 0) (view-keys view clara.input:+page-down+))
+  (check '(6 3 0) (view-keys view clara.input:+page-down+))
+  (check '(0 0 0) (view-keys view clara.input:+home+))
+  (check '(0 0 0) (view-keys view 65 clara.input:+f1+ 27))                   ; and keys that are none of its own
+  ;; Enter installs the package that is picked, with what it needs: the status says what was said last, and the list what
+  ;; is there by then, with the same package picked.
+  (check '((0 0 0) "app 2.1.0 is installed, with the applications The App, One More"
+           (("app" "2.1.0" "2.1.0") ("base" "0.1" nil) ("lib" "1.0.0" "1.0.0")) (("app" "2.1.0") ("base" "0.1") ("lib" "1.0.0")))
+         (list (view-keys view 13) (clara.parker::status view) (subseq (view-rows view) 0 3) (clara.parker:installed)))
+  ;; And while that was fetched, the row said what was being done.
+  (check '("asking https://releases.test/packages/ what it has" "installing app 2.1.0")
+         (reverse (remove-if-not #'stringp *brought*)))
+  (setq *when-asked* nil)
+  ;; On a package that is installed, and that no source has anything newer of, Enter only says so; and the next key takes the words away.
+  (check '((0 0 0) "app 2.1.0 is installed: Delete takes it out" (1 0 0) "10 packages: Enter installs, Delete takes out, Ctrl-R asks again")
+         (list (view-keys view 10) (clara.parker::status view) (view-keys view clara.input:+down+) (clara.parker::status view)))
+  ;; Delete asks, and any key but y is a no; y takes the package out, unless another one needs it, which the status then says.
+  (check '((2 0 0) "take lib out? y does it" (2 0 0) "10 packages: Enter installs, Delete takes out, Ctrl-R asks again" (2 0 0)
+           "lib is needed by app, which is installed: that one goes first" (("app" "2.1.0") ("base" "0.1") ("lib" "1.0.0")))
+         (list (view-keys view clara.input:+down+ 127) (clara.parker::status view) (view-keys view 110) (clara.parker::status view)
+               (view-keys view 127 121) (clara.parker::status view) (clara.parker:installed)))
+  (check '((0 0 0) "app 2.1.0 is no longer installed" (("app" nil "2.1.0") ("base" "0.1" nil) ("lib" "1.0.0" "1.0.0")) (3 0 0) "p1 is not installed")
+         (list (view-keys view clara.input:+home+ 127 89) (clara.parker::status view) (subseq (view-rows view) 0 3)
+               (view-keys view clara.input:+down+ clara.input:+down+ clara.input:+down+ 127) (clara.parker::status view)))
+  ;; A package that is installed and that no source has stays in the list, and is taken out like any other.
+  (check '((1 0 0) "base 0.1 is no longer installed" (("app" nil "2.1.0") ("lib" "1.0.0" "1.0.0") ("p1" nil "1")))
+         (list (view-keys view clara.input:+home+ clara.input:+down+ 127 121) (clara.parker::status view) (subseq (view-rows view) 0 3)))
+  ;; Where a source has a newer version of what is installed, Enter replaces it; with what the newer one needs.
+  (setq clara.parker:*sources* (list (list "https://releases.test/newer/" *public*)))
+  (check '((2 0 0) (("app" nil "2.1.0") ("base" nil "0.1") ("lib" "1.0.0" "1.1.0")) (2 0 0) "lib 1.1.0 is installed"
+           (("app" nil "2.1.0") ("base" "0.1" "0.1") ("lib" "1.1.0" "1.1.0")))
+         (list (view-keys view 18 clara.input:+end+) (view-rows view) (view-keys view 13) (clara.parker::status view) (view-rows view)))
+  ;; What goes wrong is said in the status row, and the list is what it was: a source that is not there, and none at all.
+  (setq clara.parker:*sources* (list (list "https://nowhere.test/packages/" *public*)))
+  (check '((2 0 0) "there is no machine of the name nowhere.test" 3) (list (view-keys view 18) (clara.parker::status view) (length (view-rows view))))
+  (setq clara.parker:*sources* nil)
+  (check '((2 0 0) "no source is named, so only what is installed is listed: CLARA.PARKER:*SOURCES*")
+         (list (view-keys view 18) (clara.parker::status view)))
+  ;; A click picks a package, and a click on the one that is picked does what Enter does; not on the row over the list, or under it.
+  (setq clara.parker:*sources* (list (list "https://releases.test/newer/" *public*)))
+  (flet ((clicked (y &optional (buttons 1))
+           (clara.parker::point view y buttons)
+           (list (clara.parker::view-picked view) (clara.parker::status view) (view-wrong view))))
+    (check '(2 "no source is named, so only what is installed is listed: CLARA.PARKER:*SOURCES*" 0) (clicked 8))
+    (check '(0 "3 packages: Enter installs, Delete takes out, Ctrl-R asks again" 0) (clicked 20))
+    (check '(0 "3 packages: Enter installs, Delete takes out, Ctrl-R asks again" 0) (clicked 30 0))
+    (check '(1 "3 packages: Enter installs, Delete takes out, Ctrl-R asks again" 0) (clicked 40))
+    (check '(1 "base 0.1 is installed: Delete takes it out" 0) (clicked 47))
+    (check '(1 "base 0.1 is installed: Delete takes it out" 0) (clicked 70))
+    (check '(1 "base 0.1 is installed: Delete takes it out" 0) (clicked 90)))
+  ;; What happens to the window, as its program takes it; Ctrl-Q and the x close it.
+  (check '(nil 0 t) (list (clara.parker::view-done view) (progn (clara.parker::happened view (list :key clara.input:+home+))
+                                                                (clara.parker::view-picked view))
+                          (progn (clara.parker::happened view '(:key 17)) (clara.parker::view-done view))))
+  (setf (clara.parker::view-done view) nil)
+  (check '(1 t) (list (progn (clara.parker::happened view '(:pointer 5 40 1)) (clara.parker::view-picked view))
+                      (progn (clara.parker::happened view '(:close)) (clara.parker::view-done view))))
+  (check '(0 0) (list (view-wrong view) (wrong-pixels)))
+  (clara.windows:close-window (clara.parker::view-window view)))
+;; The application, launched: its window lists what is installed, says
+;; whom it asks, asks, and lists what there is. Its thread is stopped
+;; like any other's, and its window goes with it.
+(parker-desk (published (list *lib* *app*)) :tree (list (list "packages" (list (installed-tree *base*)))))
+(let* ((thread (clara.windows:launch "parker"))
+       (window (clara.windows:focused-window)))
+  (check '("Parker" "Parker" t) (list (clara.windows:window-title window) (clara:thread-name thread) (clara:thread-alive-p thread)))
+  (check t (eventually (lambda () (= (asked-count) 2))))
+  (clara.windows:key-typed clara.input:+end+)
+  (clara.windows:key-typed 13)
+  (check t (eventually (lambda () (equal (clara.parker:installed) '(("base" "0.1") ("lib" "1.0.0"))))))
+  (clara.windows:key-typed 17)
+  (check t (eventually (lambda () (not (clara:thread-alive-p thread)))))
+  (check '(nil 0) (list (clara.windows:windows) (wrong-pixels))))
+;; With no source named it asks nobody, lists what is installed, and says
+;; in its last row why that is all.
+(parker-desk (published (list *lib*)) :tree (list (list "packages" (list (installed-tree *base*)))))
+(setq clara.parker:*sources* nil)
+(let* ((thread (clara.windows:launch "Parker"))
+       (inside (clara.windows:window-surface (clara.windows:focused-window))))
+  (check t (eventually (lambda ()
+                         (= 0 (wrong-cells inside
+                                           (append (list (pad (clara.parker::heading) 80)
+                                                         (list (pad " base             0.1      -        What the later library needs" 80)))
+                                                   (loop repeat 11 collect (pad "" 80))
+                                                   (list (list (pad " no source is named, so only what is installed is listed: CLARA.PARKER:*SOURCES*"
+                                                                    80)))))))))
+  (clara.windows:key-typed 17)
+  (check t (eventually (lambda () (not (clara:thread-alive-p thread)))))
+  (check '(0 nil) (list (asked-count) (clara.windows:windows))))
+;; The packages that the repository has, which are what claraos.org
+;; offers: each is one that Parker takes, as its file says it, under the
+;; name of its directory, and says what it is in no more than a row of the
+;; window has room for.
+(let ((directories (directory (source "packages/*/"))))
+  (check t (and (member "sun" directories :key (lambda (directory) (car (last (pathname-directory directory)))) :test #'equal) t))
+  (dolist (directory directories)
+    (let* ((name (car (last (pathname-directory directory))))
+           (lines (with-open-file (in (merge-pathnames "package" directory))
+                    (loop for line = (read-line in nil) while line collect line)))
+           (files (remove "package" (mapcar #'file-namestring (directory (merge-pathnames "*.*" directory))) :test #'string=))
+           (entries (clara.parker::read-index
+                     (format nil "ClaraOS packages~%~{~A~%~}~{~A~%~}" lines
+                             (loop for file in files
+                                   collect (let ((octets (file-octets (format nil "packages/~A/~A" name file))))
+                                             (format nil "file ~D ~A ~A" (length octets) (clara.host:sha-512-of octets) file)))))))
+      (check (list (list name) t t)
+             (list (mapcar #'clara.parker::entry-name entries)
+                   (<= 1 (length (clara.parker::entry-about (car entries))) 44)
+                   (equal (sort (mapcar #'car (clara.parker::entry-files (car entries))) #'string<) (sort (copy-list files) #'string<)))))))
+(forget-world)
+(web nil)
+(setf (symbol-function 'clara.unsafe:ed25519) *ed25519*)
+(setq clara.windows::*running* nil)
 
 ;; The network's thread and the card's go with the machine.
 (stop-network)

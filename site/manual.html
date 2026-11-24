@@ -100,6 +100,7 @@ body { position: relative; }
     <li><a href="#fonts">Fonts</a></li>
     <li><a href="#windows">Windows</a></li>
     <li><a href="#applications">Applications</a></li>
+    <li><a href="#parker">Packages</a></li>
     <li><a href="#sound">Sound</a></li>
     <li><a href="#machine">Looking at the machine</a></li>
     <li><a href="#trouble">When something goes wrong</a></li>
@@ -669,8 +670,8 @@ NIL</pre>
 &gt; (clara.system:system-file "boot.lisp")
 "/clara/{{version}}-8f3a1c2e/boot.lisp"</code></pre>
 <pre class="session">&gt; (clara.fat:names (clara.system:system-file ""))
-("arm64.lisp" "boot.lisp" "BOOTAA64.EFI" "BOOTX64.EFI" "clos.lisp" "compiler.lisp" "console.lisp" "disk.lisp" "draw.lisp" "emma.lisp" "fat.lisp" "files.lisp" "font.lisp" "Go-Bold-Italic.ttf" "Go-Bold.ttf" "Go-Italic.ttf" "Go-Mono-Bold-Italic.ttf" "Go-Mono-Bold.ttf" "Go-Mono-Italic.ttf" "Go-Mono.ttf" "Go-Regular.ttf" "hda.lisp" "input.lisp" "listener.lisp" "manifest" "native.lisp" "net.lisp" "pci.lisp" "random.lisp" "roots.pem" "self-test.lisp" "sound.lisp" "system.lisp" "terminal.lisp" "tls.lisp" "type.lisp" "usb.lisp" "virtio.lisp" "windows.lisp" "x86-64.lisp")</pre>
-    <p>Those are the system's Lisp files: the language's part that is written in Lisp, the compiler, the console, the drivers, the file system, the window manager and what sees to <a href="#stop">the machine as a whole</a>, and two that are not loaded until they are wanted, the <a href="#applications">applications</a> <code>emma.lisp</code> and <code>files.lisp</code>. <code>native.lisp</code> is what <a href="#processor">translates for the processor</a>, with a file for each kind of processor, <code>arm64.lisp</code> and <code>x86-64.lisp</code>, of which a machine loads its own. Beside them are a second copy of the kernels and <code>manifest</code>, the list of what the system is made of, which is what <a href="#upgrade">another machine reads</a> when it takes this system from this disk. The eight files whose names end in <code>.ttf</code> are the system's <a href="#fonts">fonts</a>, and <code>roots.pem</code> is the list of whom it <a href="#https">trusts</a>. Everything outside <code>/clara</code> and <code>/EFI</code> is yours, and no system writes there but for one file in <code>/home</code>.</p>
+("arm64.lisp" "boot.lisp" "BOOTAA64.EFI" "BOOTX64.EFI" "clos.lisp" "compiler.lisp" "console.lisp" "disk.lisp" "draw.lisp" "emma.lisp" "fat.lisp" "files.lisp" "font.lisp" "Go-Bold-Italic.ttf" "Go-Bold.ttf" "Go-Italic.ttf" "Go-Mono-Bold-Italic.ttf" "Go-Mono-Bold.ttf" "Go-Mono-Italic.ttf" "Go-Mono.ttf" "Go-Regular.ttf" "hda.lisp" "input.lisp" "listener.lisp" "manifest" "native.lisp" "net.lisp" "parker.lisp" "pci.lisp" "random.lisp" "roots.pem" "self-test.lisp" "sound.lisp" "system.lisp" "terminal.lisp" "tls.lisp" "type.lisp" "usb.lisp" "virtio.lisp" "windows.lisp" "x86-64.lisp")</pre>
+    <p>Those are the system's Lisp files: the language's part that is written in Lisp, the compiler, the console, the drivers, the file system, the window manager, what sees to <a href="#stop">the machine as a whole</a> and what installs <a href="#parker">packages</a>, and two that are not loaded until they are wanted, the <a href="#applications">applications</a> <code>emma.lisp</code> and <code>files.lisp</code>. <code>native.lisp</code> is what <a href="#processor">translates for the processor</a>, with a file for each kind of processor, <code>arm64.lisp</code> and <code>x86-64.lisp</code>, of which a machine loads its own. Beside them are a second copy of the kernels and <code>manifest</code>, the list of what the system is made of, which is what <a href="#upgrade">another machine reads</a> when it takes this system from this disk. The eight files whose names end in <code>.ttf</code> are the system's <a href="#fonts">fonts</a>, and <code>roots.pem</code> is the list of whom it <a href="#https">trusts</a>. Everything outside <code>/clara</code> and <code>/EFI</code> is yours, and no system writes there but for one file in <code>/home</code>.</p>
 
     <h3 id="reading">Reading and loading</h3>
 <pre class="session">&gt; (with-open-file (in (clara.system:system-file "listener.lisp")) (list (read-line in) (read-line in)))
@@ -1423,10 +1424,10 @@ NIL</pre>
         (sleep 2))))
 "Hello"
 &gt; (clara.windows:applications)
-("REPL" "Emma" "Files" "Hello")
+("REPL" "Emma" "Files" "Parker" "Hello")
 &gt; (clara:join-thread (clara.windows:launch "Hello"))
 NIL</pre>
-    <p>The window is there for two seconds, and goes with its application. From now on <code>Hello</code> is in the list under <code>Applications</code>, below the three that come with the system, until it is <a href="#order">moved</a>. <code>REPL</code> is <code>clara.terminal:repl</code>, the first application and the one that is launched when the window manager starts; <code>Emma</code> and <code>Files</code> are the subject of <a href="#applications">the next chapter</a>.</p>
+    <p>The window is there for two seconds, and goes with its application. From now on <code>Hello</code> is in the list under <code>Applications</code>, below the four that come with the system, until it is <a href="#order">moved</a>. <code>REPL</code> is <code>clara.terminal:repl</code>, the first application and the one that is launched when the window manager starts; <code>Emma</code> and <code>Files</code> are the subject of <a href="#applications">the next chapter</a>, and <code>Parker</code> of <a href="#parker">the one after it</a>.</p>
     <p>What the list has under its line are commands: a name and a function of no arguments, which is called in a thread of its own when the name is picked, and which opens no window that anything waits for.</p>
 <pre class="session">&gt; (clara.windows:commands)
 ("Restart" "Shut Down")
@@ -1438,7 +1439,7 @@ NIL</pre>
     <h3 id="order">The order of the list</h3>
     <p>A name stands in the list where it was first defined, under the ones that were there. <code>clara.windows:move-up</code> and <code>clara.windows:move-down</code> take a line one place up or down, by its name, and answer with the names of its kind as they stand then.</p>
 <pre class="session">&gt; (clara.windows:move-up "Hello")
-("REPL" "Emma" "Hello" "Files")
+("REPL" "Emma" "Files" "Hello" "Parker")
 &gt; (clara.windows:move-down "restart")
 ("Shut Down" "Restart")
 &gt; (clara.windows:move-down "Restart")
@@ -1460,7 +1461,7 @@ NIL</pre>
 <pre class="session again">&gt; (list (clara.windows:running-p) (mapcar #'clara.windows:window-title (clara.windows:windows)))
 (T ("REPL"))
 &gt; (list (clara.windows:applications) (clara.windows:commands))
-(("REPL" "Emma" "Hello" "Files") ("Shut Down" "Restart"))
+(("REPL" "Emma" "Files" "Hello" "Parker") ("Shut Down" "Restart"))
 &gt; (clara.windows:stop)
 T</pre>
     <p>What is defined comes back, the applications among it, in the order that the list was left in. The windows that were open do not: a window is pixels and a thread, and an image has neither, so the window manager starts with one REPL, as it does the first time. <code>clara.windows:stop</code> ends the applications and gives the screen back to the console, cleared; a world that is saved after that starts at the console again.</p>
@@ -1552,7 +1553,7 @@ NIL
 &gt; (clara.windows:install-application "Greeting" "/greeting.lisp")
 "Greeting"
 &gt; (list (clara.windows:applications) (find-package "GREETING"))
-(("REPL" "Emma" "Hello" "Files" "Greeting") NIL)
+(("REPL" "Emma" "Files" "Hello" "Parker" "Greeting") NIL)
 &gt; (clara.windows:launch "Greeting" "Good morning")
 #&lt;THREAD "Greeting"&gt;
 &gt; (list (package-name (find-package "GREETING"))
@@ -1562,11 +1563,11 @@ NIL
 <pre class="session">&gt; (clara.windows:unload-application "Greeting")
 "Greeting"
 &gt; (list (find-package "GREETING") (clara.windows:applications))
-(NIL ("REPL" "Emma" "Hello" "Files" "Greeting"))
+(NIL ("REPL" "Emma" "Files" "Hello" "Parker" "Greeting"))
 &gt; (clara.windows:remove-application "Greeting")
 "Greeting"
 &gt; (clara.windows:applications)
-("REPL" "Emma" "Hello" "Files")</pre>
+("REPL" "Emma" "Files" "Hello" "Parker")</pre>
     <ul>
       <li><code>clara.windows:unload-application</code> stops the application wherever it runs, which closes its windows, and deletes the packages that its file made: what the file defined is gone from the world, and the memory it took comes back. The application stays in the list, and the next launch loads the file as it is by then. That is how to try a change to an application: save the file, unload, launch.</li>
       <li><code>clara.windows:remove-application</code> does the same and takes the name out of the list. It is also what takes out an application that was defined at a prompt, like <code>Hello</code>.</li>
@@ -1575,6 +1576,114 @@ NIL
       <li>Emma and the browser are unloaded and launched again the same way, and the system's <code>emma.lisp</code> can be changed in Emma: <code>(clara.system:system-file "emma.lisp")</code> is its name. A file that is installed by a name without a directory, as those two are, is one of the system's own.</li>
       <li>What an application is installed as is part of the world, and is saved with it. Whether its file has been loaded is too: a world that is saved after Emma was used starts with Emma in it.</li>
     </ul>
+  </section>
+
+  <section id="parker">
+    <h2>{{spleen:Packages}}</h2>
+    <p>A package is something that is added to the system: a name, a version, and files of Lisp, which bring an application for the list under <code>Applications</code>, or functions for your own programs, or both. Parker is what installs them. It is an application, with a window of its own, and at a prompt it is the package <code>CLARA.PARKER</code>. (That last word is the language's, and means something else: <a href="#structures">a package of the language</a> is a set of names. Everywhere else in this chapter a package is what Parker installs.)</p>
+
+    <h3 id="parker-window">Parker's window</h3>
+    <p><code>Parker</code> is in the list under <code>Applications</code>. Its window lists the packages that are installed and the ones that can be had, a row each: the name, the version that is here, the version that is offered, and what the package is.</p>
+<pre><code> package          here     offered  about
+ sun              -        1.0.0    The sun of ClaraOS over its horizon
+
+
+ 1 package: Enter installs, Delete takes out, Ctrl-R asks again</code></pre>
+    <table class="wrap">
+      <tr><td>The arrows, <kbd>Home</kbd>, <kbd>End</kbd>, <kbd>Page Up</kbd> and <kbd>Page Down</kbd>, or a click</td><td>pick another package.</td></tr>
+      <tr><td><kbd>Enter</kbd>, or a click on the package that is picked</td><td>installs it, with the packages that it needs. Where a newer version is offered than the one that is here, that one takes its place.</td></tr>
+      <tr><td><kbd>Delete</kbd></td><td>takes the package out, when it is asked twice: <code>y</code> does it, and any other key does not.</td></tr>
+      <tr><td><kbd>Ctrl-R</kbd></td><td>asks again what there is.</td></tr>
+      <tr><td><kbd>Ctrl-Q</kbd></td><td>closes the window, as its <code>x</code> does.</td></tr>
+    </table>
+    <p>As the window opens, Parker asks the place where packages are published what there is, and its last row says whom it is asking. That takes a moment, and it takes <a href="#network">the network</a>: on a machine without one the row says what went wrong, and the list has what is installed, which can still be taken out. Whatever is done is said in that row too, <code>sun 1.0.0 is installed, with the application Sun</code>, and from then on <code>Sun</code> is in the list under <code>Applications</code>.</p>
+
+    <h3 id="parker-prompt">At a prompt</h3>
+    <p>The same is done with five functions. The first three ask the network, so they are shown here and not typed by this page's tests:</p>
+<pre><code>&gt; (clara.parker:available)
+(("sun" "1.0.0" "The sun of ClaraOS over its horizon"))
+&gt; (clara.parker:install "sun")
+parker: sun 1.0.0 is installed, with the application Sun
+("sun")
+&gt; (clara.parker:update)
+NIL
+&gt; (clara.parker:installed)
+(("sun" "1.0.0"))
+&gt; (clara.parker:uninstall "sun")
+parker: sun 1.0.0 is no longer installed
+"sun"</code></pre>
+    <ul>
+      <li><code>clara.parker:available</code> asks what can be had, and gives each package as its name, its version and what it is, in the order of the names.</li>
+      <li><code>clara.parker:install</code> installs the package of a name, after the packages that it needs, and gives the names of what it installed. A package that is installed already is said to be, and nothing is fetched.</li>
+      <li><code>clara.parker:update</code> looks for a newer version of every package that is installed, puts each one that it finds in the place of the older one, and gives the names of what it replaced. With names, <code>(clara.parker:update "sun")</code>, it looks at those packages and no others.</li>
+      <li><code>clara.parker:installed</code> gives what is installed, each package as its name and its version. It reads the disk and asks nobody.</li>
+      <li><code>clara.parker:uninstall</code> takes a package out. A package that another one needs stays until the other one is gone.</li>
+    </ul>
+<pre class="session">&gt; (clara.parker:installed)
+NIL</pre>
+
+    <h3 id="parker-installed">What installing does</h3>
+    <p>A package that is installed is a directory on the disk that the machine was started from, <code>/packages/sun/</code>, with the package's files and a file <code>package</code>, which says what the package is. Nothing else is written, and <a href="#upgrade">an upgrade of the system</a> leaves that directory alone.</p>
+    <ul>
+      <li>The files that the package says are to be loaded are loaded at once, so what they define is there: <code>sun</code> has one, which defines <code>sun:disc</code>. Its applications are in the list under <code>Applications</code> at once as well, and the file of each is loaded when the application is first picked, like <a href="#installed">any application in a file</a>.</li>
+      <li>Every file of a package is fetched before the first one is written, so a package that cannot be had whole leaves nothing on the disk. One whose file fails as it is loaded is not installed either, and the reason is said.</li>
+      <li>The disk says what is installed, and the world follows it. A <a href="#image">world that is saved</a> has its packages in it. A world that is made of the files, at a first start or after an upgrade, loads every package that the disk has, each after the ones that it needs, and before <a href="#home">the text that you keep</a>, so <code>/home/init.lisp</code> can use what a package defines. The start says <code>packages: sun 1.0.0 is installed, and is loaded into this world</code>, and <code>(clara.system:report)</code> says it again.</li>
+      <li>A world that was saved before a package was installed, on a machine that then stopped without saving, takes the package at its next start; one that was saved before a package was taken out lets go of it. Either is said.</li>
+      <li>A package that fails as a start loads it is said to have, with the reason, and the start goes on: <code>packages: sun 1.0.0 is installed, and did not load:</code>, and under it the reason. It stays installed, and the next start tries it again. A package gets as long as a file of <code>/home</code> does, <code>clara.system:*patience*</code>.</li>
+      <li>After <a href="#prompt-not-reached">two starts that did not come to a prompt</a> a package may be the reason, so the world is made without any: <code>(clara.parker:load-installed)</code> loads them, when what was wrong has been taken out.</li>
+      <li>Taking a package out stops its applications, takes them out of the list, deletes the packages of the language that its files made, with all that they defined, and then its directory. What a file of it defined somewhere else, in <code>COMMON-LISP-USER</code> for one, stays in the world.</li>
+      <li>A newer version takes the older one's place the same way: the older one is taken out of the world and off the disk, and the newer one is written and loaded.</li>
+    </ul>
+<pre class="session">&gt; (clara.parker:load-installed)
+NIL</pre>
+
+    <h3 id="parker-sources">Where packages come from</h3>
+    <p>Packages are published at a source: a directory on a web server, with an index that says what is there, and beside the index a signature of it. The system knows of one, <code>https://claraos.org/packages/</code>, which is beside <a href="#upgrade-network">its own releases</a> and signed with the same key.</p>
+<pre class="session">&gt; clara.parker:*sources*
+(("https://claraos.org/packages/" "2c67792528bac0b3570bb966e176e9b60ee04bfa0084ce50676db6cd8fca8dc6"))</pre>
+    <ul>
+      <li>A source is the address of the directory and the public half of the key that its index is signed with, 64 digits. The address begins with <code>https://</code>: packages are fetched by <a href="#https">HTTPS</a> and in no other way.</li>
+      <li>Nothing is believed for having arrived. The index is held against its signature, and every file against the index, by its length and its SHA-512. What fails either is not installed, and the disk is as it was.</li>
+      <li>The machine asks a source when it is told to, by Parker's window as it opens and at <kbd>Ctrl-R</kbd>, and by <code>available</code>, <code>install</code> and <code>update</code>. It asks at no other time.</li>
+      <li>Another source is one more pair in the list, and <code>/home/init.lisp</code> is the place to say so, since a world that is made again starts with the list above: <code>(setq clara.parker:*sources* (append clara.parker:*sources* '(("https://example.org/packages/" "8c33..."))))</code>. Of two sources that have a package of one name, the first is the one that it is taken from.</li>
+      <li>A package is code, and code does on this machine whatever it likes: ClaraOS keeps no program away from another, or from the system. Naming a source is trusting whoever has its key with the machine, as an upgrade trusts whoever has the key of the releases.</li>
+    </ul>
+
+    <h3 id="parker-make">A package of your own</h3>
+    <p>A package is written as a directory of its name, with its files and a file <code>package</code> that says what it is. This is the one of <code>sun</code>, which is in ClaraOS's repository, in <code>packages/sun/</code>, with its two files of Lisp:</p>
+<pre><code>package sun 1.0.0
+about The sun of ClaraOS over its horizon
+system 0.0.52
+load disc.lisp
+application sun.lisp Sun</code></pre>
+    <table class="wrap">
+      <tr><td><code>package</code></td><td>The first line: the name, which is the directory's, and the version. A name is small letters, digits and hyphens; a version is numbers with dots between them, and a higher one is a newer one.</td></tr>
+      <tr><td><code>about</code></td><td>What the package is, in 44 characters at the most, which is what a row of Parker's window has room for.</td></tr>
+      <tr><td><code>system</code></td><td>The oldest ClaraOS that the package is for. An older one does not install it, and says why.</td></tr>
+      <tr><td><code>needs</code></td><td>The name of another package, which is installed with this one, and before it. A line for each.</td></tr>
+      <tr><td><code>load</code></td><td>A file that is loaded when the package is installed, and into every world after that. A line for each, in the order in which they are to be loaded.</td></tr>
+      <tr><td><code>application</code></td><td>A file and the name of the application that it defines, as <a href="#installed">an application in a file</a> does, with <code>clara.windows:define-application</code> as its last form. The name is the one for the list.</td></tr>
+    </table>
+    <p>Only the first two are needed. Every file of the directory is a file of the package, whether a line names it or not; their names are letters, digits, <code>.</code>, <code>-</code> and <code>_</code>, and there are no directories in it. A file that is loaded should make a package of the language for what it defines, as <code>disc.lisp</code> makes <code>SUN</code>: that is what is deleted when the package is taken out.</p>
+    <p>What is in <code>packages/</code> of the repository is what <code>https://claraos.org/packages/</code> has: each time a change there is merged, the packages are laid out and their index is signed, with the system's release. A newer version of a package is its directory with a higher version in the first line of <code>package</code>.</p>
+    <p>To publish packages yourself, lay them out with a key of your own, as <a href="#upgrade-network">a release</a> is, and put the directory where a web server hands it out by HTTPS:</p>
+<pre><code>python3 tools/release.py key my.key                          <span class="note"># once: the secret half goes into my.key, the public half is printed</span>
+python3 tools/release.py packages packages published my.key  <span class="note"># the packages of packages/, laid out in published/</span></code></pre>
+    <p>A machine then names that address, with the 64 digits that the first line printed, in <code>clara.parker:*sources*</code>. To try it from your own computer, the web server and the certificates of <a href="#upgrade-network">Over the network</a> do for packages what they do for a release.</p>
+    <table class="wrap">
+      <tr><td><code>there is no package ...: the sources have (...)</code></td><td>No source has a package of that name. The names that follow are the ones that there are.</td></tr>
+      <tr><td><code>there is no machine of the name claraos.org</code>, or another error about the network</td><td>The machine has no way to the Internet: see <a href="#network">the network</a>.</td></tr>
+      <tr><td><code>... does not begin with https://: packages are fetched over a connection that is kept closed, and over no other</code></td><td>The source's address is one for plain HTTP.</td></tr>
+      <tr><td><code>the source ... is named without the public half of a key</code></td><td>A source is two strings in a list, the address and the 64 digits. Nothing was fetched.</td></tr>
+      <tr><td><code>the index at ... is not signed with the key that the source is named with</code></td><td>The index was signed with another key, or what arrived is not what was signed. Nothing of it is believed.</td></tr>
+      <tr><td><code>the file ... is not what the index at ... says it is</code></td><td>A file arrived damaged or changed, or the source is in the middle of being published. Nothing is installed; ask again.</td></tr>
+      <tr><td><code>... is for ClaraOS ... and newer, and this is ...</code></td><td>The package needs a newer system: <a href="#upgrade">upgrade</a> first.</td></tr>
+      <tr><td><code>... needs the package ..., which is not installed, and which no source has</code></td><td>The package cannot be installed from the sources that are named.</td></tr>
+      <tr><td><code>... was fetched, and did not load, so it is not installed: ...</code></td><td>A file of the package failed as it was loaded, for the reason at the end. That is the package's to put right.</td></tr>
+      <tr><td><code>... is needed by ..., which is installed: that one goes first</code></td><td>A package that another one needs is not taken out before the other one.</td></tr>
+      <tr><td><code>packages: ... is installed, and did not load:</code> and a reason, as the machine starts</td><td>The package is still installed, and the world has nothing of it. <code>(clara.parker:update)</code> may find a version that loads, and <code>(clara.parker:uninstall "...")</code> takes it out.</td></tr>
+      <tr><td>An error about a certificate</td><td>See <a href="#https">HTTPS</a>.</td></tr>
+    </table>
   </section>
 
   <section id="sound">
@@ -1809,6 +1918,10 @@ error: nothing is mapped at #x0</pre>
     <p>The two <a href="#applications">applications</a> that are files. Each package is there once its application has been launched, and gone again when it is unloaded; the one name of each is the function that <code>clara.windows:launch</code> calls.</p>
     <p class="names" data-package="CLARA.EMMA"><code>clara.emma:edit</code></p>
     <p class="names" data-package="CLARA.FILES"><code>clara.files:browse</code></p>
+
+    <h3>The package CLARA.PARKER</h3>
+    <p><a href="#parker">Packages</a> says what each of these is for. <code>clara.parker:parker</code> is the function of the application, which <code>clara.windows:launch</code> calls.</p>
+    <p class="names" data-package="CLARA.PARKER"><code>clara.parker:available</code> <code>clara.parker:install</code> <code>clara.parker:installed</code> <code>clara.parker:update</code> <code>clara.parker:uninstall</code> <code>clara.parker:load-installed</code> <code>clara.parker:*sources*</code> <code>clara.parker:parker</code></p>
 
     <h3>The package CLARA.SOUND</h3>
     <p><a href="#sound">Sound</a> says what each of these is for. <code>clara.sound:start</code> is what the system calls as it starts.</p>

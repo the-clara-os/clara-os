@@ -2253,7 +2253,8 @@ static void new_world(void)
                                          "draw.lisp",     "pci.lisp",      "virtio.lisp",  "usb.lisp",      "input.lisp",
                                          "disk.lisp",     "fat.lisp",      "type.lisp",     "random.lisp",   "net.lisp",
                                          "hda.lisp",      "sound.lisp",    "listener.lisp",
-                                         "windows.lisp",  "terminal.lisp", "system.lisp",   "tls.lisp" };
+                                         "windows.lisp",  "terminal.lisp", "system.lisp",   "tls.lisp",
+                                         "parker.lisp" };
     uint64_t before[LISP_TYPES], after[LISP_TYPES], ticks, collections;
     char processor[16] = { 0 };
     struct lisp_functions functions;

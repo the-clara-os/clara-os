@@ -95,6 +95,37 @@ tls: this system trusts {{roots}} certificates to say who a machine is
 ("{{version}}-other" "http://releases.test:{{port}}/ does not begin with https://: a release is fetched over a connection that is kept closed, and over no other")
 > (list clara.system:*releases* clara.system:*release-key* (complaint #'clara.system:newest))
 ("https://claraos.org/releases/" "2c67792528bac0b3570bb966e176e9b60ee04bfa0084ce50676db6cd8fca8dc6" "there is no machine of the name claraos.org")
+> clara.parker:*sources*
+(("https://claraos.org/packages/" "2c67792528bac0b3570bb966e176e9b60ee04bfa0084ce50676db6cd8fca8dc6"))
+> (list (complaint #'clara.parker:available) (complaint (lambda () (clara.parker:install "sun"))))
+("there is no machine of the name claraos.org" "there is no machine of the name claraos.org")
+> (list (complaint (lambda () (let ((clara.parker:*sources* '(("http://releases.test:{{port}}/packages/" "{{key}}")))) (clara.parker:available))))
+        (complaint (lambda () (let ((clara.parker:*sources* (list (list "https://releases.test:{{secure}}/packages/" clara.system:*release-key*)))) (clara.parker:available))))
+        (complaint (lambda () (let ((clara.parker:*sources* '(("https://releases.test:{{secure}}/packages/" nil)))) (clara.parker:available)))))
+("http://releases.test:{{port}}/packages/ does not begin with https://: packages are fetched over a connection that is kept closed, and over no other" "the index at https://releases.test:{{secure}}/packages/ is not signed with the key that the source is named with: nothing of it is believed" "the source https://releases.test:{{secure}}/packages/ is named without the public half of a key, 64 digits: what it has could be held against nothing")
+> (length (setq clara.parker:*sources* (list (list "https://releases.test:{{secure}}/packages/" "{{key}}"))))
+1
+> (list (clara.parker:available) (clara.parker:installed) (complaint (lambda () (clara.parker:install "moon"))))
+((("sun" "1.0.0" "The sun of ClaraOS over its horizon")) NIL "there is no package moon: the sources have (\"sun\")")
+> (clara.parker:install "sun")
+parker: sun 1.0.0 is installed, with the application Sun
+("sun")
+> (list (clara.parker:installed) (clara.fat:names "/packages/") (clara.fat:names "/packages/sun/") (clara.windows:applications) (fboundp 'sun:disc))
+((("sun" "1.0.0")) ("sun/") ("disc.lisp" "package" "sun.lisp") ("REPL" "Emma" "Files" "Parker" "Sun") T)
+> (clara.parker:install "sun")
+parker: sun 1.0.0 is installed already: (clara.parker:update) looks for a newer one
+NIL
+> (list (clara.windows:start) (clara:threadp (clara.windows:launch "Sun")) (mapcar #'clara.windows:window-title (clara.windows:windows)) (fboundp 'sun::rise))
+(T T ("Sun" "REPL") T)
+> (list (clara.windows:stop) (clara.parker:update))
+(T NIL)
+> (length (setq clara.parker:*sources* (list (list "https://releases.test:{{secure}}/newer/" "{{key}}"))))
+1
+> (clara.parker:update)
+parker: sun 9.0.0 is installed, with the application Sun
+("sun")
+> (list (clara.parker:installed) (clara.windows:applications) (fboundp 'sun:disc) (find-symbol "RISE" "SUN"))
+((("sun" "9.0.0")) ("REPL" "Emma" "Files" "Parker" "Sun") T NIL)
 > (clara.system:upgrade :from "https://releases.test:{{secure}}/")
 error: the newest ClaraOS at https://releases.test:{{secure}}/ is {{version}}-other, which is no newer than this one, {{system}}: :ANY T takes it all the same
 > (clara.system:upgrade :from "https://releases.test:{{secure}}/" :any t)
@@ -127,3 +158,8 @@ clara: starting the machine again
 net: this machine is 10.0.2.15 on its network, 10.0.2.2 is the way out, 10.0.2.3 knows names
 net: by IPv6 it is fec0::5054:ff:fe12:3456, fe80::2 is the way out
 (("{{version}}-other/" "clara.image") "10.0.2.15")
+> (list (clara.parker:installed) (clara.windows:applications) (fboundp 'sun:disc) clara.parker:*sources*)
+((("sun" "9.0.0")) ("REPL" "Emma" "Files" "Parker" "Sun") T (("https://claraos.org/packages/" "2c67792528bac0b3570bb966e176e9b60ee04bfa0084ce50676db6cd8fca8dc6")))
+> (list (clara.parker:uninstall "sun") (clara.parker:installed) (clara.fat:names "/packages/") (find-package "SUN") (clara.windows:applications))
+parker: sun 9.0.0 is no longer installed
+("sun" NIL NIL NIL ("REPL" "Emma" "Files" "Parker"))

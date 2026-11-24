@@ -1248,6 +1248,96 @@ Infrastructure, done:
   order put back before the text is loaded). The host tests noticed all
   forty, and passed with a comment changed, which was the control.
 
+- **Parker, and packages** (2026-11-23, version 0.0.52). Something can be
+  added to a ClaraOS that runs (issue #43, "A package management system
+  for ClaraOS where new packages and applications can be installed"). A
+  package is a name, a version and files of Lisp: files that are loaded
+  when it is installed, and applications for the list under
+  `Applications`. Parker installs them (lisp/parker.lisp, the package
+  CLARA.PARKER): an application with a window that lists what is
+  installed and what can be had, where Enter installs the package that is
+  picked, or puts a newer version in its place, and Delete takes it out;
+  and at a prompt `clara.parker:available`, `install`, `installed`,
+  `update` and `uninstall`. Packages are published the way the system is,
+  and beside it, at `https://claraos.org/packages/`: the directory
+  `packages/` of the repository, laid out with an index of what there is,
+  which is signed with the key of the releases, by the workflow that
+  publishes the release (`make release PACKAGES=`, `python3
+  tools/release.py packages`). A machine fetches by HTTPS and in no other
+  way, holds the index against its signature and every file against the
+  index, and writes nothing before it has every file. The place is
+  `clara.parker:*sources*`, which can name others, each with its key. The
+  first package is `sun`, the sun of ClaraOS over its horizon, in a
+  window: a file that is loaded and an application. What is installed is
+  a directory of the disk, `/packages/<name>`, which no upgrade writes
+  to. The disk says what is installed, and a world follows it: one that
+  is made from the files loads every package, before the text of `/home`;
+  one that came back as an image takes what was installed since it was
+  saved and lets go of what was taken out; after two starts that did not
+  come to a prompt none is loaded; and each start says what it did, in
+  lines that begin with `packages:`, which the report keeps. What a
+  package defined is not written into the account of a world that leaves
+  for a newer system: that system has it from the disk. The manual has a
+  chapter, "Packages", and DESIGN.md a section. What it left: the key
+  (issue #111); a newer version that does not load (#112); a machine
+  without a network (#113); what a file defines outside a package of its
+  own (#114); an application's file, which nothing tries before it is
+  picked (#115); the window, which asks as it opens (#116); the sources,
+  which are a variable and no text (#117); a page of the website that
+  lists the packages (#118); the boot of the tests, which installs one
+  package by its name (#119); and versions, of which a package that
+  needs another names none and a source has one (#120). `make test`
+  passed on the Mac and in a container of Ubuntu 26.04, the host tests
+  with 16670 checks, of which Parker's are 159, and all nineteen boots,
+  in fourteen minutes there, with the stress boot at 208 s. The boot
+  that fetches a release is first given the repository's packages by the
+  test's web server: it refuses a source by plain HTTP, one without a
+  key and one whose index another key signed, installs `sun`, launches
+  its application in a window, replaces it by a newer version, upgrades
+  the system, comes up with the package loaded into the world that was
+  made again, and takes it out. What it costs: the stress boot where the
+  machine is emulated took 213 s with Parker and 208 s without, side by
+  side on the Mac; and the host tests take 76 seconds there where they
+  took 72. They took 114 at first, of the 120 that they are given:
+  Ed25519 is big numbers under SBCL, an eighth of a second to sign and as
+  long to hold a signature, and a machine on the made-up network takes as
+  long to make. So one machine of Parker's tests fetches over that
+  network, the tests that are about signatures sign in earnest, and the
+  others have a list for a web server and a rule of their own for a
+  signature. On CI the host tests took 78 to 90 seconds before this. A
+  copy of the disk of Julio's machine, which ran the published 0.0.51
+  with the window manager, was started with this system beside it, as his
+  next `make run-aarch64` does it, and with a copy of `~/clara-work.dmg`:
+  it took the system, made its world again of the seventeen forms of
+  `/home/defined.lisp`, and came up with the list in the order that he
+  had moved it into, Parker behind Files and before Galculator, and with
+  his eleven commands; the world that it saved started again, loaded his
+  `init.lisp` from the copy of the work disk, and opened Galculator and
+  Parker; and a second upgrade from there, to a system that the tests
+  build, carried all of it again. The step of the website's workflow
+  that signs was run by hand with a key made for it: it laid out the
+  release and the packages and held both against the key, and with a key
+  that is not the system's, or with no secret, it laid out nothing.
+  Mistakes that were planted, one at a time, in copies of the tree, 157
+  of them: in what an index says and leaves out (a name, a version, each
+  line of a package, what makes one whole), in what is asked of a source
+  and held against what (the road, the key, the signature, the sums, the
+  memory that is given back), in what is written to the disk and in which
+  order, in what a world is given and what is taken from it, in what a
+  start does for each kind of world and what it says, in what is
+  installed with what, replaced by what and refused, in the window (its
+  rows, its keys, the pointer, what it says while it fetches), and in the
+  places where lisp/system.lisp calls on it. The tests of Parker noticed
+  155. The two that got through were the control, a comment changed, and
+  a letter allowed in a version, which changes nothing that a machine
+  could show: the numbers of a version are read by a function that
+  refuses a letter itself. A first round had let five through. Three
+  became tests: the name of an application that is none, a file of
+  `/packages` whose name is a package's and one letter more, and a world
+  on a machine whose disk is not known. One was that letter. And one was
+  better than the code, which was changed to it: with no source named,
+  the window says so as it opens.
+
 Infrastructure, for sessions with budget left over:
 
 - Read the UART base from ACPI (SPCR or DBG2) instead of assuming
