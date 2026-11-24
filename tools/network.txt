@@ -111,7 +111,7 @@ tls: this system trusts {{roots}} certificates to say who a machine is
 parker: sun 1.0.0 is installed, with the application Sun
 ("sun")
 > (list (clara.parker:installed) (clara.fat:names "/packages/") (clara.fat:names "/packages/sun/") (clara.windows:applications) (fboundp 'sun:disc))
-((("sun" "1.0.0")) ("sun/") ("disc.lisp" "package" "sun.lisp") ("REPL" "Emma" "Files" "Ares" "Parker" "Sun") T)
+((("sun" "1.0.0")) ("sun/") ("disc.lisp" "package" "sun.lisp") ("REPL" "Emma" "Jaid" "Ares" "Parker" "Sun") T)
 > (clara.parker:install "sun")
 parker: sun 1.0.0 is installed already: (clara.parker:update) looks for a newer one
 NIL
@@ -125,7 +125,7 @@ NIL
 parker: sun 9.0.0 is installed, with the application Sun
 ("sun")
 > (list (clara.parker:installed) (clara.windows:applications) (fboundp 'sun:disc) (find-symbol "RISE" "SUN"))
-((("sun" "9.0.0")) ("REPL" "Emma" "Files" "Ares" "Parker" "Sun") T NIL)
+((("sun" "9.0.0")) ("REPL" "Emma" "Jaid" "Ares" "Parker" "Sun") T NIL)
 > (defun titled (title) (loop (when (member title (mapcar #'clara.windows:window-title (clara.windows:windows)) :test #'equal) (return title)) (clara:wait-event (clara:make-event "a while") 20)))
 TITLED
 > (list (clara.windows:start) (clara:threadp (clara.windows:launch "Ares" "releases.test:{{secure}}/pages")) (titled "Ares - The pages of the test"))
@@ -182,7 +182,7 @@ net: this machine is 10.0.2.15 on its network, 10.0.2.2 is the way out, 10.0.2.3
 net: by IPv6 it is fec0::5054:ff:fe12:3456, fe80::2 is the way out
 (("{{version}}-other/" "clara.image") "10.0.2.15")
 > (list (clara.parker:installed) (clara.windows:applications) (fboundp 'sun:disc) clara.parker:*sources*)
-((("sun" "9.0.0")) ("REPL" "Emma" "Files" "Ares" "Parker" "Sun") T (("https://claraos.org/packages/" "2c67792528bac0b3570bb966e176e9b60ee04bfa0084ce50676db6cd8fca8dc6")))
+((("sun" "9.0.0")) ("REPL" "Emma" "Jaid" "Ares" "Parker" "Sun") T (("https://claraos.org/packages/" "2c67792528bac0b3570bb966e176e9b60ee04bfa0084ce50676db6cd8fca8dc6")))
 > (list (clara.parker:uninstall "sun") (clara.parker:installed) (clara.fat:names "/packages/") (find-package "SUN") (clara.windows:applications))
 parker: sun 9.0.0 is no longer installed
-("sun" NIL NIL NIL ("REPL" "Emma" "Files" "Ares" "Parker"))
+("sun" NIL NIL NIL ("REPL" "Emma" "Jaid" "Ares" "Parker"))

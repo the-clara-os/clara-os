@@ -62,7 +62,7 @@ and the pointer going to the one that is picked, a launcher along the top,
 and the REPL, a listener in a window (lisp/terminal.lisp), which is the
 same world as the prompt on the serial port. A world that is saved while it runs
 boots straight into it. Three applications come with it, Emma, a text editor
-(lisp/emma.lisp), a file browser (lisp/files.lisp), and Ares, a web
+(lisp/emma.lisp), Jaid, a file browser (lisp/jaid.lisp), and Ares, a web
 browser (lisp/ares.lisp): each is a file on the boot volume that the
 launcher loads when it is first picked, and unloads again when asked, and
 `(clara.windows:launch "Emma" "/notes.txt")` opens a file from a prompt.
@@ -216,7 +216,7 @@ Layout:
                      the evaluator, and the machine that compiled code runs on (vm.c)
     lisp/            Lisp sources: the language's own part, the compiler, the object system, the console, drawing, the drivers, the
                      file system, the fonts, the network, sound, the listener, the window manager, the terminal in a window and Parker, which installs packages,
-                     all of which the kernel loads as it starts, and the three applications, emma.lisp, files.lisp and ares.lisp, which the launcher loads when they are picked;
+                     all of which the kernel loads as it starts, and the three applications, emma.lisp, jaid.lisp and ares.lisp, which the launcher loads when they are picked;
                      the build copies them to the system's directory on the ESP, \clara\<its name>, read at boot
     fonts/           the console font, Spleen 8x16, which tools/bdf2c.py turns into kernel/font.c, and the
                      fonts of outlines, the Go fonts, which go onto the boot volume as they are

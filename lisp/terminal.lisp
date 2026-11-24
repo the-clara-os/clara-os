@@ -265,10 +265,10 @@
 ;;; The applications that come with the system, after the REPL in the
 ;;; launcher's list. Each is a file of its own among the system's, which
 ;;; nobody loads until the application is picked: lisp/emma.lisp, the
-;;; editor, lisp/files.lisp, and lisp/ares.lisp, the web browser. They are
-;;; installed by their bare names, which are the system's to find wherever
-;;; its files are.
+;;; editor, lisp/jaid.lisp, the file browser, and lisp/ares.lisp, the web
+;;; browser. They are installed by their bare names, which are the system's
+;;; to find wherever its files are.
 
 (clara.windows:install-application "Emma" "emma.lisp")
-(clara.windows:install-application "Files" "files.lisp")
+(clara.windows:install-application "Jaid" "jaid.lisp")
 (clara.windows:install-application "Ares" "ares.lisp")
