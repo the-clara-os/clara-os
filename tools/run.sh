@@ -16,6 +16,16 @@
 #        there until the new one has come to its prompt (lisp/system.lisp).)
 #        FRESH=1 (a new disk for the machine all the same, as if it had never
 #        run: the one that was there is kept, under another name, which is said)
+#        SIZE=1024 (how many MiB the machine's own disk has. A world is saved
+#        on it, and the one that was saved before is there until the new one
+#        is whole, so the disk has room for the largest world that a machine
+#        of 512 MiB can save, twice, and for the user's files beside them. Most
+#        of such a disk is nothing, and takes no room on this computer. A disk
+#        that is smaller, as every disk was that the tools made up to 0.0.54,
+#        is made again that large with every file that it holds, by
+#        tools/mkdisk.py, and the disk that was there is kept, under another
+#        name, which is said. SIZE= leaves a disk as it is, and makes a new
+#        one as small as they were, 35 MiB.)
 #        INPUT="-device virtio-keyboard-pci ..." (the keyboard and the pointers the
 #        machine gets; the default is a virtio keyboard, mouse and tablet, and
 #        INPUT= gives a machine with none of them)
@@ -61,6 +71,12 @@ esp=${ESP:-build/esp}
 share=${QEMU_SHARE:-/opt/homebrew/share/qemu}
 serial=${SERIAL:-mon:stdio}
 mem=${MEM:-512M}
+size=${SIZE-1024}
+case "$size" in
+*[!0-9]*)
+    echo "tools/run.sh: SIZE is how many MiB the machine's disk has, a number, and not \"$size\"" >&2
+    exit 1 ;;
+esac
 if [ -n "${UTM:-}" ]; then
     input=${INPUT--device nec-usb-xhci,id=usb-bus -device usb-tablet,bus=usb-bus.0 -device usb-mouse,bus=usb-bus.0 -device usb-kbd,bus=usb-bus.0}
     card="-device intel-hda -device hda-duplex,audiodev=sound"
@@ -195,6 +211,12 @@ else
         exit 1
     fi
     want=$(ls "$esp/clara" 2> /dev/null | head -1)
+    # A run that was stopped between putting the smaller disk aside and
+    # giving the larger one its name left the machine's disk under this one.
+    larger=${disk%.img}-larger.img
+    if [ ! -f "$disk" ] && [ -f "$larger" ]; then
+        mv "$larger" "$disk"
+    fi
     if [ -f "$disk" ] && [ -n "${FRESH:-}" ]; then
         aside "$disk" before
         echo "tools/run.sh: a new disk for this machine, as FRESH asks; the one that was there is kept as $kept" >&2
@@ -209,23 +231,45 @@ else
             echo "tools/run.sh: $disk held a ClaraOS from before one could take a newer one in place (0.0.25 or older)." >&2
             echo "    It is kept as $kept, and the machine starts from a new disk. Files that were written on" >&2
             echo "    the old one can be carried across on this computer: both are FAT volumes, and open here." >&2
-        elif [ "$have" != "$want" ]; then
-            # Another system than the one that was built: the build goes to the
-            # machine as a second disk, which says that it is to be taken at once.
-            upgrade=build/upgrade-$arch.img
-            if [ ! -f "$upgrade" ] || [ -n "$(find "$esp" -newer "$upgrade" -print | head -1)" ]; then
-                rm -rf build/upgrade-esp
-                cp -R "$esp" build/upgrade-esp
-                : > build/upgrade-esp/clara/at-once
-                python3 -I tools/mkdisk.py build/upgrade-esp "$upgrade"
+        else
+            # A disk that is smaller than a machine's disk is made now holds a
+            # world twice only while the world is small, and a world that
+            # has been worked in is not (issue #140): its files go onto a disk of
+            # the size that is wanted, each held against the old disk once it
+            # is written, and the old disk is kept as it is. When that does not
+            # work the machine has the disk that it had.
+            had=$(($(wc -c < "$disk") / 1048576))
+            if [ -n "$size" ] && [ "$had" -lt "$size" ]; then
+                rm -f "$larger"
+                if python3 -I tools/mkdisk.py --size "$size" --grow "$disk" "$larger"; then
+                    aside "$disk" small
+                    mv "$larger" "$disk"
+                    echo "tools/run.sh: the disk of this machine had $had MiB, and is to have $size: every file of it is on a disk of that size now," >&2
+                    echo "    $disk, and the disk that was there is kept as $kept" >&2
+                else
+                    rm -f "$larger"
+                    echo "tools/run.sh: the files of $disk could not be put on a larger disk, so the machine starts from it as it is" >&2
+                fi
             fi
-            echo "tools/run.sh: $disk holds ClaraOS $have, and the build is $want: the machine is given the build" >&2
-            echo "    as a second disk, takes it, and starts again by itself to try it." >&2
-            set -- "$@" -drive "if=none,id=upgrade,format=raw,readonly=on,file=$upgrade" -device virtio-blk-pci,drive=upgrade
+            if [ "$have" != "$want" ]; then
+                # Another system than the one that was built: the build goes to the
+                # machine as a second disk, which says that it is to be taken at once.
+                upgrade=build/upgrade-$arch.img
+                if [ ! -f "$upgrade" ] || [ -n "$(find "$esp" -newer "$upgrade" -print | head -1)" ]; then
+                    rm -rf build/upgrade-esp
+                    cp -R "$esp" build/upgrade-esp
+                    : > build/upgrade-esp/clara/at-once
+                    python3 -I tools/mkdisk.py build/upgrade-esp "$upgrade"
+                fi
+                echo "tools/run.sh: $disk holds ClaraOS $have, and the build is $want: the machine is given the build" >&2
+                echo "    as a second disk, takes it, and starts again by itself to try it." >&2
+                set -- "$@" -drive "if=none,id=upgrade,format=raw,readonly=on,file=$upgrade" -device virtio-blk-pci,drive=upgrade
+            fi
         fi
     fi
     if [ ! -f "$disk" ]; then
-        python3 -I tools/mkdisk.py "$esp" "$disk"
+        # shellcheck disable=SC2086
+        python3 -I tools/mkdisk.py ${size:+--size $size} "$esp" "$disk"
     fi
 fi
 

@@ -4517,6 +4517,111 @@
     (check nil problems)
     (check '(t t) (list (equalp image (cdr (assoc "/clara/clara.image" files :test #'string=)))
                         (equalp image (cdr (assoc "/clara/world.image" files :test #'string=)))))))
+
+;; A world that the volume has no room for beside the one that was saved
+;; before goes where that one was: the older one is taken away first, and
+;; only then. A world that has no room even so is not saved, nothing is
+;; touched, and the error says how much it takes and how much there is. A
+;; volume of 400 clusters of 512 bytes here, 337 of them free; a world of
+;; so many clusters is some bytes that are its own.
+(defun world-of (clusters seed)
+  (coerce (loop for i below (* 512 clusters) collect (mod (* seed i) 251)) '(vector (unsigned-byte 8))))
+(defun world-on (disk)
+  (multiple-value-bind (files problems) (inspect-volume disk)
+    (list (cdr (assoc "/clara/clara.image" files :test #'string=))
+          (equalp (remove "/clara/clara.image" files :key #'car :test #'string=)
+                  (sort (copy-list (tree-files *clean-tree*)) #'string< :key #'car))
+          problems)))
+(let ((disk (fat-bytes (make-fat-volume 12 *clean-tree* :clusters 400)))
+      (one (world-of 200 7)) (two (world-of 210 11)) (three (world-of 340 13)) (all (world-of 337 17)))
+  (start-files disk)
+  (let ((pages (clara.host:allocated-pages)))
+    (flet ((save (world &optional (name "/clara/clara.image"))
+             (clara.host:set-heap-image world)
+             (handler-case (clara:save-image name)
+               (error (condition) (list :error (princ-to-string condition)))))
+           (holds (world free)
+             (destructuring-bind (image others problems) (world-on disk)
+               (check (list t t nil (* 512 free) pages)
+                      (list (equalp image world) others problems (clara.fat:free-bytes) (clara.host:allocated-pages))))))
+      ;; The first has all the room there is.
+      (check "/clara/clara.image" (save one))
+      (holds one 137)
+      ;; The second has 137 clusters beside the first, and wants 210: the first goes, and then there are 337.
+      (check "/clara/clara.image" (save two))
+      (holds two 127)
+      ;; The third wants 340, and with the second gone there would be 337: the second stays.
+      (check '(:error "the world takes 0.2 MiB, and the disk that it is saved on has room for 0.1 MiB, even with the world that was saved before gone: files have to go from that disk, or the machine needs a larger one")
+             (save three))
+      (holds two 127)
+      ;; Under a name that no world was saved under there is nothing to take away.
+      (check '(:error "the world takes 0.2 MiB, and the disk that it is saved on has room for 0.0 MiB: files have to go from that disk, or the machine needs a larger one")
+             (save three "/clara/another.image"))
+      (holds two 127)
+      ;; A world of every cluster that there is, and one of as many after it.
+      (check "/clara/clara.image" (save all))
+      (holds all 0)
+      (check "/clara/clara.image" (save (setq all (world-of 337 19))))
+      (holds all 0)
+      (check :error (car (save (world-of 338 23))))
+      (holds all 0)
+      ;; Any other file is written beside the one that it replaces, or not at all: only a world goes first.
+      (check '(:error "the volume is full: 3 clusters are wanted, and 0 are free")
+             (handler-case (put-text "/clara/clara.image" (make-string 1025 :initial-element #\x))
+               (error (condition) (list :error (princ-to-string condition)))))
+      (holds all 0)
+      ;; And a world that has the room beside the one before it is written there, as every file is.
+      (check "/clara/clara.image" (save one))
+      (holds one 137)
+      (check "/clara/clara.image" (save (setq one (world-of 100 29))))
+      (holds one 237)
+      (let ((at (clara.fat::entry-cluster (find "clara.image" (clara.fat:entries "/clara/")
+                                                :key #'clara.fat:entry-name :test #'string-equal))))
+        (check "/clara/clara.image" (save (setq one (world-of 100 31))))
+        (holds one 237)
+        (check nil (= at (clara.fat::entry-cluster (find "clara.image" (clara.fat:entries "/clara/")
+                                                         :key #'clara.fat:entry-name :test #'string-equal))))))))
+
+;; A disk that stops while a world is saved, at every request that it could
+;; stop at. With room for both, the volume has one of the two worlds whole
+;; whenever it stops, as with any file. Without, the older one is gone
+;; before the newer one is whole: a stop between leaves no world, which is
+;; a machine that starts from its files, and never a part of one. A world
+;; that takes every cluster that is free, and no more, has room.
+(dolist (how '((100 110 t) (100 237 t) (200 210 nil)))
+  (let ((request 0) (stopped t) (none 0) (older 0) (roomy (third how))
+        (old (world-of (first how) 7)) (new (world-of (second how) 11)))
+    ;; A save that fails on a disk that never stops would go round for ever.
+    (loop while (and stopped (< request 500))
+          do (incf request)
+             (let ((disk (fat-bytes (make-fat-volume 12 *clean-tree* :clusters 400)))
+                   (count 0))
+               (start-files disk)
+               (clara.host:set-heap-image old)
+               (clara:save-image)
+               (clara.host:set-heap-image new)
+               (setf (vdev-watch *disk*)
+                     (lambda ()
+                       (when (= (incf count) request)
+                         (setf (vdev-answer *disk*) 1))))
+               (setq stopped (not (ignore-errors (clara:save-image) t)))
+               (destructuring-bind (image others problems) (world-on disk)
+                 (incf *checks*)
+                 (cond ((null image) (incf none))
+                       ((equalp image old) (incf older)))
+                 (unless (and (every (lambda (problem)
+                                       (or (search "are in no file, and not free" problem)
+                                           (search "the copies of the table differ" problem)))
+                                     problems)
+                              others
+                              (if stopped
+                                  (or (equalp image old) (equalp image new) (and (null image) (not roomy)))
+                                  (and (null problems) (equalp image new))))
+                   (failed "a disk that stopped at request ~D of saving a world ~A is left out of order: ~{~A~^; ~}"
+                           request (if roomy "beside the one before it" "where the one before it was")
+                           (or problems (list "its files are not what they were")))))))
+    ;; Both ways there are requests at which the older world is still the one; only one way has any at which there is none.
+    (check (list roomy t t roomy) (list roomy (< 8 request 500) (> older 0) (zerop none)))))
 (new-bus)
 (said-by #'clara.disk:start)
 (said-by #'clara.fat:start)
@@ -7486,14 +7591,37 @@
 
 ;; A world that cannot be saved: the machine stays as it was, and says why.
 (start-files (fat-bytes (make-fat-volume 16 '(("notes.txt" "x")))))
-(check (format nil "clara: the machine is not shut down: there is no directory for a file /clara/clara.image to be in~%")
+;; And says what can always be done, which is to go without saving.
+(check (format nil "clara: the machine is not shut down: there is no directory for a file /clara/clara.image to be in~%~
+                    clara:   (clara.system:shut-down :save nil) does it without saving the world~%")
        (said-by-all (lambda () (clara.system:shut-down))))
 (check '(nil nil) (list (clara.host:power) clara.system::*leaving*))
 (start-files (fat-bytes (make-fat-volume 16 '(("clara" (("kept.txt" "x")))))) :read-only t)
-(check t (and (search "clara: the machine is not started again: the disk 00:03.0 cannot be written"
-                      (said-by-all (lambda () (clara.system:start-again))))
-              t))
-(check nil (clara.host:power))
+(let ((said (said-by-all (lambda () (clara.system:start-again)))))
+  (check '(t t nil)
+         (list (and (search "clara: the machine is not started again: the disk 00:03.0 cannot be written" said) t)
+               (and (search (format nil "~%clara:   (clara.system:start-again :save nil) does it without saving the world~%") said) t)
+               (search "clara: the world is saved" said))))
+(check '(nil nil) (list (clara.host:power) clara.system::*leaving*))
+;; A world that the disk has no room for, even where the one before it was:
+;; the machine stays, the older world is still the one, and what is said
+;; has the two sizes in it.
+(let ((disk (fat-bytes (make-fat-volume 12 *clean-tree* :clusters 400))))
+  (start-files disk)
+  (clara.host:set-heap-image (world-of 200 7))
+  (clara:save-image)
+  (clara.host:set-heap-image (world-of 340 13))
+  (check (format nil "clara: the machine is not shut down: the world takes 0.2 MiB, and the disk that it is saved on has room for 0.1 MiB, ~
+                      even with the world that was saved before gone: files have to go from that disk, or the machine needs a larger one~%~
+                      clara:   (clara.system:shut-down :save nil) does it without saving the world~%")
+         (said-by-all (lambda () (clara.system:shut-down))))
+  (check (list nil nil t) (list (clara.host:power) clara.system::*leaving* (equalp (world-of 200 7) (car (world-on disk)))))
+  ;; One that has room there and none beside it is saved, and the machine goes.
+  (clara.host:set-heap-image (world-of 210 11))
+  (check t (and (search (format nil "clara: the world is saved~%clara: turning the machine off~%")
+                        (said-by-all (lambda () (clara.system:shut-down))))
+                t))
+  (check (list '(:off) t nil) (cons (clara.host:power) (let ((on (world-on disk))) (list (equalp (world-of 210 11) (car on)) (third on))))))
 
 ;; A machine without a disk has nowhere to save a world, and goes all the same.
 (new-disks)

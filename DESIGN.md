@@ -706,6 +706,38 @@ architectures (kernel/vm.c).
   what a new one has to be like. The first thing done in it is a
   collection: that frees what the threads held that are gone, and finds
   the free blocks of the heap, which are in no list in a file.
+- Room for a world (issue #140, 0.0.55, 2026-11-24). A file is written
+  beside the one that it replaces, which is what keeps a volume from ever
+  holding half a file, so a world that is saved needs its own size free a
+  second time. A world is the one file that can be too large for that: it
+  is as large as the heap has become, and a world that is worked in is
+  not small (one came to 15 MiB in three hours, on a disk that had 14 for
+  the second copy). And it is the one file that a machine cannot go on
+  without writing: shutting down, starting again and taking a newer
+  system all save first, so a machine whose world could not be saved a
+  second time could not be stopped either, short of saying `:save nil`.
+  So a world goes one of two ways (`put-file` in lisp/fat.lisp). With
+  room for both it is written like every file. Without, the older world
+  is taken away first and the newer one is written where it was, and a
+  machine that stops between the two has no saved world: it starts from
+  its files and from what /home holds as text, which is what that text
+  is kept for. Only a world goes first; any other file is written
+  beside the one before it or not at all. When a world has no room even
+  so, nothing is touched, the error says how much the world takes and
+  how much the disk has, and a machine that was asked to stop says how
+  that is done without saving (`finish` in lisp/system.lisp). The other
+  half is the disk. tools/run.sh makes a machine's disk of 1024 MiB
+  (`SIZE=`), and no longer of 35: the heap is copied into page frames of
+  its own before it is written, so a world is at most half of a
+  machine's memory, and such a disk holds the largest world of a machine
+  of 512 MiB twice, with the user's files beside it. Most of that disk is
+  nothing, which the file on the host does not hold. A disk that is
+  smaller, as every disk was until then, is made again that large the
+  next time the machine is run: tools/mkdisk.py `--grow` reads every
+  file of the old volume, lays them out on a new one, reads that back
+  and holds it against the old one, and tools/run.sh keeps the old disk
+  under another name. The disks that the tests boot from stay as small
+  as they were, where a volume that is full is quickly made.
 - Images are tested by booting twice. Each machine of `make test` ends
   its first session by saving the world to the disk it booted from, with
   a lock held, a thread waiting and names read in a package that uses no
