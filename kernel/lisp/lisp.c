@@ -2252,7 +2252,7 @@ static void new_world(void)
                                          "console.lisp",
                                          "draw.lisp",     "pci.lisp",      "virtio.lisp",  "usb.lisp",      "input.lisp",
                                          "disk.lisp",     "fat.lisp",      "type.lisp",     "random.lisp",   "net.lisp",
-                                         "hda.lisp",      "sound.lisp",    "listener.lisp",
+                                         "hda.lisp",      "sound.lisp",    "syntax.lisp",   "listener.lisp",
                                          "windows.lisp",  "terminal.lisp", "system.lisp",   "tls.lisp",
                                          "parker.lisp" };
     uint64_t before[LISP_TYPES], after[LISP_TYPES], ticks, collections;

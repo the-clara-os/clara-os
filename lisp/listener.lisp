@@ -19,7 +19,7 @@
 
 (defpackage "CLARA.LISTENER"
   (:use "COMMON-LISP")
-  (:export "RUN" "ANSWER" "READ-AND-ANSWER" "ANSWER-LINES" "*RECORD*"))
+  (:export "RUN" "ANSWER" "READ-AND-ANSWER" "ANSWER-LINES" "*RECORD*" "*BEGUN*"))
 (in-package "CLARA.LISTENER")
 
 ;; What READ-FROM-STRING gives when no form is left: a cons, which is EQ to
@@ -30,6 +30,15 @@
 ;; without an error, the text that the form was read from, and the name of
 ;; the package that it was read in; or NIL, when nobody wants to know.
 (defvar *record* nil)
+
+;; While the listener reads a line, the text that the line goes on from:
+;; what the lines before it began and did not finish, or a string with
+;; nothing in it when the line is the first of something. Whoever gives the
+;; listener its lines can look here, which is how a window knows which
+;; parentheses of a form of several lines belong together
+;; (lisp/terminal.lisp). At any other time it is NIL: a line that is read
+;; then is some program's, and goes on from nothing.
+(defvar *begun* nil)
 
 ;; A form: evaluated, and its values printed, each on a line of its own.
 ;; An error is said and goes no further; so does a heap that is full, and
@@ -77,7 +86,8 @@
   (let ((text ""))
     (loop
       (write-string (if (zerop (length text)) "> " "  "))
-      (let ((line (handler-case (read-line *standard-input* nil)
+      (let ((line (handler-case (let ((*begun* text))
+                                  (read-line *standard-input* nil))
                     (clara:keyboard-interrupt () :given-up))))
         (cond ((null line)
                (terpri)

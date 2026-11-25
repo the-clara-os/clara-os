@@ -2881,6 +2881,89 @@ architectures (kernel/vm.c).
   back by the keys, and lays the first page out at the prompt, where its
   lines have to be the ones that SBCL made of the same page.
 
+## Parentheses (decided for issue #47, 2026-11-24)
+
+- What is typed in a REPL's window and in Emma shows which of its
+  parentheses belong together (Julio: "parentheses should be matched
+  using a variety of colors, to assist with authoring common lisp code.
+  Also a phantom hint block cursor should appear at the starting matching
+  parentheses for further assistance"). A pair has a colour by its level,
+  which is how many pairs it lies within: the outermost the first of six,
+  and a pair that lies deeper than six takes them from the first again. So
+  two that stand next to each other in a row of closing ones are never
+  alike, and a pair is found by its colour. A closing parenthesis that
+  nothing opens has the red of the console's alarms.
+- The hint is a block under the opening parenthesis, in a paler shade
+  than a cursor would have, with the parenthesis in its colour on it. It
+  is there while the character before the cursor is the closing one of
+  that pair: at a prompt, where the cursor is at the end of the line, the
+  character typed last. It is what a form's author looks for at that
+  moment, where the form began that the parenthesis has just ended. It is
+  drawn only where the window shows the opening one, and nothing says
+  where that is when it has left the window.
+- Which parentheses count is asked in one place, lisp/syntax.lisp, the
+  package CLARA.SYNTAX, which goes through a text a character at a time
+  the way the reader does (kernel/lisp/read.c) and makes nothing of it. A
+  parenthesis in a string, in a comment of either kind, between two bars
+  or after a backslash is none, and neither is the character of `#\(`. A
+  text can be no Lisp, and half typed it never is: so nothing there fails,
+  and what the reader would refuse is gone through as far as it goes. The
+  reader itself was no way to ask: it stops at the first thing that it
+  cannot read, says nothing of where a list began, and reads a text from
+  its start every time.
+- What is known at a place of a text is a value that is never changed:
+  what the place is in, what the character before it has begun, and the
+  opening parentheses that are not closed yet. Going on from it makes
+  another. That is what lets a text be gone through in pieces and only
+  as far back as it has changed. Emma keeps what is known at the end of
+  each line above the cursor's from one drawing to the next, since a line
+  changes only while the cursor is in it, and tells the lines that are
+  still the same by the conses that the list of them shares with the one
+  before; the lines in the window are gone through at every drawing, a
+  tenth of a millisecond for a window of 24 rows.
+- A form at a prompt is often more lines than one, and the terminal reads
+  lines. The listener knows what a line goes on from, and says so while
+  it reads one (`clara.listener:*begun*`): the text that is still to be
+  made something of. The terminal does not work that out for itself from
+  the lines that it read, because only the listener knows what became of
+  them: a text that the reader refused is dropped, Ctrl-C gives one up,
+  and a line that a program asked for with `read-line` was never the
+  listener's. What the terminal knows is where it drew each character of
+  the lines that it read, the row by its number from the first row that
+  there was, since the rows of a window move up: that is how the hint
+  finds a parenthesis that was typed three lines ago.
+- A terminal's rows keep their colours as they keep what they say, a
+  list of the cells that are in another colour for each row, so that
+  Page Up shows them as they were typed. They are pixels, as they were
+  drawn: a line that was typed before the colours were changed stays as
+  it is. What a form prints has no colours. It was not typed, and nothing
+  says where in a row of output a form begins.
+- The echo of a line that is read in a window is the terminal's own now,
+  where it was the console's, written to the window's stream: a
+  character in a colour is not something that a stream of characters can
+  say. With it, Backspace at the start of a row goes back to the last
+  cell of the row above, which a line that is longer than a row has gone
+  on from: the row that was finished is the one that is being written
+  again. On the screen of the first prompt the cursor still stays where
+  it is then, as it did in a window until now.
+- The colours are variables, `clara.syntax:*colors*`, `*stray*` and
+  `*hint*`, each colour its red, green and blue, and NIL does without.
+  The six are of one family with the colours that the console and the
+  window manager have, and each stands out from the paper by 7 to 1 or
+  more, as contrast is counted for text.
+- The screen of the first prompt, before there are windows, shows none of
+  this, and the serial port could only show it to a terminal that
+  understands colours, which nothing here assumes.
+- It is tested where the reader is. Under SBCL the tests read every text
+  with SBCL's own reader as well, through a table that notes where each
+  list begins and ends, and hold what lisp/syntax.lisp says against it:
+  texts that were written to be hard, four thousand that are made of the
+  characters that matter as they come, and the text of the editor after
+  every one of seven hundred keys, whose window is held against it cell
+  by cell. The boots type a form into a REPL's window and into Emma's by
+  QEMU's keyboard and hold the rows against the same letters drawn beside
+  them in the colours of their levels, with the hint and without.
+
 ## Conventions
 
 - C: lower_snake_case for functions and files. Kernel-wide symbols carry

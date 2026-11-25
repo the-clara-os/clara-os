@@ -84,6 +84,7 @@
 (load-source "lisp/net.lisp")
 (load-source "lisp/hda.lisp")
 (load-source "lisp/sound.lisp")
+(load-source "lisp/syntax.lisp")
 (load-source "lisp/listener.lisp")
 (load-source "lisp/windows.lisp")
 (load-source "lisp/terminal.lisp")
@@ -4627,6 +4628,168 @@
 (said-by #'clara.fat:start)
 (check-condition error (clara:save-image))
 
+;;; Which parentheses of a text count, and which belong together
+;;; (lisp/syntax.lisp). What that file says is held against what SBCL's
+;;; reader makes of the same text, with a table of the tests' own that
+;;; notes where every list begins and ends, and how many lie around it.
+
+(defun scanned (text &optional state (tag :text))
+  (let ((seen nil))
+    (clara.syntax:scan text state tag (lambda (index level open) (push (list index level open) seen)))
+    (reverse seen)))
+
+;; For each parenthesis its index, its level, and the index of the one that opens it.
+(defun scanned-indices (text)
+  (mapcar (lambda (seen) (list (first seen) (second seen) (cdr (third seen)))) (scanned text)))
+
+(defvar *parentheses* nil)   ; what the reader has met of them, the last one first
+(defvar *around* 0)          ; and how many lists it is in
+(defvar *noting*
+  (let ((table (copy-readtable nil)))
+    (flet ((opened (stream character)
+             (declare (ignore character))
+             (let ((at (1- (file-position stream))) (level *around*))
+               (push (list at level nil) *parentheses*)
+               (let ((*around* (1+ *around*)))
+                 (read-delimited-list #\) stream t))
+               (push (list (1- (file-position stream)) level at) *parentheses*)
+               (values))))
+      (set-macro-character #\( #'opened nil table)
+      ;; A vector is its parentheses, like a list.
+      (set-dispatch-macro-character #\# #\( (lambda (stream character argument)
+                                              (declare (ignore argument))
+                                              (opened stream character))
+                                    table))
+    ;; One that closes a list never comes here: the list takes it. So this
+    ;; is one that nothing opens, or inside a list, one that something else
+    ;; took for what it was to read, which is no Lisp.
+    (set-macro-character #\) (lambda (stream character)
+                               (declare (ignore character))
+                               (when (plusp *around*)
+                                 (error "a closing parenthesis where something has to come"))
+                               (push (list (1- (file-position stream)) nil nil) *parentheses*)
+                               (values))
+                         nil table)
+    ;; A quote and its like read nothing here: what comes after them is
+    ;; read by whoever reads on.
+    (dolist (prefix '(#\' #\` #\,))
+      (set-macro-character prefix (lambda (stream character) (declare (ignore stream character)) (values)) nil table))
+    (set-dispatch-macro-character #\# #\' (lambda (stream character argument)
+                                            (declare (ignore stream character argument))
+                                            (values))
+                                  table)
+    table))
+
+;; What SBCL's reader makes of the parentheses of TEXT, as SCANNED-INDICES
+;; gives them, or :NO-LISP when it refuses the text for something else than
+;; its end.
+(defun read-parentheses (text)
+  (let ((*parentheses* nil) (*around* 0) (*read-suppress* t) (*readtable* *noting*))
+    (with-input-from-string (in text)
+      (handler-case (loop
+                      (when (eq (read in nil in) in)
+                        (return (reverse *parentheses*))))
+        (end-of-file () (reverse *parentheses*))
+        (error () :no-lisp)))))
+
+;; Pairs, one inside another and one after another, and what is left open.
+(check '((0 0 nil) (3 1 nil) (5 1 3) (8 0 0) (10 0 nil) (11 1 nil)) (scanned-indices "(a (b) c) (("))
+;; A closing one that nothing opens has no level, and what comes after it
+;; begins anew.
+(check '((0 nil nil) (1 nil nil) (3 0 nil) (4 0 3)) (scanned-indices ")) ()"))
+;; What does not count: in a string, with a backslash before a double quote
+;; in it; after a semicolon, to the end of the line; the character of #\(
+;; and of #\); between two bars; after a backslash; and in a #| |# comment,
+;; which can hold another.
+(check '((0 0 nil) (16 0 0)) (scanned-indices "(a \"(\\\"(\" b \"))\")"))
+(check '((0 0 nil) (10 0 0)) (scanned-indices (format nil "(a ; (((~%b)")))
+(check '((0 0 nil) (13 0 0)) (scanned-indices "(list #\\( #\\))"))
+(check '((0 0 nil) (8 0 0)) (scanned-indices "(|a (| b)"))
+(check '((0 0 nil) (6 0 0)) (scanned-indices "(a\\( b)"))
+(check '((0 0 nil) (22 0 0)) (scanned-indices "(a #| ( #| ( |# ) |# b)"))
+;; A # says something only where a thing begins, and then with the
+;; character after it: the parenthesis of #( is one like any other.
+(check '((1 0 nil) (5 0 1)) (scanned-indices "#(1 2)"))
+(check '((2 0 nil) (10 1 nil) (11 1 10) (12 0 2)) (scanned-indices "#'(lambda ())"))
+(check '((0 0 nil)) (scanned-indices "(a#|b)"))                   ; in a name it is a letter, and the bar begins what it does
+(check '((0 0 nil) (5 1 nil) (7 1 5) (8 0 0)) (scanned-indices "(a ,@(b))"))
+;; A text can be gone through in pieces: what is known at the end of one
+;; is where the next goes on from, and the place of an opening parenthesis
+;; is the piece that it is in, by the name that the piece was given, and
+;; its index there.
+(let ((state (clara.syntax:scan "(a (b" nil 7 nil)))
+  (check '((7 . 3) (7 . 0)) (clara.syntax::state-opens state))
+  (check '((1 1 (7 . 3)) (3 1 nil) (4 1 (8 . 3))) (scanned "c) ()" state 8))
+  (check t (eq state (clara.syntax:scan "(c) d" state 8 nil)))    ; a piece that leaves nothing behind changes nothing
+  (check nil (clara.syntax:scan "))" state 8 nil)))               ; and the state at the start of a text is NIL
+(check nil (clara.syntax:next-line (clara.syntax:scan "(a \"b\" #\\c |d|) ; e" nil 0 nil)))
+;; NEXT-LINE is the end of a line, for a text that is kept as its lines: a
+;; comment after a semicolon ends there, and a string does not.
+(check '(:comment nil) (let ((state (clara.syntax:scan "a ; (" nil 0 nil)))
+                         (list (clara.syntax::state-mode state) (clara.syntax:next-line state))))
+(check '(:string :string) (let ((state (clara.syntax:scan "\"a" nil 0 nil)))
+                            (list (clara.syntax::state-mode state)
+                                  (clara.syntax::state-mode (clara.syntax:next-line state)))))
+(check nil (clara.syntax:next-line nil))
+;; Cut in two at every place, a text says what it says in one piece.
+(dolist (text (list "(a (b \"c (\" d) #\\( ;; (e" (format nil "(a ;b~%#| c ( #| d |# ( |# e) f |g (| \\( ,@(h))")
+                    "#3(a) #'(b) '(c . d)"))
+  (let ((whole (scanned-indices text)) (wrong 0))
+    (dotimes (cut (1+ (length text)))
+      (let* ((before (scanned (subseq text 0 cut) nil 0))
+             (after (scanned (subseq text cut) (clara.syntax:scan (subseq text 0 cut) nil 0 nil) 1)))
+        (unless (equal whole
+                       (append (mapcar (lambda (seen) (list (first seen) (second seen) (cdr (third seen)))) before)
+                               (mapcar (lambda (seen)
+                                         (list (+ cut (first seen)) (second seen)
+                                               (and (third seen)
+                                                    (+ (cdr (third seen)) (if (eql (car (third seen)) 1) cut 0)))))
+                                       after)))
+          (incf wrong))))
+    (check 0 wrong)))
+;; And SBCL's reader says the same: of texts that were written to be hard,
+;; and of a few thousand that are made of the characters that matter, as
+;; they come.
+(dolist (text (list "(a (b) c)" (format nil "(a \"(\" ;)~% b)") "#\\( (x #\\) y)" "(a |b (| c)" "#| ( |# (x)" ")) ("
+                    "(a #| b #| c |# ( |# d)" "'(a . b) `(c ,@(d))" "#(1 2) #'(lambda ())" "(\\( a)" "a#|b (|"
+                    (format nil "(defun f (x)~%  (+ x 1))") "(a #\\Space) (#\\a)" "(a \"b\\\\\" c)" "(#2A((1) (2)) #1=(a) #1#)"
+                    "(a #|b|#) #||# (c)" "(|a\\|(| b)" "(a;b" "#|(" "\"(" "#\\"))
+  (check (read-parentheses text) (scanned-indices text)))
+(let ((state (sb-ext:seed-random-state 7)) (alphabet (format nil "()() a\"\;#|'~%")) (compared 0) (apart 0))
+  (dotimes (round 4000)
+    (let ((text (make-string (1+ (random 24 state)))))
+      (dotimes (i (length text))
+        (setf (char text i) (char alphabet (random (length alphabet) state))))
+      (let ((read (read-parentheses text)))
+        (unless (eq read :no-lisp)
+          (incf compared)
+          (unless (equal read (scanned-indices text))
+            (incf apart))))))
+  (check '(0 t) (list apart (> compared 3000))))
+;; The colours: the outermost pair has the first, a pair that lies deeper
+;; than there are colours takes them from the first again, and a closing
+;; parenthesis that nothing opens has one of its own. What is no colour
+;; draws a parenthesis like any other character, and so does NIL.
+(check (list (clara.draw:color 255 121 198) (clara.draw:color 139 233 253) (clara.draw:color 80 250 123)
+             (clara.draw:color 255 121 198) (clara.draw:color 255 85 85) (clara.draw:color 98 90 134))
+       (list (clara.syntax:color 0) (clara.syntax:color 1) (clara.syntax:color 5) (clara.syntax:color 6)
+             (clara.syntax:color nil) (clara.syntax:hint)))
+(check 6 (length clara.syntax:*colors*))
+(let ((clara.syntax:*colors* '((1 2 3) (4 5 6))) (clara.syntax:*stray* nil) (clara.syntax:*hint* nil))
+  (check (list (clara.draw:color 1 2 3) (clara.draw:color 4 5 6) (clara.draw:color 1 2 3) nil nil)
+         (list (clara.syntax:color 0) (clara.syntax:color 1) (clara.syntax:color 2) (clara.syntax:color nil)
+               (clara.syntax:hint))))
+(let ((clara.syntax:*colors* nil))
+  (check '(nil nil) (list (clara.syntax:color 0) (clara.syntax:color 3))))
+(let ((clara.syntax:*colors* '((1 2 3) (256 0 0) (1 2) "red" (1 2 3 4) (1 2 . 3))) (clara.syntax:*stray* 7)
+      (clara.syntax:*hint* '(0 0 -1)))
+  (check (list (clara.draw:color 1 2 3) nil nil nil nil nil nil nil)
+         (list (clara.syntax:color 0) (clara.syntax:color 1) (clara.syntax:color 2) (clara.syntax:color 3)
+               (clara.syntax:color 4) (clara.syntax:color 5) (clara.syntax:color nil) (clara.syntax:hint))))
+(let ((clara.syntax:*colors* "red"))
+  (check nil (clara.syntax:color 0)))
+(check '(nil nil) (list (clara.syntax:color -1) (clara.syntax:color "deep")))
+
 ;;; The listener, on strings.
 
 (defun listen-to (text)
@@ -4682,6 +4845,19 @@
                                                          (error 'clara:keyboard-interrupt)
                                                          line))))))
              (clara.listener:run)))))
+
+;; While it reads a line, the listener says what the line goes on from, for
+;; whoever gives it its lines: nothing at the start of a form, what the
+;; form has so far in the middle of one, and what a line left after the
+;; forms that it finished. At any other time nobody is told anything.
+(let ((lines (list "(list 1" "2) (car" "'(3))" "(error \"no\")" "4")) (said nil))
+  (with-output-to-string (*standard-output*)
+    (let ((*standard-input* (clara:make-stream :read-line (lambda ()
+                                                            (push clara.listener:*begun* said)
+                                                            (pop lines)))))
+      (clara.listener:run)))
+  (check (list "" (format nil "(list 1~%") (format nil "(car~%") "" "" "") (reverse said))
+  (check nil clara.listener:*begun*))
 
 ;;; The window manager, on a screen that is made up. What the screen should
 ;;; show is worked out here, pixel by pixel, from the windows there are and
@@ -6486,6 +6662,23 @@
 (defun type-text (text)
   (map nil (lambda (character) (clara.windows:key-typed (char-code character))) text))
 
+;; The colours of the parentheses, as they are on this screen: the pairs'
+;; from the outermost, the one of a closing parenthesis that nothing
+;; opens, and the hint's.
+(defvar *levels* '(#xff79c6 #x8be9fd #xf1fa8c #xbd93f9 #xffb86c #x50fa7b))
+(defconstant +stray+ #xff5555)
+(defconstant +hint+ #x625a86)
+(defun level (number)
+  (nth (mod number 6) *levels*))
+
+;; The cells of a row from its first on show STRING, in ink on paper but
+;; for the ones of TINTS, each (column ink) or (column ink paper).
+(defun row-tinted-p (surface row string &rest tints)
+  (loop for column below (length string)
+        always (let ((tint (find column tints :key #'first)))
+                 (cell-shows-p surface row column (char string column)
+                               (if tint (second tint) +ink+) (or (third tint) +paper+)))))
+
 (new-desk :width 300 :height 220)
 (defvar *terminal* (clara.terminal:open-terminal "A terminal" :columns 10 :rows 3))
 (defvar *out* (clara.terminal:terminal-stream *terminal*))
@@ -6751,6 +6944,374 @@
 (check '(t 110 0) (list (rows-show-p "g 18" "g 19" "g 20") (back) (wrong-pixels)))
 (setq clara.terminal:*rows-kept* 100000)
 (clara.terminal:clear *terminal*)
+;; What is typed shows which of its parentheses belong together
+;; (lisp/syntax.lisp). A pair has the colour of its level, the outermost
+;; the first, and while the last character of the line is a closing one,
+;; the one that opens it has a block under it: the hint.
+(defun typed-p (row string &rest tints)        ; what a row shows once the thread that reads has caught up
+  (eventually (lambda () (apply #'row-tinted-p *face* row string tints))))
+(defun hint () (clara.terminal::terminal-hint *terminal*))
+(defun hint-p (cell) (eventually (lambda () (equal (hint) cell))))
+
+(clara.terminal:clear *terminal*)
+(let ((reader (reads-a-line)))
+  (type-text "(a (")
+  (check '(t t nil) (list (typed-p 0 "(a (" (list 0 (level 0)) (list 3 (level 1))) (bar-at-p *face* 0 4 +ink+) (hint)))
+  (type-text ")")                              ; it closes the second, and is in its colour
+  (check '(t (3 . 0) 0)
+         (list (typed-p 0 "(a ()" (list 0 (level 0)) (list 3 (level 1) +hint+) (list 4 (level 1))) (hint) (wrong-pixels)))
+  (type-text ")")
+  (check '(t (0 . 0))
+         (list (typed-p 0 "(a ())" (list 0 (level 0) +hint+) (list 3 (level 1)) (list 4 (level 1)) (list 5 (level 0)))
+               (hint)))
+  (type-text ")")                              ; nothing opens this one: a colour of its own, and no hint
+  (check '(t nil)
+         (list (typed-p 0 "(a ()))" (list 0 (level 0)) (list 3 (level 1)) (list 4 (level 1)) (list 5 (level 0))
+                        (list 6 +stray+))
+               (hint)))
+  (clara.windows:key-typed 8)                  ; taken back: the last character is the one before it again
+  (check '(t t (0 . 0))
+         (list (typed-p 0 "(a ())" (list 0 (level 0) +hint+) (list 3 (level 1)) (list 4 (level 1)) (list 5 (level 0)))
+               (bar-at-p *face* 0 6 +ink+) (hint)))
+  (type-text "b")                              ; and any other character after it ends the hint
+  (check '(t nil)
+         (list (typed-p 0 "(a ())b" (list 0 (level 0)) (list 3 (level 1)) (list 4 (level 1)) (list 5 (level 0))) (hint)))
+  (clara.windows:key-typed 8)
+  (check t (hint-p '(0 . 0)))
+  (type-text (string #\Newline))               ; the line is read: its colours stay, and the hint goes
+  (check "(a ())" (clara:join-thread reader))
+  (check '(t nil nil 0)
+         (list (row-tinted-p *face* 0 "(a ())    " (list 0 (level 0)) (list 3 (level 1)) (list 4 (level 1)) (list 5 (level 0)))
+               (hint) (clara.terminal::terminal-match *terminal*) (wrong-pixels))))
+;; What does not count has no colour: in a string, the character of #\(,
+;; after a semicolon.
+(clara.terminal:clear *terminal*)
+(let ((reader (reads-a-line)))
+  (type-text "\"(\"#\\(;()")
+  (check '(t nil nil) (list (typed-p 0 "\"(\"#\\(;()") (hint) (clara.terminal::terminal-tints *terminal*)))
+  (type-text (string #\Newline))
+  (check "\"(\"#\\(;()" (clara:join-thread reader)))
+;; A form is often more lines than one. The listener says what a line goes
+;; on from, and the terminal knows where it drew the lines that it read: a
+;; parenthesis has the colour of its level in the whole form, and the hint
+;; is in the row of the line that the opening one was typed in.
+(defun reads-on (begun)
+  (clara:make-thread (lambda ()
+                       (let ((clara.listener:*begun* begun))
+                         (handler-case (read-line *out* nil :end)
+                           (clara:keyboard-interrupt () :given-up))))))
+(defun typed-line (begun text)                 ; a line of the listener's, typed and read
+  (let ((reader (reads-on begun)))
+    (type-text (format nil "~A~%" text))
+    (clara:join-thread reader)))
+(defun remembered ()
+  (mapcar #'car (clara.terminal::terminal-lines *terminal*)))
+
+(clara.terminal:clear *terminal*)
+(check '("(a (b" ("(a (b")) (list (typed-line "" "(a (b") (remembered)))
+(let ((reader (reads-on (format nil "(a (b~%"))))
+  (type-text "c)")
+  (check '(t t (3 . 0))
+         (list (typed-p 1 "c)" (list 1 (level 1)))
+               (row-tinted-p *face* 0 "(a (b     " (list 0 (level 0)) (list 3 (level 1) +hint+)) (hint)))
+  (type-text ")")
+  (check '(t t (0 . 0) 0)
+         (list (typed-p 1 "c))" (list 1 (level 1)) (list 2 (level 0)))
+               (row-tinted-p *face* 0 "(a (b     " (list 0 (level 0) +hint+) (list 3 (level 1))) (hint) (wrong-pixels)))
+  (type-text (string #\Newline))
+  (check '("c))" ("c))" "(a (b")) (list (clara:join-thread reader) (remembered)))
+  ;; Where a line was drawn is remembered with the line, and for no line
+  ;; but that one.
+  (check '(3 (3 5)) (list (length (clara.terminal::terminal-cells *terminal*))
+                          (mapcar (lambda (entry) (length (cdr entry))) (clara.terminal::terminal-lines *terminal*)))))
+;; A form of three lines, whose last line closes what the first opened.
+(clara.terminal:clear *terminal*)
+(typed-line "" "(a (b")
+(typed-line (format nil "(a (b~%") "c")
+(let ((reader (reads-on (format nil "(a (b~%c~%"))))
+  (check t (eventually (lambda () (clara.terminal::terminal-cursor *terminal*))))
+  (check '("c" "(a (b") (remembered))
+  (type-text ")")
+  (check '(t t (3 . 0))
+         (list (typed-p 2 ")" (list 0 (level 1)))
+               (row-tinted-p *face* 0 "(a (b     " (list 0 (level 0)) (list 3 (level 1) +hint+)) (hint)))
+  (type-text ")")
+  (check '(t t (0 . 0) 0)
+         (list (typed-p 2 "))" (list 0 (level 1)) (list 1 (level 0)))
+               (row-tinted-p *face* 0 "(a (b     " (list 0 (level 0) +hint+) (list 3 (level 1))) (hint) (wrong-pixels)))
+  (type-text (string #\Newline))
+  (clara:join-thread reader))
+;; What a line left after the forms that it finished is the end of that
+;; line, and that is where its parentheses are: of the lines before it,
+;; none is remembered any longer.
+(check "(a) (d" (typed-line "" "(a) (d"))
+(let ((reader (reads-on (format nil " (d~%"))))
+  (check t (eventually (lambda () (clara.terminal::terminal-cursor *terminal*))))
+  (check '("(a) (d") (remembered))
+  (type-text "e)")
+  (check '(t t (4 . 1))
+         (list (typed-p 2 "e)" (list 1 (level 0)))
+               (row-tinted-p *face* 1 "(a) (d    " (list 0 (level 0)) (list 2 (level 0)) (list 4 (level 0) +hint+)) (hint)))
+  (type-text (string #\Newline))
+  (clara:join-thread reader))
+;; A line that some program reads goes on from nothing, and what it leaves
+;; open is nothing to the listener, which goes on from its own lines.
+(clara.terminal:clear *terminal*)
+(typed-line "" "(f (g")
+(let ((reader (reads-a-line)))
+  (type-text "x)")
+  (check '(t nil) (list (typed-p 1 "x)" (list 1 +stray+)) (hint)))
+  (type-text (string #\Newline))
+  (clara:join-thread reader))
+(let ((reader (reads-on (format nil "(f (g~%"))))
+  (type-text ")")
+  (check '(t t (3 . 0))
+         (list (typed-p 2 ")" (list 0 (level 1)))
+               (row-tinted-p *face* 0 "(f (g     " (list 0 (level 0)) (list 3 (level 1) +hint+)) (hint)))
+  ;; The rows of a window move up, and a hint goes with its row: to
+  ;; nowhere, once the row has left the window.
+  (write-string (format nil "~%o") *out*)
+  (check '(t t t nil 0)
+         (list (row-tinted-p *face* 0 "x)        " (list 1 +stray+)) (row-tinted-p *face* 1 ")         " (list 0 (level 1)))
+               (row-shows-p *face* 2 "o") (hint) (wrong-pixels)))
+  (type-text ")")                              ; "o)": the one of the first row, which the window no longer shows
+  (check '(t nil) (list (typed-p 2 "o)" (list 1 (level 0))) (hint)))
+  ;; Page Up shows the rows from further back in their colours, with no
+  ;; hint, and Page Down the last ones.
+  (page-up)
+  (check '(t t t nil 1 0)
+         (list (row-tinted-p *face* 0 "(f (g     " (list 0 (level 0)) (list 3 (level 1)))
+               (row-tinted-p *face* 1 "x)        " (list 1 +stray+)) (row-tinted-p *face* 2 ")         " (list 0 (level 1)))
+               (hint) (back) (wrong-pixels)))
+  (clara.windows:key-typed 8)                  ; a key brings the last rows back, and is typed there
+  (check '(t t t t 0)
+         (list (eventually (lambda () (bar-at-p *face* 2 1 +ink+))) (row-shows-p *face* 2 "o")
+               (row-tinted-p *face* 0 "x)        " (list 1 +stray+)) (row-tinted-p *face* 1 ")         " (list 0 (level 1)))
+               (back)))
+  (type-text ")")
+  (check '(t nil) (list (typed-p 2 "o)" (list 1 (level 0))) (hint)))
+  (page-up)
+  (page-down)
+  (check '(t t nil 0) (list (row-tinted-p *face* 2 "o)" (list 1 (level 0))) (bar-at-p *face* 2 2 +ink+) (hint) (wrong-pixels)))
+  (type-text (string #\Newline))
+  (clara:join-thread reader))
+;; A row that has moved up and is still in the window has its hint where
+;; it is now.
+(clara.terminal:clear *terminal*)
+(format *out* "(x (y~%")                       ; written, not typed: no colours, and nothing to point at
+(typed-line "" "(f (g")
+(let ((reader (reads-on (format nil "(f (g~%"))))
+  (type-text ")")
+  (check '(t (3 . 1)) (list (typed-p 2 ")" (list 0 (level 1))) (hint)))
+  (write-string (format nil "~%z") *out*)
+  (check '(t t t (3 . 0) 0)
+         (list (row-tinted-p *face* 0 "(f (g     " (list 0 (level 0)) (list 3 (level 1) +hint+))
+               (row-tinted-p *face* 1 ")         " (list 0 (level 1))) (row-shows-p *face* 2 "z") (hint) (wrong-pixels)))
+  ;; A window that looks back has no hint, like no cursor, and has both
+  ;; again when it shows the last rows.
+  (page-up)
+  (check '(t t nil 1 0)
+         (list (row-shows-p *face* 0 "(x (y     ") (row-tinted-p *face* 1 "(f (g     " (list 0 (level 0)) (list 3 (level 1)))
+               (hint) (back) (wrong-pixels)))
+  (page-down)
+  (check '(t t (3 . 0) 0)
+         (list (row-tinted-p *face* 0 "(f (g     " (list 0 (level 0)) (list 3 (level 1) +hint+)) (bar-at-p *face* 2 1 +ink+)
+               (hint) (wrong-pixels)))
+  (write-string (format nil "~%y") *out*)
+  (check '(t nil 0) (list (row-tinted-p *face* 0 ")         " (list 0 (level 1))) (hint) (wrong-pixels)))
+  (type-text (string #\Newline))
+  (clara:join-thread reader))
+;; A line that is longer than a row goes on in the next, and Backspace
+;; takes it back from there: from the start of a row to the last cell of
+;; the row above, which is the row that is being written again.
+(clara.terminal:clear *terminal*)
+(let ((reader (reads-a-line)))
+  (type-text "(234567)90ab")                   ; the eleventh character starts a new row
+  (check '(t t (1 1 1))
+         (list (typed-p 1 "ab") (row-tinted-p *face* 0 "(234567)90" (list 0 (level 0)) (list 7 (level 0)))
+               (list (clara.terminal::terminal-held *terminal*) (clara.terminal::terminal-row *terminal*)
+                     (clara.terminal::terminal-count *terminal*))))
+  (dotimes (i 3)
+    (clara.windows:key-typed 8))               ; the b, the a, and the 0 at the end of the row above
+  (check '(t t t (0 0 0) nil 0)
+         (list (eventually (lambda () (bar-at-p *face* 0 9 +ink+)))
+               (row-tinted-p *face* 0 "(234567)9" (list 0 (level 0)) (list 7 (level 0))) (row-shows-p *face* 1 "          ")
+               (list (clara.terminal::terminal-held *terminal*) (clara.terminal::terminal-row *terminal*)
+                     (clara.terminal::terminal-count *terminal*))
+               (kept-rows) (wrong-pixels)))
+  (clara.windows:key-typed 8)
+  (check t (hint-p '(0 . 0)))                  ; the last character is the ) again, in the row that it was typed in
+  (clara.windows:key-typed 8)
+  (type-text "89)")                            ; a row that is full has no cell for the cursor, and the hint all the same
+  (check '(t nil (0 . 0))
+         (list (typed-p 0 "(23456789)" (list 0 (level 0) +hint+) (list 9 (level 0)))
+               (clara.terminal::terminal-cursor *terminal*) (hint)))
+  (dotimes (i 3)
+    (clara.windows:key-typed 8))
+  (type-text ")")
+  (check t (typed-p 0 "(234567)" (list 0 (level 0) +hint+) (list 7 (level 0))))
+  (type-text "90ab")
+  (check '(t t) (list (typed-p 1 "ab") (row-tinted-p *face* 0 "(234567)90" (list 0 (level 0)) (list 7 (level 0)))))
+  (type-text (string #\Newline))
+  (check "(234567)90ab" (clara:join-thread reader)))
+;; In a window that is full, every row moves down by one when the row above
+;; is the one that is being written again.
+(clara.terminal:clear *terminal*)
+(format *out* "one~%two~%")
+(let ((reader (reads-a-line)))
+  (type-text "(234567)90ab")
+  (check '(t t t ("one" "two" "(234567)90"))
+         (list (typed-p 2 "ab") (row-shows-p *face* 0 "two       ")
+               (row-tinted-p *face* 1 "(234567)90" (list 0 (level 0)) (list 7 (level 0))) (kept-rows)))
+  (dotimes (i 4)
+    (clara.windows:key-typed 8))
+  (check '(t t t t ("one" "two") ((7 . #xff79c6) (0 . #xff79c6)) 0)
+         (list (hint-p '(0 . 2)) (row-shows-p *face* 0 "one       ") (row-shows-p *face* 1 "two       ")
+               (row-tinted-p *face* 2 "(234567)" (list 0 (level 0) +hint+) (list 7 (level 0))) (kept-rows)
+               (clara.terminal::terminal-tints *terminal*) (wrong-pixels)))
+  (type-text (string #\Newline))
+  (check "(234567)" (clara:join-thread reader)))
+;; While the window shows rows from further back, nothing is drawn, and it
+;; goes on showing the rows that it showed.
+(clara.terminal:clear *terminal*)
+(format *out* "one~%two~%")
+(clara.terminal::begin *terminal*)
+(let ((line ""))
+  (flet ((typed (character)
+           (setq line (if character
+                          (concatenate 'string line (string character))
+                          (subseq line 0 (1- (length line)))))
+           (clara.terminal::echo *terminal* line character)))
+    (map nil #'typed "(234567)90ab")
+    (page-up)
+    (check '(t 1) (list (rows-show-p "one" "two") (back)))
+    (clara.draw:take-damage *face*)
+    (dotimes (i 3)
+      (typed nil))
+    (check '(t 0 nil ("one" "two") 0) (list (rows-show-p "one" "two") (back) (clara.draw:damage *face*) (kept-rows) (wrong-pixels)))
+    (check t (row-tinted-p *face* 2 "(234567)9 " (list 0 (level 0)) (list 7 (level 0))))
+    (write-string (format nil "~%") *out*)))
+;; What is written over a cell is in the terminal's ink, whatever was typed
+;; there.
+(clara.terminal:clear *terminal*)
+(let ((reader (reads-a-line)))
+  (type-text "(a)")
+  (check '(t (0 . 0) ((2 . #xff79c6) (0 . #xff79c6)))
+         (list (typed-p 0 "(a)" (list 0 (level 0) +hint+) (list 2 (level 0))) (hint) (clara.terminal::terminal-tints *terminal*)))
+  (write-string (format nil "~Cxy" #\Return) *out*)   ; over the one that the hint was under: there is none for what is there now
+  (check '(t nil ((2 . #xff79c6)) 0)
+         (list (row-shows-p *face* 0 "xy") (hint) (clara.terminal::terminal-tints *terminal*) (wrong-pixels)))
+  (clara.windows:key-typed 8)
+  (check t (eventually (lambda () (null (clara.terminal::terminal-tints *terminal*)))))
+  ;; CLEAR, while a line is read: where the line was drawn is nowhere now,
+  ;; so there is nothing to point at.
+  (clara.terminal:clear *terminal*)
+  (type-text ")")
+  (check '(t nil nil 0) (list (typed-p 0 ")" (list 0 (level 0))) (hint) (clara.terminal::terminal-match *terminal*) (wrong-pixels)))
+  (clara.windows:key-typed 8)
+  (clara.windows:key-typed 8)                  ; the a, which is not there to be taken back
+  (type-text (format nil "(~%"))
+  (check "((" (clara:join-thread reader))
+  (check t (row-tinted-p *face* 0 "(         " (list 0 (level 1)))))
+;; CLEAR under a hint: the hint is gone with everything else.
+(clara.terminal:clear *terminal*)
+(let ((reader (reads-a-line)))
+  (type-text "(a)")
+  (check t (hint-p '(0 . 0)))
+  (clara.terminal:clear *terminal*)
+  (check '(nil nil nil t 0)
+         (list (hint) (clara.terminal::terminal-match *terminal*) (clara.terminal::terminal-tints *terminal*)
+               (bar-at-p *face* 0 0 +ink+) (wrong-pixels)))
+  (type-text (string #\Newline))
+  (check "(a)" (clara:join-thread reader)))
+;; The hint is for whoever types: while nobody reads a line there is none,
+;; whatever was typed last.
+(clara.terminal:clear *terminal*)
+(typed-line "" "(a)")
+(setf (clara.terminal::terminal-match *terminal*) (cons 0 0))
+(write-string "b" *out*)
+(check '(t t nil 0) (list (row-tinted-p *face* 0 "(a)       " (list 0 (level 0)) (list 2 (level 0))) (row-shows-p *face* 1 "b ")
+                          (hint) (wrong-pixels)))
+(setf (clara.terminal::terminal-match *terminal*) nil)
+;; The colours are CLARA.SYNTAX:*COLORS*, and the hint's is *HINT*: with NIL
+;; for the first a parenthesis is drawn like any other character, and with
+;; NIL for the second there is no hint.
+(clara.terminal:clear *terminal*)
+(let ((colors clara.syntax:*colors*) (shade clara.syntax:*hint*))
+  (unwind-protect
+       (let ((reader (reads-a-line)))
+         (setq clara.syntax:*hint* nil)
+         (type-text "(a)")
+         (check '(t nil 0) (list (typed-p 0 "(a)" (list 0 (level 0)) (list 2 (level 0))) (hint) (wrong-pixels)))
+         (setq clara.syntax:*colors* '((1 2 3))
+               clara.syntax:*hint* '(4 5 6))
+         (type-text "()")
+         (check '(t (3 . 0))
+                (list (typed-p 0 "(a)()" (list 0 (level 0)) (list 2 (level 0)) (list 3 #x010203 #x040506) (list 4 #x010203))
+                      (hint)))
+         (setq clara.syntax:*colors* nil)
+         (type-text "()")
+         (check '(t (5 . 0))
+                (list (typed-p 0 "(a)()()" (list 0 (level 0)) (list 2 (level 0)) (list 3 #x010203) (list 4 #x010203)
+                               (list 5 +ink+ #x040506))
+                      (hint)))
+         (type-text (string #\Newline))
+         (clara:join-thread reader))
+    (setq clara.syntax:*colors* colors
+          clara.syntax:*hint* shade)))
+;; The rows keep their colours as they keep what they say: in a ring that
+;; grows, in which the oldest go when there are more than may be kept.
+(setq clara.terminal:*rows-kept* nil)
+(clara.terminal:clear *terminal*)
+(dotimes (i 70)
+  (clara.terminal::begin *terminal*)
+  (clara.terminal::echo *terminal* "(" #\()
+  (when (oddp i)
+    (clara.terminal::echo *terminal* "()" #\)))
+  (terpri *out*))
+(check '(70 128 128 0)
+       (list (clara.terminal::terminal-held *terminal*) (length (clara.terminal::terminal-kept *terminal*))
+             (length (clara.terminal::terminal-tinted *terminal*))
+             (loop for place below 70
+                   count (not (equal (clara.terminal::kept-tints *terminal* place)
+                                     (if (oddp place) '((1 . #xff79c6) (0 . #xff79c6)) '((0 . #xff79c6))))))))
+(dotimes (i 40)
+  (page-up))
+(check '(t t 0) (list (row-tinted-p *face* 0 "(         " (list 0 (level 0)))
+                      (row-tinted-p *face* 1 "()        " (list 0 (level 0)) (list 1 (level 0))) (wrong-pixels)))
+(setq clara.terminal:*rows-kept* 2)
+(terpri *out*)
+(check '(("()" "(" "()" "") 3 t)
+       (list (kept-rows) (count-if #'identity (clara.terminal::terminal-tinted *terminal*))
+             (row-tinted-p *face* 0 "()        " (list 0 (level 0)) (list 1 (level 0)))))
+;; A ring that is full while its oldest row is not at its start grows with
+;; the colours of its rows in their order, as the rows are.
+(clara.terminal:clear *terminal*)
+(setq clara.terminal:*rows-kept* 10)
+(flet ((rows (count)
+         (dotimes (i count)
+           (clara.terminal::begin *terminal*)
+           (if (evenp i)
+               (clara.terminal::echo *terminal* "(" #\()
+               (write-string "x" *out*))
+           (terpri *out*))))
+  (rows 31)
+  (check '(12 19) (list (clara.terminal::terminal-held *terminal*) (clara.terminal::terminal-oldest *terminal*)))
+  (setq clara.terminal:*rows-kept* nil)
+  (rows 100)
+  (check '(112 128 128 0 56)
+         (list (clara.terminal::terminal-held *terminal*) (length (clara.terminal::terminal-kept *terminal*))
+               (length (clara.terminal::terminal-tinted *terminal*))
+               (loop for place below 112
+                     count (not (equal (clara.terminal::kept-tints *terminal* place)
+                                       (and (equal (clara.terminal::kept-row *terminal* place) "(") '((0 . #xff79c6))))))
+               (count-if #'identity (clara.terminal::terminal-tinted *terminal*)))))
+(setq clara.terminal:*rows-kept* 100000)
+(clara.terminal:clear *terminal*)
+(check '(nil 64 64 nil 0)
+       (list (kept-rows) (length (clara.terminal::terminal-kept *terminal*)) (length (clara.terminal::terminal-tinted *terminal*))
+             (find-if #'identity (clara.terminal::terminal-tinted *terminal*)) (clara.terminal::terminal-count *terminal*)))
+
 ;; A terminal of one row goes back a row at a time.
 (let* ((one (clara.terminal:open-terminal "One row" :columns 10 :rows 1 :x 150 :y 150))
        (face (clara.windows:window-surface (clara.terminal:terminal-window one))))
@@ -6782,7 +7343,8 @@
            (check t (eventually (lambda () (and (row-shows-p face 3 "> ") (bar-at-p face 3 2 +ink+)))))
            (check t (and (row-shows-p face 0 "ClaraOS: a form is evaluated, C") (row-shows-p face 2 "es the window ")))
            (type-text (format nil "(+ 1 2)~%"))
-           (check t (eventually (lambda () (and (row-shows-p face 3 "> (+ 1 2) ") (row-shows-p face 4 "3 ")
+           (check t (eventually (lambda () (and (row-tinted-p face 3 "> (+ 1 2) " (list 2 (level 0)) (list 8 (level 0)))
+                                                (row-shows-p face 4 "3 ")
                                                 (row-shows-p face 5 "> ") (bar-at-p face 5 2 +ink+)))))
            (check 0 (wrong-pixels))
            (type-text (format nil "(defvar *in-a-window* 7)~%"))
@@ -6797,6 +7359,25 @@
              (check t (eventually (lambda () (clara.terminal::terminal-reading *terminal*))))
              (type-text (format nil "(setq *in-a-window* 8)~%"))
              (check t (eventually (lambda () (eql (in-a-window) 8)))))
+           ;; A form of two lines. The listener says what the second goes on
+           ;; from, so the parenthesis that ends the form has the colour of
+           ;; the one that began it, which has the hint, in the row above.
+           ;; What the form gives is written like anything else.
+           (check t (eventually (lambda () (bar-at-p face 5 2 +ink+))))
+           (type-text (format nil "(list 1~%"))
+           (check t (eventually (lambda () (and (row-tinted-p face 4 "> (list 1 " (list 2 (level 0)))
+                                                (row-shows-p face 5 "  ") (bar-at-p face 5 2 +ink+)))))
+           (type-text "'(2))")
+           (check t (eventually (lambda ()
+                                  (and (row-tinted-p face 5 "  '(2))" (list 3 (level 1)) (list 5 (level 1)) (list 6 (level 0)))
+                                       (row-tinted-p face 4 "> (list 1 " (list 2 (level 0) +hint+))))))
+           (check 0 (wrong-pixels))
+           (type-text (string #\Newline))
+           (check t (eventually (lambda ()
+                                  (and (row-tinted-p face 2 "> (list 1 " (list 2 (level 0)))
+                                       (row-tinted-p face 3 "  '(2)) " (list 3 (level 1)) (list 5 (level 1)) (list 6 (level 0)))
+                                       (row-shows-p face 4 "(1 (2)) ") (bar-at-p face 5 2 +ink+)))))
+           (check '(nil 0) (list (clara.terminal::terminal-hint *terminal*) (wrong-pixels)))
            ;; Page Up goes back to what it said first, and Page Down to its prompt.
            (check t (eventually (lambda () (clara.terminal::terminal-cursor *terminal*))))
            (let ((prompt (cdr (clara.terminal::terminal-cursor *terminal*))))
@@ -7030,15 +7611,19 @@
 ;; what each row shows from its first cell on: a string, in ink on paper,
 ;; or a list of one, with the two the other way round. BARS are the cursors
 ;; that are drawn, each the row, the column and the pixel of the two rows of
-;; pixels at the foot of a cell.
-(defun wrong-cells (surface rows &optional bars)
+;; pixels at the foot of a cell. TINTS are the cells that are in other
+;; colours: each the row, the column, the ink, and the paper when that is
+;; another too.
+(defun wrong-cells (surface rows &optional bars tints)
   (let ((wrong 0))
     (loop for spec in rows
           for row from 0
-          do (let* ((text (if (consp spec) (car spec) spec))
-                    (ink (if (consp spec) +paper+ +ink+)) (paper (if (consp spec) +ink+ +paper+)))
+          do (let ((text (if (consp spec) (car spec) spec)))
                (dotimes (column (length text))
                  (let* ((bar (find-if (lambda (bar) (and (= (first bar) row) (= (second bar) column))) bars))
+                        (tint (find-if (lambda (tint) (and (= (first tint) row) (= (second tint) column))) tints))
+                        (ink (cond (tint (third tint)) ((consp spec) +paper+) (t +ink+)))
+                        (paper (cond ((fourth tint)) ((consp spec) +ink+) (t +paper+)))
                         (code (char-code (char text column)))
                         (glyph (* 16 (- (if (<= 32 code 126) code 127) 32))))
                    (unless (loop for y below 16
@@ -7052,6 +7637,29 @@
 
 (defun editor-state (editor)
   (list (clara.emma::all-lines editor) (clara.emma::editor-row editor) (clara.emma::editor-column editor)))
+
+;; The cells of an editor's window that are in other colours, by what
+;; SBCL's reader makes of the whole text, which has to be Lisp as far as it
+;; goes: every parenthesis that counts in the colour of its level, and
+;; while the cursor stands behind a closing one, the hint under the one
+;; that opens it.
+(defun editor-tints (editor)
+  (let* ((lines (clara.emma::all-lines editor))
+         (starts (loop with at = 0 for line in lines collect at do (incf at (1+ (length line)))))
+         (top (clara.emma::editor-top editor)) (left (clara.emma::editor-left editor))
+         (columns (clara.emma::editor-columns editor)) (rows (clara.emma::editor-rows editor))
+         (read (read-parentheses (format nil "~{~A~%~}" lines)))
+         (behind (+ (nth (clara.emma::editor-row editor) starts) (clara.emma::editor-column editor) -1))
+         (opening (and (listp read) (third (find behind read :key #'first)))))
+    (if (eq read :no-lisp)
+        (progn (failed "the text of an editor is no Lisp, and the tests have no word on its parentheses: ~S" lines)
+               nil)
+        (loop for (index level) in read
+              for number = (position-if (lambda (start) (<= start index)) starts :from-end t)
+              for column = (- index (nth number starts))
+              when (and (< -1 (- number top) rows) (< -1 (- column left) columns))
+                collect (list (- number top) (- column left) (if level (level level) +stray+)
+                              (and (eql index opening) +hint+))))))
 
 ;; The window of an editor against its text, after it was drawn.
 (defun editor-wrong (editor)
@@ -7069,7 +7677,8 @@
                              (- (clara.emma::editor-column editor) (clara.emma::editor-left editor)) +ink+)
                        (and asking
                             (list (list rows (+ 1 (length (car asking)) (length (clara.emma::editor-answer editor)))
-                                        +paper+)))))))
+                                        +paper+))))
+                 (editor-tints editor))))
 
 (defun keys (editor &rest codes)
   (dolist (code codes)
@@ -7253,10 +7862,12 @@
         ((>= (ref-column ref) (+ (ref-left ref) columns)) (setf (ref-left ref) (- (ref-column ref) columns -1)))))
 
 (let ((editor (clara.emma::open-editor nil :columns 12 :rows 5 :x 20 :y 60))
-      (ref (make-ref)) (state (sb-ext:seed-random-state 13)) (apart 0) (wrong 0) (pixels 0) (most 0))
+      (ref (make-ref)) (state (sb-ext:seed-random-state 13)) (apart 0) (wrong 0) (pixels 0) (most 0)
+      (colored 0) (hinted 0) (deepest 0))
   (dotimes (step 700)
     (let* ((n (random 100 state))
-           (code (cond ((< n 34) (char-code (char "abcde ()" (random 8 state))))
+           (code (cond ((< n 30) (char-code (char "ab (((()))" (random 10 state))))
+                       ((< n 34) (char-code (char "\";|\\" (random 4 state))))
                        ((< n 45) 10)
                        ((< n 53) 8)
                        ((< n 58) 127)
@@ -7275,6 +7886,13 @@
       (ref-key ref code 5)
       (unless (zerop (editor-wrong editor))     ; which draws it
         (incf wrong))
+      ;; What the walk came by: cells in other colours, hints, and how deep.
+      (let ((tints (editor-tints editor)))
+        (incf colored (length tints))
+        (when (find-if #'fourth tints)
+          (incf hinted))
+        (dolist (tint tints)
+          (setq deepest (max deepest (or (position (third tint) *levels*) 0)))))
       (ref-view ref 5 12)
       (unless (equal (list (ref-lines ref) (ref-row ref) (ref-column ref) (ref-cut ref) (ref-top ref) (ref-left ref))
                      (append (editor-state editor)
@@ -7286,6 +7904,143 @@
         (unless (eql (wrong-pixels) 0)
           (incf pixels)))))
   (check '(0 0 0 t) (list apart wrong pixels (> most 12)))
+  (check '(t t t) (list (> colored 1500) (> hinted 20) (>= deepest 3)))
+  (clara.windows:close-window (clara.emma::editor-window editor)))
+
+;; The parentheses of a text. A pair has the colour of its level, the
+;; outermost the first; one in a string, in a comment or after #\ has
+;; none; and while the cursor stands behind a closing one, the one that
+;; opens it has a block under it, the hint, in whichever row it is.
+(let ((editor (clara.emma::open-editor nil :columns 20 :rows 4)))
+  (flet ((wrong (rows cursor &rest tints)
+           (clara.emma::render editor)
+           (wrong-cells (clara.emma::editor-surface editor) (mapcar (lambda (row) (pad row 20)) rows)
+                        (list (append cursor (list +ink+))) tints)))
+    (keys editor "(a (b" 10 "c))")
+    (check '(0 0) (list (wrong '("(a (b" "c))") '(1 3)
+                               (list 0 0 (level 0) +hint+) (list 0 3 (level 1)) (list 1 1 (level 1)) (list 1 2 (level 0)))
+                        (editor-wrong editor)))
+    (keys editor clara.input:+left+)           ; behind the one that closes the second pair
+    (check 0 (wrong '("(a (b" "c))") '(1 2)
+                    (list 0 0 (level 0)) (list 0 3 (level 1) +hint+) (list 1 1 (level 1)) (list 1 2 (level 0))))
+    (keys editor clara.input:+left+)           ; and behind no parenthesis
+    (check 0 (wrong '("(a (b" "c))") '(1 1)
+                    (list 0 0 (level 0)) (list 0 3 (level 1)) (list 1 1 (level 1)) (list 1 2 (level 0))))
+    ;; A double quote above makes a string of what follows it, up to the
+    ;; next one, and a semicolon a comment of the rest of its line: what
+    ;; the lines below are is worked out again.
+    (keys editor clara.input:+up+ clara.input:+home+ "\"")
+    (check '(0 0) (list (wrong '("\"(a (b" "c))") '(0 1)) (editor-wrong editor)))
+    (keys editor clara.input:+end+ "\"")
+    (check 0 (wrong '("\"(a (b\"" "c))") '(0 7) (list 1 1 +stray+) (list 1 2 +stray+)))
+    (keys editor clara.input:+home+ 127 clara.input:+end+ 8 clara.input:+home+ ";")
+    (check 0 (wrong '(";(a (b" "c))") '(0 1) (list 1 1 +stray+) (list 1 2 +stray+)))
+    (keys editor 8 "#\\( ")
+    (check '(0 0) (list (wrong '("#\\( (a (b" "c))") '(0 4)
+                               (list 0 4 (level 0)) (list 0 7 (level 1)) (list 1 1 (level 1)) (list 1 2 (level 0)))
+                        (editor-wrong editor)))
+    ;; A closing one that nothing opens has a colour of its own, and no hint.
+    (keys editor clara.input:+page-down+ clara.input:+end+ ")")
+    (check '(0 0) (list (wrong '("#\\( (a (b" "c)))") '(1 4)
+                               (list 0 4 (level 0)) (list 0 7 (level 1)) (list 1 1 (level 1)) (list 1 2 (level 0))
+                               (list 1 3 +stray+))
+                        (editor-wrong editor)))
+    ;; The one that opens it can be out of the window, above it or to the
+    ;; left of it: then there is no hint to draw.
+    (keys editor 8 10 10 10 10)
+    (clara.emma::render editor)                ; the window has followed the cursor down,
+    (keys editor clara.input:+up+ clara.input:+up+ clara.input:+up+ clara.input:+up+ clara.input:+end+)
+    (check '(0 1 0) (list (wrong '("c))" "" "" "") '(0 3) (list 0 1 (level 1)) (list 0 2 (level 0)))
+                          (clara.emma::editor-top editor) (editor-wrong editor)))
+    (keys editor clara.input:+up+)
+    (clara.emma::render editor)                ; and up again, to the first line
+    (keys editor clara.input:+down+ clara.input:+end+)
+    (check '(0 0) (list (wrong '("#\\( (a (b" "c))" "" "") '(1 3)
+                               (list 0 4 (level 0) +hint+) (list 0 7 (level 1)) (list 1 1 (level 1)) (list 1 2 (level 0)))
+                        (clara.emma::editor-top editor)))
+    (keys editor clara.input:+page-down+ clara.input:+page-down+ "(2345678901234567890123)")
+    (check '(0 5 2 0) (list (wrong '("" "" "" "678901234567890123)") '(3 19) (list 3 18 (level 0)))
+                            (clara.emma::editor-left editor) (clara.emma::editor-top editor) (editor-wrong editor)))
+    (keys editor clara.input:+home+)
+    (check '(0 0) (list (wrong '("" "" "" "(2345678901234567890") '(3 0) (list 3 0 (level 0))) (editor-wrong editor))))
+  (clara.windows:close-window (clara.emma::editor-window editor)))
+;; A file of Lisp, opened: its parentheses are known as far as the window
+;; shows them, and further down as the cursor goes there, by going on from
+;; what was known. A #| |# comment is none of them, over as many lines as
+;; it has.
+(let* ((file (write-scratch "nested.lisp" "(defun f (x)" "  #| (a comment" "     (of two lines |#" "  (list x #\\) \")\"))"
+                            ";; (g)" "(g (f 1))" ""))
+       (editor (clara.emma::open-editor file :columns 24 :rows 3)))
+  (check '(0 nil) (list (editor-wrong editor) (clara.emma::editor-states editor)))
+  (keys editor clara.input:+page-down+ clara.input:+page-down+ clara.input:+end+)
+  (check '(0 4 (nil :open :comment-in-it :open))
+         (list (editor-wrong editor) (clara.emma::editor-row editor)
+               (mapcar (lambda (state)
+                         (cond ((null state) nil)
+                               ((integerp (clara.syntax::state-mode state)) :comment-in-it)
+                               (t :open)))
+                       (clara.emma::editor-states editor))))
+  (keys editor clara.input:+up+ clara.input:+end+)             ; behind the one that ends the DEFUN, three lines down
+  (check '(0 3 2) (list (editor-wrong editor) (clara.emma::editor-row editor) (clara.emma::editor-top editor)))
+  ;; The lines above the cursor's that were gone through are not gone
+  ;; through again: what is known of them is the list that it was.
+  (let ((known (clara.emma::editor-states editor)))
+    (keys editor "x" 8)
+    (check '(0 t) (list (editor-wrong editor) (eq known (clara.emma::editor-states editor))))
+    (keys editor clara.input:+up+ clara.input:+down+)
+    (check '(0 t) (list (editor-wrong editor) (eq (cdr known) (cdr (clara.emma::editor-states editor))))))
+  ;; Another text in the window: nothing of the one before is known.
+  (keys editor 15 15 (scratch "poem.txt") 10)
+  (check '(0 nil) (list (editor-wrong editor) (clara.emma::editor-states editor)))
+  (clara.windows:close-window (clara.emma::editor-window editor)))
+;; What is known at the end of a line says where the parentheses are that
+;; are still open there: the line and the column of each, the innermost
+;; first, however many lines were gone through at a time.
+(let ((editor (clara.emma::open-editor (write-scratch "open.lisp" "(a" " (b" "  (c" "(d" "(e" "(f" "") :columns 20 :rows 2)))
+  (flet ((open-at ()
+           (clara.emma::render editor)
+           (let ((state (car (clara.emma::editor-states editor))))
+             (and state (clara.syntax::state-opens state)))))
+    (check nil (open-at))
+    (keys editor clara.input:+down+)
+    (check '((0 . 0)) (open-at))
+    (keys editor clara.input:+down+)
+    (check '((1 . 1) (0 . 0)) (open-at))
+    (keys editor clara.input:+down+)
+    (check '(((2 . 2) (1 . 1) (0 . 0)) 3 0) (list (open-at) (clara.emma::editor-row editor) (editor-wrong editor)))
+    (keys editor clara.input:+up+ clara.input:+up+ clara.input:+up+ clara.input:+down+ clara.input:+down+
+          clara.input:+down+)
+    (check '(((2 . 2) (1 . 1) (0 . 0)) 0) (list (open-at) (editor-wrong editor)))
+    ;; Several keys can come between two drawings. A line above the window
+    ;; that is another by then, with as many lines above the cursor as
+    ;; before, is gone through again, and the lines after it with it.
+    (keys editor clara.input:+down+ clara.input:+down+)
+    (check '(((4 . 0) (3 . 0) (2 . 2) (1 . 1) (0 . 0)) 5 4 0)
+           (list (open-at) (clara.emma::editor-row editor) (clara.emma::editor-top editor) (editor-wrong editor)))
+    (keys editor clara.input:+up+ clara.input:+up+ clara.input:+up+ clara.input:+home+ "\"" clara.input:+down+
+          clara.input:+down+ clara.input:+down+)
+    (check '(((1 . 1) (0 . 0)) :string 5 4 0)
+           (list (open-at) (clara.syntax::state-mode (car (clara.emma::editor-states editor))) (clara.emma::editor-row editor)
+                 (clara.emma::editor-top editor) (editor-wrong editor)))
+    (keys editor clara.input:+up+ clara.input:+up+ clara.input:+up+ clara.input:+home+ 127 clara.input:+down+
+          clara.input:+down+ clara.input:+down+)
+    (check '(((4 . 0) (3 . 0) (2 . 2) (1 . 1) (0 . 0)) 0) (list (open-at) (editor-wrong editor))))
+  (clara.windows:close-window (clara.emma::editor-window editor)))
+;; With no colours, CLARA.SYNTAX:*COLORS*, a parenthesis is drawn like any
+;; other character, and with no colour for it, *HINT*, there is no hint.
+(let ((editor (clara.emma::open-editor nil :columns 20 :rows 2))
+      (clara.syntax:*colors* nil) (clara.syntax:*stray* nil))
+  (keys editor "(a))")
+  (clara.emma::render editor)
+  (check 0 (wrong-cells (clara.emma::editor-surface editor) (list (pad "(a))" 20)) (list (list 0 4 +ink+))))
+  (keys editor 8)
+  (clara.emma::render editor)
+  (check 0 (wrong-cells (clara.emma::editor-surface editor) (list (pad "(a)" 20)) (list (list 0 3 +ink+))
+                        (list (list 0 0 +ink+ +hint+))))
+  (let ((clara.syntax:*hint* nil))
+    (keys editor " " 8)
+    (clara.emma::render editor)
+    (check 0 (wrong-cells (clara.emma::editor-surface editor) (list (pad "(a)" 20)) (list (list 0 3 +ink+)))))
   (clara.windows:close-window (clara.emma::editor-window editor)))
 
 ;; The text of a file, read whole: after its last line comes one with

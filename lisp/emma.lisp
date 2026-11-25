@@ -20,6 +20,11 @@
 ;;;; no longer show what they should: the editor remembers what it drew in
 ;;;; each. When the text moves up or down, the rows that stay are copied.
 ;;;;
+;;;; A text is Lisp more often than not, so the window shows which of its
+;;;; parentheses belong together (lisp/syntax.lisp): each pair in a colour
+;;;; of its own, and while the cursor stands behind a closing one, a block
+;;;; under the one that opens it.
+;;;;
 ;;;; This file is not part of the world that the kernel loads. The launcher
 ;;;; loads it when Emma is first picked, and CLARA.WINDOWS:UNLOAD-APPLICATION
 ;;;; takes it out again. It loads under SBCL as well, where lisp/host/
@@ -45,7 +50,11 @@
   (column 0)   ; where in its line the cursor is: before the character of that number
   (top 0)      ; the number of the line in the window's first row,
   (left 0)     ;   and of the column in the first cell of a row
-  shown        ; what each row of the window shows, as it was drawn: a string, or NIL for a row to draw again
+  shown        ; what each row of the window shows, as it was drawn, or NIL for a row to draw again: its text,
+               ;   and after that its cells that are not ink on paper, each (column ink) or (column ink paper)
+  paints       ; such cells of each row of the text, for the drawing that is under way
+  known        ; the lines above the cursor's that STATES is about: ABOVE, as it was when the window was drawn last,
+  states       ;   and what is known of the text at the end of each of them (CLARA.SYNTAX:SCAN), the nearest first
   cursor       ; the row of the window that the cursor is drawn in, or NIL
   changed      ; the text is not what the file holds
   message      ; words for the status row, until the next key
@@ -390,6 +399,82 @@
   (clara.draw:fill-rectangle (editor-surface editor) (* column clara.font:+width+)
                              (- (* (1+ row) clara.font:+height+) 2) clara.font:+width+ 2 pixel))
 
+;;; Parentheses
+;;;
+;;; The ones that belong together are drawn in a colour of their own, by
+;;; how many pairs they lie within, and while the cursor stands behind a
+;;; closing one, the one that opens it has a block under it, the hint, when
+;;; it is in the window. Which parentheses count, and which belong
+;;; together, is a matter of all the text before them, so what is known at
+;;; the end of each line above the cursor's is kept from one drawing to the
+;;; next: a line changes only while the cursor is in it. KNOWN is ABOVE as
+;;; it was at the drawing before, and the lines that the two lists share,
+;;; which they share as conses, are the ones that nothing has to be worked
+;;; out for again.
+
+;; What is known of the text at the end of each line above the cursor's,
+;; the nearest first.
+(defun states (editor)
+  (let* ((above (editor-above editor)) (known (editor-known editor)) (states (editor-states editor))
+         (more (- (length above) (length known))) (rest above) (new nil))
+    ;; The two lists at one length,
+    (loop
+      (unless (minusp more)
+        (return))
+      (setq known (cdr known)
+            states (cdr states)
+            more (1+ more)))
+    (dotimes (i more)
+      (setq new (cons (car rest) new)
+            rest (cdr rest)))
+    ;; and then down both until they are one list.
+    (loop
+      (when (eq rest known)
+        (return))
+      (setq new (cons (car rest) new)
+            rest (cdr rest)
+            known (cdr known)
+            states (cdr states)))
+    ;; The lines that are new, from the one that comes first in the text.
+    (let ((number (length rest)) (state (car states)))
+      (dolist (line new)
+        (setq state (clara.syntax:next-line (clara.syntax:scan line state number nil))
+              states (cons state states)
+              number (1+ number))))
+    (setf (editor-known editor) above
+          (editor-states editor) states)))
+
+;; The cells of each row of the text that are not ink on paper go into
+;; PAINTS: the parentheses of the lines in sight that count, and the hint.
+(defun paint (editor)
+  (let* ((rows (editor-rows editor)) (columns (editor-columns editor)) (paints (editor-paints editor))
+         (top (editor-top editor)) (left (editor-left editor)) (row (editor-row editor))
+         (behind (1- (editor-column editor)))
+         (state (nth (- row top) (states editor)))
+         (lines (lines-in-sight editor)) (number top) (cells nil) (hint nil)
+         (seen (lambda (index level open)
+                 ;; The parenthesis that the cursor stands behind, and the one that opens it.
+                 (when (and open (= number row) (= index behind))
+                   (setq hint open))
+                 (let ((pixel (clara.syntax:color level)))
+                   (when (and pixel (>= index left) (< index (+ left columns)))
+                     (setq cells (cons (list (- index left) pixel) cells)))))))
+    (dotimes (r rows)
+      (setq cells nil)
+      (when lines
+        (setq state (clara.syntax:next-line (clara.syntax:scan (car lines) state number seen))))
+      (setf (svref paints r) cells)
+      (setq lines (cdr lines)
+            number (1+ number)))
+    (let ((shade (clara.syntax:hint)))
+      (when (and hint shade)
+        (let ((r (- (car hint) top)) (column (- (cdr hint) left)))
+          (when (and (< -1 r rows) (< -1 column columns))
+            (let ((cell (assoc column (svref paints r))))
+              (setf (svref paints r)
+                    (cons (list column (if cell (cadr cell) (editor-ink editor)) shade)
+                          (remove-if (lambda (other) (= (car other) column)) (svref paints r)))))))))))
+
 ;; The window shows the text again, around the cursor, and the status: each
 ;; row that is not what was drawn there is drawn, and then shown.
 (defun render (editor)
@@ -406,22 +491,28 @@
     (let ((column (editor-column editor)) (left (editor-left editor)))
       (cond ((< column left) (setf (editor-left editor) column))
             ((>= column (+ left columns)) (setf (editor-left editor) (- column columns -1)))))
+    (paint editor)
     (let ((lines (lines-in-sight editor)) (left (editor-left editor)))
       (dotimes (r rows)
         (let* ((line (if lines (car lines) ""))
-               (text (fit (if (< left (length line)) (subseq line left) "") columns)))
-          (unless (and (svref shown r) (string= (svref shown r) text))
+               (text (fit (if (< left (length line)) (subseq line left) "") columns))
+               (cells (svref (editor-paints editor) r))
+               (was (svref shown r)))
+          (unless (and was (string= (car was) text) (equal (cdr was) cells))
             (clara.draw:draw-text surface 0 (* r clara.font:+height+) text ink paper)
-            (setf (svref shown r) text))
+            (dolist (cell cells)
+              (clara.draw:draw-text surface (* (car cell) clara.font:+width+) (* r clara.font:+height+)
+                                    (string (char text (car cell))) (cadr cell) (or (caddr cell) paper)))
+            (setf (svref shown r) (cons text cells)))
           (setq lines (cdr lines)))))
     (setf (editor-cursor editor) (- (editor-row editor) (editor-top editor)))
     (bar editor (- (editor-column editor) (editor-left editor)) (editor-cursor editor) ink)
     ;; The status row, with the colours the other way round, and the cursor
     ;; in it while a question waits for its answer.
     (let ((text (status editor)))
-      (unless (and (svref shown rows) (string= (svref shown rows) text))
+      (unless (and (svref shown rows) (string= (car (svref shown rows)) text))
         (clara.draw:draw-text surface 0 (* rows clara.font:+height+) text paper ink)
-        (setf (svref shown rows) text)
+        (setf (svref shown rows) (list text))
         (when (editor-asking editor)
           (let ((at (+ 1 (length (car (editor-asking editor))) (length (editor-answer editor)))))
             (when (< at columns)
@@ -549,6 +640,7 @@
                               :columns columns :rows rows
                               :ink (clara.draw:color 232 227 244) :paper (clara.draw:color 30 27 46)
                               :shown (make-array (1+ rows) :initial-element nil)
+                              :paints (make-array rows :initial-element nil)
                               :message "Ctrl-S saves, Ctrl-O opens a file, Ctrl-E evaluates, Ctrl-Q closes")))
     (setf (car holds) editor)
     (when name

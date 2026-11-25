@@ -319,8 +319,12 @@
 ;; which NEXT gives one at a time, and echoed to STREAM as it grows: the
 ;; line without its end, or NIL when no more is coming. It is how a line
 ;; is typed on this console, and on a console in a window, which has other
-;; codes and another stream.
-(defun read-edited-line (next stream)
+;; codes and another stream. Such a window shows more of a line than its
+;; characters, and echoes for itself: ECHO, when there is one, is called
+;; in place of writing to STREAM whenever the line has gained a character
+;; or lost its last, with the line as it is now and the character that it
+;; gained, or NIL.
+(defun read-edited-line (next stream &optional echo)
   (let ((line ""))
     (loop
       (let ((code (funcall next)))
@@ -337,12 +341,16 @@
               ((or (= code 8) (= code 127))
                (when (plusp (length line))
                  (setq line (subseq line 0 (1- (length line))))
-                 (write-string *rubout* stream)))
+                 (if echo
+                     (funcall echo line nil)
+                     (write-string *rubout* stream))))
               (t
                (let ((character (if (= code 9) #\Space (and (>= code 32) (< code char-code-limit) (code-char code)))))
                  (when (and character (< (length line) +line-limit+))
                    (setq line (concatenate 'string line (string character)))
-                   (write-string (string character) stream)))))))))
+                   (if echo
+                       (funcall echo line character)
+                       (write-string (string character) stream))))))))))
 
 ;; The next line that was typed, without its end, or NIL when no more is
 ;; coming. While a line is being read, Ctrl-C is a byte like the others,

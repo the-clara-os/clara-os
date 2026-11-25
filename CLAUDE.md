@@ -1252,8 +1252,8 @@ Rules:
   of the machine's own processor, arm64.lisp or x86-64.lisp, whose name
   is the machine's in `*features*`, then clos, which is the exception
   above, and then the console, draw, pci,
-  virtio, usb, input, disk, fat, type, random, net, hda, sound, the listener,
-  windows, terminal, system, tls and parker), and
+  virtio, usb, input, disk, fat, type, random, net, hda, sound, syntax, the
+  listener, windows, terminal, system, tls and parker), and
   lisp/host/tests.lisp loads the same files: a new one goes into both, and what its package exports goes into
   a list of names in the manual, or `make site` stops. A file that is an
   application is not in `world`, and the launcher loads it (below). What `lisp_main`
@@ -1587,6 +1587,37 @@ Rules:
   console's when that is NIL or the font cannot be had. The strips keep
   their heights, so a rule of the tests for a new piece of text takes its
   place from `label-rule`.
+- Parentheses (lisp/syntax.lisp, the package CLARA.SYNTAX, Julio's issue
+  #47; DESIGN.md has what was decided). `scan` goes through a text the way
+  kernel/lisp/read.c reads one, so what the reader takes for a string, a
+  comment or a name is changed in both, and the tests' second opinion is
+  SBCL's reader behind a table of their own (`read-parentheses`): a new
+  case goes into the list of texts there that were written to be hard. A
+  state is never changed, since whoever keeps one keeps it for a text
+  that has not changed: Emma's `states`, beside `known`, the lines that
+  they are of, and a terminal's `start`. In a terminal a row's colours
+  are `tints` and `tinted`, kept in step with `line` and `kept` wherever
+  those change (`keep-row`, `old-row`, CLEAR, the rings as they grow);
+  `put` with no ink takes the colours of the cells that it writes; and
+  whatever draws a row from what it says draws its colours (`repaint`,
+  `draw-cell`). The hint is drawn and taken away with the cursor,
+  `show-cursor` and `hide-cursor`, around everything that draws. `echo`
+  is how a line that is read there is echoed, called by
+  `clara.console:read-edited-line`, and what it remembers of where a
+  character was drawn is a row by its number (`count`), not by its place
+  in the window. The listener binds `clara.listener:*begun*` around the
+  line that it reads; a line that is read with the variable NIL is some
+  program's, begins a text of its own and is not remembered. In Emma,
+  `paint` works out the cells of the rows in sight that are not ink on
+  paper, and `shown` holds a row's text with them, so a row whose colours
+  alone have changed is drawn again. In the tests the colours are written
+  out (`*levels*`, `+stray+`, `+hint+`), `row-tinted-p` and the fourth
+  argument of `wrong-cells` name the cells that are in them, and
+  `editor-tints` asks SBCL's reader about the editor's whole text: a text
+  that a test types into an editor has to be Lisp as far as it goes, or
+  the run fails with that. A session holds a row against letters that it
+  draws beside it (`shows`, with the cells in other colours after the
+  text), and sees the hint by typing with `^M sendkey` and no Enter.
 - With the window manager running, the keyboard is the window's and not
   the console's. So a session types into a window with a line `^T text`,
   which echoes nothing on the serial port, and sees what came of it in the
