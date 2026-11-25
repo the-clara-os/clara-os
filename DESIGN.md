@@ -916,8 +916,9 @@ architectures (kernel/vm.c).
   drawn, and not lines as they were written. A window has one width for
   as long as it is open, so nothing is ever laid out again, a long line
   is as many rows as it took, and going back is drawing strings that are
-  there. The day a window can be made wider, the rows have to say where
-  a line went on.
+  there. The rows say where a line went on since 0.0.58, for what is
+  copied of them (below, under highlighting), which is also what the day
+  needs on which a window can be made wider.
 - The rows are in the heap. The collector frees them with the terminal,
   whichever way the window went, where page frames would have to be
   given back by hand, as a surface's are, by everything that can close a
@@ -2963,6 +2964,110 @@ architectures (kernel/vm.c).
   by cell. The boots type a form into a REPL's window and into Emma's by
   QEMU's keyboard and hold the rows against the same letters drawn beside
   them in the colours of their levels, with the hint and without.
+
+## Highlighting, cutting, copying and pasting (decided for issue #48, 2026-11-24)
+
+- Text in a window is highlighted with the pointer, and three keys go with
+  it (Julio: "Let user highlight text and cut, copy, and paste across the
+  window manager"). The left button goes down where the text begins, the
+  pointer is moved with it held, and what lies between the two places, as
+  the text is read, stands on another ground. Ctrl-C copies it, Ctrl-X
+  cuts it, and Ctrl-V puts in what was cut or copied last. Those are the
+  keys that every other system has for it, which is the reason for them.
+- What was cut or copied is one text for all the windows, and it is the
+  window manager's: `clara.windows:clipboard`, a string, which a program
+  reads and writes. That is what "across the window manager" comes to. It
+  is text and nothing else, a variable of the world's like any other, so a
+  world that is saved has it.
+- The highlighting is each program's own. The window manager knows a
+  window as pixels and never what they say, so it cannot highlight for a
+  program, or know what was meant. What it gives is the moves of the
+  pointer: a window that asks for them (`:drag`) is told where the pointer
+  is for as long as the left button is down that went down on its inside,
+  also when the pointer has left the window, where the place is counted
+  from the inside's corner all the same. A window that does not ask is
+  told what it always was, a button that goes down or comes up, so a
+  program that was written before this hears nothing new.
+- A move is a drag once the pointer is three pixels from where the button
+  went down. A hand is not still while it clicks, and in Emma what is
+  typed takes the place of what is highlighted: a click that highlighted a
+  character by a tremble would cost that character at the next key.
+- A place is between two characters, the two that the pointer is nearest
+  to, so a character is highlighted once the pointer has passed its
+  middle, from either side. A click in Emma still puts the cursor on the
+  character that it is on, as before.
+- Ctrl-C is also the key that stops. In a REPL window it copies while
+  something is highlighted, and the highlight goes with that, so that the
+  next Ctrl-C is the one that stops what the window computes: nobody has
+  to look for a way out of a highlight while a form runs away. With
+  nothing highlighted the key is what it was. The other way, Shift with
+  Ctrl for the copy, is what terminals on Linux have; here the keyboard's
+  driver gives Ctrl with a letter one code whatever Shift does, and one
+  key for one thing in every window is the easier rule to hold. In Emma
+  the key had no meaning outside a question and the forms that Ctrl-E
+  runs, and what is highlighted there stays so after a copy, to be cut or
+  typed over.
+- A terminal's highlight is two places in its rows, each row by its
+  number from the first that there was, like the cells of a line that is
+  read: so it stays with its rows when they move up, when the window
+  shows others, and while the button is held and Page Up is typed, which
+  is how more than a window's worth is highlighted. The rows are drawn in
+  the thread of the mouse, with the lock that every writer has, for the
+  reason that Page Up is heard in the keyboard's: the thread that reads
+  may be computing. Whatever draws a cell asks one function what the cell
+  stands on.
+- A row says whether its line went on in the next one. Until now a
+  terminal kept rows as they were drawn and nothing of the lines that
+  they were, which was enough to show them again. What is copied has to
+  be the line: a long form that is copied with a new line wherever the
+  window happened to end a row is another text, in a string or in the
+  middle of a name. So a row that was written to its last cell and ended
+  by one character more is kept with that said, in a third ring beside
+  what the rows say and their colours, and is copied to its last cell,
+  spaces and all, with no new line behind it. It is also what a window
+  that changes its width will need.
+- In a terminal Ctrl-X copies, since nothing that a window has written
+  can be taken out of it. And Ctrl-V types: what was copied goes where
+  the keys go, so a line of it that has an end is read as it stands, a
+  form of several lines is evaluated when its last line is in, and the
+  last line waits for Enter. All of it is typed, however long, where the
+  keys that wait are otherwise held to a number; and what is no character
+  of a text is left out, since a Ctrl-C or a Ctrl-D that came in a text
+  would stop the window's form or close the window.
+- In Emma the highlight is from a mark to the cursor: the mark is set
+  where the button went down, once the pointer is dragged, and the cursor
+  goes where the pointer goes, so the window follows it past its edges.
+  What is typed takes the place of what is highlighted, Backspace and
+  Delete take it out, and a key that moves the cursor ends it. What
+  Ctrl-K cuts is what was cut last, like anything else that is cut, and
+  Ctrl-Y is Ctrl-V under its old name: one text that was cut, and not one
+  for each pair of keys.
+- The end of a line that is highlighted shows as the cell behind the
+  line's last character, in a terminal and in Emma. Without it a line
+  with nothing in it would show nothing, and whether the new line at the
+  end is part of what will be copied would be a guess.
+- The ground is a blue, 48 64 112, `clara.windows:*highlight*`. The ink
+  stands out from it by 8 to 1, as contrast is counted for text, and the
+  six colours of the parentheses by 4 to 1 or more; it stands out from
+  the paper by less than 2 to 1, which a block of it does not need more
+  of, and by its hue from the hint, which is a cell of violet.
+- Jaid copies the name that is picked, with its directory, since that is
+  the text that its window has to give, and Ares takes what was copied
+  into the row of its address. What a page says in Ares cannot be
+  highlighted yet: its letters have their own widths and its lines lie
+  side by side in the cells of tables, and that is a piece of work of its
+  own. Parker's list has nothing to copy. Nor is anything highlighted with
+  the keyboard: the driver gives Shift with an arrow no code of its own.
+  And the screen of the first prompt has no pointer.
+- It is tested where it can be seen. Under SBCL the tests move the
+  pointer of a made-up screen over a terminal of three rows and look at
+  every cell, at what is copied, and at what a reader is handed when
+  Ctrl-V types; the editor is held against the second editor of the
+  tests, which learned the pointer and the three keys the slow way, a
+  text in one string and a place a count of characters, over seven
+  hundred keys and drags as they come. The boots press and move QEMU's
+  mouse over a form in a REPL's window, copy it, type it again with
+  Ctrl-V, and cut a word out of a line in Emma and put it back.
 
 ## Conventions
 

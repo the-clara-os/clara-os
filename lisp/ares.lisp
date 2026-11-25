@@ -3,7 +3,8 @@
 ;;;; An application (lisp/windows.lisp): a window that shows a page of the
 ;;;; web, what it says, and goes where its links lead. The row at its top
 ;;;; has the address of the page, and takes another when Ctrl-L is typed or
-;;;; the row is clicked; Tab picks the next link and Enter follows it, as a
+;;;; the row is clicked, where Ctrl-V puts in what was copied last, in
+;;;; whichever window (CLARA.WINDOWS:CLIPBOARD); Tab picks the next link and Enter follows it, as a
 ;;;; click on a link does; Alt with the arrow to the left, or Backspace,
 ;;;; goes back to the page before, and Alt with the arrow to the right on
 ;;;; again; Ctrl-R asks for the page once more; the arrows, Page Up, Page
@@ -2615,6 +2616,9 @@ pictures, runs no scripts, and reads nothing of what a page says about its looks
              (setf (view-answer view) (subseq answer 0 (- (length answer) 1)))))
           ((= code 12)                  ; Ctrl-L once more: the address of the page, to be changed
            (setf (view-answer view) (or (page-address (view-page view)) "")))
+          ((= code 22)                  ; Ctrl-V: the first line of what was copied last, in whichever window
+           (let* ((text (clara.windows:clipboard)) (end (or (position #\Newline text) (length text))))
+             (setf (view-answer view) (concatenate 'string answer (subseq text 0 end)))))
           ((and (>= code 32) (< code char-code-limit))
            (setf (view-answer view) (concatenate 'string answer (string (code-char code))))))))
 

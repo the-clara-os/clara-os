@@ -1553,7 +1553,7 @@ Rules:
   `damaged` with the rectangle, and `settle` puts the dirty rectangles
   together again on `*back*` and shows them (`compose`), all with `*lock*`
   held. A window's surface is its thread's to draw on; this file only
-  copies from it. What a window is told (its KEY, POINTER and CLOSE
+  copies from it. What a window is told (its KEY, POINTER, DRAG and CLOSE
   functions) and what a click launches are called after the lock is let
   go, in the thread of the keyboard or the mouse, which is where
   `key-typed` and `pointer-moved` run (`clara.input:send-keys-to`,
@@ -1618,6 +1618,45 @@ Rules:
   the run fails with that. A session holds a row against letters that it
   draws beside it (`shows`, with the cells in other colours after the
   text), and sees the hint by typing with `^M sendkey` and no Enter.
+- Highlighting, cutting, copying and pasting (Julio's issue #48; DESIGN.md
+  has what was decided). What was cut or copied is
+  `clara.windows:clipboard`, one string for all the windows, which a
+  program sets with SETF. Nothing else of it is the window manager's but
+  the moves of the pointer: a window that was opened with `:drag` is told
+  where the pointer is while the left button is down that went down on
+  its inside (`*held*`, and `+slack+` for a hand that is not still), in
+  the thread of the mouse, and a window with `:events t :drag t` keeps
+  `(:drag x y buttons)`, one for all the moves that nobody took
+  (`post-drag`). A window that did not ask is told nothing new. A program
+  highlights for itself. In a terminal a place is `(row . column)`, the
+  row by its number like the cells of a line that is read (`row-number`),
+  `marked` is two places in the order of the text, and whatever draws a
+  cell asks `ground` what the cell stands on: a new way of drawing there
+  goes through `draw-cell` or `draw-row`, or does what `relight` does for
+  `put`, or what is highlighted is drawn over on paper. `joined` is the
+  third ring, kept in step with `kept` and `tinted` wherever those change
+  (`keep-row`, `old-row`, CLEAR, the rings as they grow): it says that a
+  row's line went on in the next, which `new-row` is told by whoever
+  starts a row for a character that had no room, and what is copied goes
+  by it. `pointed` and `dragged` run in the thread of the mouse and draw,
+  with the terminal's lock, as `scroll` does in the keyboard's. What
+  Ctrl-V types goes to `keys` whole, past `+keys-limit+`, without the
+  characters that are no text. In Emma what is highlighted is the text
+  from `mark` to the cursor (`marked`), `paint` adds its cells
+  (`lit-cells`), and whatever changes the text, or moves the cursor by a
+  key, sets `mark` to NIL, or the mark is a place that the text no longer
+  has: `take-marked`, `read-in`, the keys of `moving-p`. `pressed` is where
+  the button went down, and any key takes it away, for the same reason.
+  In the tests `+highlight+` is the ground, `lit-p` a row of the terminal
+  with cells on it, `editor-tints` says what is highlighted by counting
+  characters through the whole text, and `ref-point`, `ref-drag` and
+  `ref-key` are the pointer and the keys of the second editor: a key that
+  has to do with what is highlighted is taught to `ref-key` and to the
+  walk. An expectation there that names a row with the cursor in it ends
+  before the cursor's cell, as for the colours. A session presses and
+  moves QEMU's mouse a step at a time and holds a row against `lit`
+  (tools/session.txt), which draws the same letters with some of them on
+  the highlight's ground.
 - With the window manager running, the keyboard is the window's and not
   the console's. So a session types into a window with a line `^T text`,
   which echoes nothing on the serial port, and sees what came of it in the
@@ -1661,7 +1700,8 @@ Rules:
   to hold the one thread that runs them.
 - A window that is opened with `:events t` keeps what it is told, and its
   program takes it with `clara.windows:next-event`, in its own thread:
-  `(:key code)`, `(:pointer x y buttons)`, `(:close)`. That is how an
+  `(:key code)`, `(:pointer x y buttons)`, `(:close)`, and `(:drag x y
+  buttons)` when it asked for the moves. That is how an
   application is written: a loop that waits, changes what it holds, and
   draws. The close box is told once until the program has taken it.
 - Applications in files (lisp/emma.lisp, lisp/jaid.lisp, lisp/ares.lisp).

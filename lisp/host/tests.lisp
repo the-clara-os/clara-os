@@ -4871,6 +4871,7 @@
 (defconstant +ink+ #xe8e3f4)
 (defconstant +lit+ #xffb86c)
 (defconstant +dim+ #x4a4466)
+(defconstant +highlight+ #x304070)             ; what text that is highlighted stands on, in a window of text
 
 (defvar *desk-width* 0)
 (defvar *desk-height* 0)
@@ -5029,6 +5030,21 @@
 (check t (and (eq clara.input::*keys-to* #'clara.windows:key-typed)
               (eq clara.input::*pointer-to* #'clara.windows:pointer-moved)))
 (check 65 (clara.windows:key-typed 65))        ; typed with no window to have it: nothing happens
+;; What was cut or copied last is one text for all the windows: none yet,
+;; then whatever a program says, which has to be text. And text that is
+;; highlighted stands on the colour that CLARA.WINDOWS:*HIGHLIGHT* says, or
+;; on the one that the system came with when that says no colour.
+(check "" (clara.windows:clipboard))
+(check '("some text" "some text") (list (setf (clara.windows:clipboard) "some text") (clara.windows:clipboard)))
+(check '("what is cut or copied is text, a string, and 5 is not one" "some text")
+       (list (condition-text (lambda () (setf (clara.windows:clipboard) 5))) (clara.windows:clipboard)))
+(setf (clara.windows:clipboard) "")
+(check (list '(48 64 112) +highlight+ #x010203 +highlight+ +highlight+ +highlight+)
+       (cons clara.windows:*highlight*
+             (mapcar (lambda (parts)
+                       (let ((clara.windows:*highlight* parts))
+                         (clara.windows:highlight)))
+                     '((48 64 112) (1 2 3) nil (1 2 300) (1 2 3 4)))))
 (new-desk :width 110)                          ; too narrow for the system's name: the button alone
 (check 0 (wrong-pixels))
 
@@ -7312,6 +7328,202 @@
        (list (kept-rows) (length (clara.terminal::terminal-kept *terminal*)) (length (clara.terminal::terminal-tinted *terminal*))
              (find-if #'identity (clara.terminal::terminal-tinted *terminal*)) (clara.terminal::terminal-count *terminal*)))
 
+;; The pointer highlights what the rows say. Its left button goes down at
+;; one place, and the text from there to where the pointer is moved with
+;; the button held stands on another ground: a cell counts when the pointer
+;; has passed its middle, a row as far as it says something, and the cell
+;; behind the last character of a line whose end is highlighted with it.
+(defvar *corner* (multiple-value-list (clara.windows:window-position (clara.terminal:terminal-window *terminal*))))
+(defun pointer-in (column row buttons &optional (across 0)) ; the pointer at the left edge of a cell, or some pixels further
+  (clara.windows:pointer-moved (+ (first *corner*) (* 8 column) across) (+ (second *corner*) (* 16 row) 8) buttons))
+(defun marked () (clara.terminal::terminal-marked *terminal*))
+;; A row shows STRING, its cells from FROM to before TO on the highlight's
+;; ground; TINTS are the cells in other colours, as ROW-TINTED-P has them.
+(defun lit-p (row string from to &rest tints)
+  (apply #'row-tinted-p *face* row string
+         (loop for column below (length string)
+               for tint = (find column tints :key #'first)
+               for lit = (and (<= from column) (< column to))
+               when (or tint lit)
+                 collect (list column (if tint (second tint) +ink+) (or (third tint) (and lit +highlight+))))))
+
+(clara.terminal:clear *terminal*)
+(write-string (format nil "01234567  abcde~%xy~%~%last") *out*)
+(check '(("01234567" "abcde" "xy" "") (t nil nil nil) t)     ; the first row's line went on in the second
+       (list (kept-rows) (loop for place below 4 collect (clara.terminal::kept-joined *terminal* place))
+             (rows-show-p "xy" "" "last")))
+(pointer-in 1 0 0)
+(pointer-in 1 0 1)                             ; the button goes down before the y,
+(pointer-in 1 0 1 2)                           ; a move of two pixels is the hand's,
+(check nil (marked))
+(pointer-in 3 2 1)                             ; and the pointer is dragged to behind the s of the last row
+(check '(((2 . 1) 4 . 3) t t t 0)
+       (list (marked) (lit-p 0 "xy        " 1 3) (lit-p 1 "          " 0 1) (lit-p 2 "last      " 0 3) (wrong-pixels)))
+(pointer-in 3 2 1 3)                           ; three pixels into the t, which is not past its middle,
+(check '((2 . 1) 4 . 3) (marked))
+(pointer-in 3 2 1 4)                           ; and four, which is
+(check '(((2 . 1) 4 . 4) t) (list (marked) (lit-p 2 "last      " 0 4)))
+(pointer-in 9 2 1)                             ; past what the row says: no more of it is highlighted
+(check '(((2 . 1) 4 . 9) t) (list (marked) (lit-p 2 "last      " 0 4)))
+(pointer-in 9 2 0)                             ; the button comes up, and what is highlighted stays so,
+(pointer-in 5 1 0)                             ; wherever the pointer goes from there
+(clara.terminal::dragged *terminal* 0 0 0)     ; a move with no button is no drag, whoever says so
+(check '(((2 . 1) 4 . 9) t t t)
+       (list (marked) (lit-p 0 "xy        " 1 3) (lit-p 1 "          " 0 1) (lit-p 2 "last      " 0 4)))
+;; Ctrl-C copies what is highlighted, and it is highlighted no longer: the
+;; key is the window's own then, and nobody reads it.
+(clara.windows:key-typed 3)
+(check (list (format nil "y~%~%last") nil t nil 0)
+       (list (clara.windows:clipboard) (marked) (rows-show-p "xy" "" "last") (clara.terminal::terminal-keys *terminal*)
+             (wrong-pixels)))
+;; Dragged the other way, it is the same text. Ctrl-X copies it too, since
+;; nothing that was written can be taken out; with nothing highlighted it
+;; is a key like any other.
+(pointer-in 2 2 1)
+(pointer-in 0 1 1)
+(check '(((3 . 0) 4 . 2) t t t)
+       (list (marked) (rows-show-p "xy") (lit-p 1 "          " 0 1) (lit-p 2 "last      " 0 2)))
+(clara.windows:key-typed 24)
+(check (list (format nil "~%la") nil nil)
+       (list (clara.windows:clipboard) (marked) (clara.terminal::terminal-keys *terminal*)))
+(pointer-in 0 1 0)
+(clara.windows:key-typed 24)
+(check '(24) (clara.terminal::terminal-keys *terminal*))
+(setf (clara.terminal::terminal-keys *terminal*) nil)
+;; Page Up and Page Down work while the button is held, so what is
+;; highlighted can be more than the window holds. A row whose line went on
+;; in the next is highlighted to its last cell, and copied with no new line
+;; behind it. The window stays where it is when Ctrl-C copies.
+(pointer-in 2 2 1)
+(page-up)
+(pointer-in 3 0 1)
+(check '(((0 . 3) 4 . 2) 2 t t t 0)
+       (list (marked) (back) (lit-p 0 "01234567  " 3 10) (lit-p 1 "abcde     " 0 6) (lit-p 2 "xy        " 0 3)
+             (wrong-pixels)))
+(page-down)                                    ; the rows are drawn with it wherever the window is
+(check '(t t t) (list (lit-p 0 "xy        " 0 3) (lit-p 1 "          " 0 1) (lit-p 2 "last      " 0 2)))
+(page-up)
+(clara.windows:key-typed 3)
+(check (list (format nil "34567  abcde~%xy~%~%la") 2 t)
+       (list (clara.windows:clipboard) (back) (rows-show-p "01234567" "abcde" "xy")))
+(pointer-in 3 0 0)
+(page-down)
+;; A click takes the highlight away, and within one row there is nothing to
+;; highlight where the row says nothing.
+(pointer-in 0 0 1)
+(pointer-in 4 0 1)
+(check '(((2 . 0) 2 . 4) t) (list (marked) (lit-p 0 "xy        " 0 2)))
+(pointer-in 4 0 0)
+(pointer-in 5 1 1)
+(pointer-in 5 1 0)
+(check '(nil t 0) (list (marked) (rows-show-p "xy" "" "last") (wrong-pixels)))
+(pointer-in 5 0 1)
+(pointer-in 9 0 1)
+(check nil (marked))
+(pointer-in 9 0 0)
+;; What is written while something is highlighted: a character that comes
+;; to stand between the two places is highlighted as it is drawn, and the
+;; highlight moves up with its rows.
+(pointer-in 2 2 1)
+(pointer-in 10 2 1)
+(check '(((4 . 2) 4 . 10) t) (list (marked) (lit-p 2 "last      " 2 4)))
+(write-string "++" *out*)
+(check t (lit-p 2 "last++    " 2 6))
+(write-string (format nil "~%z") *out*)
+(check '(t t t 0) (list (rows-show-p "") (lit-p 1 "last++    " 2 6) (row-shows-p *face* 2 "z         ") (wrong-pixels)))
+(clara.windows:key-typed 3)
+(check "st++" (clara.windows:clipboard))
+(pointer-in 10 2 0)
+;; Rows that are no longer kept are no longer highlighted, and what is
+;; copied of them is what is left; when that is nothing, what was copied
+;; before stays.
+(pointer-in 0 0 1)
+(pointer-in 2 2 1)
+(check '((3 . 0) 5 . 2) (marked))
+(setq clara.terminal:*rows-kept* 0)
+(write-string (format nil "~%1~%2~%3") *out*)
+(check '(("1" "2") t) (list (kept-rows) (rows-show-p "1" "2" "3")))
+(clara.windows:key-typed 3)
+(check '("st++" nil) (list (clara.windows:clipboard) (marked)))
+(pointer-in 2 2 0)
+(setq clara.terminal:*rows-kept* 100000)
+;; CLEAR leaves nothing highlighted.
+(pointer-in 0 0 1)
+(pointer-in 1 0 1)
+(check '((6 . 0) 6 . 1) (marked))
+(clara.terminal:clear *terminal*)
+(check '(nil nil t) (list (marked) (clara.terminal::terminal-pressed *terminal*) (rows-show-p "" "" "")))
+(pointer-in 1 0 0)
+;; A place under the last row that there is, is the end of that row.
+(write-string "ab" *out*)
+(pointer-in 0 0 1)
+(pointer-in 5 2 1)
+(check '(((0 . 0) 0 . 10) t) (list (marked) (lit-p 0 "ab        " 0 2)))
+(clara.windows:key-typed 3)
+(check "ab" (clara.windows:clipboard))
+(pointer-in 5 2 0)
+;; A tab that finds its row full goes on in the next, and so does a line
+;; that is typed past the end of a row: each is one line when it is copied.
+(clara.terminal:clear *terminal*)
+(write-string (format nil "0123456789~Cx~%" #\Tab) *out*)
+(let ((reader (reads-a-line)))
+  (type-text (format nil "abcdefghijkl~%"))
+  (check "abcdefghijkl" (clara:join-thread reader)))
+(check '(("0123456789" "        x" "abcdefghij" "kl") (t nil t nil))
+       (list (kept-rows) (loop for place below 4 collect (clara.terminal::kept-joined *terminal* place))))
+(page-up)
+(pointer-in 9 0 1)
+(pointer-in 2 2 1)
+(page-down)
+(pointer-in 1 1 1)
+(clara.windows:key-typed 3)
+(check (format nil "9        x~%abcdefghijk") (clara.windows:clipboard))
+(pointer-in 1 1 0)
+(clara.terminal:clear *terminal*)
+;; A line that is being read: its parentheses keep their colours on the
+;; highlight's ground, the hint keeps its own, and what is typed behind the
+;; highlight is not part of it. Ctrl-C copies, and the line goes on being
+;; read.
+(let ((reader (reads-a-line)))
+  (type-text "(a)")
+  (check t (typed-p 0 "(a)" (list 0 (level 0) +hint+) (list 2 (level 0))))
+  (pointer-in 0 0 1)
+  (pointer-in 3 0 1)
+  (check '(((0 . 0) 0 . 3) t t)
+         (list (marked) (lit-p 0 "(a)" 0 3 (list 0 (level 0) +hint+) (list 2 (level 0))) (bar-at-p *face* 0 3 +ink+)))
+  (type-text "b")
+  (check t (eventually (lambda () (lit-p 0 "(a)b" 0 3 (list 0 (level 0)) (list 2 (level 0))))))
+  (clara.windows:key-typed 3)
+  (check '("(a)" nil t)
+         (list (clara.windows:clipboard) (marked) (row-tinted-p *face* 0 "(a)b" (list 0 (level 0)) (list 2 (level 0)))))
+  (pointer-in 3 0 0)
+  (type-text (string #\Newline))
+  (check "(a)b" (clara:join-thread reader)))
+;; Ctrl-V types what was copied last: every line of it that has an end is
+;; read as it stands, and its last waits for one. A tab is typed as one,
+;; and what is no character of a text is left out.
+(clara.terminal:clear *terminal*)
+(setf (clara.windows:clipboard) (format nil "(+ 1~%2)~%ta~Cil~C~C" (code-char 3) (code-char 127) #\Tab))
+(let ((reader (reads-a-line)))
+  (clara.windows:key-typed 22)
+  (check "(+ 1" (clara:join-thread reader)))
+(check "2)" (clara:join-thread (reads-a-line)))
+(let ((reader (reads-a-line)))
+  (check t (typed-p 2 "tail "))
+  (type-text (string #\Newline))
+  (check "tail " (clara:join-thread reader)))
+;; All of it is typed, however long it is; and with nothing copied, nothing
+;; is. The key brings the last rows back, like any other that types.
+(setf (clara.windows:clipboard) (make-string 3000 :initial-element #\a))
+(page-up)
+(clara.windows:key-typed 22)
+(check '(3000 0) (list (length (clara.terminal::terminal-keys *terminal*)) (back)))
+(setf (clara.terminal::terminal-keys *terminal*) nil
+      (clara.windows:clipboard) "")
+(clara.windows:key-typed 22)
+(check nil (clara.terminal::terminal-keys *terminal*))
+(clara.terminal:clear *terminal*)
+
 ;; A terminal of one row goes back a row at a time.
 (let* ((one (clara.terminal:open-terminal "One row" :columns 10 :rows 1 :x 150 :y 150))
        (face (clara.windows:window-surface (clara.terminal:terminal-window one))))
@@ -7479,6 +7691,71 @@
     (clara.windows:close-window kept)
     (check '("gone" 0) (list (clara.windows:rename-window kept "gone") (wrong-pixels)))))
 
+;; A window that wants to know is told where the pointer is dragged to: once
+;; it has gone three pixels from where the left button went down on the
+;; window's inside, and from then on wherever it moves while the button is
+;; held, also to places that are not on the window. A window that did not
+;; ask hears of the buttons, as ever.
+(new-desk :width 300 :height 220)
+(let* ((heard nil)
+       (plain (clara.windows:open-window "plain" 80 40 :x 20 :y 60
+                                         :pointer (lambda (x y buttons) (push (list :plain x y buttons) heard))))
+       (dragged (clara.windows:open-window "dragged" 80 40 :x 150 :y 120
+                                           :pointer (lambda (x y buttons) (push (list :pointer x y buttons) heard))
+                                           :drag (lambda (x y buttons) (push (list :drag x y buttons) heard)))))
+  (flet ((heard ()
+           (prog1 (reverse heard) (setq heard nil))))
+    (clara.windows:pointer-moved 160 130 0)
+    (clara.windows:pointer-moved 160 130 1)
+    (clara.windows:pointer-moved 162 130 1)      ; two pixels: a hand is not that still
+    (clara.windows:pointer-moved 162 132 1)
+    (check '((:pointer 10 10 1)) (heard))
+    (clara.windows:pointer-moved 163 132 1)      ; three
+    (clara.windows:pointer-moved 161 131 1)      ; and nearer again, which is a move like the others by now
+    (clara.windows:pointer-moved 161 131 1)      ; one that is none is not told
+    (clara.windows:pointer-moved 140 205 1)      ; on the desk
+    (clara.windows:pointer-moved 30 70 1)        ; and on the inside of the other window
+    (check '((:drag 13 12 1) (:drag 11 11 1) (:drag -10 85 1) (:drag -120 -50 1)) (heard))
+    (clara.windows:pointer-moved 30 70 0)        ; the button comes up there, which that window hears of,
+    (clara.windows:pointer-moved 40 80 0)        ; and a move with no button down is nobody's
+    (check '(((:plain 10 10 0)) nil 0) (list (heard) clara.windows::*held* (wrong-pixels)))
+    (clara.windows:pointer-moved 40 80 1)        ; the window that did not ask
+    (clara.windows:pointer-moved 60 90 1)
+    (clara.windows:pointer-moved 60 90 0)
+    (check '(((:plain 20 20 1) (:plain 40 30 0)) nil) (list (heard) clara.windows::*held*))
+    ;; The band of a window moves the window, and tells its program nothing.
+    (clara.windows:pointer-moved 170 110 1)
+    (clara.windows:pointer-moved 180 115 1)
+    (clara.windows:pointer-moved 180 115 0)
+    (check '(nil (160 125) 0)
+           (list (heard) (multiple-value-list (clara.windows:window-position dragged)) (wrong-pixels)))
+    ;; A window that goes while its button is held is told nothing more.
+    (clara.windows:pointer-moved 170 135 1)
+    (check '("dragged" (:pointer 10 10 1)) (list (clara.windows:window-title (car clara.windows::*held*)) (car (heard))))
+    (clara.windows:close-window dragged)
+    (clara.windows:pointer-moved 190 150 1)
+    (clara.windows:pointer-moved 190 150 0)
+    (check '(nil nil 0) (list clara.windows::*held* (heard) (wrong-pixels))))
+  (clara.windows:close-window plain))
+;; A window that keeps what happens to it keeps the moves when it asked for
+;; them: one for all that nobody has taken, with the last place.
+(let ((kept (clara.windows:open-window "kept" 80 40 :x 150 :y 120 :events t :drag t)))
+  (clara.windows:pointer-moved 160 130 1)
+  (clara.windows:pointer-moved 170 130 1)
+  (clara.windows:pointer-moved 180 135 1)
+  (clara.windows:key-typed 65)
+  (clara.windows:pointer-moved 190 135 1)
+  (clara.windows:pointer-moved 190 135 0)
+  (check '((:pointer 10 10 1) (:drag 30 15 1) (:key 65) (:drag 40 15 1) (:pointer 40 15 0) nil)
+         (loop repeat 6 collect (clara.windows:next-event kept 0)))
+  (clara.windows:close-window kept))
+(let ((kept (clara.windows:open-window "kept" 80 40 :x 150 :y 120 :events t))) ; and one that did not ask keeps none
+  (clara.windows:pointer-moved 160 130 1)
+  (clara.windows:pointer-moved 180 135 1)
+  (clara.windows:pointer-moved 180 135 0)
+  (check '((:pointer 10 10 1) (:pointer 30 15 0) nil) (loop repeat 3 collect (clara.windows:next-event kept 0)))
+  (clara.windows:close-window kept))
+
 ;;; Applications that are files. The files are the host's, in a directory of
 ;;; this run's own: LOAD, OPEN and DELETE-FILE are SBCL's here.
 
@@ -7642,24 +7919,41 @@
 ;; SBCL's reader makes of the whole text, which has to be Lisp as far as it
 ;; goes: every parenthesis that counts in the colour of its level, and
 ;; while the cursor stands behind a closing one, the hint under the one
-;; that opens it.
+;; that opens it. And what is highlighted stands on the highlight's ground:
+;; the characters of the text between the mark and the cursor, counted
+;; through the whole text, where the end of a line is a character too,
+;; whose cell is the one behind the line's last.
 (defun editor-tints (editor)
   (let* ((lines (clara.emma::all-lines editor))
          (starts (loop with at = 0 for line in lines collect at do (incf at (1+ (length line)))))
          (top (clara.emma::editor-top editor)) (left (clara.emma::editor-left editor))
          (columns (clara.emma::editor-columns editor)) (rows (clara.emma::editor-rows editor))
          (read (read-parentheses (format nil "~{~A~%~}" lines)))
-         (behind (+ (nth (clara.emma::editor-row editor) starts) (clara.emma::editor-column editor) -1))
-         (opening (and (listp read) (third (find behind read :key #'first)))))
+         (cursor (+ (nth (clara.emma::editor-row editor) starts) (clara.emma::editor-column editor)))
+         (behind (1- cursor))
+         (opening (and (listp read) (third (find behind read :key #'first))))
+         (mark (clara.emma::editor-mark editor))
+         (anchor (and mark (+ (nth (car mark) starts) (cdr mark)))))
     (if (eq read :no-lisp)
         (progn (failed "the text of an editor is no Lisp, and the tests have no word on its parentheses: ~S" lines)
                nil)
-        (loop for (index level) in read
-              for number = (position-if (lambda (start) (<= start index)) starts :from-end t)
-              for column = (- index (nth number starts))
-              when (and (< -1 (- number top) rows) (< -1 (- column left) columns))
-                collect (list (- number top) (- column left) (if level (level level) +stray+)
-                              (and (eql index opening) +hint+))))))
+        (let ((tints (loop for (index level) in read
+                           for number = (position-if (lambda (start) (<= start index)) starts :from-end t)
+                           for column = (- index (nth number starts))
+                           when (and (< -1 (- number top) rows) (< -1 (- column left) columns))
+                             collect (list (- number top) (- column left) (if level (level level) +stray+)
+                                           (and (eql index opening) +hint+)))))
+          (when anchor
+            (loop for r below rows
+                  for line = (nth (+ top r) lines)
+                  when line
+                    do (loop for c below columns
+                             for index = (+ (nth (+ top r) starts) left c)
+                             when (and (<= (+ left c) (length line)) (<= (min anchor cursor) index) (< index (max anchor cursor)))
+                               do (let ((tint (find-if (lambda (tint) (and (= (first tint) r) (= (second tint) c))) tints)))
+                                    (cond ((null tint) (push (list r c +ink+ +highlight+) tints))
+                                          ((null (fourth tint)) (setf (fourth tint) +highlight+)))))))
+          tints))))
 
 ;; The window of an editor against its text, after it was drawn.
 (defun editor-wrong (editor)
@@ -7738,19 +8032,27 @@
   (check '((("one" "two" "three") 2 5) t) (list (editor-state editor) (clara.emma::editor-changed editor)))
   ;; Ctrl-K takes the rest of the line, then the end of the line, and what
   ;; it took in a row comes back with Ctrl-Y, as often as is asked. At the
-  ;; end of the text it takes nothing, and what it has stays.
+  ;; end of the text it takes nothing, and what it has stays. What it took
+  ;; is what was cut last, for every window.
   (keys editor clara.input:+up+ clara.input:+home+ clara.input:+right+ 11)
-  (check '("t" "wo") (list (clara.emma::editor-line editor) (clara.emma::editor-cut editor)))
+  (check '("t" "wo") (list (clara.emma::editor-line editor) (clara.windows:clipboard)))
   (keys editor 11 11)
-  (check (list '(("one" "t") 1 1) (format nil "wo~%three")) (list (editor-state editor) (clara.emma::editor-cut editor)))
+  (check (list '(("one" "t") 1 1) (format nil "wo~%three")) (list (editor-state editor) (clara.windows:clipboard)))
   (keys editor 11 clara.input:+end+ 11)
-  (check (list '(("one" "t") 1 1) (format nil "wo~%three")) (list (editor-state editor) (clara.emma::editor-cut editor)))
+  (check (list '(("one" "t") 1 1) (format nil "wo~%three")) (list (editor-state editor) (clara.windows:clipboard)))
   (keys editor 25)
   (check '(("one" "two" "three") 2 5) (editor-state editor))
   (keys editor clara.input:+up+ clara.input:+up+ clara.input:+home+ 25)
   (check '(("wo" "threeone" "two" "three") 1 5) (editor-state editor))
   (keys editor clara.input:+home+ 11 clara.input:+down+ 11)                  ; a key in between, and it begins afresh
-  (check '((("wo" "" "" "three") 2 0) "two") (list (editor-state editor) (clara.emma::editor-cut editor)))
+  (check '((("wo" "" "" "three") 2 0) "two") (list (editor-state editor) (clara.windows:clipboard)))
+  ;; So does something that was copied in between, by whoever: what the key
+  ;; takes next is not added to that.
+  (keys editor 11)
+  (setf (clara.windows:clipboard) "from elsewhere")
+  (keys editor 11 25)
+  (check '((("wo" "" "three") 2 5) "three") (list (editor-state editor) (clara.windows:clipboard)))
+  (keys editor clara.input:+home+ 10)
   ;; A click puts the cursor on the character it is on, or at the end of
   ;; its line; a button that comes up does nothing, and neither does a
   ;; click on the status row.
@@ -7781,11 +8083,131 @@
   (check '(0 0 0) (list (editor-wrong editor) (clara.emma::editor-left editor) (wrong-pixels)))
   (clara.windows:close-window (clara.emma::editor-window editor)))
 
+;; The pointer highlights text: its left button goes down at one place, and
+;; the text from there to where the pointer is moved with the button held
+;; stands on another ground, with the cursor at that end of it. A place is
+;; between the two characters that the pointer is nearest to, and the end
+;; of a line that is highlighted shows in the cell behind the line.
+(let ((editor (clara.emma::open-editor nil :columns 30 :rows 4)))
+  (flet ((mark () (clara.emma::editor-mark editor))
+         (lit (rows cursor &rest cells)          ; the rows, with those cells of them on the highlight's ground
+           (clara.emma::render editor)
+           (wrong-cells (clara.emma::editor-surface editor) (mapcar (lambda (row) (pad row 30)) rows)
+                        (list (append cursor (list +ink+)))
+                        (loop for (row from to) in cells
+                              append (loop for column from from below to collect (list row column +ink+ +highlight+))))))
+    (keys editor "one two" 10 "three" 10 10 "five")
+    (clara.emma::point editor 38 5 1)            ; on the t of two, nearer to its right edge: the cursor is on the t,
+    (check '((0 4) nil (0 . 5)) (list (cdr (editor-state editor)) (mark) (clara.emma::editor-pressed editor)))
+    (clara.emma::drag editor 60 5 0)             ; and a move with no button is no drag
+    (check '((0 4) nil) (list (cdr (editor-state editor)) (mark)))
+    (clara.emma::point editor 34 5 1)            ; nearer to its left edge
+    (check '((0 4) nil (0 . 4)) (list (cdr (editor-state editor)) (mark) (clara.emma::editor-pressed editor)))
+    (clara.emma::drag editor 21 20 1)            ; to the r of three, past its middle
+    (check '((1 3) (0 . 4) 0 0)
+           (list (cdr (editor-state editor)) (mark) (lit '("one two" "three" "" "five") '(1 3) '(0 4 8) '(1 0 3))
+                 (editor-wrong editor)))
+    (clara.emma::point editor 21 20 0)           ; the button comes up, and what is highlighted stays so
+    (check '((1 3) (0 . 4) 0) (list (cdr (editor-state editor)) (mark) (editor-wrong editor)))
+    ;; Ctrl-C copies what is highlighted, which stays as it is, and Ctrl-X
+    ;; cuts it: the text closes over it, and the cursor is where it was.
+    (keys editor 3)
+    (check (list (format nil "two~%thr") '(("one two" "three" "" "five") 1 3) '(0 . 4) nil)
+           (list (clara.windows:clipboard) (editor-state editor) (mark) (clara.emma::editor-message editor)))
+    (setf (clara.windows:clipboard) ""
+          (clara.emma::editor-changed editor) nil)
+    (keys editor 24)
+    (check (list (format nil "two~%thr") '(("one ee" "" "five") 0 4) nil t 0)
+           (list (clara.windows:clipboard) (editor-state editor) (mark) (clara.emma::editor-changed editor)
+                 (editor-wrong editor)))
+    ;; Ctrl-V puts it in at the cursor, as often as it is asked, and Ctrl-Y
+    ;; does the same.
+    (keys editor 22)
+    (check '(("one two" "three" "" "five") 1 3) (editor-state editor))
+    (keys editor 25)
+    (check '((("one two" "thrtwo" "three" "" "five") 2 3) 0) (list (editor-state editor) (editor-wrong editor)))
+    ;; Dragged the other way the cursor is at the start of it. A place past
+    ;; the end of a line is the end of that line, and one under the text is
+    ;; in its last line.
+    (clara.emma::point editor 100 37 1)          ; behind three,
+    (clara.emma::drag editor 30 20 1)            ; to before the t of thrtwo: the end of that line with it
+    (check '((1 4) (2 . 5) 0 0)
+           (list (cdr (editor-state editor)) (mark) (lit '("one two" "thrtwo" "three") '(1 4) '(1 4 7) '(2 0 5))
+                 (editor-wrong editor)))
+    ;; What is typed takes its place: a character, a new line, a tab, and
+    ;; what Ctrl-V puts in.
+    (keys editor "X")
+    (check '((("one two" "thrtX" "" "five") 1 5) nil 0) (list (editor-state editor) (mark) (editor-wrong editor)))
+    (clara.emma::point editor 0 20 1)
+    (clara.emma::drag editor 24 20 1)
+    (keys editor 10)
+    (check '(("one two" "" "tX" "" "five") 2 0) (editor-state editor))
+    (clara.emma::point editor 0 37 1)
+    (clara.emma::drag editor 8 37 1)
+    (keys editor 9)
+    (check '(("one two" "" "        X" "" "five") 2 8) (editor-state editor))
+    (clara.emma::point editor 0 37 1)
+    (clara.emma::drag editor 64 37 1)
+    (setf (clara.windows:clipboard) "t")
+    (keys editor 22)
+    (check '(("one two" "" "tX" "" "five") 2 1) (editor-state editor))
+    ;; Backspace and Delete take what is highlighted out, and nothing else.
+    (clara.emma::point editor 8 5 1)
+    (clara.emma::drag editor 24 5 1)
+    (keys editor 8)
+    (check '((("o two" "" "tX" "" "five") 0 1) nil) (list (editor-state editor) (mark)))
+    (clara.emma::point editor 100 5 1)
+    (clara.emma::drag editor 0 37 1)             ; the ends of two lines, and nothing else
+    (check 0 (lit '("o two" "" "tX") '(2 0) '(0 5 6) '(1 0 1)))
+    (keys editor 127)
+    (check '((("o twotX" "" "five") 0 5) 0) (list (editor-state editor) (editor-wrong editor)))
+    ;; A key that moves the cursor leaves nothing highlighted, and so does a
+    ;; click; a key that comes while the button is held ends what the
+    ;; pointer was doing. With nothing highlighted, Ctrl-C and Ctrl-X leave
+    ;; everything as it is, and the status row says so.
+    (clara.emma::point editor 0 5 1)
+    (clara.emma::drag editor 16 5 1)
+    (keys editor clara.input:+right+)
+    (check '((0 3) nil 0) (list (cdr (editor-state editor)) (mark) (editor-wrong editor)))
+    (clara.emma::drag editor 40 5 1)             ; the button is still down, and a key has come since
+    (check '((0 3) nil) (list (cdr (editor-state editor)) (mark)))
+    (clara.emma::point editor 0 5 1)
+    (clara.emma::drag editor 16 5 1)
+    (clara.emma::point editor 40 5 1)
+    (check '((0 5) nil 0) (list (cdr (editor-state editor)) (mark) (editor-wrong editor)))
+    (setf (clara.windows:clipboard) "kept")
+    (keys editor 3)
+    (check '("kept" "nothing is highlighted: the pointer does that, moved with its button held")
+           (list (clara.windows:clipboard) (clara.emma::editor-message editor)))
+    (keys editor 24)
+    (check '("kept" (("o twotX" "" "five") 0 5)) (list (clara.windows:clipboard) (editor-state editor)))
+    ;; The window follows the cursor when the pointer is dragged out of it,
+    ;; and a button that goes down on the status row begins nothing.
+    (keys editor clara.input:+page-down+ clara.input:+end+ 10 "six" 10 "seven" clara.input:+page-up+ clara.input:+page-up+)
+    (check '((("o twotX" "" "five" "six" "seven") 0 0) 0 0)
+           (list (editor-state editor) (clara.emma::editor-top editor) (editor-wrong editor)))
+    (clara.emma::point editor 8 21 1)
+    (clara.emma::drag editor 16 90 1)            ; under the window: the last line of the text, which the window goes to
+    (check '((4 2) (1 . 0) 0 1)
+           (list (cdr (editor-state editor)) (mark) (editor-wrong editor) (clara.emma::editor-top editor)))
+    (keys editor 3)
+    (check (format nil "~%five~%six~%se") (clara.windows:clipboard))
+    (clara.emma::point editor 8 70 1)
+    (clara.emma::drag editor 16 5 1)
+    (check '((4 2) (1 . 0) nil) (list (cdr (editor-state editor)) (mark) (clara.emma::editor-pressed editor)))
+    ;; In the status row, Ctrl-V adds the first line of what was copied to
+    ;; what is typed there.
+    (setf (clara.windows:clipboard) (format nil "name.txt~%more"))
+    (keys editor 19 "a-" 22)
+    (check '("a-name.txt" 0) (list (clara.emma::editor-answer editor) (editor-wrong editor)))
+    (keys editor 27))
+  (clara.windows:close-window (clara.emma::editor-window editor)))
+
 ;; The same keys to the editor and to one that is written here, a few
 ;; hundred of them as they come: the two have the same text, the cursor at
 ;; the same place and the same lines in the window, and every cell of the
 ;; window shows it.
-(defstruct ref (lines (list "")) (row 0) (column 0) (cut "") cutting (top 0) (left 0))
+(defstruct ref (lines (list "")) (row 0) (column 0) (cut "") cutting (top 0) (left 0) mark pressed)
 
 (defun ref-line (ref)
   (nth (ref-row ref) (ref-lines ref)))
@@ -7810,7 +8232,84 @@
                     (ref-put ref (concatenate 'string (subseq line 0 column) (string character) (subseq line column)))
                     (incf (ref-column ref)))))))
 
-(defun ref-key (ref code rows)
+;; What is highlighted there, the slow way: the text is one string, with a
+;; new line between two lines, and a place is how many of its characters
+;; come before it.
+(defun ref-text (ref)
+  (format nil "~{~A~^~%~}" (ref-lines ref)))
+
+(defun ref-index (ref place)
+  (+ (loop for line in (subseq (ref-lines ref) 0 (car place)) sum (1+ (length line))) (cdr place)))
+
+(defun ref-marked (ref)                  ; where it begins and ends, or NIL when nothing is
+  (let ((mark (ref-mark ref)))
+    (and mark
+         (let ((from (ref-index ref mark)) (to (ref-index ref (cons (ref-row ref) (ref-column ref)))))
+           (and (/= from to) (cons (min from to) (max from to)))))))
+
+(defun ref-take (ref)                    ; it goes, and the cursor is where it was: the text that went, or NIL
+  (let ((marked (ref-marked ref)) (text (ref-text ref)))
+    (setf (ref-mark ref) nil)
+    (when marked
+      (let ((rest (concatenate 'string (subseq text 0 (car marked)) (subseq text (cdr marked)))))
+        (setf (ref-lines ref) (loop with start = 0
+                                    for end = (position #\Newline rest :start start)
+                                    collect (subseq rest start end)
+                                    while end
+                                    do (setq start (1+ end)))
+              (ref-row ref) (count #\Newline rest :end (car marked))
+              (ref-column ref) (- (car marked) (let ((before (position #\Newline rest :end (car marked) :from-end t)))
+                                                 (if before (1+ before) 0))))
+        (subseq text (car marked) (cdr marked))))))
+
+(defun ref-go (ref row column)           ; as near as there is a line, and a column
+  (setf (ref-row ref) (max 0 (min row (1- (length (ref-lines ref)))))
+        (ref-column ref) (max 0 (min column (length (ref-line ref))))))
+
+;; The pointer's button goes down at a place of a window of ROWS rows, and
+;; the pointer is moved to one with the button held.
+(defun ref-point (ref x y rows)
+  (setf (ref-pressed ref) nil)
+  (when (< (floor y 16) rows)
+    (setf (ref-cutting ref) nil
+          (ref-mark ref) nil)
+    (ref-go ref (+ (ref-top ref) (floor y 16)) (+ (ref-left ref) (floor (+ x 4) 8)))
+    (setf (ref-pressed ref) (cons (ref-row ref) (ref-column ref)))
+    (ref-go ref (+ (ref-top ref) (floor y 16)) (+ (ref-left ref) (floor x 8)))))
+
+(defun ref-drag (ref x y)
+  (when (ref-pressed ref)
+    (setf (ref-cutting ref) nil
+          (ref-mark ref) (ref-pressed ref))
+    (ref-go ref (+ (ref-top ref) (floor y 16)) (+ (ref-left ref) (floor (+ x 4) 8)))))
+
+;; A key: the ones that have to do with what is highlighted, and then the
+;; others, as they were before anything could be.
+(defun ref-key (ref code rows &aux (code (if (= code 22) 25 code))) ; Ctrl-V is Ctrl-Y
+  (setf (ref-pressed ref) nil)
+  (cond ((= code 3)
+         (setf (ref-cutting ref) nil)
+         (let ((marked (ref-marked ref)))
+           (when marked
+             (setf (ref-cut ref) (subseq (ref-text ref) (car marked) (cdr marked))))))
+        ((= code 24)
+         (setf (ref-cutting ref) nil)
+         (when (ref-marked ref)
+           (setf (ref-cut ref) (ref-take ref))))
+        ((and (or (= code 8) (= code 127)) (ref-marked ref))
+         (setf (ref-cutting ref) nil)
+         (ref-take ref))
+        (t
+         (when (or (= code 10) (= code 9) (<= 32 code 126) (= code 8) (= code 127)
+                   (and (= code 25) (plusp (length (ref-cut ref)))))
+           (ref-take ref))
+         (when (or (= code 11)
+                   (member code (list clara.input:+up+ clara.input:+down+ clara.input:+left+ clara.input:+right+
+                                      clara.input:+home+ clara.input:+end+ clara.input:+page-up+ clara.input:+page-down+)))
+           (setf (ref-mark ref) nil))
+         (ref-plain-key ref code rows))))
+
+(defun ref-plain-key (ref code rows)
   (let* ((cutting (ref-cutting ref)) (line (ref-line ref)) (row (ref-row ref)) (column (ref-column ref))
          (last (1- (length (ref-lines ref)))))
     (setf (ref-cutting ref) nil)
@@ -7843,8 +8342,8 @@
                    ((< row last) (incf (ref-row ref)) (setf (ref-column ref) 0))))
             ((= code clara.input:+home+) (setf (ref-column ref) 0))
             ((= code clara.input:+end+) (setf (ref-column ref) (length line)))
-            ((= code clara.input:+page-up+) (dotimes (i (1- rows)) (ref-key ref clara.input:+up+ rows)))
-            ((= code clara.input:+page-down+) (dotimes (i (1- rows)) (ref-key ref clara.input:+down+ rows)))
+            ((= code clara.input:+page-up+) (dotimes (i (1- rows)) (ref-plain-key ref clara.input:+up+ rows)))
+            ((= code clara.input:+page-down+) (dotimes (i (1- rows)) (ref-plain-key ref clara.input:+down+ rows)))
             ((= code 11)
              (let ((taken (cond ((< column (length line)) (ref-put ref (subseq line 0 column)) (subseq line column))
                                 ((< row last) (ref-join ref) (string #\Newline)))))
@@ -7861,12 +8360,18 @@
   (cond ((< (ref-column ref) (ref-left ref)) (setf (ref-left ref) (ref-column ref)))
         ((>= (ref-column ref) (+ (ref-left ref) columns)) (setf (ref-left ref) (- (ref-column ref) columns -1)))))
 
+(setf (clara.windows:clipboard) "")
 (let ((editor (clara.emma::open-editor nil :columns 12 :rows 5 :x 20 :y 60))
       (ref (make-ref)) (state (sb-ext:seed-random-state 13)) (apart 0) (wrong 0) (pixels 0) (most 0)
-      (colored 0) (hinted 0) (deepest 0))
+      (colored 0) (hinted 0) (deepest 0) (lit 0) (taken 0))
   (dotimes (step 700)
-    (let* ((n (random 100 state))
-           (code (cond ((< n 30) (char-code (char "ab (((()))" (random 10 state))))
+    (let* ((kind (random 100 state))
+           (n (random 100 state))
+           (code (cond ((< kind 12) :pointer)  ; the button goes down somewhere in the window, and the pointer is dragged
+                       ((< kind 14) 3)
+                       ((< kind 17) 24)
+                       ((< kind 21) 22)
+                       ((< n 30) (char-code (char "ab (((()))" (random 10 state))))
                        ((< n 34) (char-code (char "\";|\\" (random 4 state))))
                        ((< n 45) 10)
                        ((< n 53) 8)
@@ -7882,8 +8387,22 @@
                        ((< n 94) clara.input:+page-down+)
                        ((< n 97) 11)
                        (t 25))))
-      (clara.emma::key editor code)
-      (ref-key ref code 5)
+      (cond ((eq code :pointer)
+             ;; On the text or on the status row, and from there to a place that may be outside the window.
+             (let ((x (random 96 state)) (y (random 96 state))
+                   (to-x (- (random 112 state) 8)) (to-y (- (random 112 state) 16)))
+               (clara.emma::point editor x y 1)
+               (ref-point ref x y 5)
+               (clara.emma::drag editor to-x to-y 1)
+               (ref-drag ref to-x to-y)))
+            (t
+             (let ((marked (ref-marked ref)) (lines (ref-lines ref)))
+               (clara.emma::key editor code)
+               (ref-key ref code 5)
+               (when (and marked (not (equal lines (ref-lines ref))))
+                 (incf taken)))))
+      (when (ref-marked ref)
+        (incf lit))
       (unless (zerop (editor-wrong editor))     ; which draws it
         (incf wrong))
       ;; What the walk came by: cells in other colours, hints, and how deep.
@@ -7894,10 +8413,11 @@
         (dolist (tint tints)
           (setq deepest (max deepest (or (position (third tint) *levels*) 0)))))
       (ref-view ref 5 12)
-      (unless (equal (list (ref-lines ref) (ref-row ref) (ref-column ref) (ref-cut ref) (ref-top ref) (ref-left ref))
+      (unless (equal (list (ref-lines ref) (ref-row ref) (ref-column ref) (ref-cut ref) (ref-top ref) (ref-left ref)
+                           (ref-mark ref))
                      (append (editor-state editor)
-                             (list (clara.emma::editor-cut editor) (clara.emma::editor-top editor)
-                                   (clara.emma::editor-left editor))))
+                             (list (clara.windows:clipboard) (clara.emma::editor-top editor)
+                                   (clara.emma::editor-left editor) (clara.emma::editor-mark editor))))
         (incf apart))
       (setq most (max most (length (ref-lines ref))))
       (when (zerop (mod step 50))
@@ -7905,6 +8425,7 @@
           (incf pixels)))))
   (check '(0 0 0 t) (list apart wrong pixels (> most 12)))
   (check '(t t t) (list (> colored 1500) (> hinted 20) (>= deepest 3)))
+  (check '(t t) (list (> lit 50) (> taken 20)))  ; and with something highlighted, often, which keys then took out
   (clara.windows:close-window (clara.emma::editor-window editor)))
 
 ;; The parentheses of a text. A pair has the colour of its level, the
@@ -7989,9 +8510,13 @@
     (check '(0 t) (list (editor-wrong editor) (eq known (clara.emma::editor-states editor))))
     (keys editor clara.input:+up+ clara.input:+down+)
     (check '(0 t) (list (editor-wrong editor) (eq (cdr known) (cdr (clara.emma::editor-states editor))))))
-  ;; Another text in the window: nothing of the one before is known.
+  ;; Another text in the window: nothing of the one before is known, and
+  ;; nothing is highlighted that was.
+  (clara.emma::point editor 0 5 1)
+  (clara.emma::drag editor 40 21 1)
+  (check '(t 0) (list (and (clara.emma::marked editor) t) (editor-wrong editor)))
   (keys editor 15 15 (scratch "poem.txt") 10)
-  (check '(0 nil) (list (editor-wrong editor) (clara.emma::editor-states editor)))
+  (check '(0 nil nil) (list (editor-wrong editor) (clara.emma::editor-states editor) (clara.emma::editor-mark editor)))
   (clara.windows:close-window (clara.emma::editor-window editor)))
 ;; What is known at the end of a line says where the parentheses are that
 ;; are still open there: the line and the column of each, the innermost
@@ -8164,8 +8689,11 @@
     (keys editor "(setq clara.tests::*evaluated* (list 1" 10 "2))" 10 10 "  (push 3 clara.tests::*evaluated*) ; and a comment" 10 5)
     (check '("2 forms evaluated" (3 1 2) 0)
            (list (clara.emma::editor-message editor) *evaluated* (editor-wrong editor)))
-    (keys editor "(car 5)" 5)
-    (check '((t 4 0) (3 1 2)) (list (said "line 5: ") *evaluated*))
+    (keys editor "(car 5)")
+    (clara.emma::point editor 0 5 1)             ; with something highlighted: the cursor goes to the line all the same,
+    (clara.emma::drag editor 40 5 1)             ; and nothing is highlighted from there to where it was
+    (keys editor 5)
+    (check '((t 4 0) (3 1 2) nil) (list (said "line 5: ") *evaluated* (clara.emma::editor-mark editor)))
     (keys editor 11 "(list 1" 5)                                             ; a form that the text ends in the middle of
     (check '(t 4 0) (said "line 5: "))
     ;; The forms are read in COMMON-LISP-USER, whatever package the thread
@@ -8344,6 +8872,14 @@
     (check '(("../" "many/" "sub/" "Zed/") 3) (browser-state browser))
     (browser-keys browser 18)
     (check '((("../" "many/" "sub/" "Zed/" "new.txt") 3) 0) (list (browser-state browser) (browser-wrong browser)))
+    ;; Ctrl-C copies the name that is picked, with its directory, for
+    ;; another window, and says so; the way up is no name to copy.
+    (let ((whole (concatenate 'string (clara.jaid::browser-directory browser) "Zed/")))
+      (browser-keys browser 3)
+      (check (list whole (concatenate 'string "copied " whole) 0)
+             (list (clara.windows:clipboard) (clara.jaid::browser-message browser) (browser-wrong browser)))
+      (browser-keys browser clara.input:+home+ 3)
+      (check (list whole nil) (list (clara.windows:clipboard) (clara.jaid::browser-message browser))))
     ;; A click picks the name it is on, and on the name that is picked
     ;; opens it; below the names, on the status and with a button that comes
     ;; up it does nothing.
@@ -17800,6 +18336,9 @@ text</textarea> <button>Press <b>me</b></button>" :width 700)))
       (declare (ignore width height))
       (clara.ares::point view x y 1))
     (check '(t nil) (list (clara.ares::view-asking view) *ares-asked*))
+    ;; Ctrl-V puts in the first line of what was copied last, in whichever window.
+    (setf (clara.windows:clipboard) (format nil "pages.test/~%more"))
+    (check '((0 nil 0) "Address: pages.test/") (list (ares-keys view 22) (clara.ares::above-words view)))
     ;; Ctrl-L once more puts the address of the page there, to be changed.
     (check '((0 nil 0) "Address: https://pages.test/dir/other.html") (list (ares-keys view 12) (clara.ares::above-words view)))
     (check '("https://pages.test/dir/long.html" "Ares - Long" "20 links")
