@@ -1682,6 +1682,122 @@ Infrastructure, done:
   #147, the screen of the first prompt; and a line each on #134, the
   wheel, which has something to move here now, and on #99, since a window
   that changes its width has rows of the old one.
+- **Parentheses in colours** (2026-11-24, version 0.0.57). What was typed
+  at a REPL's prompt and what Emma showed was in one colour, and which
+  parenthesis closed which was for the eye to count (issue #47:
+  "parentheses should be matched using a variety of colors, to assist
+  with authoring common lisp code. Also a phantom hint block cursor
+  should appear at the starting matching parentheses for further
+  assistance"). The parentheses that belong together are in one colour
+  now, by their level, which is how many pairs a pair lies within: six
+  colours from the outermost pair on, and from the first again for a pair
+  that lies deeper, so that no two neighbours in a row of closing ones
+  are alike. One that closes nothing is red. And the hint: while the
+  character before the cursor is a closing parenthesis, at a prompt the
+  one that was typed last, the one that opens it has a block under it in
+  a paler shade, in whichever row of the window that is, also when it was
+  typed lines ago. lisp/syntax.lisp is a new file of the world, the
+  package CLARA.SYNTAX, and says which parentheses count: it goes through
+  a text the way the reader does (kernel/lisp/read.c) and makes nothing
+  of it, so one in a string, in a comment of either kind, between two
+  bars, after a backslash or in `#\(` is none; and what it knows at a
+  place of a text is a value that it goes on from, so a text is gone
+  through in pieces and only as far back as it has changed. A terminal
+  (lisp/terminal.lisp) echoes a line that is read for itself, where
+  `clara.console:read-edited-line` wrote it to the window's stream. The
+  listener says what the line goes on from while it reads one
+  (`clara.listener:*begun*`), since only it knows what became of the
+  lines before, and the terminal remembers where it drew each character
+  of the lines that it read, the row by its number. Its rows keep their
+  colours with what they say, so Page Up shows them as they were typed.
+  And Backspace at the start of a row goes back to the last cell of the
+  row above there, which it did not: the row that was finished is the
+  one that is being written again. Emma (lisp/emma.lisp) keeps what is
+  known at the end of each line above the cursor's from one drawing to
+  the next, tells the lines that are still the same by the conses that
+  the list of them shares with the one before, and goes through the
+  lines in sight at every drawing. The colours are three variables,
+  `clara.syntax:*colors*`, `*stray*` and `*hint*`, each colour its red,
+  green and blue, and NIL does without. What it costs, under hvf: a
+  drawing of Emma's window, 24 rows of lisp/net.lisp, takes 0.20 ms
+  where 0.0.56 takes 0.08, and a key with its drawing 0.23 where it took
+  0.12; a character typed at a prompt 0.016 ms where it took 0.009; and
+  20000 rows of thirty characters written to a window take 5.1 s as
+  before, with parentheses in them or without, since what is written is
+  not gone through. The screen of the first prompt, before there are
+  windows, shows none of this, and neither does the serial port. The
+  manual says it under "Parentheses" in the chapter of the windows, with
+  two transcripts, the colours and what `clara.syntax:scan` says of a
+  text, and in "Keys", "Text in a window" and "Emma, the editor";
+  DESIGN.md has the decisions under Parentheses. The host tests hold
+  what lisp/syntax.lisp says against what SBCL's reader makes of the
+  same text, through a table of their own that notes where each list
+  begins and ends: 21 texts that were written to be hard, 4000 made of
+  the characters that matter as they come, and the text of the editor
+  after each of 700 keys, whose window is held against it cell by cell.
+  In a terminal of ten columns and three rows they type lines and forms
+  of several lines and look at every cell: the colours, the hint coming
+  and going, a row that has moved up or out, Page Up and Page Down,
+  Backspace across a row in a window that is full and in one that is
+  not, what is written over what was typed, CLEAR under a hint, and the
+  rings as they grow and come round. 18219 checks, in 85 s on the Mac
+  where they took 83, and in 89 s under the SBCL of Ubuntu 26.04 in the
+  container. The first session of `make test` asks a kernel about a text
+  what the tests ask SBCL, types a form into the REPL's window and two
+  lines into Emma's by QEMU's keyboard, with Enter and without, and holds
+  the rows against the same letters drawn beside them in the colours of
+  their levels, on all three machines of that session. `make test` passed
+  on the Mac, the host tests and all nineteen boots; the boots were not
+  run in the container. Mistakes that were planted, one at a time, in
+  copies of the tree, 149: in what counts, a string or a comment or bars
+  that are not known, do not end or end too soon, a backslash that is
+  nothing, `#\(` that counts, a `#` that takes too much or too little,
+  the level not going up or not coming down, the wrong one of two that
+  open, a state that is changed or made anew, and the colours past their
+  last, one off, or too few; in the terminal, a row's colours not kept,
+  not moved, not let go or kept in the old order when the ring grows,
+  what is written over keeping its colour, the hint not taken away,
+  drawn while nobody reads, while the window looks back, in a row above
+  the window or over what the cell says by now, the lines of a form
+  forgotten, kept without end or the other way round, a place one line
+  or one character off, the row above taken back without what it said,
+  still kept, still counted or not drawn, and the listener saying
+  nothing or saying it for good; in Emma, what is known kept too long or
+  not at all, a line above that changed between two drawings, lines that
+  do not end, the hint for the wrong character, in the wrong row or
+  column, out of the window, and a row whose colours alone changed left
+  as it was. The tests noticed all of them, and passed with a comment
+  changed. Twelve of them got through at one time or another, eleven as
+  the tests were first written and one after a test was changed. Eleven
+  are noticed by tests that were written for them: a ring that grows
+  while its oldest row is not at its start, a hint with the window
+  looking back at a row that has a parenthesis in the same place, one
+  for a line that fills its row, one whose cell is written over, one
+  while nobody reads, CLEAR under a hint, a form of three lines, the
+  cells of one line and no more, a line above Emma's window that changed
+  between two drawings, and the places of what is open after lines that
+  were gone through one at a time. The twelfth was a line of the code
+  that nothing needed, which is gone, like a rule for `,@` that no text
+  could tell from its absence. By hand,
+  at a kernel under QEMU: the screens of a REPL with a nested form of
+  six lines and of Emma on lisp/listener.lisp, looked at. A copy of the
+  disk of Julio's machine as it stood that evening (0.0.56-f2288f36),
+  with a copy of `~/clara-work.dmg`: it took this system at once, made
+  its world again of his text, 17 forms, the package that he had
+  installed, his list in his order and two variables with their values,
+  and came up with one REPL window, where a form of two lines typed by
+  QEMU's keyboard had its colours and its hint in the row above; Emma
+  showed his `/galculator.lisp`, 322 lines, in them. The world that it
+  saved is 7.1 MiB, and 1009 MiB of the disk are free. On Julio's own
+  keyboard nothing was typed. What it left is in the issues: #150, the
+  screen of the first prompt has no colours; #151, nothing says where the
+  opening parenthesis is when it is out of the window; #152, nothing
+  points from an opening one to the one that closes it; #153, Backspace
+  at the start of a row at the first prompt; #154, which colours, and how
+  the hint looks; and a line each on #77, since the hint goes by the last
+  character for as long as the cursor is at the end of the line, and on
+  #106, which can stand on what lisp/syntax.lisp knows of strings and
+  comments.
 
 Infrastructure, for sessions with budget left over:
 

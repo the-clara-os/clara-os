@@ -420,6 +420,11 @@ PICTURE
 KEPT
 > (clara.draw:text-width "saved" *title*)
 60
+> (let ((seen nil))                                                     ; which parentheses of a text count, and how deep
+    (list (clara.syntax::state-opens (clara.syntax:scan "(a \"(\" #\\( (b)) ) #| ( |# (c ; (" nil 'here
+                                       (lambda (index level open) (setq seen (cons (list index level (cdr open)) seen)))))
+          (reverse seen)))
+(((HERE . 26)) ((0 0 NIL) (11 1 NIL) (13 1 11) (14 0 0) (16 NIL NIL) (26 0 NIL)))
 > (defmacro until (test)
     `(dotimes (i 400 'never) (when ,test (return 'ok)) (clara:wait-event (clara.input:pointer-changed) 50)))
 UNTIL
@@ -493,10 +498,14 @@ OK
 > (list 'closed (pointer-at 696 76 0) (where))
 ^M mouse_button 0
 (CLOSED OK (100 104))
-> (defun shows (row says)                                               ; a row of the window on top begins with that
-    (let* ((face (clara.windows:window-surface (clara.windows:focused-window)))
-           (width (* 8 (length says))) (scratch (clara.draw:allocate-surface width 16)) (same t))
-      (clara.draw:draw-text scratch 0 0 says (clara.draw:color 232 227 244) (clara.draw:color 30 27 46))
+> (defun shows (row says &rest tints)                                   ; a row of the window on top begins with that,
+    (let* ((face (clara.windows:window-surface (clara.windows:focused-window)))  ; a parenthesis of TINTS in the colour
+           (width (* 8 (length says))) (scratch (clara.draw:allocate-surface width 16)) (same t) ; of its level: (column
+           (paper (clara.draw:color 30 27 46)))                                  ; level), and a third for the hint
+      (clara.draw:draw-text scratch 0 0 says (clara.draw:color 232 227 244) paper)
+      (dolist (tint tints)
+        (clara.draw:draw-text scratch (* 8 (car tint)) 0 (string (char says (car tint))) (clara.syntax:color (cadr tint))
+                              (if (cddr tint) (clara.syntax:hint) paper)))
       (dotimes (y 16)
         (dotimes (x width)
           (unless (= (clara.draw:pixel scratch x y) (clara.draw:pixel face x (+ (* 16 row) y)))
@@ -521,8 +530,16 @@ P
 > (until (shows 0 "15 "))
 ^M sendkey pgup
 OK
-> (list (clara:wait-event *seen* 60000) (until (bar-p)) (shows 21 "> (k)") (shows 22 "K ")) ; any other key: the last rows
+> (list (clara:wait-event *seen* 60000) (until (bar-p)) (shows 21 "> (k)" '(2 0) '(4 0)) (shows 22 "K ")) ; any other key
 ^T (k)
+(T OK T T)
+> (until (shows 23 "> (k)" '(2 0 t) '(4 0)))                             ; typed and not entered: the hint, under the first
+^M sendkey shift-9
+^M sendkey k
+^M sendkey shift-0
+OK
+> (list (clara:wait-event *seen* 60000) (until (bar-p)) (shows 21 "> (k)" '(2 0) '(4 0)) (shows 22 "K ")) ; and entered
+^M sendkey ret
 (T OK T T)
 > (defvar *window* (clara.windows:open-window "A picture" 200 120 :x 500 :y 400))
 *WINDOW*
@@ -577,6 +594,12 @@ OK
 > (list 'ended (cursor-at 0 2))
 ^T () 'there)
 (ENDED OK)
+> (list (shows 0 "(defun hi" '(0 0)) (shows 1 "() 'there)" '(0 1) '(1 1) '(9 0))) ; each pair in the colour of its level
+(T T)
+> (until (shows 0 "(defun hi" '(0 0 t)))                                 ; the cursor behind the last: the hint, under the first
+^M sendkey up
+^M sendkey end
+OK
 > (until (fboundp 'hi))
 ^M sendkey ctrl-e
 OK
