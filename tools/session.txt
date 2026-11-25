@@ -405,7 +405,7 @@ PICTURE
 > (list (clara.type:families)
         (let ((font (clara.type:font "Sans" 24)))
           (list (clara.type:font-height font) (clara.draw:text-width "Hello, world" font))))
-(("Sans" "Mono") (29 127))
+(("Sans" "Mono" "Serif") (29 127))
 > (let ((s (clara.draw:allocate-surface 60 40)) (white (clara.draw:color 255 255 255)) (full 0) (part 0))
     (clara.draw:draw-text s 4 2 "Hi" white nil (clara.type:font "Sans" 30))
     (dotimes (y 40)                       ; the letters: pixels that are white, and at their edges pixels that are less
@@ -733,6 +733,37 @@ OK
 > (list (clara.windows:remove-application "Hello") (find-package "HELLO") (clara.windows:applications)
         (length (clara.windows:windows)))
 ("Hello" NIL ("REPL" "Emma" "Jaid" "Ares" "Parker") 1)
+> (mapcar (lambda (said)                                                 ; text in cells, in a font: a terminal whose cells
+            (let* ((font (apply #'clara.type:font said))                ; are as large as the font's. How many pixels of
+                   (terminal (clara.terminal:open-terminal "Letters" :columns 12 :rows 2 :font font :x 300 :y 300))
+                   (face (clara.windows:window-surface (clara.terminal:terminal-window terminal))) ; its window are the
+                   (ink (clara.draw:color 232 227 244)) (paper (clara.draw:color 30 27 46)) (full 0) (part 0)) ; ink's,
+              (write-string "(g_j) W%K" (clara.terminal:terminal-stream terminal))             ; and how many lie between
+              (dotimes (y (clara.draw:surface-height face))                                    ; that and the paper
+                (dotimes (x (clara.draw:surface-width face))
+                  (let ((p (clara.draw:pixel face x y)))
+                    (cond ((= p ink) (setq full (+ full 1)))
+                          ((/= p paper) (setq part (+ part 1)))))))
+              (list (clara.draw:cell-width font) (clara.draw:cell-height font) (clara.draw:surface-width face)
+                    (clara.draw:surface-height face) full part
+                    (clara.windows:close-window (clara.terminal:terminal-window terminal)))))
+          '(("Mono" 15 :bold t) ("Serif" 18 :bold t :italic t :underline t)))
+((9 19 108 38 113 414 NIL) (18 23 216 46 424 509 NIL))
+> (let ((font (clara.type:font "Mono" 15 :bold t)) (sizes nil))          ; the applications in a font: the REPL and Jaid
+    (setq clara.windows:*text-font* (list "Mono" 15 :bold t))            ; by what the variable says, and Emma by what it
+    (dolist (launch (list (lambda () (clara.windows:launch "REPL"))      ; is told. Each is closed by its own key
+                          (lambda () (clara.windows:launch "Emma" nil :columns 20 :rows 2 :font font))
+                          (lambda () (clara.windows:launch "Jaid" "/clara/" :columns 30 :rows 4))))
+      (funcall launch)
+      (let ((face (clara.windows:window-surface (clara.windows:focused-window))))
+        (setq sizes (cons (list (clara.draw:surface-width face) (clara.draw:surface-height face)) sizes))))
+    (setq clara.windows:*text-font* nil)
+    (list (reverse sizes)
+          (mapcar (lambda (key left) (clara.windows:key-typed key) (until (= (length (clara.windows:windows)) left)))
+                  '(17 17 4) '(3 2 1))
+          (mapcar #'clara.windows:window-title (clara.windows:windows))
+          (clara.windows:unload-application "Emma") (find-package "CLARA.EMMA")))
+(((720 456) (180 57) (270 95)) (OK OK OK) ("REPL") "Emma" NIL)
 > (defpackage "PLAY" (:use "COMMON-LISP") (:export "BALL"))
 #<PACKAGE "PLAY">
 > (in-package "PLAY")

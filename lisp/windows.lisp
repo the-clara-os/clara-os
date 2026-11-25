@@ -16,7 +16,8 @@
 ;;;; CLIPBOARD, which the programs of the windows write and read.
 ;;;; What the bar, the list and the titles say is written in a font of
 ;;;; outlines (lisp/type.lisp), and in the console's letters on a machine
-;;;; that has no such font.
+;;;; that has no such font. The applications whose windows are cells of text
+;;;; ask here which font that text is in (TEXT-FONT).
 ;;;;
 ;;;; Nothing here draws on the screen. What the screen is to show is put
 ;;;; together on a surface of the same size, out of sight: the desk, the
@@ -50,7 +51,7 @@
            "MOVE-WINDOW" "RAISE-WINDOW" "RENAME-WINDOW" "NEXT-EVENT" "WINDOWS" "FOCUSED-WINDOW"
            "DEFINE-APPLICATION" "INSTALL-APPLICATION" "UNLOAD-APPLICATION" "REMOVE-APPLICATION"
            "APPLICATIONS" "LAUNCH" "*APPLICATION-DIRECTORY*" "DEFINE-COMMAND" "REMOVE-COMMAND" "COMMANDS"
-           "MOVE-UP" "MOVE-DOWN" "UNFINISHED" "*FONT*" "CLIPBOARD" "HIGHLIGHT" "*HIGHLIGHT*"
+           "MOVE-UP" "MOVE-DOWN" "UNFINISHED" "*FONT*" "*TEXT-FONT*" "TEXT-FONT" "CLIPBOARD" "HIGHLIGHT" "*HIGHLIGHT*"
            "KEY-TYPED" "POINTER-MOVED"))
 (in-package "CLARA.WINDOWS")
 
@@ -107,9 +108,12 @@
 (defvar *pointer-y* 0)
 (defvar *buttons* 0)        ; and its buttons
 (defvar *name* "")          ; the system and its version, for the right-hand end of the bar
-(defvar *font* (list "Sans" 13)) ; what the bar, the list and the titles are written in: the name of a font of outlines
-                            ;   and its size, as CLARA.TYPE:FONT takes them, or NIL for the console's letters. START reads it.
+(defvar *font* (list "Sans" 13)) ; what the bar, the list and the titles are written in: a font of outlines, said as
+                            ;   CLARA.TYPE:FONT is told, its name, its size and what else it takes, in a list; or such a
+                            ;   font itself; or NIL for the console's letters. START reads it.
 (defvar *letters* nil)      ; that font, as START found it, or NIL: the console's letters
+(defvar *text-font* nil)    ; what the windows that are cells of text are written in, a terminal's, an editor's, a list's:
+                            ;   said like *FONT*. A window reads it as it opens: TEXT-FONT
 (defvar *clipboard* "")     ; the text that was cut or copied last, in whichever window: CLIPBOARD
 (defvar *highlight* (list 48 64 112)) ; what highlighted text stands on, its red, green and blue: HIGHLIGHT
 
@@ -174,15 +178,36 @@
 
 ;;; Putting the screen together
 
+;; The font that SAID says: NIL is none, a font is itself, and a list is
+;; what CLARA.TYPE:FONT is told, a name, a size, and the rest of what it
+;; takes.
+(defun font-said (said)
+  (cond ((null said) nil)
+        ((clara.type:font-p said) said)
+        ((and (consp said) (consp (cdr said)))
+         (apply #'clara.type:font said))
+        (t
+         (error "a font is said as CLARA.TYPE:FONT is told, its name and its size in a list, and ~S is not that" said))))
+
 ;; The font that *FONT* asks for, or NIL, which is the console's letters:
 ;; when none is asked for, and when the one that is cannot be had, which is
 ;; said once.
 (defun letters ()
-  (and (consp *font*)
-       (handler-case (clara.type:font (car *font*) (cadr *font*))
-         (error (condition)
-           (format t "windows: ~A, so the letters are the console's~%" condition)
-           nil))))
+  (handler-case (font-said *font*)
+    (error (condition)
+      (format t "windows: ~A, so the letters are the console's~%" condition)
+      nil)))
+
+;; The font that a window which is cells of text is written in: the one
+;; that *TEXT-FONT* asks for, or NIL, which is the console's letters, when
+;; none is asked for, and when the one that is cannot be had, which is said.
+;; A terminal asks as it opens, and so do the applications that show a text
+;; or a list.
+(defun text-font ()
+  (handler-case (font-said *text-font*)
+    (error (condition)
+      (format t "windows: ~A, so the text of the window is in the console's letters~%" condition)
+      nil)))
 
 ;; How wide STRING is in the letters of the bar, the list and the titles,
 ;; and how high a line of them.

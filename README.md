@@ -53,9 +53,12 @@ the screen what has changed of a picture that was made out of sight,
 `(clara.draw:fill-rectangle (clara.draw:screen) 40 40 200 120 (clara.draw:color 255 184 108))`
 for a start. Text is drawn in the console's font or in a font of outlines,
 at any size (lisp/type.lisp): `(clara.type:font "Sans" 24)` is one, of
-the Go fonts that come with the system, read from their TrueType files
-and made into pictures in which a pixel at the edge of a letter takes a
-part of the colour. And there is a window manager (lisp/windows.lisp):
+the three families that come with the system, Sans, Mono and Serif, each
+with a bold and an italic, read from their TrueType files and made into
+pictures in which a pixel at the edge of a letter takes a part of the
+colour. The windows of text, the REPL's, Emma's, Jaid's and Parker's, are
+in the console's letters or in any such font
+(`clara.windows:*text-font*`). And there is a window manager (lisp/windows.lisp):
 `(clara.windows:start)` takes the screen from the console and puts windows
 on it, each a surface that its program draws on, with the focus, the keys
 and the pointer going to the one that is picked, a launcher along the top,
@@ -223,7 +226,7 @@ Layout:
                      all of which the kernel loads as it starts, and the three applications, emma.lisp, jaid.lisp and ares.lisp, which the launcher loads when they are picked;
                      the build copies them to the system's directory on the ESP, \clara\<its name>, read at boot
     fonts/           the console font, Spleen 8x16, which tools/bdf2c.py turns into kernel/font.c, and the
-                     fonts of outlines, the Go fonts, which go onto the boot volume as they are
+                     fonts of outlines, the Go fonts and Charter, which go onto the boot volume as they are
     packages/        the packages that https://claraos.org/packages/ has, a directory each: the package's
                      files, and a file "package" that says what it is (the manual, "A package of your own")
     site/            the website: the front page and the user manual (manual.html), filled in from the
@@ -289,4 +292,6 @@ GPL-3.0, see [LICENSE](LICENSE). The console font is Spleen by Frederic
 Cambus, under the BSD 2-Clause license in
 [fonts/LICENSE.spleen](fonts/LICENSE.spleen). The fonts of outlines are
 the Go fonts by Bigelow & Holmes, under the BSD 3-Clause license in
-[fonts/LICENSE.go](fonts/LICENSE.go).
+[fonts/LICENSE.go](fonts/LICENSE.go), and Charter, which Matthew Carter
+drew for Bitstream and Bitstream gave to the X Consortium, under the
+notice in [fonts/LICENSE.charter](fonts/LICENSE.charter).

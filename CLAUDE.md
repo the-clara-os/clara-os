@@ -1690,6 +1690,55 @@ Rules:
   them once and tools/resumed.txt again, in the world that came back, so
   a line that is typed into such a window before either changes both
   lists.
+- Text in cells, and the letters of a window (Julio's issue #51; DESIGN.md
+  has what was decided). `clara.draw:draw-cells`, `cell-width` and
+  `cell-height` are text a character to the cell: in the console's letters
+  without a font, and through lisp/type.lisp with one (`draw-cells` and
+  `cell-width` there, which `provide-fonts` hands over with the other three
+  functions). A cell of a font is as wide as the widest of the characters
+  from the space to the tilde moves on, which is kept beside the font
+  (`kept-wide`) and goes when the fonts let go of their glyphs. A character
+  is cut at its cell: `draw-cells` draws a glyph whose picture lies within
+  its cell as it is, and any other under `with-clip`, and the two ways have
+  to come to the same pixels, since a window draws now a row and now one
+  cell of it. The terminal, Emma, Jaid and Parker each keep `font`, `wide`
+  and `high` in their structure from when the window opens, and draw every
+  string with `clara.draw:draw-cells` and that font: none of the four names
+  `clara.font:+width+` or `clara.draw:draw-text` any more, and a new piece
+  of drawing there asks the structure how large a cell is. A cursor that is
+  taken away in a terminal draws its cell again from what the row says
+  (`hide-cursor`), because the bar lies over the foot of a letter that has
+  one. Which font is `clara.windows:*text-font*`, which
+  `clara.windows:text-font` reads as a window opens, in the thread that
+  opens it, and `:font` for one window, where NIL is the console's letters;
+  `font-said` is what makes a font of that variable and of `*font*`. As the
+  system comes it is NIL, so every session and the picture on the website
+  are in the console's letters.
+- In the tests `*cell-font*` is the font that the windows of a test are
+  written in, and whatever holds cells against what they should show goes by
+  it (`cell-size`, `cell-pixel`, `cell-shows-p`, `bar-at-p`, `wrong-cells`,
+  `pointer-in`): bind it with LET around the checks. `*terminal*`, `*out*`
+  and `*face*` are set with SETQ there, and so is
+  `clara.windows:*text-font*` where an application's thread is to read it,
+  since a thread that SBCL starts sees nothing of a LET. `new-desk :fonts`
+  puts files of fonts/ among the system's. The font of those tests is Mono
+  at 15 pixels, bold, because some of its glyphs reach out of their cells
+  (`reaches-out-p`): cells in a font whose glyphs all fit say nothing about
+  the cut. An expectation that names the row with the cursor in it ends
+  before the cursor's cell, as everywhere. tools/session.txt opens a
+  terminal in two fonts and counts the pixels of its window, numbers that
+  the same forms give under SBCL, and launches the REPL, Emma and Jaid in a
+  font; it unloads Emma again, since the session of the world that came back
+  wants no package of hers there. The files of Serif say how far their
+  letters reach below the baseline as a distance, 236, where a number below
+  nought is meant, and `fit` takes either: `*font-facts*` has what FreeType
+  reads, the number as it stands.
+- A thread that is stopped while it reads the disk, by
+  `clara:destroy-thread` or by a Ctrl-C, leaves the disk refusing every read
+  after it (issue #174). So a session closes an application by its own
+  key, `(clara.windows:key-typed 17)`, and 4 for a REPL, and waits for the
+  window to go before its next form: `clara.windows:launch` comes back when
+  the window is open, and Jaid is reading its directory then.
 - With the window manager running, the keyboard is the window's and not
   the console's. So a session types into a window with a line `^T text`,
   which echoes nothing on the serial port, and sees what came of it in the

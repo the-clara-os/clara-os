@@ -7,7 +7,10 @@
 ;;;; the stream a line at a time, put together and echoed the way the
 ;;;; console does it (lisp/console.lisp). It draws like everything else, on
 ;;;; its window's surface (lisp/draw.lisp), and shows what it has drawn
-;;;; when a string is written (lisp/windows.lisp).
+;;;; when a string is written (lisp/windows.lisp). The font is the
+;;;; console's, or a font of outlines at any size (lisp/type.lisp), which
+;;;; the terminal is told as it opens and keeps: its cells are as large as
+;;;; the font's.
 ;;;;
 ;;;; A row that has moved out at the top is not gone. The terminal keeps
 ;;;; what its rows say, and Page Up and Page Down, which are keys of the
@@ -48,6 +51,9 @@
 (defstruct terminal
   window      ; the window that it is in,
   surface     ; and what that is drawn on
+  font        ; what its text is written in: one of CLARA.TYPE:FONT's, or NIL for the console's letters
+  wide        ; the size of a cell of that, in pixels
+  high
   columns     ; the size of the grid, in cells
   rows
   (column 0)  ; where the next character goes; past the last column, it starts a new row first
@@ -257,25 +263,26 @@
 (defun draw-cell (terminal column row paper)
   (multiple-value-bind (says tints) (shown-row terminal row)
     (let ((tint (assoc column tints)))
-      (clara.draw:draw-text (terminal-surface terminal) (* column clara.font:+width+) (* row clara.font:+height+)
-                            (if (< column (length says)) (string (char says column)) " ")
-                            (if tint (cdr tint) (terminal-ink terminal)) (ground terminal column row paper)))))
+      (clara.draw:draw-cells (terminal-surface terminal) (* column (terminal-wide terminal)) (* row (terminal-high terminal))
+                             (if (< column (length says)) (string (char says column)) " ")
+                             (if tint (cdr tint) (terminal-ink terminal)) (ground terminal column row paper)
+                             (terminal-font terminal)))))
 
 ;; The row ROW of the window is drawn again, from what it says and in the
 ;; colours that it says it in, with what is highlighted of it on that
 ;; ground.
 (defun draw-row (terminal row)
-  (let ((surface (terminal-surface terminal)) (y (* row clara.font:+height+))
+  (let ((surface (terminal-surface terminal)) (y (* row (terminal-high terminal)))
         (ink (terminal-ink terminal)) (paper (terminal-paper terminal))
-        (marked (terminal-marked terminal)))
-    (clara.draw:fill-rectangle surface 0 y (* (terminal-columns terminal) clara.font:+width+) clara.font:+height+ paper)
+        (marked (terminal-marked terminal)) (font (terminal-font terminal)))
+    (clara.draw:fill-rectangle surface 0 y (* (terminal-columns terminal) (terminal-wide terminal)) (terminal-high terminal) paper)
     (multiple-value-bind (says tints) (shown-row terminal row)
       (when (plusp (length says))
-        (clara.draw:draw-text surface 0 y says ink paper))
+        (clara.draw:draw-cells surface 0 y says ink nil font))
       (let ((lit (and marked (lit terminal (row-number terminal row) marked))))
         (when lit
-          (clara.draw:draw-text surface (* (car lit) clara.font:+width+) y
-                                (subseq (padded says (cdr lit)) (car lit) (cdr lit)) ink (clara.windows:highlight))))
+          (clara.draw:draw-cells surface (* (car lit) (terminal-wide terminal)) y
+                                 (subseq (padded says (cdr lit)) (car lit) (cdr lit)) ink (clara.windows:highlight) font)))
       (dolist (tint tints)
         (draw-cell terminal (car tint) row paper)))))
 
@@ -304,10 +311,10 @@
          (setf (terminal-row terminal) (1+ (terminal-row terminal))))
         ((zerop (terminal-back terminal))
          (let* ((surface (terminal-surface terminal))
-                (width (* (terminal-columns terminal) clara.font:+width+))
-                (kept (* (1- (terminal-rows terminal)) clara.font:+height+)))
-           (clara.draw:copy-rectangle surface 0 clara.font:+height+ width kept surface 0 0)
-           (clara.draw:fill-rectangle surface 0 kept width clara.font:+height+ (terminal-paper terminal))))
+                (width (* (terminal-columns terminal) (terminal-wide terminal)))
+                (kept (* (1- (terminal-rows terminal)) (terminal-high terminal))))
+           (clara.draw:copy-rectangle surface 0 (terminal-high terminal) width kept surface 0 0)
+           (clara.draw:fill-rectangle surface 0 kept width (terminal-high terminal) (terminal-paper terminal))))
         ((< (terminal-back terminal) (top terminal))
          (setf (terminal-back terminal) (1+ (terminal-back terminal))))
         (t
@@ -340,10 +347,11 @@
         (setq tints (cons (cons (+ column i) ink) tints))))
     (setf (terminal-tints terminal) tints)
     (when (zerop (terminal-back terminal))
-      (clara.draw:draw-text (terminal-surface terminal)
-                            (* column clara.font:+width+)
-                            (* (terminal-row terminal) clara.font:+height+)
-                            (subseq string start end) (or ink (terminal-ink terminal)) (terminal-paper terminal))
+      (clara.draw:draw-cells (terminal-surface terminal)
+                             (* column (terminal-wide terminal))
+                             (* (terminal-row terminal) (terminal-high terminal))
+                             (subseq string start end) (or ink (terminal-ink terminal)) (terminal-paper terminal)
+                             (terminal-font terminal))
       (when (terminal-marked terminal)
         (relight terminal column after)))
     (setf (terminal-column terminal) after)))
@@ -370,14 +378,14 @@
 ;; before anything is drawn and put back after, and a window that shows
 ;; rows from further back has neither.
 (defun paint-cursor (terminal column row pixel)
-  (clara.draw:fill-rectangle (terminal-surface terminal) (* column clara.font:+width+)
-                             (- (* (1+ row) clara.font:+height+) 2) clara.font:+width+ 2 pixel))
+  (clara.draw:fill-rectangle (terminal-surface terminal) (* column (terminal-wide terminal))
+                             (- (* (1+ row) (terminal-high terminal)) 2) (terminal-wide terminal) 2 pixel))
 
 (defun hide-cursor (terminal)
   (let ((cursor (terminal-cursor terminal)) (hint (terminal-hint terminal)))
     (when cursor
-      (paint-cursor terminal (car cursor) (cdr cursor)
-                    (ground terminal (car cursor) (cdr cursor) (terminal-paper terminal)))
+      ;; The whole cell, from what its row says: the bar may have lain over the foot of a letter.
+      (draw-cell terminal (car cursor) (cdr cursor) (terminal-paper terminal))
       (setf (terminal-cursor terminal) nil))
     (when hint
       (draw-cell terminal (car hint) (cdr hint) (terminal-paper terminal))
@@ -444,8 +452,8 @@
 (defun clear (terminal)
   (clara:with-lock-held ((terminal-lock terminal))
     (clara.draw:fill-rectangle (terminal-surface terminal) 0 0
-                               (* (terminal-columns terminal) clara.font:+width+)
-                               (* (terminal-rows terminal) clara.font:+height+) (terminal-paper terminal))
+                               (* (terminal-columns terminal) (terminal-wide terminal))
+                               (* (terminal-rows terminal) (terminal-high terminal)) (terminal-paper terminal))
     (dotimes (i (terminal-columns terminal))
       (setf (char (terminal-line terminal) i) #\Space))
     (setf (terminal-cursor terminal) nil
@@ -579,9 +587,9 @@
 ;; its number, and the column that the place is nearest to the left edge
 ;; of. A place under the last row that there is, is the end of that row.
 (defun cell-at (terminal x y)
-  (let* ((row (max 0 (min (1- (terminal-rows terminal)) (floor y clara.font:+height+))))
+  (let* ((row (max 0 (min (1- (terminal-rows terminal)) (floor y (terminal-high terminal)))))
          (column (max 0 (min (terminal-columns terminal)
-                             (floor (+ x (floor clara.font:+width+ 2)) clara.font:+width+))))
+                             (floor (+ x (floor (terminal-wide terminal) 2)) (terminal-wide terminal)))))
          (number (row-number terminal row)))
     (if (> number (terminal-count terminal))
         (cons (terminal-count terminal) (terminal-columns terminal))
@@ -743,8 +751,8 @@
           (terminal-held terminal) held
           (terminal-count terminal) (1- (terminal-count terminal)))
     (cond ((< held (1- (terminal-rows terminal)))
-           (clara.draw:fill-rectangle (terminal-surface terminal) 0 (* (terminal-row terminal) clara.font:+height+)
-                                      (* (terminal-columns terminal) clara.font:+width+) clara.font:+height+
+           (clara.draw:fill-rectangle (terminal-surface terminal) 0 (* (terminal-row terminal) (terminal-high terminal))
+                                      (* (terminal-columns terminal) (terminal-wide terminal)) (terminal-high terminal)
                                       (terminal-paper terminal))
            (setf (terminal-row terminal) (1- (terminal-row terminal))))
           ((plusp (terminal-back terminal))
@@ -896,11 +904,15 @@
 ;; opens it, like any other (CLARA.WINDOWS:OPEN-WINDOW, which X, Y and
 ;; CLOSE are for). What is typed in it is the stream's to give back, but for
 ;; Page Up and Page Down, and for the keys that copy; and the pointer
-;; highlights what its rows say.
-(defun open-terminal (title &key (columns 80) (rows 24) x y close)
+;; highlights what its rows say. Its text is written in FONT, one of
+;; CLARA.TYPE:FONT's, or in the console's letters with NIL: the one that
+;; CLARA.WINDOWS:*TEXT-FONT* says, when the terminal is told nothing.
+(defun open-terminal (title &key (columns 80) (rows 24) x y close (font (clara.windows:text-font)))
   (unless (and (integerp columns) (integerp rows) (plusp columns) (plusp rows))
     (error "a terminal has a number of columns and of rows, and ~S by ~S are not that" columns rows))
-  (let* ((terminal (make-terminal :columns columns :rows rows
+  (let* ((wide (clara.draw:cell-width font))
+         (high (clara.draw:cell-height font))
+         (terminal (make-terminal :columns columns :rows rows :font font :wide wide :high high
                                   :line (make-string columns :initial-element #\Space)
                                   :kept (make-array +ring+ :initial-element "")
                                   :tinted (make-array +ring+ :initial-element nil)
@@ -908,7 +920,7 @@
                                   :ink (clara.draw:color 232 227 244) :paper (clara.draw:color 30 27 46)
                                   :lock (clara:make-lock "terminal") :keys-lock (clara:make-lock "keys")
                                   :typed (clara:make-event "typed")))
-         (window (clara.windows:open-window title (* columns clara.font:+width+) (* rows clara.font:+height+)
+         (window (clara.windows:open-window title (* columns wide) (* rows high)
                                             :x x :y y :close close
                                             :key (lambda (code) (key-typed terminal code))
                                             :pointer (lambda (x y buttons) (pointed terminal x y buttons))
@@ -922,17 +934,19 @@
 ;;; The REPL
 ;;;
 ;;; An application, for the launcher: a terminal of 80 by 24 cells, or as
-;;; many as the screen has room for, and the listener reading from it and
-;;; writing to it, with a package of its own to be in. Ctrl-D at its prompt
-;;; ends it, and so does the close box; either way the window goes with it.
+;;; many as the screen has room for in the font that its text is written
+;;; in, and the listener reading from it and writing to it, with a package
+;;; of its own to be in. Ctrl-D at its prompt ends it, and so does the close
+;;; box; either way the window goes with it.
 
-(defun repl ()
+(defun repl (&key (font (clara.windows:text-font)))
   (let* ((screen (clara.draw:screen))
          (thread (clara:current-thread))
          (terminal (open-terminal
                     "REPL"
-                    :columns (max 20 (min 80 (floor (- (clara.draw:surface-width screen) 48) clara.font:+width+)))
-                    :rows (max 4 (min 24 (floor (- (clara.draw:surface-height screen) 120) clara.font:+height+)))
+                    :columns (max 20 (min 80 (floor (- (clara.draw:surface-width screen) 48) (clara.draw:cell-width font))))
+                    :rows (max 4 (min 24 (floor (- (clara.draw:surface-height screen) 120) (clara.draw:cell-height font))))
+                    :font font
                     :close (lambda () (clara:destroy-thread thread))))
          (*standard-output* (terminal-stream terminal))
          (*standard-input* (terminal-stream terminal))

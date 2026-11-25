@@ -25,10 +25,33 @@ is that directory's `README` as it stands. Their SHA-256 sums:
     8bc66a0154bbf69cd24e5bde41a12ec9495c8a242c5def2255e4a164900f1ed7  Go-Mono.ttf
     197d9f3703b4c00af609178876a8d73e396f64fe438b2c871778566632374be3  Go-Regular.ttf
 
-They are the families `Sans` and `Mono` of `lisp/type.lisp`, which reads
-them as they are: every `fonts/*.ttf` goes into the system's directory on
-the boot volume, and the handoff reads it into memory with the system's
-other files. A font that is added here gets its family in
+The four files whose names begin with `Charter-` are Charter, which
+Matthew Carter drew for Bitstream in 1987 and Bitstream gave to the X
+Consortium in 1992, as Matthew Butterick made TrueType files of it:
+https://practicaltypography.com/charter.html, the archive
+`Charter 210112.zip` (SHA-256
+`b40297f1a615f94594bdad0995848eb2223fb53ccb4ea197cabf24439bd811c9`), its
+directory `TTF format (best for Windows)/Charter`. The files are that
+archive's byte for byte, under other names, `Charter-Regular.ttf` for
+`Charter Regular.ttf` and so on, since a name with a space in it is one
+that `make` cannot list. They are distributed under Bitstream's notice in
+`LICENSE.charter`, which is the archive's `Charter license.txt` as it
+stands. Their SHA-256 sums:
+
+    f69ac5fa6e4908d5c89d16477ace994893c42eb2ceec9c4cbf8773ace6622d98  Charter-Bold-Italic.ttf
+    80424631bd3908efad8a5489df473cae7b7556f90bb6b63251ee22a0ace4f615  Charter-Bold.ttf
+    f459d9b7aad4265984d87ed0e38f2c912131488f8a3b91027ef0bed567239506  Charter-Italic.ttf
+    5fad789c56e24d323dfa017dffa5305220f03f89b8e43b28594284554df70437  Charter-Regular.ttf
+
+The Go fonts are the families `Sans` and `Mono` of `lisp/type.lisp`, and
+Charter is its family `Serif`. It reads them as they are: every
+`fonts/*.ttf` goes into the system's directory on the boot volume, and
+the handoff reads it into memory with the system's other files. The Go
+fonts have the letters of Latin, Greek and Cyrillic writing, 712 glyphs
+to the file; Charter has 229, the Latin letters of the languages of
+western Europe. Charter's files say how far their letters reach below
+the baseline as that distance, 236, where the table is for a number
+below nought: `lisp/type.lisp` takes it for the same either way. A font that is added here gets its family in
 `clara.type::*families*`, its license beside it, and its row in the table
 `*font-facts*` of `lisp/host/tests.lisp`, which `tools/fontcheck.c` prints:
 what FreeType says of the file, for the host tests to hold against what

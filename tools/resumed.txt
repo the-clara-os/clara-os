@@ -104,6 +104,12 @@ T
 error: this surface is of a machine that was switched off: a world is saved without its pixels
 > (list (clara.type:font-p *title*) (clara.draw:text-width "saved" *title*) (eq *title* (clara.type:font "Mono" 20 :bold t)))
 (T 60 T)
+> (let* ((terminal (clara.terminal:open-terminal "Kept" :columns 6 :rows 1 :font *title*)) ; and a window of text is in it
+         (face (clara.windows:window-surface (clara.terminal:terminal-window terminal))))
+    (list (clara.draw:cell-width *title*) (clara.draw:cell-height *title*) (clara.draw:surface-width face)
+          (clara.draw:surface-height face) (clara.windows:close-window (clara.terminal:terminal-window terminal))
+          clara.windows:*text-font*))
+(12 24 72 24 NIL NIL)
 > (list (clara.windows:window-surface *window*) (clara.windows:close-window *window*))
 (NIL NIL)
 > (progn (setq *window* (clara.windows:open-window "A picture" 200 120 :x 540 :y 410))

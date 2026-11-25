@@ -42,6 +42,9 @@
 (defstruct editor
   window
   surface      ; what its window is drawn on
+  font         ; what the text is written in: one of CLARA.TYPE:FONT's, or NIL for the console's letters
+  wide         ; the size of a cell of that, in pixels
+  high
   columns      ; the size of the text's part of the window, in cells:
   rows         ;   the window has one row more, below it, for the status
   ink          ; the pixel of a glyph,
@@ -438,20 +441,20 @@
 ;; go, and the others are to be drawn.
 (defun scroll (editor delta)
   (let* ((rows (editor-rows editor)) (shown (editor-shown editor)) (surface (editor-surface editor))
-         (width (* (editor-columns editor) clara.font:+width+))
+         (width (* (editor-columns editor) (editor-wide editor)))
          (kept (- rows (abs delta))))
     (setf (editor-top editor) (+ (editor-top editor) delta))
     (cond ((<= kept 0)
            (dotimes (r rows)
              (setf (svref shown r) nil)))
           ((plusp delta)
-           (clara.draw:copy-rectangle surface 0 (* delta clara.font:+height+) width (* kept clara.font:+height+)
+           (clara.draw:copy-rectangle surface 0 (* delta (editor-high editor)) width (* kept (editor-high editor))
                                       surface 0 0)
            (dotimes (r rows)
              (setf (svref shown r) (and (< r kept) (svref shown (+ r delta))))))
           (t
-           (clara.draw:copy-rectangle surface 0 0 width (* kept clara.font:+height+)
-                                      surface 0 (* (- delta) clara.font:+height+))
+           (clara.draw:copy-rectangle surface 0 0 width (* kept (editor-high editor))
+                                      surface 0 (* (- delta) (editor-high editor)))
            (dotimes (i rows)
              (let ((r (- rows i 1)))
                (setf (svref shown r) (and (>= (+ r delta) 0) (svref shown (+ r delta))))))))))
@@ -483,8 +486,8 @@
 
 ;; A bar under a cell: the cursor.
 (defun bar (editor column row pixel)
-  (clara.draw:fill-rectangle (editor-surface editor) (* column clara.font:+width+)
-                             (- (* (1+ row) clara.font:+height+) 2) clara.font:+width+ 2 pixel))
+  (clara.draw:fill-rectangle (editor-surface editor) (* column (editor-wide editor))
+                             (- (* (1+ row) (editor-high editor)) 2) (editor-wide editor) 2 pixel))
 
 ;;; Parentheses
 ;;;
@@ -588,7 +591,8 @@
 ;; row that is not what was drawn there is drawn, and then shown.
 (defun render (editor)
   (let ((rows (editor-rows editor)) (columns (editor-columns editor)) (surface (editor-surface editor))
-        (shown (editor-shown editor)) (ink (editor-ink editor)) (paper (editor-paper editor)))
+        (shown (editor-shown editor)) (ink (editor-ink editor)) (paper (editor-paper editor))
+        (font (editor-font editor)))
     ;; The cursor that is drawn goes with its row, which is drawn again.
     (when (editor-cursor editor)
       (setf (svref shown (editor-cursor editor)) nil
@@ -608,10 +612,10 @@
                (cells (svref (editor-paints editor) r))
                (was (svref shown r)))
           (unless (and was (string= (car was) text) (equal (cdr was) cells))
-            (clara.draw:draw-text surface 0 (* r clara.font:+height+) text ink paper)
+            (clara.draw:draw-cells surface 0 (* r (editor-high editor)) text ink paper font)
             (dolist (cell cells)
-              (clara.draw:draw-text surface (* (car cell) clara.font:+width+) (* r clara.font:+height+)
-                                    (string (char text (car cell))) (cadr cell) (or (caddr cell) paper)))
+              (clara.draw:draw-cells surface (* (car cell) (editor-wide editor)) (* r (editor-high editor))
+                                     (string (char text (car cell))) (cadr cell) (or (caddr cell) paper) font))
             (setf (svref shown r) (cons text cells)))
           (setq lines (cdr lines)))))
     (setf (editor-cursor editor) (- (editor-row editor) (editor-top editor)))
@@ -620,7 +624,7 @@
     ;; in it while a question waits for its answer.
     (let ((text (status editor)))
       (unless (and (svref shown rows) (string= (car (svref shown rows)) text))
-        (clara.draw:draw-text surface 0 (* rows clara.font:+height+) text paper ink)
+        (clara.draw:draw-cells surface 0 (* rows (editor-high editor)) text paper ink font)
         (setf (svref shown rows) (list text))
         (when (editor-asking editor)
           (let ((at (+ 1 (length (car (editor-asking editor))) (length (editor-answer editor)))))
@@ -739,15 +743,15 @@
 ;; above the window or below it is one that the window does not show, and
 ;; the window follows the cursor there.
 (defun go-near (editor x y)
-  (go-to editor (+ (editor-top editor) (floor y clara.font:+height+))
-         (+ (editor-left editor) (floor (+ x (floor clara.font:+width+ 2)) clara.font:+width+))))
+  (go-to editor (+ (editor-top editor) (floor y (editor-high editor)))
+         (+ (editor-left editor) (floor (+ x (floor (editor-wide editor) 2)) (editor-wide editor)))))
 
 ;; A button of the pointer went down or up in the window: the left one,
 ;; down on the text, puts the cursor there, on the character that it is on,
 ;; and nothing is highlighted any more. What is highlighted next begins
 ;; between the two characters that the place is nearest to.
 (defun point (editor x y buttons)
-  (let ((row (floor y clara.font:+height+)))
+  (let ((row (floor y (editor-high editor))))
     (when (= 1 (logand buttons 1))
       (setf (editor-pressed editor) nil))
     (when (and (= 1 (logand buttons 1)) (not (editor-asking editor)) (< row (editor-rows editor)))
@@ -757,7 +761,7 @@
             (editor-mark editor) nil)
       (go-near editor x y)
       (setf (editor-pressed editor) (cons (editor-row editor) (editor-column editor)))
-      (go-to editor (+ (editor-top editor) row) (+ (editor-left editor) (floor x clara.font:+width+))))))
+      (go-to editor (+ (editor-top editor) row) (+ (editor-left editor) (floor x (editor-wide editor)))))))
 
 ;; The pointer was moved with that button held: the text from where the
 ;; button went down to where the pointer is now is highlighted, and the
@@ -784,21 +788,26 @@
 ;; An editor in a window of its own, with the text of the file of a name in
 ;; it, or with no text yet. COLUMNS and ROWS are the size of the text's
 ;; part, 80 by 24 cells or what the screen has room for; X and Y are where
-;; the window goes. The window is the thread's that calls. Whoever shuts the
-;; machine down asks the window first, and a text that is not saved is what
-;; it has to say then.
-(defun open-editor (name &key columns rows x y)
+;; the window goes; and FONT is what the text is written in, one of
+;; CLARA.TYPE:FONT's or NIL for the console's letters, which is the one that
+;; CLARA.WINDOWS:*TEXT-FONT* says when the editor is told nothing. The
+;; window is the thread's that calls. Whoever shuts the machine down asks
+;; the window first, and a text that is not saved is what it has to say
+;; then.
+(defun open-editor (name &key columns rows x y (font (clara.windows:text-font)))
   (let* ((screen (clara.draw:screen))
-         (columns (or columns (max 20 (min 80 (floor (- (clara.draw:surface-width screen) 48) clara.font:+width+)))))
-         (rows (or rows (max 3 (min 24 (floor (- (clara.draw:surface-height screen) 136) clara.font:+height+)))))
+         (wide (clara.draw:cell-width font))
+         (high (clara.draw:cell-height font))
+         (columns (or columns (max 20 (min 80 (floor (- (clara.draw:surface-width screen) 48) wide)))))
+         (rows (or rows (max 3 (min 24 (floor (- (clara.draw:surface-height screen) 136) high)))))
          (holds (list nil))
-         (window (clara.windows:open-window (title name) (* columns clara.font:+width+)
-                                            (* (1+ rows) clara.font:+height+) :x x :y y :events t :drag t
+         (window (clara.windows:open-window (title name) (* columns wide)
+                                            (* (1+ rows) high) :x x :y y :events t :drag t
                                             :unfinished (lambda ()
                                                           (and (car holds) (editor-changed (car holds))
                                                                "text that is not saved"))))
          (editor (make-editor :window window :surface (clara.windows:window-surface window)
-                              :columns columns :rows rows
+                              :font font :wide wide :high high :columns columns :rows rows
                               :ink (clara.draw:color 232 227 244) :paper (clara.draw:color 30 27 46)
                               :shown (make-array (1+ rows) :initial-element nil)
                               :paints (make-array rows :initial-element nil)
