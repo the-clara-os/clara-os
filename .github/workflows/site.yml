@@ -41,7 +41,7 @@ jobs:
 
     environment:
       name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+      url: ${{ steps.deployment.outputs.page_url || steps.second.outputs.page_url || steps.third.outputs.page_url }}
 
     steps:
       - name: Checkout
@@ -89,11 +89,54 @@ jobs:
           (umask 077 && printf '%s\n' "$RELEASE_KEY" > "$key")
           make release KEY="$key" RELEASES=_site/releases PACKAGES=_site/packages
 
+      # The site goes to GitHub as an artifact of this run, and the
+      # deployment finds it by its name in the list of the run's artifacts.
+      # A run that is started again keeps the artifacts of its earlier
+      # attempts, so the name has the attempt's number in it: with one name
+      # for all of them, a second attempt finds two and stops, or finds the
+      # first attempt's alone and publishes that one.
       - name: Upload the Site
         uses: actions/upload-pages-artifact@v5
         with:
+          name: github-pages-${{ github.run_attempt }}
           path: _site
+
+      # GitHub lists a new artifact some time after it has taken it, and
+      # the deployment gives up at once when the list has none of that
+      # name: "No artifacts named ..." (issue #102; actions/deploy-pages#451
+      # is the same for everybody else). So the deployment waits ten
+      # seconds, is tried again thirty seconds later when it fails, and a
+      # last time a minute after that, which only then fails the job. A
+      # green run with an error in it is one whose first try came too early.
+      - name: Give GitHub Time to List the Site
+        run: sleep 10
 
       - name: Deploy to GitHub Pages
         id: deployment
+        continue-on-error: true
         uses: actions/deploy-pages@v5
+        with:
+          artifact_name: github-pages-${{ github.run_attempt }}
+
+      - name: Wait Before the Second Try
+        if: steps.deployment.outcome == 'failure'
+        run: sleep 30
+
+      - name: Deploy to GitHub Pages, Second Try
+        id: second
+        if: steps.deployment.outcome == 'failure'
+        continue-on-error: true
+        uses: actions/deploy-pages@v5
+        with:
+          artifact_name: github-pages-${{ github.run_attempt }}
+
+      - name: Wait Before the Third Try
+        if: steps.second.outcome == 'failure'
+        run: sleep 60
+
+      - name: Deploy to GitHub Pages, Third Try
+        id: third
+        if: steps.second.outcome == 'failure'
+        uses: actions/deploy-pages@v5
+        with:
+          artifact_name: github-pages-${{ github.run_attempt }}

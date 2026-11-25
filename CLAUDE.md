@@ -2166,7 +2166,14 @@ Rules:
   them, the system, or packages/: the same workflow builds the system of
   that commit and publishes it beside the pages, as the release at
   `https://claraos.org/releases/` (above), and the packages at
-  `https://claraos.org/packages/`. The page reads the milestone
+  `https://claraos.org/packages/`. GitHub lists what the workflow
+  uploaded some time after it has taken it, so the deployment waits ten
+  seconds and is tried up to three times, and the artifact is named after
+  the attempt of its run, which is what lets a run that failed be run
+  again (issues #102 and #185). Look at that run after every merge that
+  starts it, beside CI's: when it failed, the site and the release are
+  still those of the merge before, and `gh run rerun <id> --failed` runs
+  it again. The page reads the milestone
   entries of ROADMAP.md, so keep their form.
 - The user manual is site/manual.html, the second page of the website
   (Julio, 2026-11-17: it "should have everything a user needs to operate
