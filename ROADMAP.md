@@ -1798,6 +1798,160 @@ Infrastructure, done:
   character for as long as the cursor is at the end of the line, and on
   #106, which can stand on what lisp/syntax.lisp knows of strings and
   comments.
+- **Highlighting, cutting, copying and pasting** (2026-11-24, version
+  0.0.58). Text that a window showed could be read and typed again, and
+  nothing else (issue #48: "Let user highlight text and cut, copy, and
+  paste across the window manager"). The pointer highlights it now: its
+  left button goes down at one place, and the text from there to where
+  the pointer is moved with the button held stands on a blue ground, as
+  the text is read, over as many lines as lie between. Ctrl-C copies it,
+  Ctrl-X cuts it, and Ctrl-V puts in what was cut or copied last, in the
+  window that it was copied in or in any other: there is one such text
+  for all of them, `clara.windows:clipboard`, a string that a program
+  reads and sets. The window manager (lisp/windows.lisp) knows nothing
+  of what a window says, so what it gives is the moves of the pointer: a
+  window that asks (`:drag`, or `:events t :drag t` for a window that
+  keeps what happens to it) is told where the pointer is while the left
+  button is down that went down on its inside, also outside the window,
+  once it is three pixels from where the button went down, so that a
+  click is not a drag. A window that does not ask is told what it was
+  told before. In a REPL window, and in any terminal
+  (lisp/terminal.lisp), what is highlighted is two places in the rows,
+  each row by its number, so it stays with its rows as they move up and
+  while Page Up and Page Down are typed with the button held, which is
+  how more than a window's worth is highlighted. Ctrl-C copies there
+  while something is highlighted, and the highlight goes with that, so
+  that the next Ctrl-C stops what the window computes, as the key always
+  did with nothing highlighted; Ctrl-X copies too, since nothing that
+  was written can be taken out; and Ctrl-V types what was copied, all of
+  it, without the characters that are no text: a line of it that has an
+  end is read as it stands, and its last waits for Enter. A row says now
+  whether its line went on in the next one, in a third ring beside what
+  the rows say and their colours, so a line that was too long for a row
+  is copied as the one line that it is, with the spaces at the end of
+  its rows. In Emma (lisp/emma.lisp) what is highlighted is the text
+  from a mark to the cursor, which goes where the pointer goes, past the
+  window's edges too; what is typed takes its place, Backspace and
+  Delete take it out, a key that moves the cursor ends it, Ctrl-K cuts
+  to the same text that Ctrl-X does, and Ctrl-Y is Ctrl-V. Jaid
+  (lisp/jaid.lisp) copies the name that is picked, with its directory,
+  at Ctrl-C, and Ares (lisp/ares.lisp) takes what was copied into the
+  row of its address at Ctrl-V, as Emma does into its status row, a
+  line of it. The end of a line that is highlighted shows as the cell
+  behind the line. The ground is `clara.windows:*highlight*`, 48 64 112.
+  What it costs, under hvf: 20000 rows of thirty characters written to a
+  window take 5.1 s, as 0.0.57 takes, and so do 10000 lines of a hundred
+  characters, each two rows of which the first goes on, with something
+  highlighted or without; a move of the pointer that changes one row of
+  what is highlighted takes 0.10 ms, and one that changes all 24 rows of
+  a window 0.72 ms; 79977 rows that are highlighted are 3.3 million
+  characters, put together in 60 ms; a hundred forms of twenty
+  characters that Ctrl-V types are read and evaluated in 0.16 s; and one
+  line of 20000 characters takes 2.9 s and is read as its first 4096,
+  which is what a line that is typed was always held to (#164). The
+  manual says it under "Highlighting, cutting, copying and pasting" in
+  the chapter of the windows, with a transcript of the clipboard and of
+  the colour, in "A window of your own" for `:drag`, and in "Keys", "Text
+  in a window", "Emma, the editor", "Jaid, the file browser" and "Ares,
+  the web browser"; DESIGN.md has the decisions under Highlighting,
+  cutting, copying and pasting. The host tests move the pointer of their
+  made-up screen: over two windows of which one asked for the moves,
+  with a hand that is not still, onto the desk and onto the other
+  window, with the window gone while its button is held; over a terminal
+  of ten columns and three rows, where they look at every cell: dragged
+  both ways, past what a row says and under the last row, with Page Up
+  held, across a row that went on, by a tab and by a line that was
+  typed, with rows written under the highlight and rows that are no
+  longer kept, CLEAR, a line that is being read with its parentheses and
+  its hint, and what a reader is handed when Ctrl-V types; and over
+  Emma, whose text and window are held against the second editor of the
+  tests, which learned the pointer and the three keys the slow way, a
+  text in one string and a place a count of characters, over 700 keys
+  and drags as they come, of which 66 had something highlighted and 41
+  took it out. 18399 checks, in 84.7 s on the Mac where main takes 84.5
+  with its 18219. The first session of `make test` presses and moves QEMU's
+  mouse over a form in the REPL's window, lets go, copies it with Ctrl-C
+  and types it again with Ctrl-V and Enter, and in Emma highlights a
+  word of a line, cuts it with Ctrl-X and puts it back with Ctrl-V, and
+  holds the rows against the same letters drawn beside them, some on the
+  highlight's ground, on all three machines of that session. `make test`
+  passed on the Mac, the host tests and all nineteen boots; the
+  container of Ubuntu was not run. The first run of CI then failed in
+  that session on x86_64: the step that looks at Emma's row after the
+  button has come up read the window's pixels once, while Emma was
+  drawing the row again, which the slower machine showed. It waits for
+  the row now, like the steps around it, and so does an older step, of
+  Page Up, which waited for the window's first row and then read its
+  last, which the repaint may not have come to: with eight machines at
+  once on the Mac one boot in eight failed there, and none of
+  twenty-four since. Mistakes that were planted, one at a
+  time, in copies of the tree, 91: in the window manager, the slack one
+  less and one more or counted from the last place, the window still
+  held when the button comes up or when it goes, a move that is none
+  told, the place the wrong way round or counted from the screen's
+  corner, every move kept, a move kept by a window that did not ask,
+  what is no text copied, and a colour of four parts, of 300, or another
+  when none is said; in the terminal, a cell that counts at its left
+  edge, the row's number one off or without where the window is, no cell
+  for the end of a line, a row that goes on highlighted as far as it
+  says, copied with a new line or without its spaces, not kept as such,
+  or every row kept as one, a row that was ended by a character, by a
+  tab or by what was typed not said to go on, the third ring not grown,
+  the ground always paper, the hint on the highlight's, a row drawn
+  without it, what is written not highlighted, the rows not drawn again,
+  the highlight left when it is copied, the key handed on, nothing
+  copied over something, Ctrl-X not copying, Ctrl-V typing a Ctrl-C or a
+  rubout, leaving a tab out, held to the limit, the wrong way round,
+  handed on, or leaving the window looking back, a click that leaves the
+  highlight, a button that comes up beginning anew, a row that says
+  nothing highlighted, a place under the last row, the row that is being
+  written with its spaces, a drag one way only, a move with no button,
+  CLEAR leaving the highlight or the place, and the first or the last
+  row copied whole; in Emma, the two ends the wrong way round, no new
+  line or a line too many in what is copied, the text not said to have
+  changed, the mark left when its text goes, when another text comes or
+  where a form went wrong, the cursor behind what went, nothing said
+  when nothing is highlighted, Ctrl-V, a character, a new line and a tab
+  beside what is highlighted, Ctrl-X copying only, Ctrl-C cutting,
+  Backspace taking a character more and Delete no highlight, an arrow,
+  Page Up or Ctrl-K leaving the highlight, a key leaving the place where
+  the button went down, a click leaving the highlight or putting the
+  cursor between two characters, the status row beginning one, a place
+  that is the character under the pointer, the end of a line not shown,
+  a parenthesis without its colour on the highlight, the highlight not
+  moved with the window's left edge, Ctrl-K's text the editor's alone or
+  added to what somebody else copied, and all that was copied in the
+  status row; Jaid copying a name without its directory, the way up, or
+  saying nothing, and Ares taking all that was copied, or nothing. Five
+  got through at first. One was a mistake that took the highlight away
+  when the button came up, which the tests and the session could not
+  see, since they copied before they let go: they let go first now, as
+  a hand does. Three more have a test each since, a click that is on a
+  character while a place is between two, a move with no button, and a
+  window that keeps what happens to it and did not ask for the moves;
+  and the fifth was a line of the code that nothing needed, which is
+  gone. All 91 were noticed after that. By hand, at a kernel under
+  QEMU: the screen of a REPL and of Emma with text highlighted across
+  lines, looked at. A copy of the disk of Julio's machine as it stood
+  that evening (0.0.57-a3f47944), with a copy of `~/clara-work.dmg`: it
+  took this system at once, made its world again of his text, 17 forms,
+  the package that he had installed, his list in his order and the
+  variable that had changed, and came up with one REPL window, where a
+  form typed by QEMU's keyboard and what it printed were highlighted by
+  QEMU's mouse, copied, and typed again by Ctrl-V; his Galculator, which
+  keeps what happens to its window and asked for no moves, opened as
+  before; and in Emma on his `/galculator.lisp` the first two lines were
+  highlighted and copied to the letter, the file left as it was. On
+  Julio's own keyboard and mouse nothing was typed or moved. What it
+  left is in the issues: #156, what a page says in Ares; #157, nothing
+  is highlighted with the keyboard; #158, a double click, and all of a
+  text; #159, the keys, and Ctrl-C in a REPL window; #160, the colour;
+  #161, a window does not go on by itself while the pointer is held
+  outside it; #162, the name of a package in Parker; #163, the screen of
+  the first prompt; #164, a long line that is pasted; and a line each on
+  #77, since a line at a prompt is still changed at its end and nowhere
+  else, on #99, since the rows say where a line went on now, and on
+  #149, whose double click is #158's.
 
 Infrastructure, for sessions with budget left over:
 

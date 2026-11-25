@@ -8,7 +8,9 @@
 ;;;; launched for it; a click on the name that is picked does the same.
 ;;;; Backspace goes to the directory that this one is in, Delete deletes the
 ;;;; file that is picked, when asked twice, Ctrl-R reads the directory again
-;;;; and Ctrl-Q closes the window, as its close box does.
+;;;; and Ctrl-Q closes the window, as its close box does. Ctrl-C copies the
+;;;; name that is picked, with its directory, for Ctrl-V in another window
+;;;; (CLARA.WINDOWS:CLIPBOARD).
 ;;;;
 ;;;; What a directory holds is asked of the language, DIRECTORY, and that of
 ;;;; whatever file system said that it is there (lisp/boot.lisp): this file
@@ -205,6 +207,12 @@
            (attempt browser (lambda ()
                               (list-directory browser (browser-directory browser)
                                               (nth picked (browser-names browser))))))
+          ((= code 3)                   ; Ctrl-C: the name that is picked is what was copied last, for every window
+           (let ((name (nth picked (browser-names browser))))
+             (when (and name (not (string= name "../")))
+               (let ((whole (concatenate 'string (browser-directory browser) name)))
+                 (setf (clara.windows:clipboard) whole
+                       (browser-message browser) (concatenate 'string "copied " whole))))))
           ((= code 17)                  ; Ctrl-Q
            (setf (browser-done browser) t)))))
 

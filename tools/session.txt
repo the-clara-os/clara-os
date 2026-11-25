@@ -521,9 +521,9 @@ P
 > (list (clara:wait-event *seen* 60000) (until (bar-p)) (shows 0 "38 ") (shows 21 "59 ") (shows 23 "> "))
 ^T (p)
 (T OK T T T)
-> (list (until (shows 0 "15 ")) (shows 23 "38 ") (bar-p))                ; Page Up: the rows that had left the window
+> (list (until (and (shows 0 "15 ") (shows 23 "38 "))) (bar-p))          ; Page Up: the rows that had left the window
 ^M sendkey pgup
-(OK T NIL)
+(OK NIL)
 > (list (until (bar-p)) (shows 0 "38 ") (shows 23 "> "))                 ; Page Down: the last rows, and the cursor
 ^M sendkey pgdn
 (OK T T)
@@ -539,6 +539,43 @@ OK
 ^M sendkey shift-0
 OK
 > (list (clara:wait-event *seen* 60000) (until (bar-p)) (shows 21 "> (k)" '(2 0) '(4 0)) (shows 22 "K ")) ; and entered
+^M sendkey ret
+(T OK T T)
+> (defun lit (row says from to &rest tints)                              ; a row of the window on top begins with that, its
+    (let* ((face (clara.windows:window-surface (clara.windows:focused-window)))  ; cells from FROM to before TO on the
+           (width (* 8 (length says))) (scratch (clara.draw:allocate-surface width 16)) (same t) ; ground of what is
+           (ink (clara.draw:color 232 227 244)) (ground (clara.windows:highlight)))        ; highlighted, and the parentheses
+      (clara.draw:draw-text scratch 0 0 says ink (clara.draw:color 30 27 46))             ; of TINTS on it in the colours of
+      (clara.draw:draw-text scratch (* 8 from) 0 (subseq says from to) ink ground)        ; their levels
+      (dolist (tint tints)
+        (clara.draw:draw-text scratch (* 8 (car tint)) 0 (string (char says (car tint))) (clara.syntax:color (cadr tint))
+                              ground))
+      (dotimes (y 16)
+        (dotimes (x width)
+          (unless (= (clara.draw:pixel scratch x y) (clara.draw:pixel face x (+ (* 16 row) y)))
+            (setq same nil))))
+      (clara.draw:free-surface scratch)
+      same))
+LIT
+> (pointer-at 116 448 0)
+^M mouse_move -580 372
+OK
+> (list 'pressed (pointer-at 116 448 1) (clara.windows:clipboard))       ; the button goes down before the form of row 21,
+^M mouse_button 1
+(PRESSED OK "")
+> (list 'dragged (until (lit 21 "> (k) " 2 5 '(2 0) '(4 0))))             ; and the pointer is moved with it held: highlighted
+^M mouse_move 24 0
+(DRAGGED OK)
+> (list 'released (pointer-at 140 448 0) (until (lit 21 "> (k) " 2 5 '(2 0) '(4 0)))) ; the button comes up: it stays so
+^M mouse_button 0
+(RELEASED OK OK)
+> (list 'copied (until (shows 21 "> (k) " '(2 0) '(4 0))) (clara.windows:clipboard)) ; Ctrl-C copies it, and nothing stops
+^M sendkey ctrl-c
+(COPIED OK "(k)")
+> (until (shows 23 "> (k)" '(2 0 t) '(4 0)))                             ; Ctrl-V types what was copied, at the prompt,
+^M sendkey ctrl-v
+OK
+> (list (clara:wait-event *seen* 60000) (until (bar-p)) (shows 21 "> (k)" '(2 0) '(4 0)) (shows 22 "K ")) ; where Enter
 ^M sendkey ret
 (T OK T T)
 > (defvar *window* (clara.windows:open-window "A picture" 200 120 :x 500 :y 400))
@@ -573,7 +610,7 @@ OK
 ^M sendkey spc
 OK
 > (pointer-at 124 144 0)
-^M mouse_move -572 68
+^M mouse_move -16 -304
 OK
 > (list 'placed (pointer-at 124 144 1) (cursor-at 3 1))
 ^M mouse_button 1
@@ -586,6 +623,24 @@ OK
 OK
 > (with-open-file (in "/poem.txt") (list (read-line in) (read-line in) (read-line in nil 'end)))
 ("red roses" "are red" END)
+> (pointer-at 128 128 0)
+^M mouse_move 4 -16
+OK
+> (list 'pressed-on (pointer-at 128 128 1) (cursor-at 4 0))              ; in Emma, before the second word of its first line,
+^M mouse_button 1
+(PRESSED-ON OK OK)
+> (list 'dragged-over (until (lit 0 "red roses" 4 9)))                   ; and to behind it: the word is highlighted
+^M mouse_move 40 0
+(DRAGGED-OVER OK)
+> (list 'let-go-of (pointer-at 168 128 0) (until (lit 0 "red roses" 4 9))) ; Emma draws the row again: once it has
+^M mouse_button 0
+(LET-GO-OF OK OK)
+> (list 'cut (cursor-at 4 0) (clara.windows:clipboard))                  ; Ctrl-X cuts it, for every window,
+^M sendkey ctrl-x
+(CUT OK "roses")
+> (list 'put-back (cursor-at 9 0) (shows 0 "red roses"))                 ; and Ctrl-V puts it back
+^M sendkey ctrl-v
+(PUT-BACK OK T)
 > (list 'another (clara:thread-alive-p (clara.windows:launch "Emma")) (fboundp 'hi))
 (ANOTHER T NIL)
 > (list 'begun (cursor-at 0 1))

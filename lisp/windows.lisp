@@ -12,6 +12,8 @@
 ;;;; list has the commands: things that are done and open no window, such
 ;;;; as shutting the machine down (lisp/system.lisp). A name stands in the
 ;;;; list where it was defined, and MOVE-UP and MOVE-DOWN take it elsewhere.
+;;;; What is cut or copied in one window is there for every other: one text,
+;;;; CLIPBOARD, which the programs of the windows write and read.
 ;;;; What the bar, the list and the titles say is written in a font of
 ;;;; outlines (lisp/type.lisp), and in the console's letters on a machine
 ;;;; that has no such font.
@@ -48,7 +50,7 @@
            "MOVE-WINDOW" "RAISE-WINDOW" "RENAME-WINDOW" "NEXT-EVENT" "WINDOWS" "FOCUSED-WINDOW"
            "DEFINE-APPLICATION" "INSTALL-APPLICATION" "UNLOAD-APPLICATION" "REMOVE-APPLICATION"
            "APPLICATIONS" "LAUNCH" "*APPLICATION-DIRECTORY*" "DEFINE-COMMAND" "REMOVE-COMMAND" "COMMANDS"
-           "MOVE-UP" "MOVE-DOWN" "UNFINISHED" "*FONT*"
+           "MOVE-UP" "MOVE-DOWN" "UNFINISHED" "*FONT*" "CLIPBOARD" "HIGHLIGHT" "*HIGHLIGHT*"
            "KEY-TYPED" "POINTER-MOVED"))
 (in-package "CLARA.WINDOWS")
 
@@ -60,6 +62,8 @@
   height
   key      ; a function of a character's code, called for what is typed while the window has the focus, or NIL
   pointer  ; a function of a place on the inside and the buttons, called when a button goes down or up there, or NIL
+  drag     ; a function of a place and the buttons, called when the pointer moves while the left button is still down
+           ;   that went down on the inside: the place is counted from the inside's corner, and can lie outside it; or NIL
   close    ; a function of no arguments, called when the close box is clicked; without one there is no box
   unfinished ; a function of no arguments that says what its program has not finished, in words, or NIL: see UNFINISHED
   thread   ; the thread that opened it, whose it is to draw on and to close
@@ -78,6 +82,7 @@
 (defconstant +band+ 21)     ; from the top of a window's frame to its inside
 (defconstant +box+ 16)      ; the close box is this wide, and as high as the band
 (defconstant +events-limit+ 1024) ; what happens to a window and waits to be taken; what happens past that is dropped
+(defconstant +slack+ 3)     ; a pointer that is nearer than this to where its button went down has not been dragged yet
 
 (defvar *lock* (clara:make-lock "windows"))
 (defvar *running* nil)      ; the window manager has the screen; in a world that was saved: it had
@@ -96,6 +101,8 @@
 (defvar *opened* 0)         ; how many windows were opened, for where the next one goes
 (defvar *menu* nil)         ; the launcher's list is open
 (defvar *drag* nil)         ; (window dx . dy): the window that the pointer has by its frame, and where it took hold
+(defvar *held* nil)         ; (window x y dragged): the window on whose inside the left button went down and is down still,
+                            ;   where on the screen that was, and whether the pointer has been further from there since
 (defvar *pointer-x* 0)      ; where the pointer was last said to be,
 (defvar *pointer-y* 0)
 (defvar *buttons* 0)        ; and its buttons
@@ -103,6 +110,8 @@
 (defvar *font* (list "Sans" 13)) ; what the bar, the list and the titles are written in: the name of a font of outlines
                             ;   and its size, as CLARA.TYPE:FONT takes them, or NIL for the console's letters. START reads it.
 (defvar *letters* nil)      ; that font, as START found it, or NIL: the console's letters
+(defvar *clipboard* "")     ; the text that was cut or copied last, in whichever window: CLIPBOARD
+(defvar *highlight* (list 48 64 112)) ; what highlighted text stands on, its red, green and blue: HIGHLIGHT
 
 ;; Pixels, which are the screen's to say: made of colours by START.
 (defvar *desk* 0)   ; behind everything
@@ -317,6 +326,8 @@
     (setq *windows* (remove window *windows*))
     (when (eq (car *drag*) window)
       (setq *drag* nil))
+    (when (eq (car *held*) window)
+      (setq *held* nil))
     (when *running*
       (window-damaged window)
       (when (and top *windows*)
@@ -332,20 +343,25 @@
 ;; that goes down or up on its inside, and for a click on its close box,
 ;; which it has when CLOSE is given. They are called in the thread of the
 ;; keyboard or of the mouse, so they hand on what they are told and do not
-;; draw. With EVENTS the window has the three for itself, and keeps what
-;; they are told until its program asks: NEXT-EVENT. UNFINISHED is a
+;; draw. DRAG is a function like POINTER, which is called when the pointer
+;; moves while the left button is still down that went down on the inside,
+;; once it has left the place where that was: with where it is now, counted
+;; from the inside's corner, which can be a place outside the window. With
+;; EVENTS the window has the three for itself, and keeps what
+;; they are told until its program asks: NEXT-EVENT; and with a DRAG that is
+;; not NIL it keeps the moves as well. UNFINISHED is a
 ;; function that says, when it is asked, what the window's program still
 ;; holds that would be lost if the window went now, in a few words, or NIL
 ;; for nothing: a text that is not saved. It is asked before the machine is
 ;; shut down, in whatever thread does that.
-(defun open-window (title width height &key x y key pointer close events unfinished)
+(defun open-window (title width height &key x y key pointer drag close events unfinished)
   (unless (stringp title)
     (error "the title of a window is a string, and ~S is not one" title))
   (unless (and (integerp width) (>= width 24))
     (error "a window is 24 pixels wide or more, for its band to be got hold of, and ~S is not" width))
   (let* ((surface (clara.draw:allocate-surface width height))
          (window (make-window :title title :surface surface :width width :height height
-                              :key key :pointer pointer :close close :unfinished unfinished
+                              :key key :pointer pointer :drag drag :close close :unfinished unfinished
                               :thread (clara:current-thread)))
          (opened nil))
     (when events
@@ -353,6 +369,7 @@
             (window-happened window) (clara:make-event "events")
             (window-key window) (lambda (code) (post window (list :key code)))
             (window-pointer window) (lambda (x y buttons) (post window (list :pointer x y buttons)))
+            (window-drag window) (and drag (lambda (x y buttons) (post-drag window x y buttons)))
             (window-close window) (lambda () (post window (list :close)))))
     (unwind-protect
          (clara:with-lock-held (*lock*)
@@ -425,7 +442,9 @@
 ;;; a character's code or the code of a key that types none
 ;;; (lisp/input.lisp); (:POINTER x y buttons) for a button that went down or
 ;;; up on its inside, with the place there; and (:CLOSE) for a click on its
-;;; close box. Its program takes them one at a time, in a thread of its own,
+;;; close box. A window that was opened with a DRAG as well keeps
+;;; (:DRAG x y buttons) for the pointer that has moved with the left button
+;;; held down. Its program takes them one at a time, in a thread of its own,
 ;;; where it can draw.
 
 (defun post (window event)
@@ -433,6 +452,20 @@
     (when (< (length (window-events window)) +events-limit+)
       (setf (window-events window) (append (window-events window) (list event)))))
   (clara:signal-event (window-happened window)))
+
+;; The pointer was dragged. Where it is now is all that such an event says,
+;; so one that nobody has taken yet, and that nothing has happened since, is
+;; told the new place: a program that is busy finds one move, the last.
+(defun post-drag (window x y buttons)
+  (let ((kept nil))
+    (clara:with-lock-held ((window-events-lock window))
+      (let ((last (car (last (window-events window)))))
+        (when (and last (eq (car last) :drag))
+          (rplacd last (list x y buttons))
+          (setq kept t))))
+    (if kept
+        (clara:signal-event (window-happened window))
+        (post window (list :drag x y buttons)))))
 
 ;; The next thing that happened to WINDOW, waited for when nothing has: for
 ;; so many milliseconds, after which it is NIL, or for as long as it takes.
@@ -535,10 +568,11 @@
                               ((and (window-close window) (< y top) (>= x (- right +box+))) :close)
                               (t :frame))))))))
 
-;; What a window's program is to be told of the pointer: a function that
-;; tells it, to be called once the lock is free again, or NIL.
-(defun tell (window x y buttons)
-  (let ((function (window-pointer window)) (x (- x (window-x window))) (y (- y (window-y window))))
+;; What a window's program is to be told of the pointer, by FUNCTION, the
+;; one that it has for that: a function that tells it, to be called once
+;; the lock is free again, or NIL.
+(defun tell (window function x y buttons)
+  (let ((x (- x (window-x window))) (y (- y (window-y window))))
     (and function
          (lambda () (funcall function x y buttons)))))
 
@@ -570,7 +604,9 @@
            (when window
              (raise window)
              (case part
-               (:inside (tell window x y buttons))
+               (:inside
+                (setq *held* (list window x y nil))
+                (tell window (window-pointer window) x y buttons))
                (:frame (setq *drag* (list* window (- x (window-x window)) (- y (window-y window))))
                 nil)
                (:close
@@ -584,7 +620,10 @@
 ;; From the drivers of mice and tablets: the pointer is at that place, with
 ;; those buttons down, and one of the three has changed. Its picture moves;
 ;; a window that it has hold of moves with it, until the left button comes
-;; up; and a button that changes is for PRESS, or for the program of the
+;; up; a window on whose inside that button went down, and which wants to
+;; know, is told where the pointer is dragged to, once it has left the
+;; place where the button went down (+SLACK+: a hand is not that still);
+;; and a button that changes is for PRESS, or for the program of the
 ;; window that the pointer is on the inside of.
 (defun pointer-moved (x y buttons)
   (let ((call nil))
@@ -592,8 +631,9 @@
       (when *running*
         (let ((down (/= 0 (logand buttons 1)))
               (was-down (/= 0 (logand *buttons* 1)))
-              (changed (/= buttons *buttons*)))
-          (unless (and (= x *pointer-x*) (= y *pointer-y*))
+              (changed (/= buttons *buttons*))
+              (moved (not (and (= x *pointer-x*) (= y *pointer-y*)))))
+          (when moved
             (pointer-damaged)
             (setq *pointer-x* x
                   *pointer-y* y)
@@ -603,20 +643,58 @@
                  (setq call (press x y buttons)))
                 (t
                  (cond ((not down)
-                        (setq *drag* nil))
+                        (setq *drag* nil
+                              *held* nil))
                        (*drag*
                         (let ((window (car *drag*)))
                           (window-damaged window)
                           (place window (- x (car (cdr *drag*))) (- y (cdr (cdr *drag*))))
-                          (window-damaged window))))
+                          (window-damaged window)))
+                       (*held*
+                        (when (or (>= (abs (- x (cadr *held*))) +slack+) (>= (abs (- y (caddr *held*))) +slack+))
+                          (rplaca (cdddr *held*) t))
+                        (when (and moved (cadddr *held*))
+                          (setq call (tell (car *held*) (window-drag (car *held*)) x y buttons)))))
                  (when changed
                    (multiple-value-bind (window part) (window-at x y)
                      (when (and window (eq part :inside))
-                       (setq call (tell window x y buttons)))))))
+                       (setq call (tell window (window-pointer window) x y buttons)))))))
           (settle))))
     (when call
       (funcall call)))
   nil)
+
+;;; What was cut or copied
+;;;
+;;; One text for all the windows. A program that lets its text be
+;;; highlighted, cut and copied puts what was taken here, and one that takes
+;;; text gets it from here, so that what is copied in one window is put in
+;;; in another: the terminal (lisp/terminal.lisp) and the applications do,
+;;; by the keys that they have for it. It is a variable of the world's, like
+;;; any other: a world that is saved has it.
+
+;; The text that was cut or copied last, a string, with nothing in it when
+;; nothing was yet. (SETF (CLIPBOARD) text) makes TEXT that text.
+(defun clipboard ()
+  *clipboard*)
+
+(defun set-clipboard (text)
+  (unless (stringp text)
+    (error "what is cut or copied is text, a string, and ~S is not one" text))
+  (setq *clipboard* text))
+
+(defsetf clipboard set-clipboard)
+
+;; The pixel that text stands on while it is highlighted, for whoever
+;; draws such text: the colour that *HIGHLIGHT* says, its red, green and
+;; blue, or the one that the system came with when that says no colour.
+(defun highlight ()
+  (let ((parts *highlight*))
+    (if (and (consp parts) (consp (cdr parts)) (consp (cddr parts)) (null (cdddr parts))
+             (integerp (car parts)) (integerp (cadr parts)) (integerp (caddr parts))
+             (<= 0 (car parts) 255) (<= 0 (cadr parts) 255) (<= 0 (caddr parts) 255))
+        (clara.draw:color (car parts) (cadr parts) (caddr parts))
+        (clara.draw:color 48 64 112))))
 
 ;;; Applications
 ;;;
@@ -987,7 +1065,8 @@
                 *launched* nil
                 *opened* 0
                 *menu* nil
-                *drag* nil)
+                *drag* nil
+                *held* nil)
           (multiple-value-bind (x y buttons) (clara.input:pointer)
             (setq *pointer-x* x
                   *pointer-y* y
@@ -1018,7 +1097,8 @@
               *launched* nil
               *dirty* nil
               *menu* nil
-              *drag* nil)
+              *drag* nil
+              *held* nil)
         (dolist (window *windows*)
           (setf (window-open window) nil))
         (setq *windows* nil)
@@ -1053,7 +1133,8 @@
           *dirty* nil
           *launched* nil
           *menu* nil
-          *drag* nil)
+          *drag* nil
+          *held* nil)
     (when wanted
       (if (start)
           (format t "windows: the window manager has the screen again, as it had when the world was saved~%")
