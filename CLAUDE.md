@@ -1656,7 +1656,12 @@ Rules:
   before the cursor's cell, as for the colours. A session presses and
   moves QEMU's mouse a step at a time and holds a row against `lit`
   (tools/session.txt), which draws the same letters with some of them on
-  the highlight's ground.
+  the highlight's ground. It waits for every row that it looks at
+  (`until`, with all the rows of one look in its test), also where the
+  row should be as it was: the window's own thread may be drawing the
+  row at that moment, text first and colours after, and a slower machine
+  shows it. The first run of CI for #48 failed on a row that was read
+  once, right after a button had come up.
 - With the window manager running, the keyboard is the window's and not
   the console's. So a session types into a window with a line `^T text`,
   which echoes nothing on the serial port, and sees what came of it in the

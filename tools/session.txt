@@ -521,9 +521,9 @@ P
 > (list (clara:wait-event *seen* 60000) (until (bar-p)) (shows 0 "38 ") (shows 21 "59 ") (shows 23 "> "))
 ^T (p)
 (T OK T T T)
-> (list (until (shows 0 "15 ")) (shows 23 "38 ") (bar-p))                ; Page Up: the rows that had left the window
+> (list (until (and (shows 0 "15 ") (shows 23 "38 "))) (bar-p))          ; Page Up: the rows that had left the window
 ^M sendkey pgup
-(OK T NIL)
+(OK NIL)
 > (list (until (bar-p)) (shows 0 "38 ") (shows 23 "> "))                 ; Page Down: the last rows, and the cursor
 ^M sendkey pgdn
 (OK T T)
@@ -566,9 +566,9 @@ OK
 > (list 'dragged (until (lit 21 "> (k) " 2 5 '(2 0) '(4 0))))             ; and the pointer is moved with it held: highlighted
 ^M mouse_move 24 0
 (DRAGGED OK)
-> (list 'released (pointer-at 140 448 0) (lit 21 "> (k) " 2 5 '(2 0) '(4 0))) ; the button comes up, and it stays so
+> (list 'released (pointer-at 140 448 0) (until (lit 21 "> (k) " 2 5 '(2 0) '(4 0)))) ; the button comes up: it stays so
 ^M mouse_button 0
-(RELEASED OK T)
+(RELEASED OK OK)
 > (list 'copied (until (shows 21 "> (k) " '(2 0) '(4 0))) (clara.windows:clipboard)) ; Ctrl-C copies it, and nothing stops
 ^M sendkey ctrl-c
 (COPIED OK "(k)")
@@ -632,9 +632,9 @@ OK
 > (list 'dragged-over (until (lit 0 "red roses" 4 9)))                   ; and to behind it: the word is highlighted
 ^M mouse_move 40 0
 (DRAGGED-OVER OK)
-> (list 'let-go-of (pointer-at 168 128 0) (lit 0 "red roses" 4 9))
+> (list 'let-go-of (pointer-at 168 128 0) (until (lit 0 "red roses" 4 9))) ; Emma draws the row again: once it has
 ^M mouse_button 0
-(LET-GO-OF OK T)
+(LET-GO-OF OK OK)
 > (list 'cut (cursor-at 4 0) (clara.windows:clipboard))                  ; Ctrl-X cuts it, for every window,
 ^M sendkey ctrl-x
 (CUT OK "roses")

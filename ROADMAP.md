@@ -1876,7 +1876,15 @@ Infrastructure, done:
   holds the rows against the same letters drawn beside them, some on the
   highlight's ground, on all three machines of that session. `make test`
   passed on the Mac, the host tests and all nineteen boots; the
-  container of Ubuntu was not run. Mistakes that were planted, one at a
+  container of Ubuntu was not run. The first run of CI then failed in
+  that session on x86_64: the step that looks at Emma's row after the
+  button has come up read the window's pixels once, while Emma was
+  drawing the row again, which the slower machine showed. It waits for
+  the row now, like the steps around it, and so does an older step, of
+  Page Up, which waited for the window's first row and then read its
+  last, which the repaint may not have come to: with eight machines at
+  once on the Mac one boot in eight failed there, and none of
+  twenty-four since. Mistakes that were planted, one at a
   time, in copies of the tree, 91: in the window manager, the slack one
   less and one more or counted from the last place, the window still
   held when the button comes up or when it goes, a move that is none
