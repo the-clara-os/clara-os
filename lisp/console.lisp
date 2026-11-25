@@ -324,33 +324,53 @@
 ;; in place of writing to STREAM whenever the line has gained a character
 ;; or lost its last, with the line as it is now and the character that it
 ;; gained, or NIL.
-(defun read-edited-line (next stream &optional echo)
+;;
+;; A key that types no character means nothing to a line, unless RECALL
+;; says otherwise: when there is one, it is called with the code of such a
+;; key and with the line as it is, and gives the line that is to stand in
+;; its place, or NIL. That is how a line that was typed before comes back
+;; in a window, at an arrow (lisp/terminal.lisp). The line that is there is
+;; taken back then, a character at a time, and the other one typed after
+;; it, as a hand would do it: whoever echoes is told nothing new, and the
+;; line holds what could have been typed and no more.
+(defun read-edited-line (next stream &optional echo recall)
   (let ((line ""))
-    (loop
-      (let ((code (funcall next)))
-        (cond ((or (= code 13) (= code 10))
-               (write-string (string #\Newline) stream)
-               (return line))
-              ((= code 4)
-               (when (zerop (length line))
-                 (return nil)))
-              ((= code 3)
-               (write-string "^C" stream)
-               (write-string (string #\Newline) stream)
-               (error 'clara:keyboard-interrupt))
-              ((or (= code 8) (= code 127))
-               (when (plusp (length line))
-                 (setq line (subseq line 0 (1- (length line))))
+    (flet ((lose ()
+             (setq line (subseq line 0 (1- (length line))))
+             (if echo
+                 (funcall echo line nil)
+                 (write-string *rubout* stream)))
+           (gain (code)
+             (let ((character (if (= code 9) #\Space (and (>= code 32) (< code char-code-limit) (code-char code)))))
+               (when (and character (< (length line) +line-limit+))
+                 (setq line (concatenate 'string line (string character)))
                  (if echo
-                     (funcall echo line nil)
-                     (write-string *rubout* stream))))
-              (t
-               (let ((character (if (= code 9) #\Space (and (>= code 32) (< code char-code-limit) (code-char code)))))
-                 (when (and character (< (length line) +line-limit+))
-                   (setq line (concatenate 'string line (string character)))
-                   (if echo
-                       (funcall echo line character)
-                       (write-string (string character) stream))))))))))
+                     (funcall echo line character)
+                     (write-string (string character) stream))))))
+      (loop
+        (let ((code (funcall next)))
+          (cond ((or (= code 13) (= code 10))
+                 (write-string (string #\Newline) stream)
+                 (return line))
+                ((= code 4)
+                 (when (zerop (length line))
+                   (return nil)))
+                ((= code 3)
+                 (write-string "^C" stream)
+                 (write-string (string #\Newline) stream)
+                 (error 'clara:keyboard-interrupt))
+                ((or (= code 8) (= code 127))
+                 (when (plusp (length line))
+                   (lose)))
+                ((>= code char-code-limit)
+                 (let ((other (and recall (funcall recall code line))))
+                   (when other
+                     (dotimes (i (length line))
+                       (lose))
+                     (dotimes (i (length other))
+                       (gain (char-code (char other i)))))))
+                (t
+                 (gain code))))))))
 
 ;; The next line that was typed, without its end, or NIL when no more is
 ;; coming. While a line is being read, Ctrl-C is a byte like the others,

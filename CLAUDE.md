@@ -1662,6 +1662,34 @@ Rules:
   row at that moment, text first and colours after, and a slower machine
   shows it. The first run of CI for #48 failed on a row that was read
   once, right after a button had come up.
+- History (Julio's issue #49; DESIGN.md has what was decided). The lines
+  that a listener read in a terminal are `clara.terminal::*history*`, the
+  newest first, one list for all the windows, which a program reads and
+  sets with `clara.terminal:history`, a copy both ways. Nothing changes
+  that list where it is: `remember` and `set-history` make another one,
+  with `*history-lock*` held, since a window that goes through the lines
+  holds on to the list that it found (`older` in `read-text-line`, taken
+  at the first arrow up, and `newer` for the lines that the arrows have
+  left, as they were left). A line is remembered in `read-text-line` and
+  nowhere else, and only a listener's, one that was read while
+  `clara.listener:*begun*` was a string. `clara.console:read-edited-line`
+  knows nothing of any of that: it asks RECALL about a key that types no
+  character, and a line that RECALL gives is typed through the two
+  functions that every key goes through, `lose` and `gain`. Whatever
+  changes a line there goes through those two, or a terminal's `cells`
+  no longer say where the line was drawn. In the tests a listener's line
+  that an earlier test typed is among the lines, so a test that looks at
+  them sets them first, and the section ends with none; that an arrow
+  did nothing is seen by typing a character after it, since a row that
+  shows what it showed says nothing of whether the key was read; and the
+  walk of keys holds the arrows against a row of slots, which is taught
+  whatever the arrows learn. A session presses them with `^M sendkey up`
+  and waits for a row that differs from what the row showed before. The
+  lines of a session's world are the ones that it typed into a REPL's
+  window, by `^T` or by `sendkey` and `ret`: tools/session.txt asks for
+  them once and tools/resumed.txt again, in the world that came back, so
+  a line that is typed into such a window before either changes both
+  lists.
 - With the window manager running, the keyboard is the window's and not
   the console's. So a session types into a window with a line `^T text`,
   which echoes nothing on the serial port, and sees what came of it in the

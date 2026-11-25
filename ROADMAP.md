@@ -1952,6 +1952,124 @@ Infrastructure, done:
   #77, since a line at a prompt is still changed at its end and nowhere
   else, on #99, since the rows say where a line went on now, and on
   #149, whose double click is #158's.
+- **The REPL remembers** (2026-11-25, version 0.0.59). A line that was
+  typed at a REPL's prompt was gone once it was read, and a form was
+  evaluated a second time by typing it a second time (issue #49: "Command
+  history function, with up and down arrow lookup"). The lines are
+  remembered now (lisp/terminal.lisp). While a line is read in a REPL
+  window, the arrow up puts the line that was read before it at the
+  prompt, as it was typed and in its colours, the arrow up again the one
+  before that, as far back as the oldest, and the arrow down the line
+  after, down to the one that was being typed, which is as it was left.
+  So is every line that the arrows pass: what is typed into a line that
+  came back stays in it until Enter reads one of them, and that one is
+  the newest line from then on. What is remembered is lines, so a form of
+  several lines comes back as those, the last one first. There is one
+  list for all the REPL windows, as there is one world: a line that was
+  typed in one window comes back in another, in a window that is opened
+  later, and in one that sat at its prompt meanwhile, since the lines are
+  the ones that there are when the first arrow asks. A line is not
+  remembered a second time right after itself, and one that says nothing
+  not at all; nor is a line that was given up, or one that a program
+  read, where the arrows mean nothing. `clara.terminal:history` gives the
+  lines, the newest first, and SETF makes other ones of them;
+  `clara.terminal:*lines-kept*` says how many are kept, 1000 unless it
+  says otherwise, and NIL for all of them. The list is in the heap, so a
+  world that is saved has it, and the world that a newer system makes of
+  the files begins without it. The line editor that every prompt shares,
+  `clara.console:read-edited-line`, learned one thing for this: a
+  function that it asks about a key that types no character, and whose
+  line it puts in the place of the one that is there, by taking that one
+  back a character at a time and typing the other. So a window echoes a
+  line that comes back as it echoes one that is typed, and such a line
+  holds what could have been typed and nothing else. What it costs, under
+  hvf: a line of 40 characters comes back and goes again in 0.7 ms, one
+  of 200 in 8 ms, one of 1000 in 0.15 s, and one of 4096, the longest
+  that a prompt reads, in 2.3 s, for the two reasons that #164 gives for
+  a long line that is pasted; remembering a line takes 23 millionths of a
+  second with a thousand lines there; and a thousand lines of forty
+  characters are 221 KiB of the heap. The screen of the first prompt and
+  the serial port remember nothing and have no arrows, as before. The
+  manual says it under "Windows", with the two keys, in "Keys", in "Text
+  in a window", whose transcript reads and sets the lines, and in a row
+  of its table of what goes wrong; DESIGN.md has the decisions under
+  History. The host tests give the line editor a function of their own
+  and look at what it sends to a stream; and in a terminal of ten columns
+  and three rows they press the arrows and look at every cell: a line
+  that comes back with its colours and its hint, the oldest and the
+  newest that there is, the other keys that type nothing, a line that was
+  begun, a line that was changed and left, one that was given up, one
+  that a program reads, a line that is longer than a row in a window that
+  is full, an arrow that is typed ahead, a line that was read in another
+  window while this one sat at its prompt, the number of lines at 3, 0,
+  NIL and what is no number, and lists that SETF refuses. Then the arrows
+  among other keys as they come, 60 lines of up to 16 keys, against a
+  second way of keeping the lines, a row of slots with a place in it:
+  what is read, what is remembered, what the rows say and what the window
+  shows have to be that second way's. 18467 checks, in 84.6 s on the Mac
+  where main takes 84.5 with its 18416; the new ones take 0.45 s of that.
+  The first session of `make test` presses the arrows of QEMU's keyboard
+  in the REPL's window: up twice, down, up again and Enter, which reads
+  that line a second time; then a line that is begun, left for the one
+  before it and come back to, which goes on from where it was; and asks
+  for the lines at the serial port, on all three machines of that
+  session. The session of the world that came back asks for them again,
+  and has the arrow up and Enter read the newest of them in the window
+  that the start opened; and the session of the upgrade asks before it,
+  where there are seven, and in the world that the newer system made,
+  where there are none. `make test` passed on the Mac, the host tests and
+  all nineteen boots, before the session of the upgrade had its two
+  lines, and that boot passed by itself with them; the container of
+  Ubuntu was not run. Mistakes that were planted, one at a time, in
+  copies of the tree, 46: in the line editor, the old line left where it
+  was, or one character of it, as many taken back as the other line is
+  long, the other line's first character over and over, or one character
+  short, the function asked with an empty line, with the wrong key, about
+  every key, or when there is none, a line with nothing in it taken for
+  no line, no rubout for what is taken back, and a tab that comes back as
+  a tab; in the lines, another number, one line less and one more than
+  may be kept, the newest going in place of the oldest, 0 and a negative
+  number taken as they come, the list itself handed out or kept, given
+  lines not held to the number, what is no string taken, the lines gone
+  when a list is refused, SETF giving something else, a line that says
+  nothing or a line of spaces remembered, a line remembered right after
+  itself, or never again once it was typed, or as another string only,
+  the newest put last, and no limit; in the arrows, the two the other way
+  round, the arrow left taken for the arrow up, any key past the arrow
+  down taken for it, the lines asked for at every arrow or when the
+  prompt is written, the line that is left forgotten or not kept, either
+  way, an arrow with no line to go to kept all the same, a program's line
+  with arrows, a line not remembered, and the line before it remembered
+  in its place. The host tests noticed all of them, and passed with a
+  comment changed. Four were planted at a kernel as well, for the first
+  session to notice: the arrows the other way round, a line that is not
+  remembered, and an arrow down that forgets the line that it left, or
+  does not keep it. The last of them got through the session as it was
+  first written, which never went up again after it had gone down; it
+  does now, and notices all four. By hand, at a kernel under QEMU: a form
+  of three lines read again with the arrows, three presses and Enter for
+  each of its lines; a line of 200 characters brought back over three
+  rows of a REPL's window after a short one had come and gone, looked at;
+  the number of lines at 2, at 0 and at what is no number, and two lists
+  that SETF refuses; the arrow up at the first prompt, which does
+  nothing, and the three bytes of an arrow on the serial port, which type
+  `[A` into the line. A copy of the disk of Julio's machine as it stood
+  that night (0.0.58-b49e5bcd), with a copy of `~/clara-work.dmg`: it
+  took this system at once, made its world again of his text, 17 forms,
+  the package that he had installed, his list in his order and the
+  variable that had changed, and came up with one REPL window and no
+  lines; there a form typed by QEMU's keyboard was read again by the
+  arrow up and Enter, and a second one by up, up, down and Enter, each
+  remembered once; his Galculator opened as before. On Julio's own
+  keyboard nothing was typed. What it left is in the issues: #166, an
+  arrow key on the serial port types `[A` into the line; #167, no line
+  comes back at the first prompt; #168, the lines are not written down,
+  and a world that is made again has none; #169, one list for all the
+  windows; #170, how many lines, and which; #171, a form of several lines
+  comes back a line at a time; #172, nothing finds a line by what it
+  says; and a line each on #77, since a line that came back is changed at
+  its end like any other, and on #164, since a long line comes back at
+  the pace at which one is pasted.
 
 Infrastructure, for sessions with budget left over:
 

@@ -1468,6 +1468,30 @@
 (check t (clara.host:serial-break-p))         ; Ctrl-C stops a computation again once the line is over
 (check "next" (typed 110 101 120 116 10))
 
+;; A key that types no character means something to a line when whoever
+;; has it read says so: it is asked with the key and the line as it is,
+;; and the line that it gives stands in the place of that one, which is
+;; taken back a character at a time. What it gives is typed, so the line
+;; holds what could have been typed: a tab as a space, no other control
+;; character, and no more than a line may hold.
+(flet ((line-of (codes recall)
+         (let ((out (make-string-output-stream)))
+           (list (clara.console:read-edited-line (lambda () (pop codes)) out nil recall)
+                 (get-output-stream-string out)))))
+  (let* ((up (+ char-code-limit 1)) (down (+ char-code-limit 2)) (other (+ char-code-limit 7)) (asked nil)
+         (rubout clara.console::*rubout*)
+         (recall (lambda (code line)
+                   (push (list (- code char-code-limit) line) asked)
+                   (cond ((= code up) (format nil "x~Cz~%~C" #\Tab (code-char 7)))
+                         ((= code down) "")))))
+    (check (list "d" (format nil "ab~A~Ax zc~A~A~A~Ad~%" rubout rubout rubout rubout rubout rubout))
+           (line-of (list 97 98 up 99 down 8 other 100 10) recall))
+    (check '((1 "ab") (2 "x zc") (7 "")) (reverse asked))
+    (check (list "abc" (format nil "abc~%")) (line-of (list 97 up 98 down 99 10) nil)) ; and to nobody when nobody says so
+    (check 4096 (length (first (line-of (list 97 up 10) (lambda (code line)
+                                                         (declare (ignore code line))
+                                                         (make-string 5000 :initial-element #\b))))))))
+
 ;; What a keyboard's driver hands in is read along with the serial port's
 ;; bytes, and ahead of them.
 (new-machine)
@@ -7524,6 +7548,246 @@
 (check nil (clara.terminal::terminal-keys *terminal*))
 (clara.terminal:clear *terminal*)
 
+;; What a listener read is remembered, the newest line first, and comes
+;; back while the next line is read: the arrow up puts the line before in
+;; the place of the one that is there, in its colours, and the arrow down
+;; the line after it, down to the one that was being typed.
+(defun arrow-up () (clara.windows:key-typed clara.input:+up+))
+(defun arrow-down () (clara.windows:key-typed clara.input:+down+))
+(defun blank-after-p (row column)              ; the cells of a row behind the one at COLUMN show nothing
+  (loop for at from (1+ column) below 10
+        always (cell-shows-p *face* row at #\Space)))
+
+(check 1000 clara.terminal:*lines-kept*)
+(setf (clara.terminal:history) nil)            ; the lines of a listener's that the tests above typed
+(typed-line "" "(a)")
+(typed-line "" "(b c)")
+(check '("(b c)" "(a)") (clara.terminal:history))
+(let ((reader (reads-on "")))
+  (arrow-up)                                   ; the line before, with the hint that its last character has
+  (check '(t t (0 . 2) 0)
+         (list (typed-p 2 "(b c)" (list 0 (level 0) +hint+) (list 4 (level 0))) (bar-at-p *face* 2 5 +ink+) (hint) (wrong-pixels)))
+  (dolist (code (list clara.input:+left+ clara.input:+right+ clara.input:+home+ clara.input:+end+ clara.input:+insert+
+                      clara.input:+f1+ (+ clara.input:+alt+ clara.input:+up+)))
+    (clara.windows:key-typed code))            ; the other keys that type no character mean nothing to a line
+  (type-text "!")
+  (check t (typed-p 2 "(b c)!" (list 0 (level 0)) (list 4 (level 0))))
+  (clara.windows:key-typed 8)
+  (arrow-up)                                   ; and the one before that, in its place
+  (check '(t t t (0 . 2))
+         (list (typed-p 2 "(a)" (list 0 (level 0) +hint+) (list 2 (level 0))) (bar-at-p *face* 2 3 +ink+) (blank-after-p 2 3)
+               (hint)))
+  (arrow-up)                                   ; there is none before the first: the key means nothing,
+  (type-text "!")                              ; and what is typed goes on from the line that is there
+  (check '(t nil) (list (typed-p 2 "(a)!" (list 0 (level 0)) (list 2 (level 0))) (hint)))
+  (clara.windows:key-typed 8)
+  (arrow-down)                                 ; the line after it,
+  (check t (typed-p 2 "(b c)" (list 0 (level 0) +hint+) (list 4 (level 0))))
+  (arrow-down)                                 ; and the one that was being typed, which had nothing in it yet
+  (check '(t nil 0) (list (eventually (lambda () (and (bar-at-p *face* 2 0 +ink+) (blank-after-p 2 0)))) (hint) (wrong-pixels)))
+  (arrow-down)                                 ; there is none after that one
+  (type-text "xy")
+  (check t (typed-p 2 "xy"))
+  (arrow-up)
+  (check t (typed-p 2 "(b c)" (list 0 (level 0) +hint+) (list 4 (level 0))))
+  (arrow-down)                                 ; what was being typed is as it was
+  (check '(t t) (list (typed-p 2 "xy") (blank-after-p 2 2)))
+  (type-text (string #\Newline))               ; the line that is read is the newest from now on
+  (check '("xy" ("xy" "(b c)" "(a)")) (list (clara:join-thread reader) (clara.terminal:history))))
+;; A line that the arrows leave is left as it stands, with what was typed
+;; into it, until the line is read; the line that is remembered is not
+;; changed by that.
+(let ((reader (reads-on "")))
+  (arrow-up)
+  (type-text "z")
+  (check t (typed-p 2 "xyz"))
+  (arrow-up)
+  (check t (typed-p 2 "(b c)" (list 0 (level 0) +hint+) (list 4 (level 0))))
+  (arrow-down)
+  (check '(t t) (list (typed-p 2 "xyz") (blank-after-p 2 3)))
+  (arrow-down)                                 ; to the line that was being typed, and back from it
+  (arrow-up)
+  (type-text (format nil "!~%"))
+  (check '("xyz!" ("xyz!" "xy" "(b c)" "(a)")) (list (clara:join-thread reader) (clara.terminal:history))))
+;; A line is not remembered a second time right after itself. Neither is
+;; one that says nothing, one that was given up, or one that some program
+;; read, which the arrows mean nothing to.
+(typed-line "" "xyz!")
+(typed-line "" "")
+(typed-line "" "   ")
+(let ((reader (reads-on "")))
+  (arrow-up)
+  (check t (typed-p 2 "xyz!"))
+  (clara.windows:key-typed 3)
+  (check :given-up (clara:join-thread reader)))
+(let ((reader (reads-a-line)))
+  (arrow-up)
+  (type-text (format nil "p~%"))
+  (check "p" (clara:join-thread reader)))
+(check '("xyz!" "xy" "(b c)" "(a)") (clara.terminal:history))
+(check "xy" (typed-line "" "xy"))              ; one that was typed before the last one is the newest again
+(check '("xy" "xyz!" "xy" "(b c)" "(a)") (clara.terminal:history))
+;; CLARA.TERMINAL:*LINES-KEPT* says how many lines are remembered, the
+;; newest of them, whenever one is remembered: a smaller number takes the
+;; oldest then, 0 leaves none, and NIL keeps them all, as does what is no
+;; number of lines.
+(setq clara.terminal:*lines-kept* 3)
+(typed-line "" "one")
+(check '("one" "xy" "xyz!") (clara.terminal:history))
+(clara.terminal::remember "two")
+(check '("two" "one" "xy") (clara.terminal:history))
+(setq clara.terminal:*lines-kept* 0)
+(clara.terminal::remember "three")
+(check nil (clara.terminal:history))
+(flet ((remembered-of (kept)
+         (setq clara.terminal:*lines-kept* kept)
+         (setf (clara.terminal:history) nil)
+         (dotimes (i 1200)
+           (clara.terminal::remember (format nil "l~D" i)))
+         (let ((lines (clara.terminal:history)))
+           (list (length lines) (first lines) (first (last lines))))))
+  (check '((1000 "l1199" "l200") (1200 "l1199" "l0") (1200 "l1199" "l0") (1200 "l1199" "l0"))
+         (mapcar #'remembered-of '(1000 nil -1 "many"))))
+;; (SETF (CLARA.TERMINAL:HISTORY) lines) makes LINES the lines, the first
+;; of them as many as may be remembered, in a list of their own, which the
+;; one that HISTORY gives is too. What is no list of strings is refused,
+;; and the lines are left as they were.
+(let ((lines (list "1" "2" "3")))
+  (setq clara.terminal:*lines-kept* 2)
+  (check '(("1" "2" "3") ("1" "2")) (list (setf (clara.terminal:history) lines) (clara.terminal:history)))
+  (setq clara.terminal:*lines-kept* 1000)
+  (setf (clara.terminal:history) lines)
+  (setf (first lines) "changed"
+        (first (clara.terminal:history)) "changed too")
+  (check '("1" "2" "3") (clara.terminal:history)))
+(check '("the lines that were typed before are a list of strings, and 5 is not one"
+         "the lines that were typed before are a list of strings, and (\"a\" 5) is not one"
+         "the lines that were typed before are a list of strings, and (\"a\" . \"b\") is not one"
+         ("1" "2" "3"))
+       (flet ((said (lines)
+                (let ((*print-pretty* nil))
+                  (condition-text (lambda () (setf (clara.terminal:history) lines))))))
+         (list (said 5) (said (list "a" 5)) (said (cons "a" "b")) (clara.terminal:history))))
+;; A line that is brought back is typed: what it holds that no key types
+;; stays out of it, and a tab is a space.
+(setf (clara.terminal:history) (list (format nil "a~Cb~%c~Cd" #\Tab (code-char 3))))
+(clara.terminal:clear *terminal*)
+(let ((reader (reads-on "")))
+  (arrow-up)
+  (check t (typed-p 0 "a bcd"))
+  (type-text (string #\Newline))
+  (check "a bcd" (clara:join-thread reader)))
+;; A line that is longer than a row is brought back into as many rows as
+;; it takes, and taken back out of them: in a window that is full, the rows
+;; above it move up for the one and down again for the other.
+(clara.terminal:clear *terminal*)
+(format *out* "one~%two~%")
+(setf (clara.terminal:history) (list "(234567)90ab" "xy"))
+(let ((reader (reads-on "")))
+  (arrow-up)
+  (check '(t t t ("one" "two" "(234567)90") 0)
+         (list (typed-p 2 "ab") (row-shows-p *face* 0 "two       ")
+               (row-tinted-p *face* 1 "(234567)90" (list 0 (level 0)) (list 7 (level 0))) (kept-rows) (wrong-pixels)))
+  (arrow-up)
+  (check '(t t t ("one" "two") 0)
+         (list (typed-p 2 "xy") (row-shows-p *face* 0 "one       ") (row-shows-p *face* 1 "two       ") (kept-rows)
+               (wrong-pixels)))
+  (arrow-down)
+  (check '(t t ("one" "two" "(234567)90"))
+         (list (typed-p 2 "ab") (row-tinted-p *face* 1 "(234567)90" (list 0 (level 0)) (list 7 (level 0))) (kept-rows)))
+  (type-text (string #\Newline))
+  (check "(234567)90ab" (clara:join-thread reader)))
+;; An arrow that is typed while nobody reads waits like any other key, for
+;; the line that is read next.
+(clara.terminal:clear *terminal*)
+(arrow-up)
+(arrow-up)
+(let ((reader (reads-on "")))
+  (check t (typed-p 0 "xy"))
+  (type-text (string #\Newline))
+  (check "xy" (clara:join-thread reader)))
+;; The lines are every window's. One that is read in another window comes
+;; back in this one, also when this one began to read before it was typed:
+;; the lines are the ones that there are when the first arrow asks for
+;; them, and they stay those until the line is read.
+(clara.terminal:clear *terminal*)
+(let ((other (clara.terminal:open-terminal "Another" :columns 10 :rows 3 :x 150 :y 150))
+      (reader (reads-on "")))
+  (flet ((types (terminal text)
+           (map nil (lambda (character) (clara.terminal::key-typed terminal (char-code character))) text))
+         (read-there (text)
+           (let ((there (clara:make-thread (lambda ()
+                                             (let ((clara.listener:*begun* ""))
+                                               (read-line (clara.terminal:terminal-stream other)))))))
+             (map nil (lambda (character) (clara.terminal::key-typed other (char-code character))) (format nil "~A~%" text))
+             (clara:join-thread there))))
+    (check t (eventually (lambda () (clara.terminal::terminal-reading *terminal*))))
+    (check "there" (read-there "there"))
+    (clara.terminal::key-typed *terminal* clara.input:+up+)
+    (check '(t 0) (list (typed-p 0 "there") (wrong-pixels)))
+    (check "more" (read-there "more"))
+    (clara.terminal::key-typed *terminal* clara.input:+down+)
+    (clara.terminal::key-typed *terminal* clara.input:+up+)
+    (types *terminal* (format nil "!~%"))
+    (check '("there!" ("there!" "more" "there" "xy" "(234567)90ab" "xy"))
+           (list (clara:join-thread reader) (clara.terminal:history))))
+  (clara.windows:close-window (clara.terminal:terminal-window other)))
+;; The arrows among other keys, as they come, against a second way of
+;; keeping the lines: a row of slots, the oldest line first and the one
+;; that is being typed last, and a place in that row. An arrow puts the
+;; line that is there into its slot and takes the line of the slot beside
+;; it. What is read has to be the line of that second way, the lines that
+;; are remembered its lines, what the rows say that line, and the window
+;; what the rows say.
+(defun last-line ()                            ; what the rows say of the line that was finished last
+  (let* ((place (1- (clara.terminal::terminal-held *terminal*)))
+         (text (clara.terminal::kept-row *terminal* place)))
+    (loop while (and (plusp place) (clara.terminal::kept-joined *terminal* (1- place)))
+          do (decf place)
+             (setq text (concatenate 'string (clara.terminal::kept-row *terminal* place) text)))
+    text))
+(defun window-says-rows-p ()
+  (loop for row below 3
+        always (multiple-value-bind (says tints) (clara.terminal::shown-row *terminal* row)
+                 (apply #'row-tinted-p *face* row (format nil "~10A" says)
+                        (loop for tint in tints collect (list (car tint) (cdr tint)))))))
+
+(clara.terminal:clear *terminal*)
+(let ((state (sb-ext:seed-random-state 49)) (lines (list "(ab(ba)(a(b)a)b)(ab(a))" "b(a(b)a)b)(" "(a)")) (wrong nil) (arrows 0))
+  (setf (clara.terminal:history) lines)        ; some of them longer than a row, and than two
+  (dotimes (round 60)
+    (let* ((slots (coerce (append (reverse lines) (list "")) 'vector)) (at (1- (length slots))) (line "")
+           (reader (reads-on "")))
+      (dotimes (i (random 16 state))
+        (case (random 8 state)
+          ((0 1) (arrow-up)
+           (when (plusp at)
+             (setf (aref slots at) line)
+             (setq at (1- at)
+                   line (aref slots at)
+                   arrows (1+ arrows))))
+          (2 (arrow-down)
+           (when (< at (1- (length slots)))
+             (setf (aref slots at) line)
+             (setq at (1+ at)
+                   line (aref slots at)
+                   arrows (1+ arrows))))
+          (3 (clara.windows:key-typed 8)
+           (when (plusp (length line))
+             (setq line (subseq line 0 (1- (length line))))))
+          (t (let ((character (char "ab(" (random 3 state))))
+               (clara.windows:key-typed (char-code character))
+               (setq line (concatenate 'string line (string character)))))))
+      (type-text (string #\Newline))
+      (let ((read (clara:join-thread reader)))
+        (when (and (plusp (length line)) (not (equal line (first lines))))
+          (push line lines))
+        (unless (and (equal read line) (equal (clara.terminal:history) lines) (equal (last-line) line) (window-says-rows-p))
+          (push (list round read line) wrong)))))
+  (check '(nil 0 t) (list wrong (wrong-pixels) (> arrows 100))))
+(setf (clara.terminal:history) nil)
+(clara.terminal:clear *terminal*)
+
 ;; A terminal of one row goes back a row at a time.
 (let* ((one (clara.terminal:open-terminal "One row" :columns 10 :rows 1 :x 150 :y 150))
        (face (clara.windows:window-surface (clara.terminal:terminal-window one))))
@@ -7601,6 +7865,20 @@
              (dotimes (i 4)
                (clara.windows:key-typed clara.input:+page-down+))
              (check '(5 t t 0) (list prompt (row-shows-p face 5 "> ") (bar-at-p face 5 2 +ink+) (wrong-pixels))))
+           ;; The arrow up brings back what was typed at its prompt, the last
+           ;; line first, each a line of its own now, and the arrow down the
+           ;; line after it, down to the prompt as it was.
+           (clara.windows:key-typed clara.input:+up+)
+           (check t (eventually (lambda ()
+                                  (row-tinted-p face 5 "> '(2))" (list 3 (level 0)) (list 5 (level 0)) (list 6 +stray+)))))
+           (clara.windows:key-typed clara.input:+up+)
+           (check t (eventually (lambda () (and (row-tinted-p face 5 "> (list 1" (list 2 (level 0))) (bar-at-p face 5 9 +ink+)))))
+           (clara.windows:key-typed clara.input:+down+)
+           (clara.windows:key-typed clara.input:+down+)
+           (check t (eventually (lambda () (and (row-shows-p face 5 "> ") (bar-at-p face 5 2 +ink+)
+                                                (cell-shows-p face 5 3 #\Space)))))
+           (check '(("'(2))" "(list 1" "(setq *in-a-window* 8)" "(loop)" "(defvar *in-a-window* 7)" "(+ 1 2)") 0)
+                  (list (clara.terminal:history) (wrong-pixels)))
            (clara.windows:key-typed 4)             ; Ctrl-D at its prompt: it ends, and its window goes with it
            (check t (eventually (lambda () (and (null (clara.windows:windows)) (not (clara:thread-alive-p thread))))))
            (check '(0 nil) (list (wrong-pixels) clara.windows::*made*)))

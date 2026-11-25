@@ -578,6 +578,37 @@ OK
 > (list (clara:wait-event *seen* 60000) (until (bar-p)) (shows 21 "> (k)" '(2 0) '(4 0)) (shows 22 "K ")) ; where Enter
 ^M sendkey ret
 (T OK T T)
+> (until (shows 23 "> (k)" '(2 0 t) '(4 0)))                             ; the arrow up: the line that was read last,
+^M sendkey up
+OK
+> (until (shows 23 "> (p)" '(2 0 t) '(4 0)))                             ; and the one that was typed before it;
+^M sendkey up
+OK
+> (until (shows 23 "> (k)" '(2 0 t) '(4 0)))                             ; the arrow down: the line after that one again,
+^M sendkey down
+OK
+> (until (shows 23 "> (p)" '(2 0 t) '(4 0)))                             ; and up once more: the one that it had left,
+^M sendkey up
+OK
+> (list (clara:wait-event *seen* 60000) (until (bar-p)) (shows 0 "38 ") (shows 21 "59 ") (shows 23 "> ")) ; which Enter reads
+^M sendkey ret
+(T OK T T T)
+> (until (shows 23 "> (k" '(2 0)))                                       ; a line that is begun,
+^M sendkey shift-9
+^M sendkey k
+OK
+> (until (shows 23 "> (p)" '(2 0 t) '(4 0)))                             ; left for the one before it,
+^M sendkey up
+OK
+> (until (shows 23 "> (k" '(2 0)))                                       ; and come back to: it is as it was left,
+^M sendkey down
+OK
+> (list (clara:wait-event *seen* 60000) (until (bar-p)) (shows 21 "> (k)" '(2 0) '(4 0)) (shows 22 "K ")) ; and goes on
+^M sendkey shift-0
+^M sendkey ret
+(T OK T T)
+> (clara.terminal:history)                                               ; what was read in a window, the newest line first
+("(k)" "(p)" "(k)" "(p)" "(k)" "(loop)" "(k)")
 > (defvar *window* (clara.windows:open-window "A picture" 200 120 :x 500 :y 400))
 *WINDOW*
 > (list (picture (clara.windows:window-surface *window*)) (clara.windows:show *window*) (clara.windows:show *window*)
