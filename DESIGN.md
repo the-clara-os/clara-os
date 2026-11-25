@@ -3069,6 +3069,89 @@ architectures (kernel/vm.c).
   mouse over a form in a REPL's window, copy it, type it again with
   Ctrl-V, and cut a word out of a line in Emma and put it back.
 
+## History (decided for issue #49, 2026-11-25)
+
+- A line that was typed at a REPL's prompt comes back (Julio: "Command
+  history function, with up and down arrow lookup"). While a line is read
+  there, the arrow up puts the line that was read before it in its place,
+  and the arrow down the line after that one, down to the line that was
+  being typed. Those are the keys that the issue names and that every
+  shell has for it.
+- What is remembered is lines, and not forms. A prompt reads a line at a
+  time, and one line is what it lets a hand change. A form of three lines
+  that came back as one thing would have to be made one line, and the end
+  of a line is no space: it ends a comment, and in a string it is a
+  character. So a form comes back as the lines that it was typed in, the
+  last of them first, each as it was.
+- There is one list for all the windows. The REPL windows are prompts of
+  the one world: what is defined in one is defined in the next, and what
+  was typed in one comes back in the next in the same way, and in a window
+  that is opened after the first is closed, where a list for each window
+  would begin with nothing every time. A shell keeps a list for each
+  terminal and puts them together in a file when a terminal ends; here
+  the world is what lasts. The list is a variable of the world's, like
+  the text that was copied, so a world that is saved has it. A world that
+  a newer system makes of the files begins without one: the lines are not
+  written down as text.
+- The terminal remembers, and the listener knows nothing of it
+  (lisp/terminal.lisp). A line is remembered where it can come back, and
+  that is a window: the console of the first prompt drops the keys that
+  type no character, and on the serial port an arrow is three bytes that
+  nothing there reads as a key. What is typed at those two is not among
+  the lines.
+- Only a listener's lines are remembered, the ones that are read while
+  `clara.listener:*begun*` says what they go on from. A line that a
+  program reads from a terminal is an answer to something that the
+  program asked, which nobody wants evaluated a second time, and the
+  arrows mean nothing while it is typed.
+- The line editor learned one thing. `clara.console:read-edited-line`
+  asks a function, when it is given one, about a key that types no
+  character, and when the function gives a line, it takes the line that
+  is there back a character at a time and types the other one after it.
+  So a window echoes a line that comes back as it echoes any line: the
+  colours of its parentheses, the hint, the rows that a long line goes on
+  in, and the rows that come down again when it goes. And such a line
+  holds what could have been typed and nothing else, whatever a program
+  has put among the lines. The price is that a line comes back at the
+  pace of typing, which goes through the line once for every character:
+  a line of 40 characters comes and goes in 0.7 ms under hvf, one of 200
+  in 8 ms, one of 1000 in 0.15 s, and one of 4096, the longest that a
+  prompt reads, in 2.3 s.
+- A line that the arrows leave is left as it stands. The lines are two
+  lists while a line is read, the ones before the line that the window
+  shows and the ones after it, and an arrow moves that line from the one
+  list to the other as it is: what was typed into a line that came back
+  is there when the arrows come to it again, as the line is that was
+  being typed. Only the line that Enter reads is remembered, as the
+  newest, and the lines that were remembered are not changed by any of
+  it.
+- The lines that the arrows go through are the ones that there are when
+  the first arrow asks, not the ones of the moment when the prompt was
+  written: a window that sat at its prompt while a line was read in
+  another one has that line.
+- A line is not remembered a second time right after itself, since the
+  arrow up would bring the same line twice and seem to have done nothing,
+  and one that says nothing is not remembered at all. A line that was
+  given up with Ctrl-C was never read.
+- The newest 1000 lines are kept, `clara.terminal:*lines-kept*`, and NIL
+  there keeps them all. They are in the heap: a thousand lines of forty
+  characters are 221 KiB of it. Remembering a line takes 23 millionths of
+  a second with the list at that length.
+- A program reads and writes the lines with `clara.terminal:history`, the
+  way it does the text that was copied, and both ways the list is a copy:
+  nothing outside can change the lines while a window goes through them,
+  and what is no list of strings is refused.
+- It is tested where it can be seen. Under SBCL the tests press the
+  arrows in a terminal of three rows and look at every cell: the colours
+  and the hint of a line that comes back, a line that is longer than a
+  row in a window that is full, a line that was left, a line that is
+  given up, the lines of another window. And the arrows among other keys
+  as they come are held against a second way of keeping the lines, a row
+  of slots with a place in it. The boots press the arrows of QEMU's
+  keyboard in a REPL's window, read a line a second time, leave a line
+  that is begun and come back to it, and bring a line back in the world
+  that was saved, after the machine has started again.
+
 ## Conventions
 
 - C: lower_snake_case for functions and files. Kernel-wide symbols carry

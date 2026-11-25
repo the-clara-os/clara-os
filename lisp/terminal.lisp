@@ -25,6 +25,11 @@
 ;;;; that text for every window (CLARA.WINDOWS:CLIPBOARD). Ctrl-V types what
 ;;;; was copied last, here or in another window, as if on the keyboard.
 ;;;;
+;;;; A line that a listener read here is remembered, for every such window:
+;;;; while the next one is typed, the arrow up brings back the line before,
+;;;; to be read again or changed first, and the arrow down the one after it
+;;;; (HISTORY).
+;;;;
 ;;;; The REPL is the first application, the listener in a window: a
 ;;;; terminal, and a thread that reads forms from it, evaluates them and
 ;;;; prints what they give (lisp/listener.lisp). It is the one world that
@@ -36,7 +41,8 @@
 
 (defpackage "CLARA.TERMINAL"
   (:use "COMMON-LISP")
-  (:export "OPEN-TERMINAL" "TERMINAL-P" "TERMINAL-STREAM" "TERMINAL-WINDOW" "CLEAR" "*ROWS-KEPT*" "REPL"))
+  (:export "OPEN-TERMINAL" "TERMINAL-P" "TERMINAL-STREAM" "TERMINAL-WINDOW" "CLEAR" "*ROWS-KEPT*" "HISTORY" "*LINES-KEPT*"
+           "REPL"))
 (in-package "CLARA.TERMINAL")
 
 (defstruct terminal
@@ -789,6 +795,62 @@
     (show-cursor terminal)
     (clara.windows:show (terminal-window terminal))))
 
+;;; What was typed before
+;;;
+;;; The lines that a listener read in a window are remembered, the newest
+;;; first, in one list for all the windows: they are prompts of the one
+;;; world, so a line that was typed in one comes back in the next, and in a
+;;; window that is opened when the first is long closed. While a listener's
+;;; line is read, the arrow up puts the line before it in its place, and
+;;; the arrow down the line after it, down to the one that was being typed.
+;;; A line that the arrows have left is left as it stands, with what was
+;;; typed into it, until the reading is over: only the line that is read in
+;;; the end is remembered, as the newest. A line that some program reads is
+;;; not remembered, and the arrows mean nothing while it is typed.
+
+;; How many lines are remembered, the newest of them: a number, or NIL for
+;; all of them, which is also what a value that is no number of lines comes
+;; to. The lines are held to it whenever one is remembered.
+(defvar *lines-kept* 1000)
+
+(defvar *history* nil)                              ; the lines, the newest first: HISTORY
+(defvar *history-lock* (clara:make-lock "history")) ; two windows may each have read a line
+
+;; The first of LINES, as many as may be remembered.
+(defun newest (lines)
+  (let ((kept *lines-kept*))
+    (if (and (integerp kept) (>= kept 0) (> (length lines) kept))
+        (subseq lines 0 kept)
+        lines)))
+
+;; The lines that are remembered, the newest first, in a list that is the
+;; caller's own. (SETF (HISTORY) lines) makes LINES those lines, and with
+;; NIL there are none.
+(defun history ()
+  (copy-list *history*))
+
+(defun set-history (lines)
+  (let ((rest lines))
+    (loop
+      (when (null rest)
+        (return))
+      (unless (and (consp rest) (stringp (car rest)))
+        (error "the lines that were typed before are a list of strings, and ~S is not one" lines))
+      (setq rest (cdr rest))))
+  (clara:with-lock-held (*history-lock*)
+    (setq *history* (newest (copy-list lines))))
+  lines)
+
+(defsetf history set-history)
+
+;; LINE was read by a listener, and is the newest of the lines from now
+;; on: unless it says nothing, or is what the line before it was.
+(defun remember (line)
+  (when (plusp (text-end line))
+    (clara:with-lock-held (*history-lock*)
+      (unless (equal line (car *history*))
+        (setq *history* (newest (cons line *history*)))))))
+
 ;; The next line that was typed, without its end, or NIL when no more is
 ;; coming, which is what Ctrl-D at the start of a line says. The cursor
 ;; shows for as long, and Ctrl-C is from now on for the thread that reads.
@@ -798,12 +860,30 @@
   (begin terminal)
   (cursor-shows terminal)
   (unwind-protect
-       (let ((line (clara.console:read-edited-line (lambda () (next-code terminal)) (terminal-stream terminal)
-                                                   (lambda (line character) (echo terminal line character)))))
-         ;; A line of the listener's is one that the next may go on from.
-         (when (and line (stringp clara.listener:*begun*))
+       (let* ((listening (stringp clara.listener:*begun*))
+              (asked nil)   ; an arrow has asked for the lines: they are the ones that there were then
+              (older nil)   ; the lines before the one that the window shows, the newest first,
+              (newer nil)   ; and the ones after it, the nearest first: what the arrows have left, as it was left
+              (line (clara.console:read-edited-line
+                     (lambda () (next-code terminal)) (terminal-stream terminal)
+                     (lambda (line character) (echo terminal line character))
+                     (and listening
+                          (lambda (code typed)
+                            (cond ((= code clara.input:+up+)
+                                   (unless asked
+                                     (setq older *history*
+                                           asked t))
+                                   (when older
+                                     (push typed newer)
+                                     (pop older)))
+                                  ((and (= code clara.input:+down+) newer)
+                                   (push typed older)
+                                   (pop newer))))))))
+         ;; A line of the listener's is one that the next may go on from, and that the arrows bring back.
+         (when (and line listening)
            (clara:with-lock-held ((terminal-lock terminal))
-             (setf (terminal-lines terminal) (cons (cons line (terminal-cells terminal)) (terminal-lines terminal)))))
+             (setf (terminal-lines terminal) (cons (cons line (terminal-cells terminal)) (terminal-lines terminal))))
+           (remember line))
          line)
     (setf (terminal-reading terminal) nil
           (terminal-match terminal) nil)

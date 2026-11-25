@@ -74,8 +74,11 @@ T
 (("REPL" "Emma" "Jaid" "Ares" "Parker") NIL "CLARA.JAID" THERE)
 > (list 'keyboards 'and 'pointers (length (clara.input:devices)))
 (KEYBOARDS AND POINTERS 3)
+> (clara.terminal:history)
+("(k)" "(p)" "(k)" "(p)" "(k)" "(loop)" "(k)")
 > (clara:wait-event *seen* 60000)
-^T (k)
+^M sendkey up
+^M sendkey ret
 T
 > (list 'stopped (clara:wait-event *seen* 60000))
 ^T (loop)
