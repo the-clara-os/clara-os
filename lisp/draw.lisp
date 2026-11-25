@@ -8,7 +8,9 @@
 ;;;; the screen when it is whole, so that nobody watches it being drawn.
 ;;;; Text is drawn in the console's font, a picture of one bit to the pixel
 ;;;; for each character, or in a font of outlines, at any size, which is the
-;;;; business of lisp/type.lisp.
+;;;; business of lisp/type.lisp: as a line, each character as wide as it is,
+;;;; or a character to the cell, in cells of one size, which is what a
+;;;; window of text is made of.
 ;;;;
 ;;;; Whatever is drawn is cut to what the surface has of it, and to the part
 ;;;; of the surface that drawing is kept to for the time being (WITH-CLIP):
@@ -29,7 +31,7 @@
   (:export "START" "SCREEN" "COLOR"
            "ALLOCATE-SURFACE" "FREE-SURFACE" "SURFACE-P" "SURFACE-WIDTH" "SURFACE-HEIGHT" "PIXEL"
            "FILL-RECTANGLE" "DRAW-RECTANGLE" "COPY-RECTANGLE" "DRAW-BITMAP" "DRAW-SHADES" "DRAW-TEXT" "TEXT-WIDTH"
-           "PROVIDE-FONTS"
+           "DRAW-CELLS" "CELL-WIDTH" "CELL-HEIGHT" "PROVIDE-FONTS"
            "WITH-CLIP" "DAMAGE" "ADD-DAMAGE" "TAKE-DAMAGE" "SHOW"))
 (in-package "CLARA.DRAW")
 
@@ -64,7 +66,7 @@
 (defvar *red* '(16 . 8))           ; where red is in a pixel: how far up its bits begin, and how many there are
 (defvar *green* '(8 . 8))
 (defvar *blue* '(0 . 8))
-(defvar *fonts* nil)               ; what lisp/type.lisp handed over: (width . draw), two functions, or NIL
+(defvar *fonts* nil)               ; what lisp/type.lisp handed over: five functions in a list, or NIL
 
 ;; SURFACE, when it is one that can be drawn on.
 (defun live (surface)
@@ -315,10 +317,11 @@
   (ash (- (ash 1 (cdr part)) 1) (car part)))
 
 ;; Text in a font that is not the console's is drawn by lisp/type.lisp, which
-;; is loaded after this file and hands over two functions: how wide a
-;; string is in a font, and the string drawn.
-(defun provide-fonts (width draw)
-  (setq *fonts* (cons width draw))
+;; is loaded after this file and hands over its functions: how wide a
+;; string is in a font, and the string drawn; and for text in cells how wide
+;; a cell of a font is, how high, and a string drawn a character to the cell.
+(defun provide-fonts (width draw cell-width cell-height cells)
+  (setq *fonts* (list width draw cell-width cell-height cells))
   t)
 
 (defun fonts ()
@@ -330,7 +333,7 @@
 ;; CLARA.TYPE:FONT's.
 (defun text-width (string &optional font)
   (if font
-      (funcall (car (fonts)) string font)
+      (funcall (nth 0 (fonts)) string font)
       (* clara.font:+width+ (length string))))
 
 ;; STRING, its first character's upper left corner at X and Y, all on one
@@ -340,10 +343,37 @@
 ;; at all without one.
 (defun draw-text (surface x y string color &optional background font)
   (if font
-      (funcall (cdr (fonts)) surface x y string color background font)
-      (draw-cells surface x y string color background)))
+      (funcall (nth 1 (fonts)) surface x y string color background font)
+      (draw-letters surface x y string color background)))
 
-(defun draw-cells (surface x y string color background)
+;; Text in cells: a character to the cell, and every cell of one size, so
+;; that a row of text is so many cells, whatever its characters are. That
+;; is what a terminal, an editor and a list are made of. A cell of the
+;; console's font is CLARA.FONT:+WIDTH+ by +HEIGHT+ pixels, each character's
+;; picture; a cell of FONT, one of CLARA.TYPE:FONT's, is as wide as the
+;; widest of its characters from the space to the tilde moves on, and as
+;; high as a line of it.
+(defun cell-width (&optional font)
+  (if font
+      (funcall (nth 2 (fonts)) font)
+      clara.font:+width+))
+
+(defun cell-height (&optional font)
+  (if font
+      (funcall (nth 3 (fonts)) font)
+      clara.font:+height+))
+
+;; STRING, a character to the cell, the first cell's upper left corner at X
+;; and Y, in the console's font or in FONT. A character stands in the middle
+;; of its cell, and what of it lies outside the cell is not drawn. The
+;; glyphs are drawn in COLOR, and the cells are filled with BACKGROUND
+;; first, or left as they are without one.
+(defun draw-cells (surface x y string color &optional background font)
+  (if font
+      (funcall (nth 4 (fonts)) surface x y string color background font)
+      (draw-letters surface x y string color background)))
+
+(defun draw-letters (surface x y string color background)
   (multiple-value-bind (left top right bottom) (inside surface x y (text-width string) clara.font:+height+)
     (when left
       (let ((row (+ (surface-address surface) (* top (surface-pitch surface))))

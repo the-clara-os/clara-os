@@ -4908,14 +4908,17 @@
 
 ;; A machine with a screen, what draws started on it, and the window manager
 ;; as a world has it that never ran one.
-(defun new-desk (&key (width 200) (height 140) applications commands (start t) (machine t) letters (files t))
+(defun new-desk (&key (width 200) (height 140) applications commands (start t) (machine t) letters (files t) fonts)
   (when machine
     (clara.host:reset-machine))
   ;; The letters of the bar, the list and the titles are the console's,
   ;; unless LETTERS asks for the font of outlines, whose file is then among
-  ;; the system's, unless FILES says that it is not.
+  ;; the system's, unless FILES says that it is not. FONTS are more files of
+  ;; fonts/ that are among the system's, for what the windows are written in.
   (when (and letters files)
     (clara.host:put-system-file "Go-Regular.ttf" (file-octets "fonts/Go-Regular.ttf")))
+  (dolist (file fonts)
+    (clara.host:put-system-file file (file-octets (concatenate 'string "fonts/" file))))
   (with-output-to-string (*standard-output*)
     (clara.type:start))
   (setq clara.windows:*font* (cond ((consp letters) letters)
@@ -6372,7 +6375,7 @@
 ;; file, or by a file. The same is given every time that the same is asked
 ;; for, and no two that differ are the same.
 (new-type "Go-Regular.ttf" "Go-Bold.ttf" "Go-Italic.ttf" "Go-Bold-Italic.ttf" "Go-Mono.ttf")
-(check '("Sans" "Mono") (clara.type:families))
+(check '("Sans" "Mono" "Serif") (clara.type:families))
 (let ((sans (clara.type:font "Sans" 16)))
   (check '(t "Sans" 16 nil nil) (list (clara.type:font-p sans) (clara.type:font-name sans) (clara.type:font-size sans)
                                       (clara.type:font-p "Sans") (clara.type:font-p nil)))
@@ -6406,12 +6409,12 @@
   ;; A family of the user's, whose missing files are stood in for by the nearest that it has; and one under a
   ;; name that is taken, which takes the name.
   (check "Plain" (clara.type:define-family "Plain" "Go-Mono.ttf" :bold "Go-Bold.ttf"))
-  (check '("Sans" "Mono" "Plain") (clara.type:families))
+  (check '("Sans" "Mono" "Serif" "Plain") (clara.type:families))
   (check '("Go-Mono.ttf" "Go-Bold.ttf" "Go-Mono.ttf" "Go-Bold.ttf")
          (mapcar (lambda (style) (clara.type::font-file (apply #'clara.type:font "plain" 12 style)))
                  '(() (:bold t) (:italic t) (:bold t :italic t))))
   (clara.type:define-family "PLAIN" "Go-Italic.ttf")
-  (check '(("Sans" "Mono" "PLAIN") "Go-Italic.ttf")
+  (check '(("Sans" "Mono" "Serif" "PLAIN") "Go-Italic.ttf")
          (list (clara.type:families) (clara.type::font-file (clara.type:font "Plain" 12 :bold t))))
   (check-condition error (clara.type:define-family "Plain" 'go))
   (setq clara.type::*families* (butlast clara.type::*families*)))
@@ -6422,6 +6425,10 @@
 (check (format nil "type: 8 files of outlines came with the system, for the fonts Sans and Mono~%")
        (new-type "Go-Regular.ttf" "Go-Bold.ttf" "Go-Italic.ttf" "Go-Bold-Italic.ttf" "Go-Mono.ttf" "Go-Mono-Bold.ttf"
                  "Go-Mono-Italic.ttf" "Go-Mono-Bold-Italic.ttf"))
+(check (format nil "type: 12 files of outlines came with the system, for the fonts Sans, Mono and Serif~%")
+       (new-type "Go-Regular.ttf" "Go-Bold.ttf" "Go-Italic.ttf" "Go-Bold-Italic.ttf" "Go-Mono.ttf" "Go-Mono-Bold.ttf"
+                 "Go-Mono-Italic.ttf" "Go-Mono-Bold-Italic.ttf" "Charter-Regular.ttf" "Charter-Bold.ttf"
+                 "Charter-Italic.ttf" "Charter-Bold-Italic.ttf"))
 (check '("a" "a and b" "a, b and c") (mapcar #'clara.type::listed '(("a") ("a" "b") ("a" "b" "c"))))
 
 ;; The files that come with the system, each held against what FreeType
@@ -6431,7 +6438,11 @@
 ;; every glyph moves on, and over every point of every outline. A file in
 ;; fonts/ that has no row here fails the run.
 (defparameter *font-facts*
-  '(("Go-Bold-Italic.ttf" 2048 712 1935 -432 0 -300 100 512 102 967746671 337441057 634850756)
+  '(("Charter-Bold-Italic.ttf" 1000 229 980 236 0 -110 84 296 84 893503001 353753178 144325026)
+    ("Charter-Bold.ttf" 1000 229 980 236 0 -110 84 292 84 893503001 392483803 619893077)
+    ("Charter-Italic.ttf" 1000 229 980 236 0 -149 58 291 58 893503001 366261209 141821785)
+    ("Charter-Regular.ttf" 1000 229 980 236 0 -149 58 288 58 893503001 871259280 641911726)
+    ("Go-Bold-Italic.ttf" 2048 712 1935 -432 0 -300 100 512 102 967746671 337441057 634850756)
     ("Go-Bold.ttf" 2048 712 1935 -432 0 -250 100 512 102 967746671 331232792 161428814)
     ("Go-Italic.ttf" 2048 712 1935 -432 0 -275 50 512 102 967746671 425405616 434109530)
     ("Go-Mono-Bold-Italic.ttf" 2048 712 1935 -432 0 -275 100 512 102 967746671 249473842 564812262)
@@ -6470,6 +6481,23 @@
 ;; that no style of one is stood in for by another.
 (check t (every (lambda (family) (every (lambda (file) (probe-file (source (concatenate 'string "fonts/" file)))) (cdr family)))
                 clara.type::*families*))
+
+;; How far the letters of a font reach below its baseline is a number below
+;; nought in a file, and in some the distance itself, the files of Serif
+;; among them, which say 236 where the Go fonts say -432: a line of either
+;; is as high as its letters reach.
+(new-type "Charter-Regular.ttf" "Charter-Bold.ttf" "Charter-Italic.ttf" "Charter-Bold-Italic.ttf")
+(let ((serif (clara.type:font "Serif" 20)))
+  (check '(20 5 25 ("Charter-Regular.ttf" "Charter-Bold.ttf" "Charter-Italic.ttf" "Charter-Bold-Italic.ttf"))
+         (list (clara.type:font-ascent serif) (clara.type:font-descent serif) (clara.type:font-height serif)
+               (mapcar (lambda (style) (clara.type::font-file (apply #'clara.type:font "serif" 20 style)))
+                       '(() (:bold t) (:italic t) (:bold t :italic t))))))
+(check '((16 4 20) (16 4 20))
+       (loop for descent in '(-200 200)
+             collect (progn (new-made :descent descent)
+                            (let ((font (clara.type:font "made.ttf" 20)))
+                              (list (clara.type:font-ascent font) (clara.type:font-descent font)
+                                    (clara.type:font-height font))))))
 
 ;;; Text in a font, on a surface. What a pixel should be is worked out
 ;;; from the pictures of the glyphs, which the tests above have looked at:
@@ -6556,8 +6584,205 @@
 ;; Without the file that draws in fonts, a font cannot be handed to what
 ;; draws: there is none.
 (let ((clara.draw::*fonts* nil))
-  (check "there is nothing here that draws in a font: lisp/type.lisp is not loaded"
-         (condition-text (lambda () (clara.draw:text-width "a" 5)))))
+  (check '("there is nothing here that draws in a font: lisp/type.lisp is not loaded"
+           "there is nothing here that draws in a font: lisp/type.lisp is not loaded"
+           "there is nothing here that draws in a font: lisp/type.lisp is not loaded" 8 16)
+         (list (condition-text (lambda () (clara.draw:text-width "a" 5)))
+               (condition-text (lambda () (clara.draw:cell-width 5)))
+               (condition-text (lambda () (clara.draw:draw-cells *canvas* 0 0 "a" 1 nil 5)))
+               (clara.draw:cell-width) (clara.draw:cell-height))))
+
+;;; Text in cells: a character to the cell, and every cell of one size. A
+;;; cell of a font is as wide as the widest of the characters from the
+;;; space to the tilde moves on, and as high as a line of the font; a
+;;; character stands in the middle of its cell, and shows nothing outside
+;;; it. The tests work the size out for themselves, from the glyphs.
+
+(defun cell-size (font)
+  (if font
+      (values (loop for code from 32 to 126 maximize (clara.type::glyph-advance (clara.type::glyph font code)))
+              (clara.type:font-height font))
+      (values 8 16)))
+
+;; What a cell that is WIDE pixels wide has at X and Y, counted from its
+;; upper left corner, when it shows CHARACTER in INK on a pixel that was
+;; UNDER: in the console's letters, INK where the character's picture has a
+;; bit; in FONT, what lies between the two by the shade of the glyph, which
+;; stands in the middle of the cell, and INK in the rows of a line under the
+;; text or through it.
+(defun cell-pixel (font character x y ink under wide)
+  (if (null font)
+      (let ((code (char-code character)))
+        (if (logbitp (- 7 x) (aref clara.font:*glyphs* (+ y (* 16 (- (if (<= 32 code 126) code 127) 32)))))
+            ink
+            under))
+      (let* ((glyph (clara.type::glyph font (char-code character)))
+             (up (clara.type:font-ascent font))
+             (below (+ up (clara.type::font-under font)))
+             (through (- up (clara.type::font-over font))))
+        (if (or (and (clara.type::font-underline font) (<= below y (+ below (clara.type::font-stroke font) -1)))
+                (and (clara.type::font-strike font) (<= through y (+ through (clara.type::font-cut font) -1))))
+            ink
+            (mix under ink (glyph-shade glyph (- x (floor (- wide (clara.type::glyph-advance glyph)) 2)) (- y up)))))))
+
+;; The sides of its cell that the picture of CHARACTER reaches over in FONT,
+;; whose cells are WIDE by HIGH: what a cell cuts off.
+(defun reaches-over (font character wide high)
+  (let* ((glyph (clara.type::glyph font (char-code character)))
+         (left (+ (floor (- wide (clara.type::glyph-advance glyph)) 2) (clara.type::glyph-left glyph)))
+         (top (+ (clara.type:font-ascent font) (clara.type::glyph-top glyph))))
+    (and (clara.type::glyph-shades glyph)
+         (append (and (< left 0) '(:left)) (and (< top 0) '(:top))
+                 (and (> (+ left (clara.type::glyph-width glyph)) wide) '(:right))
+                 (and (> (+ top (clara.type::glyph-height glyph)) high) '(:foot))))))
+
+;; And the sides that the pictures of a string's characters reach over
+;; between them.
+(defun sides-cut (font string)
+  (multiple-value-bind (wide high) (cell-size font)
+    (remove-if-not (lambda (side) (some (lambda (character) (member side (reaches-over font character wide high))) string))
+                   '(:left :top :right :foot))))
+
+;; A string in cells, at places on a surface and around it: how many
+;; pixels are not what the rule says, with the ones that changed and do not
+;; lie in the damage, and the times that something changed and the function
+;; said that it drew nothing.
+(defun cells-wrong (font string background)
+  (let ((ink #xf0e0d0) (ground #x102030) (wrong 0))
+    (multiple-value-bind (wide high) (cell-size font)
+      (loop for x from -150 to 64 by 37
+            do (loop for y from -30 to 44 by 19
+                     do (clara.draw:fill-rectangle *canvas* 0 0 60 40 ground)
+                        (clara.draw:take-damage *canvas*)
+                        (let ((drew (clara.draw:draw-cells *canvas* x y string ink background font))
+                              (changed nil))
+                          (dotimes (py 40)
+                            (dotimes (px 60)
+                              (let* ((shown (word-at *canvas* px py))
+                                     (column (floor (- px x) wide)) (down (- py y)))
+                                (unless (= shown (if (and (< -1 column (length string)) (< -1 down high))
+                                                     (cell-pixel font (char string column) (- px x (* column wide)) down
+                                                                 ink (or background ground) wide)
+                                                     ground))
+                                  (incf wrong))
+                                (unless (= shown ground)
+                                  (setq changed t)
+                                  (unless (some (lambda (r) (and (<= (first r) px (+ (first r) (third r) -1))
+                                                                 (<= (second r) py (+ (second r) (fourth r) -1))))
+                                                (clara.draw:damage *canvas*))
+                                    (incf wrong))))))
+                          (when (and changed (not drew))
+                            (incf wrong))))))
+    wrong))
+
+;; In the console's letters and in four fonts: two of one width, of which
+;; the one that leans has letters that reach over both sides of their
+;; cells, one whose letters differ in width, and one with a line under it
+;; and through it, whose dash reaches over the left side of its cell and no
+;; other. The string has characters for each whose pictures reach out of
+;; their cells, which are cut there.
+(new-type "Go-Mono-Bold.ttf" "Go-Mono-Italic.ttf" "Go-Bold-Italic.ttf" "Charter-Italic.ttf" "Charter-Regular.ttf")
+(setq *canvas* (clara.draw:allocate-surface 60 40))
+(let ((string (coerce (list #\f #\W #\_ #\Space #\g (code-char 8212) (code-char 233) #\| #\p) 'string)))
+  (loop for font in (list nil (clara.type:font "Mono" 15 :bold t) (clara.type:font "Mono" 20 :italic t)
+                          (clara.type:font "Sans" 21 :bold t :italic t :underline t)
+                          (clara.type:font "Serif" 20 :italic t :strike t :underline t))
+        for cut in '(nil (:right) (:left :right) (:right) (:left :right))
+        do (multiple-value-bind (wide high) (cell-size font)
+             (check (list wide high cut)
+                    (list (clara.draw:cell-width font) (clara.draw:cell-height font) (and font (sides-cut font string))))
+             (dolist (background (list nil #x405060))
+               (check (list (and font (clara.type:font-size font)) (and background t) 0)
+                      (list (and font (clara.type:font-size font)) (and background t)
+                            (cells-wrong font string background)))))))
+;; The cells of the three: in a font of one width every character moves on
+;; by a cell, and in the others a cell is as wide as the widest that is
+;; typed, which the tests found by asking for each.
+(check '((9 19) (20 25) (9 12) nil)
+       (list (list (clara.draw:cell-width (clara.type:font "Mono" 15 :bold t)) (clara.draw:cell-height (clara.type:font "Mono" 15 :bold t)))
+             (list (clara.draw:cell-width (clara.type:font "Sans" 21 :bold t :italic t :underline t))
+                   (clara.draw:cell-height (clara.type:font "Sans" 21 :bold t :italic t :underline t)))
+             (list (clara.draw:cell-width (clara.type:font "Serif" 9)) (clara.draw:cell-height (clara.type:font "Serif" 9)))
+             (clara.draw:draw-cells *canvas* 0 0 "" 1 2 (clara.type:font "Mono" 15 :bold t))))
+(check '("5 is not a font" "5 is not a font" "5 is not a font")
+       (list (condition-text (lambda () (clara.draw:cell-width 5))) (condition-text (lambda () (clara.draw:cell-height 5)))
+             (condition-text (lambda () (clara.draw:draw-cells *canvas* 0 0 "a" 1 nil 5)))))
+;; A cell that is drawn again by itself leaves the cells beside it as they
+;; were, whatever its character reaches into, and is what it was itself:
+;; that is what lets a window draw one cell of a row.
+(let* ((font (clara.type:font "Sans" 21 :bold t :italic t :underline t))
+       (wide (clara.draw:cell-width font))
+       (string (coerce (list (code-char 8212) #\W (code-char 8212)) 'string)))
+  (flet ((pixels ()
+           (loop for y below 40 collect (loop for x below 60 collect (word-at *canvas* x y)))))
+    (clara.draw:fill-rectangle *canvas* 0 0 60 40 #x102030)
+    (clara.draw:draw-cells *canvas* 0 3 string #xf0e0d0 #x405060 font)
+    (let ((before (pixels)))
+      (clara.draw:draw-cells *canvas* wide 3 "W" #xf0e0d0 #x405060 font)
+      (clara.draw:draw-cells *canvas* 0 3 (string (code-char 8212)) #xf0e0d0 #x405060 font)
+      (check t (equal before (pixels)))
+      ;; Another character there changes that cell and no other.
+      (clara.draw:draw-cells *canvas* wide 3 "@" #xf0e0d0 #x405060 font)
+      (let ((after (pixels)))
+        (check '(t t)
+               (list (loop for y below 40
+                           always (loop for x below 60
+                                        always (or (and (<= wide x (+ wide wide -1)) (<= 3 y (+ 3 (clara.draw:cell-height font) -1)))
+                                                   (= (nth x (nth y before)) (nth x (nth y after))))))
+                     (not (equal before after))))))))
+;; What a font keeps of how wide its cells are goes with its glyphs when the
+;; fonts let go of them, and is found again.
+(let ((font (clara.type:font "Mono" 15 :bold t)))
+  (check '(9 nil 9)
+         (list (clara.type::kept-wide (clara.type::live font))
+               (progn (clara.type::shed) (clara.type::kept-wide (clara.type::live font)))
+               (clara.draw:cell-width font))))
+;; A cell is as high as a line, with the room that the font leaves between
+;; two lines, and is filled that high. And a line under the text is cut at
+;; the foot of its cell like everything else: this font wants its line two
+;; rows thick, three rows below the baseline, where its cells have room for
+;; one.
+(new-made :ascent 750 :descent -250 :gap 90)
+(setq *canvas* (clara.draw:allocate-surface 60 40))
+(let ((font (clara.type:font "made.ttf" 20)))
+  (check '(22 22 0 0)
+         (list (clara.draw:cell-height font) (clara.type:font-height font)
+               (cells-wrong font "AB C" #x405060) (cells-wrong font "AB C" nil))))
+(new-made :lines t :descent -90)
+(setq *canvas* (clara.draw:allocate-surface 60 40))
+(let ((font (clara.type:font "made.ttf" 40 :underline t :strike t)))
+  (check '((32 4 36) (3 2) 0 0)
+         (list (list (clara.type:font-ascent font) (clara.type:font-descent font) (clara.draw:cell-height font))
+               (list (clara.type::font-under font) (clara.type::font-stroke font))
+               (cells-wrong font "AB" #x405060) (cells-wrong font "AB" nil))))
+;; And a line through the text that lies above the cells is not drawn, or
+;; as much of it as lies within them: this font's line is ten rows above
+;; the baseline, and its cells begin four above it.
+(new-made :lines t :ascent 100 :descent -90)
+(setq *canvas* (clara.draw:allocate-surface 60 40))
+(let ((font (clara.type:font "made.ttf" 40 :strike t)))
+  (check '((4 4 8) (10 2) 0 0)
+         (list (list (clara.type:font-ascent font) (clara.type:font-descent font) (clara.draw:cell-height font))
+               (list (clara.type::font-over font) (clara.type::font-cut font))
+               (cells-wrong font "AB" #x405060) (cells-wrong font "AB" nil))))
+;; A font whose letters are higher than it says its lines are, and reach
+;; lower: they are cut at the top and at the foot of their cells.
+(new-made :ascent 400 :descent -50)
+(setq *canvas* (clara.draw:allocate-surface 60 40))
+(let ((font (clara.type:font "made.ttf" 20)))
+  (check '((14 9) (:top :right :foot) 0 0)
+         (list (list (clara.draw:cell-width font) (clara.draw:cell-height font)) (sides-cut font "AFJ")
+               (cells-wrong font "AFJ B" #x405060) (cells-wrong font "AFJ B" nil))))
+;; The widest of the characters that are typed is found by asking every one
+;; of them, the space and the tilde too, and no other: a font whose one
+;; wide glyph is the space's, one where it is the tilde's, and one where
+;; it is the glyph of the characters on either side of those.
+(flet ((cell-of (characters)
+         (new-type)
+         (clara.host:put-system-file "made.ttf" (font-file (list (cons 500 (plain-glyph *box*)) (cons 900 (plain-glyph *square*)))
+                                                           characters))
+         (clara.draw:cell-width (clara.type:font "made.ttf" 20))))
+  (check '(18 18 10) (list (cell-of '((32 . 1))) (cell-of '((126 . 1))) (cell-of '((31 . 1) (127 . 1))))))
 
 ;;; A world that was saved, and the machine after it. The fonts and the
 ;;; pictures of their glyphs are in the heap and come back; the bytes of
@@ -6658,6 +6883,40 @@
 (dolist (window (clara.windows:windows))
   (clara.windows:close-window window))
 (clara.windows:stop)
+;; The letters are said as CLARA.TYPE:FONT is told, with what else it takes,
+;; or they are a font: bold ones are the bold file's.
+(new-desk :letters (list "Sans" 13 :bold t) :fonts '("Go-Bold.ttf"))
+(clara.windows:open-window "Bold" 90 40 :x 30 :y 50 :close (lambda () nil))
+(check '(t "Go-Bold.ttf" 0)
+       (list (eq clara.windows::*letters* (clara.type:font "Sans" 13 :bold t)) (clara.type::font-file clara.windows::*letters*)
+             (wrong-pixels)))
+(clara.windows:stop)
+(let ((under (clara.type:font "Sans" 12 :bold t :underline t)))
+  (check '(nil t t t)
+         (list (clara.windows::font-said nil) (eq under (clara.windows::font-said under))
+               (eq under (clara.windows::font-said (list "Sans" 12 :bold t :underline t)))
+               (eq (clara.type:font "Go-Bold.ttf" 30) (clara.windows::font-said (list "Go-Bold.ttf" 30)))))
+  (check '("a font is said as CLARA.TYPE:FONT is told, its name and its size in a list, and \"Sans\" is not that"
+           "a font is said as CLARA.TYPE:FONT is told, its name and its size in a list, and (\"Sans\") is not that"
+           "the size of a font is a whole number of pixels from 4 to 400, and \"large\" is not")
+         (mapcar (lambda (said) (condition-text (lambda () (clara.windows::font-said said))))
+                 (list "Sans" (list "Sans") (list "Sans" "large"))))
+  ;; What the windows of text are written in: nothing is said as the system comes, which is the console's
+  ;; letters; a font or what says one is that font; and one that cannot be had is said, and is the console's.
+  (check '(nil nil t t)
+         (list clara.windows:*text-font* (clara.windows:text-font)
+               (let ((clara.windows:*text-font* under)) (eq under (clara.windows:text-font)))
+               (let ((clara.windows:*text-font* (list "Sans" 12 :bold t :underline t))) (eq under (clara.windows:text-font)))))
+  (let ((clara.windows:*text-font* (list "Nowhere.ttf" 12)))
+    (check (list nil (format nil "windows: Nowhere.ttf is not a font that can be had here: there are no files: no disk has a volume that is known here, so the text of the window is in the console's letters~%"))
+           (let* ((font :none) (said (with-output-to-string (*standard-output*) (setq font (clara.windows:text-font)))))
+             (list font said)))))
+(let ((said (with-output-to-string (*standard-output*)
+              (new-desk :letters (list "Sans")))))
+  (check '(nil 0 t) (list clara.windows::*letters* (wrong-pixels)
+                          (and (search "windows: a font is said as CLARA.TYPE:FONT is told" said)
+                               (search "so the letters are the console's" said) t))))
+(clara.windows:stop)
 ;; A font that is asked for and cannot be had is said, and the letters are
 ;; the console's; and so they are when none is asked for.
 (new-type)
@@ -6677,15 +6936,17 @@
 ;;; surface of its window, and what its stream gives back when keys are
 ;;; typed at the window manager.
 
+;; The letters that the windows of these tests are written in: the
+;; console's, or a font of outlines while this is bound to one. Whatever
+;; holds a window of cells against what it should show goes by it.
+(defvar *cell-font* nil)
+
 (defun cell-shows-p (surface row column character &optional (ink +ink+) (paper +paper+))
-  (let* ((code (char-code character))
-         (glyph (* clara.font:+height+
-                   (- (if (<= clara.font:+first+ code clara.font:+last+) code (1+ clara.font:+last+))
-                      clara.font:+first+))))
-    (dotimes (y clara.font:+height+ t)
-      (dotimes (x clara.font:+width+)
-        (unless (= (word-at surface (+ (* column clara.font:+width+) x) (+ (* row clara.font:+height+) y))
-                   (if (logbitp (- clara.font:+width+ 1 x) (aref clara.font:*glyphs* (+ glyph y))) ink paper))
+  (multiple-value-bind (wide high) (cell-size *cell-font*)
+    (dotimes (y high t)
+      (dotimes (x wide)
+        (unless (= (word-at surface (+ (* column wide) x) (+ (* row high) y))
+                   (cell-pixel *cell-font* character x y ink paper wide))
           (return-from cell-shows-p nil))))))
 
 ;; The cells of a row from its first on show STRING.
@@ -6695,9 +6956,10 @@
 
 ;; The lowest two rows of a cell's pixels, where the cursor is drawn, are all of PIXEL.
 (defun bar-at-p (surface row column pixel)
-  (loop for y from 14 to 15
-        always (loop for x below 8
-                     always (= (word-at surface (+ (* column 8) x) (+ (* row 16) y)) pixel))))
+  (multiple-value-bind (wide high) (cell-size *cell-font*)
+    (loop for y from (- high 2) below high
+          always (loop for x below wide
+                       always (= (word-at surface (+ (* column wide) x) (+ (* row high) y)) pixel)))))
 
 (defun type-text (text)
   (map nil (lambda (character) (clara.windows:key-typed (char-code character))) text))
@@ -7359,7 +7621,9 @@
 ;; behind the last character of a line whose end is highlighted with it.
 (defvar *corner* (multiple-value-list (clara.windows:window-position (clara.terminal:terminal-window *terminal*))))
 (defun pointer-in (column row buttons &optional (across 0)) ; the pointer at the left edge of a cell, or some pixels further
-  (clara.windows:pointer-moved (+ (first *corner*) (* 8 column) across) (+ (second *corner*) (* 16 row) 8) buttons))
+  (multiple-value-bind (wide high) (cell-size *cell-font*)
+    (clara.windows:pointer-moved (+ (first *corner*) (* wide column) across) (+ (second *corner*) (* high row) (floor high 2))
+                                 buttons)))
 (defun marked () (clara.terminal::terminal-marked *terminal*))
 ;; A row shows STRING, its cells from FROM to before TO on the highlight's
 ;; ground; TINTS are the cells in other colours, as ROW-TINTED-P has them.
@@ -7828,7 +8092,9 @@
                     (let ((symbol (find-symbol "*IN-A-WINDOW*" "COMMON-LISP-USER")))
                       (and symbol (boundp symbol) (symbol-value symbol)))))
              (check t (eventually (lambda () (eql (in-a-window) 7))))
-             ;; Ctrl-C stops what it computes, and it reads again.
+             ;; Ctrl-C stops what it computes, and it reads again. The form is typed once the window reads
+             ;; the next line: typed before that, it is typed ahead, and the Ctrl-C would forget it unread.
+             (check t (eventually (lambda () (clara.terminal::terminal-reading *terminal*))))
              (type-text (format nil "(loop)~%"))
              (check t (eventually (lambda () (not (clara.terminal::terminal-reading *terminal*)))))
              (clara.windows:key-typed 3)
@@ -7907,6 +8173,141 @@
          (error (condition) (let ((*print-pretty* nil)) (princ-to-string condition)))))
 (check (list #'clara.terminal:repl #'clara.emma:edit #'clara.jaid:browse #'clara.ares:browse #'clara.parker:parker)
        (mapcar #'clara.windows::application-function clara.windows::*applications*))
+
+;;; A terminal in a font of outlines. Its cells are as large as the font's,
+;;; and what is drawn in them goes the ways that it goes in the console's
+;;; letters: what is written and what moves up, what Page Up brings back,
+;;; what is typed and taken back across the start of a row, the cursor, the
+;;; colours of the parentheses and the hint, and what the pointer
+;;; highlights. The font is one of which some characters' pictures reach
+;;; out of their cells.
+(new-desk :width 300 :height 220 :fonts '("Go-Mono-Bold.ttf" "Go-Mono.ttf"))
+(let ((*cell-font* (clara.type:font "Mono" 15 :bold t)))
+  (setq *terminal* (clara.terminal:open-terminal "Letters" :columns 10 :rows 3 :font *cell-font*)
+        *out* (clara.terminal:terminal-stream *terminal*)
+        *face* (clara.windows:window-surface (clara.terminal:terminal-window *terminal*))
+        *corner* (multiple-value-list (clara.windows:window-position (clara.terminal:terminal-window *terminal*))))
+  (check '(90 57 0) (list (clara.draw:surface-width *face*) (clara.draw:surface-height *face*) (wrong-pixels)))
+  (write-string "0123456789_/K%\\(g)jqxyzgjpq" *out*)       ; one string, three rows
+  (check '(t 0) (list (rows-show-p "0123456789" "_/K%\\(g)jq" "xyzgjpq") (wrong-pixels)))
+  (write-string (string #\Newline) *out*)                  ; a new line past the last row moves the rows up, and the
+  (check '(t 0) (list (rows-show-p "_/K%\\(g)jq" "xyzgjpq" "") (wrong-pixels))) ; last is blank to the feet of its letters
+  (write-string (format nil "last~%") *out*)
+  (check '(t 0) (list (rows-show-p "xyzgjpq" "last" "") (wrong-pixels)))
+  (page-up)                                                ; and Page Up draws the rows that have left again
+  (check '(t 2 0) (list (rows-show-p "0123456789" "_/K%\\(g)jq" "xyzgjpq") (back) (wrong-pixels)))
+  (page-down)
+  (check '(t 0) (list (rows-show-p "xyzgjpq" "last" "") (back)))
+  (write-string (coerce (list #\a #\Tab #\b #\Return #\_) 'string) *out*)
+  (check t (rows-show-p "xyzgjpq" "last" "_       b"))
+  ;; A line that is read: the cursor is a bar at the foot of its cell, the parentheses have their colours, and
+  ;; the one that opens the last has the hint under it, in the row above.
+  (clara.terminal:clear *terminal*)
+  (let ((reader (reads-on "")))
+    (check t (eventually (lambda () (bar-at-p *face* 0 0 +ink+))))
+    (type-text "(ab (cd e))")                              ; ten characters to the row, and the last in the next
+    (check '(t t t (0 . 0) 0)
+           (list (typed-p 0 "(ab (cd e)" (list 0 (level 0) +hint+) (list 4 (level 1)) (list 9 (level 1)))
+                 (typed-p 1 ")" (list 0 (level 0))) (bar-at-p *face* 1 1 +ink+) (hint) (wrong-pixels)))
+    (clara.windows:key-typed 8)                            ; Backspace takes the last one back,
+    (clara.windows:key-typed 8)                            ; and the one before it, from the start of the row
+    (check '(t t t nil 0)
+           (list (typed-p 0 "(ab (cd e" (list 0 (level 0)) (list 4 (level 1))) (row-shows-p *face* 1 "          ")
+                 (bar-at-p *face* 0 9 +ink+) (hint) (wrong-pixels)))
+    (type-text (format nil "))~%"))
+    (check '("(ab (cd e))" t nil)
+           (list (clara:join-thread reader)
+                 (row-tinted-p *face* 0 "(ab (cd e)" (list 0 (level 0)) (list 4 (level 1)) (list 9 (level 1)))
+                 (clara.terminal::terminal-cursor *terminal*))))
+  ;; The cursor over a letter that reaches to the foot of its cell: taken away, it leaves the letter whole.
+  (clara.terminal:clear *terminal*)
+  (write-string (coerce (list #\g #\j #\Return) 'string) *out*)
+  (let ((reader (reads-a-line)))
+    (check t (eventually (lambda () (bar-at-p *face* 0 0 +ink+))))
+    (clara.windows:key-typed 4)                            ; no more is coming, and nothing was drawn but the cursor
+    (check '(:end t 0) (list (clara:join-thread reader) (row-shows-p *face* 0 "gj        ") (wrong-pixels))))
+  ;; The pointer highlights by the cells of the font: a cell counts when the pointer has passed its middle.
+  (clara.terminal:clear *terminal*)
+  (write-string (format nil "one two~%three") *out*)
+  (flet ((pointer-at (column row buttons across down)      ; so many pixels into a cell, across and down
+           (clara.windows:pointer-moved (+ (first *corner*) (* 9 column) across) (+ (second *corner*) (* 19 row) down) buttons)))
+    (pointer-at 4 0 0 0 18)
+    (pointer-at 4 0 1 0 18)                                ; the button goes down before the t of two, in its last row of pixels,
+    (pointer-at 2 1 1 4 18)                                ; and the pointer is dragged four pixels into the r, not past its middle,
+    (check '(((0 . 4) 1 . 2) t t) (list (marked) (lit-p 0 "one two   " 4 8) (lit-p 1 "three     " 0 2)))
+    (pointer-at 2 1 1 5 0)                                 ; and five, which is, in its first row of pixels
+    (check '(((0 . 4) 1 . 3) t t 0) (list (marked) (lit-p 0 "one two   " 4 8) (lit-p 1 "three     " 0 3) (wrong-pixels)))
+    (pointer-at 2 1 0 5 0))
+  (clara.windows:key-typed 3)                              ; Ctrl-C copies it
+  (check (list (format nil "two~%thr") nil t 0)
+         (list (clara.windows:clipboard) (marked) (rows-show-p "one two" "three" "") (wrong-pixels)))
+  (clara.windows:close-window (clara.terminal:terminal-window *terminal*))
+  ;; Cells of another width, whose middle is another number of pixels in: six of twelve are past it.
+  (let* ((wide (clara.terminal:open-terminal "Wide" :columns 8 :rows 2 :font (clara.type:font "Mono" 20) :x 20 :y 60))
+         (window (clara.terminal:terminal-window wide)))
+    (write-string "abcdefg" (clara.terminal:terminal-stream wide))
+    (flet ((dragged-to (across)
+             (clara.windows:pointer-moved (+ 20 12) (+ 60 23) 1)
+             (clara.windows:pointer-moved (+ 20 (* 12 3) across) (+ 60 23) 1)
+             (prog1 (clara.terminal::terminal-marked wide)
+               (clara.windows:pointer-moved (+ 20 (* 12 3) across) (+ 60 23) 0))))
+      (check '((12 24 96 48) ((0 . 1) 0 . 3) ((0 . 1) 0 . 4))
+             (list (list (clara.terminal::terminal-wide wide) (clara.terminal::terminal-high wide)
+                         (clara.draw:surface-width (clara.windows:window-surface window))
+                         (clara.draw:surface-height (clara.windows:window-surface window)))
+                   (dragged-to 5) (dragged-to 6))))
+    (clara.windows:close-window window)))
+;; A terminal that is told nothing is written in what CLARA.WINDOWS:*TEXT-FONT*
+;; says as the terminal opens, and one that is told NIL in the console's
+;; letters. The REPL is as many cells as the screen has room for in its
+;; font, and takes a font like a terminal.
+(setq clara.windows:*text-font* (list "Mono" 15 :bold t))
+(let ((said (clara.terminal:open-terminal "Said" :columns 4 :rows 2))
+      (console (clara.terminal:open-terminal "Console" :columns 4 :rows 2 :font nil)))
+  (flet ((sizes (terminal)
+           (let ((face (clara.windows:window-surface (clara.terminal:terminal-window terminal))))
+             (list (clara.terminal::terminal-wide terminal) (clara.terminal::terminal-high terminal)
+                   (clara.draw:surface-width face) (clara.draw:surface-height face)))))
+    (check (list (clara.type:font "Mono" 15 :bold t) '(9 19 36 38) nil '(8 16 32 32) 0)
+           (list (clara.terminal::terminal-font said) (sizes said) (clara.terminal::terminal-font console) (sizes console)
+                 (wrong-pixels))))
+  (setq clara.windows:*text-font* nil)                     ; what is said later is nothing to a window that is open
+  (write-string "g_" (clara.terminal:terminal-stream said))
+  (write-string "g_" (clara.terminal:terminal-stream console))
+  (check '(t t 0)
+         (list (let ((*cell-font* (clara.type:font "Mono" 15 :bold t)))
+                 (row-shows-p (clara.windows:window-surface (clara.terminal:terminal-window said)) 0 "g_  "))
+               (row-shows-p (clara.windows:window-surface (clara.terminal:terminal-window console)) 0 "g_  ")
+               (wrong-pixels))))
+(clara.windows:stop)
+(let ((open-terminal #'clara.terminal:open-terminal))
+  (setf (symbol-function 'clara.terminal:open-terminal)
+        (lambda (&rest arguments) (setq *terminal* (apply open-terminal arguments))))
+  (unwind-protect
+       (progn
+         (setq clara.windows:*text-font* (list "Mono" 15 :bold t))
+         (new-desk :width 300 :height 220 :applications (list (cons "REPL" #'clara.terminal:repl)) :fonts '("Go-Mono-Bold.ttf"))
+         (let* ((window (clara.windows:focused-window))
+                (face (clara.windows:window-surface window))
+                (*cell-font* (clara.type:font "Mono" 15 :bold t)))
+           (check '("REPL" 252 95 28 5)                    ; as many cells of 9 by 19 as a screen of 300 by 220 has room for
+                  (list (clara.windows:window-title window) (clara.draw:surface-width face) (clara.draw:surface-height face)
+                        (clara.terminal::terminal-columns *terminal*) (clara.terminal::terminal-rows *terminal*)))
+           (check t (eventually (lambda () (and (row-shows-p face 3 "> ") (bar-at-p face 3 2 +ink+)))))
+           (check '(t 0) (list (row-shows-p face 0 "ClaraOS: a form is evaluated") (wrong-pixels)))
+           (setq clara.windows:*text-font* nil)
+           (clara.windows:launch "REPL" :font (clara.type:font "Mono" 15 :bold t))
+           (check '(2 252 95) (list (length (clara.windows:windows))
+                                    (clara.draw:surface-width (clara.windows:window-surface (clara.windows:focused-window)))
+                                    (clara.draw:surface-height (clara.windows:window-surface (clara.windows:focused-window)))))
+           (clara.windows:launch "REPL")
+           (check '(3 248 96) (list (length (clara.windows:windows))
+                                    (clara.draw:surface-width (clara.windows:window-surface (clara.windows:focused-window)))
+                                    (clara.draw:surface-height (clara.windows:window-surface (clara.windows:focused-window)))))
+           (check 0 (wrong-pixels)))
+         (clara.windows:stop))
+    (setq clara.windows:*text-font* nil)
+    (setf (symbol-function 'clara.terminal:open-terminal) open-terminal)))
 
 ;;; What happens to a window, kept for its program: the keys that are typed
 ;;; while it has the focus, the buttons on its inside and its close box, in
@@ -8170,24 +8571,24 @@
 ;; colours: each the row, the column, the ink, and the paper when that is
 ;; another too.
 (defun wrong-cells (surface rows &optional bars tints)
-  (let ((wrong 0))
-    (loop for spec in rows
-          for row from 0
-          do (let ((text (if (consp spec) (car spec) spec)))
-               (dotimes (column (length text))
-                 (let* ((bar (find-if (lambda (bar) (and (= (first bar) row) (= (second bar) column))) bars))
-                        (tint (find-if (lambda (tint) (and (= (first tint) row) (= (second tint) column))) tints))
-                        (ink (cond (tint (third tint)) ((consp spec) +paper+) (t +ink+)))
-                        (paper (cond ((fourth tint)) ((consp spec) +ink+) (t +paper+)))
-                        (code (char-code (char text column)))
-                        (glyph (* 16 (- (if (<= 32 code 126) code 127) 32))))
-                   (unless (loop for y below 16
-                                 always (loop for x below 8
-                                              always (= (word-at surface (+ (* 8 column) x) (+ (* 16 row) y))
-                                                        (cond ((and bar (>= y 14)) (third bar))
-                                                              ((logbitp (- 7 x) (aref clara.font:*glyphs* (+ glyph y))) ink)
-                                                              (t paper)))))
-                     (incf wrong))))))
+  (let ((wrong 0) (font *cell-font*))
+    (multiple-value-bind (wide high) (cell-size font)
+      (loop for spec in rows
+            for row from 0
+            do (let ((text (if (consp spec) (car spec) spec)))
+                 (dotimes (column (length text))
+                   (let* ((bar (find-if (lambda (bar) (and (= (first bar) row) (= (second bar) column))) bars))
+                          (tint (find-if (lambda (tint) (and (= (first tint) row) (= (second tint) column))) tints))
+                          (ink (cond (tint (third tint)) ((consp spec) +paper+) (t +ink+)))
+                          (paper (cond ((fourth tint)) ((consp spec) +ink+) (t +paper+)))
+                          (character (char text column)))
+                     (unless (loop for y below high
+                                   always (loop for x below wide
+                                                always (= (word-at surface (+ (* wide column) x) (+ (* high row) y))
+                                                          (if (and bar (>= y (- high 2)))
+                                                              (third bar)
+                                                              (cell-pixel font character x y ink paper wide)))))
+                       (incf wrong)))))))
     wrong))
 
 (defun editor-state (editor)
@@ -9029,6 +9430,84 @@
   (check t (eventually (lambda () (and (null (clara.windows:windows)) (not (clara:thread-alive-p thread))))))
   (check '(0 nil) (list (wrong-pixels) clara.windows::*made*)))
 
+;;; The editor in a font of outlines. Its cells are the font's, and the
+;;; rows, the cursor, the colours of the parentheses, what is highlighted
+;;; and the status row are held against the text as they are in the
+;;; console's letters. A click and a drag find their places by the size of
+;;; those cells, and the rows that stay when the text moves are copied by it.
+(new-desk :width 400 :height 300 :fonts '("Go-Mono-Bold.ttf" "Go-Mono.ttf"))
+(let* ((*cell-font* (clara.type:font "Mono" 15 :bold t))
+       (editor (clara.emma::open-editor nil :columns 30 :rows 4 :font *cell-font*)))
+  (check '(270 95 0 0)
+         (list (clara.draw:surface-width (clara.emma::editor-surface editor))
+               (clara.draw:surface-height (clara.emma::editor-surface editor))
+               (editor-wrong editor) (wrong-pixels)))
+  (keys editor "(a (b" 10 "c))" 10 "_/K% gjq (list 1 2 3 4 5 6 7)")  ; the last line to the last cell but one
+  (check '((("(a (b" "c))" "_/K% gjq (list 1 2 3 4 5 6 7)") 2 29) 0 0)
+         (list (editor-state editor) (editor-wrong editor) (wrong-pixels)))
+  (keys editor clara.input:+up+ clara.input:+end+)         ; behind the parenthesis that closes the first: the hint
+  (check '((("(a (b" "c))" "_/K% gjq (list 1 2 3 4 5 6 7)") 1 3) 0) (list (editor-state editor) (editor-wrong editor)))
+  ;; A click on the fourth cell of the third row, in the last pixels of that cell, and a drag from there: four
+  ;; pixels into a cell are not past its middle, and five are.
+  (clara.emma::point editor 35 56 1)
+  (check '((2 3) nil 0)
+         (list (cdr (editor-state editor)) (clara.emma::editor-mark editor) (editor-wrong editor)))
+  (clara.emma::drag editor 58 56 1)
+  (check '((2 . 4) 6 0) (list (clara.emma::editor-mark editor) (clara.emma::editor-column editor) (editor-wrong editor)))
+  (clara.emma::drag editor 59 33 1)                        ; and to the row above, in its last pixels but four
+  (check '((2 . 4) (1 3) 0)
+         (list (clara.emma::editor-mark editor) (list (clara.emma::editor-row editor) (clara.emma::editor-column editor))
+               (editor-wrong editor)))
+  (clara.emma::point editor 59 33 0)
+  ;; More lines than the window has rows: the rows that stay are copied up, and down again, to their last cells.
+  (keys editor clara.input:+down+ clara.input:+end+ 10 "d" 10 "e" 10 "f")
+  (check '(0 5 2 0) (list (editor-wrong editor) (clara.emma::editor-row editor) (clara.emma::editor-top editor) (wrong-pixels)))
+  (keys editor clara.input:+up+ clara.input:+up+ clara.input:+up+ clara.input:+up+)
+  (check '(0 1 1) (list (editor-wrong editor) (clara.emma::editor-row editor) (clara.emma::editor-top editor)))
+  (keys editor clara.input:+down+ clara.input:+down+ clara.input:+down+ clara.input:+down+) ; and up by one, three rows staying
+  (check '(0 5 2) (list (editor-wrong editor) (clara.emma::editor-row editor) (clara.emma::editor-top editor)))
+  (keys editor clara.input:+up+ clara.input:+up+ clara.input:+up+ clara.input:+up+ clara.input:+up+) ; and down by two
+  (check '(0 0 0) (list (editor-wrong editor) (clara.emma::editor-row editor) (clara.emma::editor-top editor)))
+  (keys editor clara.input:+down+ clara.input:+down+ clara.input:+down+ clara.input:+down+ clara.input:+down+)
+  (check '(0 5 2) (list (editor-wrong editor) (clara.emma::editor-row editor) (clara.emma::editor-top editor)))
+  (clara.emma::point editor 2 70 1)                        ; the last row of the text, which the status row begins under
+  (check '(0 5 0) (list (editor-wrong editor) (clara.emma::editor-row editor) (clara.emma::editor-column editor)))
+  (clara.emma::point editor 2 70 0)
+  ;; A question in the status row has its cursor there.
+  (keys editor 15 15 "x")
+  (check '(("Open: " "x") 0 0)
+         (list (list (car (clara.emma::editor-asking editor)) (clara.emma::editor-answer editor)) (editor-wrong editor)
+               (wrong-pixels)))
+  (clara.windows:close-window (clara.emma::editor-window editor)))
+;; Cells of another width, whose middle is another number of pixels in: the
+;; place that the button goes down at is the one that it is nearest to.
+(let ((editor (clara.emma::open-editor nil :columns 10 :rows 2 :font (clara.type:font "Mono" 20))))
+  (keys editor "abcdefgh")
+  (clara.emma::point editor 41 5 1)                        ; five pixels into the d: before it,
+  (check '((0 . 3) 3) (list (clara.emma::editor-pressed editor) (clara.emma::editor-column editor)))
+  (clara.emma::point editor 42 5 1)                        ; and six: behind it
+  (check '((0 . 4) 3) (list (clara.emma::editor-pressed editor) (clara.emma::editor-column editor)))
+  (clara.emma::drag editor 78 5 1)
+  (check '((0 . 4) 7 120 72)
+         (list (clara.emma::editor-mark editor) (clara.emma::editor-column editor)
+               (clara.draw:surface-width (clara.emma::editor-surface editor))
+               (clara.draw:surface-height (clara.emma::editor-surface editor))))
+  (clara.windows:close-window (clara.emma::editor-window editor)))
+;; An editor that is told nothing is written in what CLARA.WINDOWS:*TEXT-FONT*
+;; says as it opens, and one that is told NIL in the console's letters.
+(let ((clara.windows:*text-font* (list "Mono" 15 :bold t)))
+  (let ((said (clara.emma::open-editor nil :columns 20 :rows 2))
+        (console (clara.emma::open-editor nil :columns 20 :rows 2 :font nil)))
+    (check (list (clara.type:font "Mono" 15 :bold t) 180 57 nil 160 48 0 0)
+           (list (clara.emma::editor-font said) (clara.draw:surface-width (clara.emma::editor-surface said))
+                 (clara.draw:surface-height (clara.emma::editor-surface said))
+                 (clara.emma::editor-font console) (clara.draw:surface-width (clara.emma::editor-surface console))
+                 (clara.draw:surface-height (clara.emma::editor-surface console))
+                 (let ((*cell-font* (clara.type:font "Mono" 15 :bold t))) (editor-wrong said)) (editor-wrong console)))
+    (clara.windows:close-window (clara.emma::editor-window said))
+    (clara.windows:close-window (clara.emma::editor-window console))))
+(clara.windows:stop)
+
 ;;; The file browser. What a directory holds is asked of the language, and
 ;;; the language here is SBCL's, whose DIRECTORY gives pathnames of the
 ;;; host's: the tests put a function in its place that makes names of them,
@@ -9234,6 +9713,39 @@
   (check '(nil t nil) (list (titles) (packagep (find-package "CLARA.EMMA"))
                             (clara.windows::application-function (clara.windows::find-application "Emma")))))
 (clara.windows:define-application "Emma" #'clara.emma:edit)
+(clara.windows:stop)
+;; The browser in a font of outlines: the names, the one that is picked and
+;; the status row are in cells of the font's size, and a click picks by
+;; them. One that is told nothing is written in what
+;; CLARA.WINDOWS:*TEXT-FONT* says as it opens.
+(new-desk :width 400 :height 300 :fonts '("Go-Mono-Bold.ttf"))
+(let* ((*cell-font* (clara.type:font "Mono" 15 :bold t))
+       (browser (clara.jaid::open-browser *shelf* :columns 30 :rows 4 :font *cell-font*))
+       (count (length (clara.jaid::browser-names browser))))
+  (check '(270 95 t 0 0)
+         (list (clara.draw:surface-width (clara.jaid::browser-surface browser))
+               (clara.draw:surface-height (clara.jaid::browser-surface browser))
+               (> count 4) (browser-wrong browser) (wrong-pixels)))
+  (browser-keys browser clara.input:+end+)                 ; the last name, and the list has moved up
+  (check (list 0 (- count 1) (- count 4))
+         (list (browser-wrong browser) (clara.jaid::browser-picked browser) (clara.jaid::browser-top browser)))
+  (clara.jaid::point browser 37 1)                         ; the last row of pixels of the second row of names,
+  (check (list (- count 3) 0) (list (clara.jaid::browser-picked browser) (browser-wrong browser)))
+  (clara.jaid::point browser 38 0)                         ; a button that comes up picks nothing,
+  (clara.jaid::point browser 76 1)                         ; and neither does one in the status row
+  (check (list (- count 3) 0 0) (list (clara.jaid::browser-picked browser) (browser-wrong browser) (wrong-pixels)))
+  (clara.jaid::point browser 70 1)                         ; the last row of names, just above it
+  (check (list (- count 1) 0) (list (clara.jaid::browser-picked browser) (browser-wrong browser)))
+  (clara.windows:close-window (clara.jaid::browser-window browser)))
+(let ((clara.windows:*text-font* (list "Mono" 15 :bold t)))
+  (let ((said (clara.jaid::open-browser *shelf* :columns 20 :rows 2))
+        (console (clara.jaid::open-browser *shelf* :columns 20 :rows 2 :font nil)))
+    (check (list (clara.type:font "Mono" 15 :bold t) 180 57 nil 160 48 0 0)
+           (list (clara.jaid::browser-font said) (clara.draw:surface-width (clara.jaid::browser-surface said))
+                 (clara.draw:surface-height (clara.jaid::browser-surface said))
+                 (clara.jaid::browser-font console) (clara.draw:surface-width (clara.jaid::browser-surface console))
+                 (clara.draw:surface-height (clara.jaid::browser-surface console))
+                 (let ((*cell-font* (clara.type:font "Mono" 15 :bold t))) (browser-wrong said)) (browser-wrong console)))))
 (clara.windows:stop)
 (setq clara.jaid::*names* #'clara.jaid::names-in)
 (sb-ext:delete-directory *scratch* :recursive t)
@@ -17724,6 +18236,36 @@ needs now
   (check '(1 t) (list (progn (clara.parker::happened view '(:pointer 5 40 1)) (clara.parker::view-picked view))
                       (progn (clara.parker::happened view '(:close)) (clara.parker::view-done view))))
   (check '(0 0) (list (view-wrong view) (wrong-pixels)))
+  ;; The window in a font of outlines, with what the first one was told: the row over the list, the list and the
+  ;; status row are in cells of the font's size, and a click picks by them.
+  (clara.host:put-system-file "Go-Mono-Bold.ttf" (file-octets "fonts/Go-Mono-Bold.ttf"))
+  (let* ((*cell-font* (clara.type:font "Mono" 15 :bold t))
+         (lettered (clara.parker::open-view :columns 60 :rows 3 :font *cell-font*)))
+    (setf (clara.parker::view-offers lettered) (clara.parker::view-offers view))
+    (clara.parker::relist lettered)
+    (check '(("app" nil "2.1.0") ("base" "0.1" "0.1") 540 95 0 0)
+           (list (first (view-rows lettered)) (second (view-rows lettered))
+                 (clara.draw:surface-width (clara.parker::view-surface lettered))
+                 (clara.draw:surface-height (clara.parker::view-surface lettered)) (view-wrong lettered) (wrong-pixels)))
+    (clara.parker::point lettered 18 1)                    ; the row over the list is no package,
+    (check '(0 0) (list (clara.parker::view-picked lettered) (view-wrong lettered)))
+    (clara.parker::point lettered 56 1)                    ; and the last pixels of the second row under it are the second
+    (check '(1 0) (list (clara.parker::view-picked lettered) (view-wrong lettered)))
+    (clara.parker::point lettered 75 1)                    ; the last pixels of the list are the third,
+    (clara.parker::point lettered 76 1)                    ; and the status row under them is none
+    (check '(2 0 0) (list (clara.parker::view-picked lettered) (view-wrong lettered) (wrong-pixels)))
+    (clara.windows:close-window (clara.parker::view-window lettered)))
+  ;; A window that is told nothing is written in what CLARA.WINDOWS:*TEXT-FONT* says as it opens.
+  (let ((clara.windows:*text-font* (list "Mono" 15 :bold t)))
+    (let ((said (clara.parker::open-view :columns 40 :rows 2))
+          (console (clara.parker::open-view :columns 40 :rows 2 :font nil)))
+      (check (list (clara.type:font "Mono" 15 :bold t) 360 76 nil 320 64)
+             (list (clara.parker::view-font said) (clara.draw:surface-width (clara.parker::view-surface said))
+                   (clara.draw:surface-height (clara.parker::view-surface said))
+                   (clara.parker::view-font console) (clara.draw:surface-width (clara.parker::view-surface console))
+                   (clara.draw:surface-height (clara.parker::view-surface console))))
+      (clara.windows:close-window (clara.parker::view-window said))
+      (clara.windows:close-window (clara.parker::view-window console))))
   (clara.windows:close-window (clara.parker::view-window view)))
 ;; The application, launched: its window lists what is installed, says
 ;; whom it asks, asks, and lists what there is. Its thread is stopped

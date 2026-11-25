@@ -22,10 +22,18 @@
 ;;;; A font, here, is such a file at a size: (font "Sans" 16) is one, and
 ;;;; CLARA.DRAW:DRAW-TEXT and TEXT-WIDTH take it. "Sans" is a family, the
 ;;;; names of four files: upright, bold, italic and both. The files of the
-;;;; two families that come with the system, the Go fonts (fonts/README.md),
-;;;; are among the system's own that the handoff read into memory, so they
-;;;; are there on a machine with no disk that is known here; any other name
-;;;; is that of a file, which is read from its volume.
+;;;; three families that come with the system, the Go fonts for Sans and
+;;;; Mono and Charter for Serif (fonts/README.md), are among the system's
+;;;; own that the handoff read into memory, so they are there on a machine
+;;;; with no disk that is known here; any other name is that of a file,
+;;;; which is read from its volume.
+;;;;
+;;;; Text is drawn in a font in two ways. A line of it has each character
+;;;; where the one before it ends, as wide as the character is. And text in
+;;;; cells has a character to the cell, all cells as wide as the widest
+;;;; character that is typed and as high as a line: a terminal, an editor
+;;;; and a list are grids of those, in any font (CLARA.DRAW:DRAW-CELLS,
+;;;; CELL-WIDTH and CELL-HEIGHT).
 ;;;;
 ;;;; The picture of a glyph is made the first time its character is drawn
 ;;;; in a font and kept with the font. It is a vector of shades in the heap,
@@ -98,7 +106,8 @@
 (defstruct kept
   face      ; its file, as it was read
   glyphs    ; the glyphs of the characters whose codes are below 256, where they were made, or NIL
-  others)   ; and of the others: (code . glyph)
+  others    ; and of the others: (code . glyph)
+  wide)     ; how wide a cell of the font is, once that was asked for: CELL-WIDTH
 
 ;; What a character looks like in a font.
 (defstruct glyph
@@ -121,7 +130,8 @@
 ;; bold italic.
 (defvar *families*
   (list (list "Sans" "Go-Regular.ttf" "Go-Bold.ttf" "Go-Italic.ttf" "Go-Bold-Italic.ttf")
-        (list "Mono" "Go-Mono.ttf" "Go-Mono-Bold.ttf" "Go-Mono-Italic.ttf" "Go-Mono-Bold-Italic.ttf")))
+        (list "Mono" "Go-Mono.ttf" "Go-Mono-Bold.ttf" "Go-Mono-Italic.ttf" "Go-Mono-Bold-Italic.ttf")
+        (list "Serif" "Charter-Regular.ttf" "Charter-Bold.ttf" "Charter-Italic.ttf" "Charter-Bold-Italic.ttf")))
 
 ;;; Numbers
 
@@ -846,14 +856,17 @@
 
 ;; Where the lines of FONT lie, in pixels, by what FACE says, which is its
 ;; file. A line of text is high enough for whatever the font says its
-;; letters reach.
+;; letters reach. How far they reach below the baseline is a number below
+;; nought in a file, and some files say the distance itself, the ones of
+;; Serif among them: it is taken for the same either way.
 (defun fit (font face)
   (let* ((size (font-size font))
          (units (face-units face))
+         (below (if (< (face-descent face) 0) (- 0 (face-descent face)) (face-descent face)))
          (stroke (max 1 (nearest (* (face-stroke face) size) units)))
          (cut (max 1 (nearest (* (face-cut face) size) units))))
     (setf (font-up font) (max 1 (at-least (* (face-ascent face) size) units))
-          (font-down font) (max 0 (at-least (* (- 0 (face-descent face)) size) units))
+          (font-down font) (max 0 (at-least (* below size) units))
           (font-gap font) (max 0 (nearest (* (face-gap face) size) units))
           (font-stroke font) stroke
           (font-under font) (max 1 (floor (* (- 0 (face-under face) (floor (face-stroke face) 2)) size) units))
@@ -926,9 +939,9 @@
           (t (cadr family)))))
 
 ;; The font of that name at SIZE pixels to the em: the same one every time
-;; that the same is asked for. NAME is a family, "Sans" or "Mono" or one
-;; that DEFINE-FAMILY made, of which BOLD and ITALIC pick the file, or it is
-;; the name of a file of outlines. With UNDERLINE a line is drawn under its
+;; that the same is asked for. NAME is a family, "Sans", "Mono", "Serif" or
+;; one that DEFINE-FAMILY made, of which BOLD and ITALIC pick the file, or
+;; it is the name of a file of outlines. With UNDERLINE a line is drawn under its
 ;; text, and with STRIKE one through it.
 (defun font (name size &key bold italic underline strike)
   (unless (stringp name)
@@ -1001,6 +1014,75 @@
         (setq drew t)))
     drew))
 
+;;; Text in cells
+;;;
+;;; A grid: every character has a cell, and all cells are one size, so that
+;;; a row of text is as many cells and a place in the text a cell. A cell is
+;;; as wide as the widest of the characters that are typed, the ones from the
+;;; space to the tilde, moves on, which in a font of one width is how far
+;;; every one of them does, and as high as a line of the font. A character
+;;; stands in the middle of its cell, and nothing of it is drawn outside:
+;;; a cell is drawn again by itself, whatever is in the cells around it.
+
+;; How wide a cell of FONT is, in pixels.
+(defun cell-width (font)
+  (or (kept-wide (live font))
+      (let ((wide 1))
+        (do ((code 32 (+ code 1)))
+            ((> code 126))
+          (let ((advance (glyph-advance (glyph font code))))
+            (when (> advance wide)
+              (setq wide advance))))
+        ;; The glyphs may all have been let go of on the way, and what was kept with them.
+        (setf (kept-wide (live font)) wide)
+        wide)))
+
+;; STRING in FONT, a character to the cell, the upper left corner of the
+;; first cell at X and Y, in COLOR. With BACKGROUND the cells are filled with
+;; that first. A line under the text or through it goes across the cells,
+;; as far as it lies within them. Says whether anything of it was drawn.
+(defun draw-cells (surface x y string color background font)
+  (live font)
+  (let* ((width (cell-width font))
+         (up (font-up font))
+         (height (+ up (font-down font) (font-gap font)))
+         (count (length string))
+         (drew nil))
+    (when (> count 0)
+      (when background
+        (when (clara.draw:fill-rectangle surface x y (* count width) height background)
+          (setq drew t)))
+      (dotimes (i count)
+        (let ((glyph (glyph font (char-code (char string i)))))
+          (when (glyph-shades glyph)
+            ;; Where the picture lies in its cell, from the cell's upper left corner.
+            (let ((cell (+ x (* i width)))
+                  (left (+ (floor (- width (glyph-advance glyph)) 2) (glyph-left glyph)))
+                  (top (+ up (glyph-top glyph))))
+              (if (and (>= left 0) (>= top 0)
+                       (<= (+ left (glyph-width glyph)) width) (<= (+ top (glyph-height glyph)) height))
+                  (when (clara.draw:draw-shades surface (+ cell left) (+ y top) (glyph-shades glyph)
+                                                (glyph-width glyph) (glyph-height glyph) color (glyph-step glyph))
+                    (setq drew t))
+                  ;; Some of it lies outside the cell, and is left out.
+                  (clara.draw:with-clip (surface cell y width height)
+                    (when (clara.draw:draw-shades surface (+ cell left) (+ y top) (glyph-shades glyph)
+                                                  (glyph-width glyph) (glyph-height glyph) color (glyph-step glyph))
+                      (setq drew t))))))))
+      ;; As much of either line as lies within the cells, which may be none of it.
+      (when (font-underline font)
+        (let ((top (+ up (font-under font))))
+          (when (clara.draw:fill-rectangle surface x (+ y top) (* count width)
+                                           (- (min height (+ top (font-stroke font))) top) color)
+            (setq drew t))))
+      (when (font-strike font)
+        ;; It ends above the baseline, and begins no higher than the cells do.
+        (let* ((top (max 0 (- up (font-over font))))
+               (bottom (+ (- up (font-over font)) (font-cut font))))
+          (when (clara.draw:fill-rectangle surface x (+ y top) (* count width) (- bottom top) color)
+            (setq drew t)))))
+    drew))
+
 ;;; The machine
 
 ;; The files that were read are let go of, and the glyphs that were made of
@@ -1047,7 +1129,13 @@
         (format t "type: no file of outlines came with the system, and the letters are the console's~%"))
     (and names t)))
 
-;; What draws takes it from here when it is handed a font.
+;; What draws takes it from here when it is handed a font: how wide a
+;; string is and the string drawn, and for text in cells how wide and how
+;; high a cell is, and a string drawn a character to the cell.
 (clara.draw:provide-fonts (lambda (string font) (width string font))
                           (lambda (surface x y string color background font)
-                            (draw surface x y string color background font)))
+                            (draw surface x y string color background font))
+                          (lambda (font) (cell-width font))
+                          (lambda (font) (font-height font))
+                          (lambda (surface x y string color background font)
+                            (draw-cells surface x y string color background font)))

@@ -2117,7 +2117,9 @@ architectures (kernel/vm.c).
   for reading code, under a BSD license like the console's Spleen. And
   they are small, eight files in 1.3 MiB where the eight of DejaVu are
   four: a system is copied whole when a machine takes a newer one, and
-  lies on its volume twice for a moment. There is no font with serifs.
+  lies on its volume twice for a moment. There was no font with serifs
+  until 0.0.60, whose third family is Serif ("The letters of a window",
+  below).
 - A font is a file at a size, in whole pixels, and a glyph moves on by a
   whole number of pixels, its own way rounded. So a letter looks the same
   wherever it stands, one picture of it serves, and the width of a string
@@ -2826,8 +2828,9 @@ architectures (kernel/vm.c).
   either, the columns are made narrower all the same and the words are
   cut: there is no way to move a page sideways, so nothing may lie
   outside it.
-- The letters are the system's two families of outlines (lisp/type.lisp),
-  Sans and Mono, at the sizes that the kinds of elements have. Where a
+- The letters are two of the system's families of outlines
+  (lisp/type.lisp), Sans and Mono, at the sizes that the kinds of elements
+  have. Where a
   font cannot be had, the console's letters stand in, all of one size,
   and a page is laid out all the same.
 - No picture is fetched: the system has nothing that reads a picture, and
@@ -3151,6 +3154,83 @@ architectures (kernel/vm.c).
   keyboard in a REPL's window, read a line a second time, leave a line
   that is begun and come back to it, and bring a line back in the world
   that was saved, after the machine has started again.
+
+## The letters of a window (decided for issue #51, 2026-11-25)
+
+- The issue asks for more fonts, for bold, italic, underlined and struck
+  through, and for sizes (Julio: "Add more system fonts, bold, italic,
+  underline, strikethrough, font sizes, etc."). A font has been all of
+  that since M18, for whatever draws, and Ares writes a page that way.
+  What was left was the windows that are grids of the console's cells,
+  the REPL's, Emma's, Jaid's and Parker's, which had one font at one
+  size, and the families, which were two.
+- Text in cells is a way of drawing, beside a line of text
+  (`clara.draw:draw-cells`, `cell-width`, `cell-height`), and the four
+  windows draw through it: one place says what a cell is. In the
+  console's letters that is what it was, 8 by 16 and a picture in each.
+  In a font of outlines a cell is as high as a line of the font and as
+  wide as the widest of the characters that are typed moves on, the ones
+  from the space to the tilde, which in a font of one width is how far
+  every one of them does.
+- A character stands in the middle of its cell and is cut at its cell's
+  edges. A window draws a cell at a time: the character that was typed,
+  the cursor that is taken away, a parenthesis in its colour, a cell that
+  is highlighted. A letter that reached into the cell beside its own
+  would be laid over what is there at every such drawing, a shade darker
+  each time, and what it left there would stay when its own cell is drawn
+  again. So nothing is drawn outside a cell, and the cells beside one are
+  never drawn for its sake. The price is the tip of a leaning letter: in
+  the italics of Mono, a column of pale pixels at the edge of many
+  letters.
+- Any font can be had, and the one of one width is the one that fits. A
+  font whose letters differ in width has each in a cell as wide as its
+  widest, and its words come out spaced. It is not refused: a refusal
+  would need a rule for which fonts are of one width, of a file that
+  anybody may bring, and whoever wants a window in Serif can see what it
+  looks like.
+- A window has its font from when it opens to when it closes. A
+  terminal's rows are strings as long as a row, and the places of what is
+  highlighted and of the lines that were read are cells: another font in
+  a window that is open means a window of another size or other rows,
+  and windows have the size that they were opened with. The next window
+  is in the font that is said by then.
+- Which font is `clara.windows:*text-font*`, one variable for all such
+  windows, said like the one for the bar and the titles: a list of what
+  `clara.type:font` is told, or a font, or NIL for the console's letters.
+  It is the window manager's because the applications that are files
+  have no package until they are launched: a form in `/home/init.lisp`
+  that named a variable of Emma's could not be read. One window is told
+  its own with `:font`, through `clara.windows:launch` or
+  `clara.terminal:open-terminal`, and NIL there is the console's letters
+  whatever the variable says. A font that cannot be had is said on the
+  serial port, and the window opens in the console's letters: a name
+  that is mistyped must not cost anybody the window.
+- As the system comes, the variable is NIL, and the windows are in the
+  console's letters as they were. Those are pictures that were drawn for
+  8 by 16 pixels, and at that size they are sharper than outlines that
+  nothing fits to the pixels: Mono at 13, whose cells are the same 8 by
+  16, is paler on the dark ground. From 15 or 16 pixels on the outlines
+  read well. So nothing changes on a machine whose user says nothing,
+  and the font is one form away. Which the windows open in is Julio's to
+  say (#175).
+- The third family is Serif, and its files are Charter, which Matthew
+  Carter drew for Bitstream in 1987 for printers of 300 dots to the inch:
+  sturdy shapes that hold at few pixels with nothing fitted, which is
+  what this screen is. Bitstream gave it to the X Consortium in 1992
+  under a notice that allows everything as long as the notice stays, and
+  the TrueType files are the ones that Matthew Butterick made of it. The
+  four are 145 KiB together, where the eight Go fonts are 1.3 MiB, and
+  the system reads its fonts into memory at every start. They have the
+  Latin letters of western Europe and no more, 229 glyphs. Their table
+  says how far the letters reach below the baseline as that distance,
+  where a number below nought is meant; the reader takes it either way,
+  as other readers do, and a line is as high as the letters need.
+- The bar, the list and the titles take a font said the same way, so
+  bold titles are `(list "Sans" 13 :bold t)`. Their strips keep their
+  heights (#177).
+- The first prompt, before the window manager, and what the kernel says
+  of a fault keep the console's letters: they need no file, and they are
+  what is left when something else is not.
 
 ## Conventions
 

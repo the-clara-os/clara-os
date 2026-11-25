@@ -2070,6 +2070,134 @@ Infrastructure, done:
   says; and a line each on #77, since a line that came back is changed at
   its end like any other, and on #164, since a long line comes back at
   the pace at which one is pasted.
+- **The letters of a window** (2026-11-25, version 0.0.60). A font has been
+  a family at a size, bold, italic, underlined or struck through, since M18,
+  for whatever draws, and Ares writes a page that way. The windows that are
+  grids of text had none of it: the REPL's, Emma's, Jaid's and Parker's were
+  cells of the console's letters, 8 by 16, and the families were two (issue
+  #51: "Add more system fonts, bold, italic, underline, strikethrough, font
+  sizes, etc."). Those windows are written in any font now, and there are
+  three families. Text in cells is a way of drawing beside a line of text
+  (lisp/draw.lisp, lisp/type.lisp): `clara.draw:draw-cells` draws a string a
+  character to the cell, and `cell-width` and `cell-height` say how large a
+  cell is, the console's without a font, and with one as high as a line of
+  it and as wide as the widest of the characters from the space to the tilde
+  moves on, which in Mono is every character's width. A character stands in
+  the middle of its cell and is cut at the cell's edges, so that one cell
+  can be drawn again and the cells beside it stay as they are, which is how
+  a window draws. The terminal, Emma, Jaid and Parker draw through that,
+  each in the font that its window was opened in, and a window is as large
+  as its cells. `:font` says the font of one window, through
+  `clara.terminal:open-terminal` or `clara.windows:launch`, and
+  `clara.windows:*text-font*` the font of every window that is told nothing:
+  a list of what `clara.type:font` is told, or a font, or NIL for the
+  console's letters. `clara.windows:*font*`, for the bar and the titles, is
+  said the same way now, with a style when one is wanted. As the system
+  comes the new variable is NIL, and the windows are in the console's
+  letters as they were; a window keeps its font for as long as it is open;
+  and a font that cannot be had is said on the serial port, and the window
+  opens in the console's letters. The third family is Serif: four files of
+  Charter, 145 KiB together, with the Latin letters of western Europe. Their
+  table says how far the letters reach below the baseline as that distance,
+  where a number below nought is meant, and the reader takes either. So a
+  system has 47 files where it had 43, and the report's line is `type: 12
+  files of outlines came with the system, for the fonts Sans, Mono and
+  Serif`. One thing changed for the console's letters as well: a cursor that
+  is taken away in a terminal draws its cell again from what the row says,
+  where it painted two rows of paper, since its bar lies over the foot of a
+  letter there, and a `g` of a font has one. The manual says it under
+  "Fonts", with a section "Text in cells" and its transcript, under
+  "Windows", with "The letters of a window" and its transcript, in what it
+  says of Emma, of Jaid and of a terminal, in a row of its table of what
+  goes wrong, and in its lists of names; DESIGN.md has the decisions under
+  "The letters of a window". What it costs, under hvf: 240 lines of 79
+  characters, written to a terminal of 80 by 24, take 60 ms in the console's
+  letters, 70 in Mono at 13, 90 in Mono at 16, and 100 in its italic, most
+  of whose letters are cut at their cells, and in Serif at 16; and how wide
+  the cells of a font are is found in under 10 ms, once for a font at a
+  start. The host tests hold a string in cells against a rule of their own
+  at every pixel, on a surface and around it, in the console's letters, in
+  two fonts of one width, of which the italic has letters that reach over
+  both sides of their cells, in one whose letters differ in width, with a
+  line under it, and in Serif with a line under it and through it; in fonts
+  that they make up, for a line under the text that lies below its cells,
+  for the room between two lines, for letters that are higher and reach
+  lower than their lines, and for the widest character at either end of the
+  ones that are asked; a cell that is drawn again by itself, which changes
+  nothing; the four files of Serif against what FreeType reads of them, to
+  every point of every outline, and a descent of either sign. Then a
+  terminal of ten columns and three rows in Mono at 15 pixels, bold, some of
+  whose letters reach out of their cells: what is written and what moves up,
+  what Page Up brings back, a line that is typed with its parentheses in
+  their colours and the hint in the row above, Backspace across the start of
+  a row, the cursor over a letter with a foot, what the pointer highlights
+  by those cells, and what Ctrl-C copies; a terminal that is told nothing
+  and one that is told NIL; the REPL at the size that its font gives it, by
+  the variable and by `:font`. And Emma, Jaid and Parker in that font, each
+  cell against the text, with clicks and drags at pixels where the console's
+  cells would be other ones, a text that moves by one row either way, and a
+  question in the status row. 18608 checks, in 87.8 s on the Mac where main
+  takes 85.5 with its 18467: the new ones take 1.7 s of that, and the four
+  files of Serif held against FreeType a quarter of a second more. The first
+  session of `make test` opens a terminal in Mono and in Serif, bold, italic
+  and underlined, and counts the pixels of its window that are the ink's and
+  the ones that lie between that and the paper, which have to be the numbers
+  that the same forms give under SBCL; it launches the REPL by what the
+  variable says, Emma by `:font` and Jaid by the variable again, and closes
+  each by its own key. The session of the world that came back opens a
+  terminal in a font that came back with the world. `make test` passed on
+  the Mac, the host tests and all nineteen boots; the container of Ubuntu
+  was not run. Mistakes that were planted, one at a time, in copies of the
+  tree, with the host tests after each, 133: 31 in what lisp/type.lisp
+  gained, 7 in lisp/draw.lisp, 9 in lisp/windows.lisp, and the rest in the
+  four windows, where every place that asks how large a cell is was given
+  the console's 8 or 16 in its turn, 49 places, and every place that draws
+  the console's letters. Seventeen got through the tests as they were first
+  written, and each has its test now: the widest character at either end of
+  the ones that are asked; a letter that reaches over the top of its cell,
+  over its foot, or over its left side and no other; a line through the text
+  that lies above the cells; a row with the feet of letters in it that moves
+  up, whose place has to be blank to its last row of pixels; the pointer in
+  the last row of pixels of a cell, in a terminal and in Emma, and at a
+  place across that is another cell by the console's; the middle of a cell
+  that is 12 pixels wide, where the tests' cells of 9 have theirs at the
+  same 4 as the console's 8; a text in Emma that moves by one row, and one
+  whose line reaches the last cell; a click in Jaid's last row of names; and
+  a row of Parker's list that is not the one that is picked. Two showed a
+  test in the code that nothing needed, of a line that lies wholly outside
+  its cells, and those are gone. Three change nothing that can be seen: a
+  width that is kept and never read, and the width and the height of what is
+  made blank when a line is taken back across the start of a row, which is
+  blank by then. The first round counted seven of the seventeen as noticed
+  that were not: every run of the host tests prints a line with the word
+  error in it, from a file that is there to fail, and the script that plants
+  took any such line for a finding. It goes by the tests' own word now.
+  Eight machines at once on the Mac, the first session on x86_64 and on
+  emulated AArch64 and the session of the world that came back on both: 24
+  of 24 boots pass. By hand, at a kernel under QEMU: seven terminals side by
+  side with the same four lines, in the console's letters, in Mono at 13, at
+  16, bold at 15 and italic at 14, in Sans at 12 and in Serif at 15, looked
+  at as a picture: Mono reads well from 15 pixels on and is paler than the
+  console's letters at 13, the italic's cuts do not show, and Sans and Serif
+  are spaced, a letter to the cell. And a copy of the disk of Julio's
+  machine, which ran 0.0.59-598173c4, took this system at once, with its 17
+  forms, its package, its list and its variable, opened Galculator, and
+  opened a REPL in Mono at 16 pixels, which on a screen of 800 by 600 has 75
+  columns and lies over the right-hand edge when it is not the first window
+  (#183). Not tried: UTM, and a keyboard of flesh. Found on the way, and not
+  put right: a thread that is stopped while it reads the disk leaves every
+  read after it refused, Ctrl-C at a prompt among the ways (#174). What it
+  left, as issues: #175, the windows of text open in the console's letters
+  until they are told a font; #176, a window keeps the font that it was
+  opened with; #177, letters of more than 16 pixels are cut off in the bar,
+  the list and the titles; #178, a letter that leans out of its cell is cut
+  at the cell's edge; #179, Sans and Serif come out spaced in a window of
+  text; #180, the letters of a page in Ares are Sans, whatever is said;
+  #181, Serif has the Latin letters of western Europe and no others; #182, a
+  terminal has one font for all that it says; #183, a window as wide as the
+  screen has room for lies over its edge when it is not the first; and #174,
+  the disk that a stopped thread leaves refusing, which is a bug and was
+  always there.
 
 Infrastructure, for sessions with budget left over:
 
@@ -3868,12 +3996,9 @@ M18a and M18b, fonts, what they left:
   change shows after STOP and START, which ends the applications. The
   bar, the list and the bands of the windows keep their heights, 20 and
   21 pixels: a font of more than 16 pixels is cut off there, and no font
-  makes them lower. A terminal, the editor and the file browser are grids
-  of the console's cells: Julio's issue #51, styles and sizes in the
-  applications, is that work, and this is what it would stand on. The
-  console itself, before the window manager and in a fault report, keeps
-  its pictures of 8 by 16: it is the first thing that works and the last
-  that should stop.
+  makes them lower (#177). The console itself, before the window
+  manager and in a fault report, keeps its pictures of 8 by 16: it is the
+  first thing that works and the last that should stop.
 - A file is read once at a start, with a lock, and a font of it can be
   made by two threads at once, which then both make the same glyph: the
   second one's is kept, and nothing else is lost. A program that draws

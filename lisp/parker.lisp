@@ -690,6 +690,9 @@
 (defstruct view
   window
   surface         ; what its window is drawn on
+  font            ; what the list is written in: one of CLARA.TYPE:FONT's, or NIL for the console's letters
+  wide            ; the size of a cell of that, in pixels
+  high
   columns         ; the size of the list's part of the window, in cells:
   rows            ;   the window has two rows more, one above it for what the columns are, and one below it for the status
   ink             ; the pixel of a glyph,
@@ -775,12 +778,12 @@
 (defun render (view)
   (let ((rows (view-rows view)) (columns (view-columns view)) (surface (view-surface view))
         (shown (view-shown view)) (ink (view-ink view)) (paper (view-paper view))
-        (picked (view-picked view)))
+        (picked (view-picked view)) (font (view-font view)))
     (cond ((< picked (view-top view)) (setf (view-top view) picked))
           ((>= picked (+ (view-top view) rows)) (setf (view-top view) (- picked rows -1))))
     (let ((text (fit (heading) columns)))
       (unless (equal (svref shown 0) text)
-        (clara.draw:draw-text surface 0 0 text ink paper)
+        (clara.draw:draw-cells surface 0 0 text ink paper font)
         (setf (svref shown 0) text)))
     (let ((lines (nthcdr (view-top view) (view-lines view))))
       (dotimes (r rows)
@@ -788,13 +791,13 @@
                          (and lines (= (+ (view-top view) r) picked)))))
           (unless (equal (svref shown (1+ r)) row)
             (if (cdr row)
-                (clara.draw:draw-text surface 0 (* (1+ r) clara.font:+height+) (car row) paper ink)
-                (clara.draw:draw-text surface 0 (* (1+ r) clara.font:+height+) (car row) ink paper))
+                (clara.draw:draw-cells surface 0 (* (1+ r) (view-high view)) (car row) paper ink font)
+                (clara.draw:draw-cells surface 0 (* (1+ r) (view-high view)) (car row) ink paper font))
             (setf (svref shown (1+ r)) row))
           (setq lines (cdr lines)))))
     (let ((text (fit (concatenate 'string " " (status view)) columns)))
       (unless (equal (svref shown (1+ rows)) text)
-        (clara.draw:draw-text surface 0 (* (1+ rows) clara.font:+height+) text paper ink)
+        (clara.draw:draw-cells surface 0 (* (1+ rows) (view-high view)) text paper ink font)
         (setf (svref shown (1+ rows)) text)))
     (clara.windows:show (view-window view))))
 
@@ -887,7 +890,7 @@
 ;; down on a package, picks it, and on the one that is picked does what
 ;; Enter does.
 (defun point (view y buttons)
-  (let* ((row (1- (floor y clara.font:+height+))) (number (+ (view-top view) row)))
+  (let* ((row (1- (floor y (view-high view)))) (number (+ (view-top view) row)))
     (when (and (= 1 (logand buttons 1)) (<= 0 row) (< row (view-rows view)) (< number (length (view-lines view))))
       (setf (view-message view) nil
             (view-doomed view) nil)
@@ -903,12 +906,16 @@
 
 ;; Parker in a window of its own, which lists what is installed. COLUMNS
 ;; and ROWS are the size of the list, in cells; X and Y are where the
-;; window goes. The window is the thread's that calls.
-(defun open-view (&key (columns 80) (rows 12) x y)
-  (let* ((window (clara.windows:open-window "Parker" (* columns clara.font:+width+) (* (+ rows 2) clara.font:+height+)
-                                            :x x :y y :events t))
+;; window goes; and FONT is what the list is written in, one of
+;; CLARA.TYPE:FONT's or NIL for the console's letters, which is the one that
+;; CLARA.WINDOWS:*TEXT-FONT* says when Parker is told nothing. The window is
+;; the thread's that calls.
+(defun open-view (&key (columns 80) (rows 12) x y (font (clara.windows:text-font)))
+  (let* ((wide (clara.draw:cell-width font))
+         (high (clara.draw:cell-height font))
+         (window (clara.windows:open-window "Parker" (* columns wide) (* (+ rows 2) high) :x x :y y :events t))
          (view (make-view :window window :surface (clara.windows:window-surface window)
-                          :columns columns :rows rows
+                          :font font :wide wide :high high :columns columns :rows rows
                           :ink (clara.draw:color 232 227 244) :paper (clara.draw:color 30 27 46)
                           :shown (make-array (+ rows 2) :initial-element nil))))
     (relist view)

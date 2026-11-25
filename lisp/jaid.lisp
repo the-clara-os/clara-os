@@ -29,6 +29,9 @@
 (defstruct browser
   window
   surface         ; what its window is drawn on
+  font            ; what the names are written in: one of CLARA.TYPE:FONT's, or NIL for the console's letters
+  wide            ; the size of a cell of that, in pixels
+  high
   columns         ; the size of the list's part of the window, in cells:
   rows            ;   the window has one row more, below it, for the status
   ink             ; the pixel of a glyph,
@@ -142,7 +145,7 @@
 (defun render (browser)
   (let ((rows (browser-rows browser)) (columns (browser-columns browser)) (surface (browser-surface browser))
         (shown (browser-shown browser)) (ink (browser-ink browser)) (paper (browser-paper browser))
-        (picked (browser-picked browser)))
+        (picked (browser-picked browser)) (font (browser-font browser)))
     (cond ((< picked (browser-top browser)) (setf (browser-top browser) picked))
           ((>= picked (+ (browser-top browser) rows)) (setf (browser-top browser) (- picked rows -1))))
     (let ((names (nthcdr (browser-top browser) (browser-names browser))))
@@ -151,13 +154,13 @@
                          (and names (= (+ (browser-top browser) r) picked)))))
           (unless (equal (svref shown r) row)
             (if (cdr row)
-                (clara.draw:draw-text surface 0 (* r clara.font:+height+) (car row) paper ink)
-                (clara.draw:draw-text surface 0 (* r clara.font:+height+) (car row) ink paper))
+                (clara.draw:draw-cells surface 0 (* r (browser-high browser)) (car row) paper ink font)
+                (clara.draw:draw-cells surface 0 (* r (browser-high browser)) (car row) ink paper font))
             (setf (svref shown r) row))
           (setq names (cdr names)))))
     (let ((text (fit (concatenate 'string " " (status browser)) columns)))
       (unless (equal (svref shown rows) text)
-        (clara.draw:draw-text surface 0 (* rows clara.font:+height+) text paper ink)
+        (clara.draw:draw-cells surface 0 (* rows (browser-high browser)) text paper ink font)
         (setf (svref shown rows) text)))
     (clara.windows:show (browser-window browser))))
 
@@ -219,8 +222,8 @@
 ;; A button of the pointer went down or up in the window: the left one,
 ;; down on a name, picks it, and on the name that is picked opens it.
 (defun point (browser y buttons)
-  (let ((number (+ (browser-top browser) (floor y clara.font:+height+))))
-    (when (and (= 1 (logand buttons 1)) (< (floor y clara.font:+height+) (browser-rows browser))
+  (let ((number (+ (browser-top browser) (floor y (browser-high browser)))))
+    (when (and (= 1 (logand buttons 1)) (< (floor y (browser-high browser)) (browser-rows browser))
                (< number (length (browser-names browser))))
       (setf (browser-message browser) nil
             (browser-doomed browser) nil)
@@ -238,13 +241,17 @@
 
 ;; A browser in a window of its own, which lists the directory of a name.
 ;; COLUMNS and ROWS are the size of the list, in cells; X and Y are where
-;; the window goes. The window is the thread's that calls.
-(defun open-browser (place &key (columns 48) (rows 16) x y)
+;; the window goes; and FONT is what the names are written in, one of
+;; CLARA.TYPE:FONT's or NIL for the console's letters, which is the one that
+;; CLARA.WINDOWS:*TEXT-FONT* says when the browser is told nothing. The
+;; window is the thread's that calls.
+(defun open-browser (place &key (columns 48) (rows 16) x y (font (clara.windows:text-font)))
   (let* ((place (if (directory-name-p place) place (concatenate 'string place "/")))
-         (window (clara.windows:open-window (title place) (* columns clara.font:+width+)
-                                            (* (1+ rows) clara.font:+height+) :x x :y y :events t))
+         (wide (clara.draw:cell-width font))
+         (high (clara.draw:cell-height font))
+         (window (clara.windows:open-window (title place) (* columns wide) (* (1+ rows) high) :x x :y y :events t))
          (browser (make-browser :window window :surface (clara.windows:window-surface window)
-                                :columns columns :rows rows :directory place
+                                :font font :wide wide :high high :columns columns :rows rows :directory place
                                 :ink (clara.draw:color 232 227 244) :paper (clara.draw:color 30 27 46)
                                 :shown (make-array (1+ rows) :initial-element nil))))
     (attempt browser (lambda () (list-directory browser place)))
