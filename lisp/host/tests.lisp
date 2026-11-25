@@ -8290,8 +8290,11 @@
          (let* ((window (clara.windows:focused-window))
                 (face (clara.windows:window-surface window))
                 (*cell-font* (clara.type:font "Mono" 15 :bold t)))
-           (check '("REPL" 252 95 28 5)                    ; as many cells of 9 by 19 as a screen of 300 by 220 has room for
+           ;; As many cells of 9 by 19 as a screen of 300 by 220 has room for. The window is there before the
+           ;; application's thread has said which terminal it is, so that is waited for.
+           (check '("REPL" 252 95 t 28 5)
                   (list (clara.windows:window-title window) (clara.draw:surface-width face) (clara.draw:surface-height face)
+                        (eventually (lambda () (eq (clara.terminal:terminal-window *terminal*) window)))
                         (clara.terminal::terminal-columns *terminal*) (clara.terminal::terminal-rows *terminal*)))
            (check t (eventually (lambda () (and (row-shows-p face 3 "> ") (bar-at-p face 3 2 +ink+)))))
            (check '(t 0) (list (row-shows-p face 0 "ClaraOS: a form is evaluated") (wrong-pixels)))
@@ -8304,7 +8307,8 @@
            (check '(3 248 96) (list (length (clara.windows:windows))
                                     (clara.draw:surface-width (clara.windows:window-surface (clara.windows:focused-window)))
                                     (clara.draw:surface-height (clara.windows:window-surface (clara.windows:focused-window)))))
-           (check 0 (wrong-pixels)))
+           ;; The two windows are still writing their first lines: the screen is right once they have.
+           (check t (eventually (lambda () (zerop (wrong-pixels))))))
          (clara.windows:stop))
     (setq clara.windows:*text-font* nil)
     (setf (symbol-function 'clara.terminal:open-terminal) open-terminal)))
