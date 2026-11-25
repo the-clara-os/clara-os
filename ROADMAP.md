@@ -2199,6 +2199,42 @@ Infrastructure, done:
   the disk that a stopped thread leaves refusing, which is a bug and was
   always there.
 
+- **A deployment that waits and tries again** (2026-11-25, issue #102; the
+  system is as it was, and so is its version). The website's workflow
+  uploads the site as an artifact of its run, and its last step, the
+  deployment, asked GitHub for the run's artifacts a quarter to half a
+  second later and gave up when the one named `github-pages` was not among
+  them. In the workflow's first 28 runs it always was. In the 28 since, it
+  was not ten times, six of them in the last nine runs and the last three
+  one after the other, so that 0.0.60 was published an hour and forty
+  minutes after its merge. Nothing here had changed: the same two actions,
+  asking as soon after the upload as before. GitHub's list is behind, and
+  for everybody (actions/deploy-pages#451, where others measured it up to
+  six seconds behind in one repository and 46 seconds once in another).
+  Now the deployment waits ten seconds, is tried again thirty seconds
+  after it failed, and a third time a minute after that, and only the
+  third try fails the job. And the artifact is named after the attempt of
+  its run, `github-pages-1`. A run that is started again keeps the
+  artifacts of its attempts, and both times that a failed job was run
+  again here, for 0.0.49 and for 0.0.60, the second attempt was given a
+  list of one artifact and published it: the first attempt's, minutes
+  old, its own not being listed yet (the number in the deployment's log
+  is the first attempt's). After a wait both would be listed, and the
+  deployment stops at two of one name. Checked: the file as YAML, its
+  twelve steps read back; what `outcome`, `continue-on-error`, the
+  `success()` that an `if` begins with and `github.run_attempt` mean, in
+  GitHub's documentation; in the sources of both actions at v5, that the
+  name is only what the list is searched by, the deployment being made
+  with the artifact's number; and a repository that deploys an artifact
+  of another name with the same two versions (mozilla/addons-server, its
+  run 45674407321). Not tried, since nothing of that workflow can be
+  before the merge: any of it running. No linter read the file. The first
+  run is the one that this merge starts, which publishes 0.0.60-756088c7
+  once more. What it left is issue #185: the wait and the two further
+  tries are there for GitHub's list alone, with numbers that were picked,
+  and go when the deployment asks more than once or takes the artifact's
+  number.
+
 Infrastructure, for sessions with budget left over:
 
 - Read the UART base from ACPI (SPCR or DBG2) instead of assuming
