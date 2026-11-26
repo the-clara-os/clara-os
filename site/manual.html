@@ -164,7 +164,7 @@ make run-x86_64    <span class="note"># emulated: the firmware takes a few secon
       <tr><td>A processor</td><td>x86_64 or AArch64. One is used, however many the machine has.</td></tr>
       <tr><td>Firmware</td><td>UEFI. The kernel is the program that the firmware starts: there is no boot loader between them.</td></tr>
       <tr><td>Memory</td><td>128 MiB is enough to start and to work. It is given 512 MiB unless you say otherwise.</td></tr>
-      <tr><td>A disk</td><td>A virtio disk with a FAT volume, of 12, 16 or 32 bits, behind either kind of table of partitions or without one, that the firmware can write to. The volume it starts from is the one whose files it sees, until it is told to look on <a href="#work">another disk's</a>.</td></tr>
+      <tr><td>A disk</td><td>A virtio disk with a FAT volume, of 12, 16 or 32 bits, behind either kind of table of partitions or without one, that the firmware can write to. The volume it starts from is the one whose files it sees by their plain names, and the files of <a href="#work">another disk's</a> have that volume's number before theirs.</td></tr>
       <tr><td>A place to type</td><td>A serial port, a keyboard, or both. The keyboard is a virtio keyboard, or one that hangs from a <a href="#usb">USB controller</a>.</td></tr>
       <tr><td>A screen</td><td>The one the firmware sets up, if there is one. Without it everything is on the serial port.</td></tr>
       <tr><td>A pointer</td><td>A mouse or a tablet, virtio's or one of USB, for the <a href="#windows">window manager</a>. Nothing else has a use for one.</td></tr>
@@ -653,7 +653,7 @@ FIB
 
   <section id="files">
     <h2>{{spleen:Files}}</h2>
-    <p>The system reads and writes the files of the disk it started from. The name of a file is a string: the directories that lead to it and then its own name, with a slash before each, as in <code>"/EFI/BOOT/BOOTX64.EFI"</code>. Letters match in either case. There is no current directory: every name starts at the top of the volume.</p>
+    <p>The system reads and writes the files of the disk it started from. The name of a file is a string: the directories that lead to it and then its own name, with a slash before each, as in <code>"/EFI/BOOT/BOOTX64.EFI"</code>. Letters match in either case. There is no current directory: every name starts at the top of the volume. A machine with <a href="#work">a second disk</a> has a volume for each, and a name says which one it means by a number and a colon before everything else, <code>"2:/mine.lisp"</code>; a name that says none is on the disk that the machine started from.</p>
 
     <h3 id="listing">What is there</h3>
 <pre class="session">&gt; (directory "/*")
@@ -713,9 +713,9 @@ NIL</pre>
     </table>
     <p>What to know about files as they are now:</p>
     <ul>
-      <li>A file is text, in UTF-8. It is read whole when it is opened and written whole when it is closed, so it has to fit in memory, which a text does.</li>
+      <li>A file is text, in UTF-8. It is read whole when it is opened and written whole when it is closed, so it has to fit in memory, which a text does. <code>(clara:copy-file "/hello.lisp" "/letters/hello.lisp")</code> makes a file of the second name that holds what the first holds, byte for byte, whether that is text or not, in place of one that was there; it goes through memory whole as well.</li>
       <li>A name can be 255 characters long and have spaces in it. It cannot have any of <code>" * : &lt; &gt; ? \ |</code> in it, or end in a dot or a space.</li>
-      <li>A file goes into a directory that is there. <code>(clara.fat:make-directory "/letters")</code> makes one, and <code>(clara.fat:remove-directory "/letters")</code> takes one away that has nothing in it. A file cannot be renamed or moved.</li>
+      <li>A file goes into a directory that is there. <code>(clara.fat:make-directory "/letters")</code> makes one, and <code>(clara.fat:remove-directory "/letters")</code> takes one away that has nothing in it. A file cannot be renamed. It is moved by copying it and deleting the one before, which is what <a href="#browser">Jaid</a> does when it moves one.</li>
       <li>There is no clock in the system, so every file it writes is dated the first of January 1980.</li>
       <li>The disk is a FAT volume, which other systems read. On macOS, <code>build/claraos.img</code> opens with a double click, and the files that ClaraOS wrote are in it.</li>
     </ul>
@@ -731,49 +731,45 @@ disk: 00:06.0 has 72081 sectors of 512 bytes, 35 MiB
 files: a FAT32 volume of 1020 MiB on the disk 00:02.0, from its sector 2048 on
 files: a FAT32 volume of 33 MiB on the disk 00:06.0, from its sector 2048 on
 files: names are looked up on the first of these volumes</code></pre>
-    <p>The first is the system's, so nothing has changed for the files so far. <code>(clara.fat:volumes)</code> gives the volumes in that order, and <code>clara.fat:*volume*</code> holds the one that names are looked up on. Bind it to yours around a form, and the files of that form are the ones on your disk:</p>
-<pre class="session">&gt; (length (clara.fat:volumes))
-2
-&gt; (defun work () (second (clara.fat:volumes)))
-WORK
-&gt; (let ((clara.fat:*volume* (work)))
-    (with-open-file (out "/mine.lisp" :direction :output)
-      (format out "(defun mine () ~S)~%" "kept on a disk of my own")))
+    <p>The first is the system's, so nothing has changed for the files so far. A file on the second has <code>2:</code> before its name, the number of its volume in that order and a colon, and whatever takes the name of a file takes such a name. <code>(clara:volumes)</code> says which volumes there are, each by the name of its first directory:</p>
+<pre class="session">&gt; (mapcar #'car (clara:volumes))
+("1:/" "2:/")
+&gt; (with-open-file (out "2:/mine.lisp" :direction :output)
+    (format out "(defun mine () ~S)~%" "kept on a disk of my own"))
 NIL
-&gt; (let ((clara.fat:*volume* (work))) (directory "/*"))
-("/mine.lisp")
-&gt; (let ((clara.fat:*volume* (work))) (load "/mine.lisp"))
+&gt; (directory "2:/*")
+("2:/mine.lisp")
+&gt; (load "2:/mine.lisp")
 T
 &gt; (mine)
 "kept on a disk of my own"</pre>
-    <p>A file is carried from one volume to the other by reading it with the variable bound one way and writing it with the variable bound the other way. <code>clara.fat:file-text</code> gives the text of a file as one string:</p>
-<pre class="session">&gt; (defun copy-text (name from to)
-    (let ((text (let ((clara.fat:*volume* from)) (clara.fat:file-text name))))
-      (let ((clara.fat:*volume* to))
-        (with-open-file (out name :direction :output :if-exists :supersede)
-          (write-string text out)))
-      name))
-COPY-TEXT
-&gt; (copy-text "/hello.lisp" (first (clara.fat:volumes)) (work))
-"/hello.lisp"
-&gt; (let ((clara.fat:*volume* (work))) (directory "/*"))
-("/hello.lisp" "/mine.lisp")</pre>
-    <p>A <code>let</code> reaches the forms inside it and nothing else. To work on your disk for a while, set the variable instead: then every name is looked up there, in every thread, so <a href="#applications">Emma and Jaid</a>, the editor and the file browser, open and save there as well.</p>
-<pre class="session">&gt; (progn (setq clara.fat:*volume* (work)) (directory "/*"))
+    <p>After its name, each volume of that list has what is known of it:</p>
+<pre><code>&gt; (clara:volumes)
+(("1:/" :BYTES 1069547520 :STARTED-FROM T :CURRENT T) ("2:/" :BYTES 35263488))</code></pre>
+    <p><code>:bytes</code> is how much room the volume has for files, used or not. <code>:started-from</code> marks the one that the machine was started from, and <code>:current</code> the one that a name is looked up on which does not say its volume, so <code>"1:/hello.lisp"</code> and <code>"/hello.lisp"</code> are one file here. A volume whose disk cannot be written has <code>:read-only</code> as well.</p>
+    <p><code>clara:copy-file</code> carries a file from one volume to the other: afterwards the second name is a file that holds what the first holds, byte for byte, in place of one that was there under that name. The first stays, and <code>delete-file</code> after it makes a move of it. <a href="#browser">Jaid</a> does both, with the keys and with the pointer.</p>
+<pre class="session">&gt; (clara:copy-file "/hello.lisp" "2:/hello.lisp")
+"2:/hello.lisp"
+&gt; (directory "2:/*")
+("2:/hello.lisp" "2:/mine.lisp")
+&gt; (clara:copy-file "/hello.lisp" "1:/HELLO.LISP")
+error: /hello.lisp and 1:/HELLO.LISP are one file</pre>
+    <p>A name that says no volume is looked up on the one that <code>clara.fat:*volume*</code> holds, which is the first as the machine starts; <code>(clara.fat:volumes)</code> gives the volumes themselves, in the same order. To work on your disk for a while, set the variable to yours: then every name without a number is looked up there, in every thread, so <a href="#applications">Emma and Jaid</a>, the editor and the file browser, open and save there when they are told such a name. A <code>let</code> around a form does the same for the forms inside it and for nothing else.</p>
+<pre class="session">&gt; (progn (setq clara.fat:*volume* (second (clara.fat:volumes))) (directory "/*"))
 ("/hello.lisp" "/mine.lisp")
-&gt; (list (clara:save-image) (probe-file "/clara/clara.image"))
-("/clara/clara.image" NIL)
+&gt; (list (clara:save-image) (probe-file "/clara/clara.image") (directory "1:/hello*"))
+("/clara/clara.image" NIL ("1:/hello.lisp"))
 &gt; (progn (setq clara.fat:*volume* (first (clara.fat:volumes))) (directory "/*"))
 ("/clara/" "/EFI/" "/hello.lisp" "/home/")</pre>
-    <p>Two things do not follow the variable, as the form in the middle shows for the first. <a href="#image">The world is saved</a> on the disk that the machine was started from, since that is where a machine looks for one, and <a href="#home">what you define is written down</a> there as well. The applications start either way: the system finds its own files where it started from.</p>
+    <p>Two things do not follow the variable, as the form in the middle shows for the first, and a name that says its volume does not either. <a href="#image">The world is saved</a> on the disk that the machine was started from, since that is where a machine looks for one, and <a href="#home">what you define is written down</a> there as well. The applications start either way: the system finds its own files where it started from.</p>
     <p>The next time the machine starts, your disk is as you left it, whatever became of the system's in the meantime. A world that was made anew, by <a href="#upgrade">a newer system</a> for one, has what you defined at a prompt, and not what a file of this disk defined. One line brings that back, at a prompt or in <a href="#init"><code>/home/init.lisp</code></a>:</p>
-<pre class="session again">&gt; (let ((clara.fat:*volume* (second (clara.fat:volumes)))) (load "/mine.lisp"))
+<pre class="session again">&gt; (load "2:/mine.lisp")
 T
 &gt; (mine)
 "kept on a disk of my own"</pre>
     <p>A file of yours that loads all the others makes that the only line to type in a new world. What to know about such a disk:</p>
     <ul>
-      <li>The volumes are found anew at every start, so ask <code>(clara.fat:volumes)</code> for yours each time, as <code>work</code> does. A volume that a variable has kept since before the machine was started again, in a world that was saved, is refused.</li>
+      <li>A volume has its number from where its disk stands among the machine's, which is the order of the report. Started without your disk, the machine has no <code>2:</code>: a name that begins so is an error then, which says which volumes there are, and <code>probe-file</code> and <code>directory</code> give <code>NIL</code> for it. The volumes are found anew at every start, so a volume that <code>clara.fat:*volume*</code> has kept since before the machine was started again, in a world that was saved, is refused: ask <code>(clara.fat:volumes)</code> for yours again.</li>
       <li>The host opens the disk as well: on macOS with a double click, like the system's. That is the way to <a href="#outside">carry files in and out</a>, and the whole disk is one file, which is easy to keep a copy of.</li>
       <li>The host and the machine must not have it at the same time, since each would write without knowing of the other. On macOS, <code>make run-aarch64</code> ejects a disk that is still open in the Finder before it starts the machine, and says so in the terminal; when something on the Mac is still using the disk, it says that and starts nothing. The other way round nothing stops you, so stop the machine before you open the disk on the host.</li>
       <li>Any FAT volume will do, as large as you like, made with whatever the host has for that. A disk image that macOS made is one, a <code>.dmg</code> as well, as long as it is a plain read/write image and not a compressed or a sparse one: <code>WORK=~/clara-work.dmg make run-aarch64</code>. The one above has 33 MiB, which is room for a great many texts.</li>
@@ -1449,7 +1445,7 @@ T
       <li><code>clara.windows:windows</code> lists the windows from the top one down, <code>clara.windows:focused-window</code> is the first of them, and <code>clara.windows:raise-window</code> brings one to the top.</li>
       <li><code>clara.windows:close-window</code> takes a window off the screen and gives its memory back.</li>
     </ul>
-    <p>A window belongs to the thread that opened it. That thread draws on it, shows it and closes it, and <code>close-window</code> from any other thread is an error for as long as the first one lives. Four functions can be given when a window is opened, for what happens to it meanwhile:</p>
+    <p>A window belongs to the thread that opened it. That thread draws on it, shows it and closes it, and <code>close-window</code> from any other thread is an error for as long as the first one lives. Five functions can be given when a window is opened, for what happens to it meanwhile:</p>
 <pre class="session">&gt; (defvar *typed* nil)
 *TYPED*
 &gt; (defvar *keys* (clara.windows:open-window "Keys" 160 40 :key (lambda (code) (push (code-char code) *typed*))))
@@ -1464,10 +1460,32 @@ T
       <li><code>:key</code> is called with the code of every character that is typed while the window has the focus. <code>clara.windows:key-typed</code> is what the keyboard's driver calls; here it stands in for a key.</li>
       <li><code>:pointer</code> is called when a button of the pointer goes down or comes up on the inside of the window, with the place, counted from the corner of the inside, and the buttons that are down: 1 for the left one, 2 for the right, 4 for the middle. <code>clara.windows:pointer-moved</code> is what the drivers of mice and tablets call, with a place on the screen and the buttons.</li>
       <li><code>:drag</code> is called when the pointer moves while the left button is still down that went down on the inside of the window, once it is three pixels away from where that was, and from then on with every move until the button comes up: with the place, counted from the corner of the inside like <code>:pointer</code>'s, and the buttons. The place can lie outside the window, to its left or above it too, where it is counted below nought. That is what <a href="#copying">highlighting</a> is made of.</li>
+      <li><code>:drop</code> is called when the left button comes up on the inside of the window while the pointer carries something: with the place, and with what is carried, which is a text. <a href="#carrying">What the pointer carries</a> is below.</li>
       <li><code>:close</code> is called when the <code>x</code> in the title is clicked, and a window that was given none has no <code>x</code>. It is for the function to see that the window is closed, by the thread that opened it.</li>
     </ul>
-    <p>The four are called in the thread of the keyboard or of the mouse, not in the window's own. They should note what they were told, or signal an event, and leave the drawing to the thread that the window belongs to.</p>
-    <p>A fifth, <code>:unfinished</code>, is for a program that holds something which would be lost if its window went: a function that gives a few words about it, such as <code>"text that is not saved"</code>, or <code>NIL</code> when there is nothing. The machine asks every window before it <a href="#stop">shuts down</a>, and does not while one answers in words. <code>(clara.windows:unfinished)</code> gives the windows that do at the moment, each with its words.</p>
+    <p>The five are called in the thread of the keyboard or of the mouse, not in the window's own. They should note what they were told, or signal an event, and leave the drawing to the thread that the window belongs to.</p>
+    <p id="carrying">A program lets something of its window's be taken to another window by having the pointer carry it, as a text: <a href="#browser">Jaid</a> does so with the name of a file. <code>(clara.windows:carry window text)</code> says what is carried, and holds while the left button is down that went down on the inside of that window. When the button comes up, the window that it comes up on is told through its <code>:drop</code>, whichever program's it is, and the window that the text was carried from is told where it was let go, through its <code>:drag</code>, with no button down. Then nothing is carried any more.</p>
+<pre class="session">&gt; (defvar *let-go* nil)
+*LET-GO*
+&gt; (defvar *from* (clara.windows:open-window "From" 160 40 :x 40 :y 100))
+*FROM*
+&gt; (defvar *to* (clara.windows:open-window "To" 160 40 :x 300 :y 100
+                                          :drop (lambda (x y text) (setq *let-go* (list x y text)))))
+*TO*
+&gt; (clara.windows:carry *from* "/hello.lisp")
+NIL
+&gt; (clara.windows:pointer-moved 50 110 1)
+NIL
+&gt; (clara.windows:carry *from* "/hello.lisp")
+T
+&gt; (clara.windows:pointer-moved 310 120 0)
+NIL
+&gt; *let-go*
+(10 20 "/hello.lisp")
+&gt; (list (clara.windows:close-window *from*) (clara.windows:close-window *to*))
+(NIL NIL)</pre>
+    <p><code>carry</code> gives <code>T</code> when the pointer carries the text from then on, and <code>NIL</code> when it does not: no button is down, as for the first of the two above, or it went down on another window. <code>clara.windows:pointer-moved</code> stands in for the mouse here, with a place on the screen and the buttons, the way <code>key-typed</code> stood in for a key.</p>
+    <p>A sixth function, <code>:unfinished</code>, is for a program that holds something which would be lost if its window went: a function that gives a few words about it, such as <code>"text that is not saved"</code>, or <code>NIL</code> when there is nothing. The machine asks every window before it <a href="#stop">shuts down</a>, and does not while one answers in words. <code>(clara.windows:unfinished)</code> gives the windows that do at the moment, each with its words.</p>
     <p>A window that is opened with <code>:events t</code> does that by itself: it keeps what happens to it, and its program asks for the next thing when it is ready for it, in its own thread, where it can draw.</p>
 <pre class="session">&gt; (defvar *heard* (clara.windows:open-window "Heard" 160 40 :events t))
 *HEARD*
@@ -1486,7 +1504,7 @@ NIL
 &gt; (clara.windows:close-window *heard*)
 NIL</pre>
     <ul>
-      <li><code>clara.windows:next-event</code> gives what happened next, and waits when nothing has: for as long as it takes, or for so many milliseconds, after which it gives <code>NIL</code>. <code>(:key 97)</code> is a key, <code>(:pointer 12 30 1)</code> a button that went down or came up, with the place on the inside and the buttons, and <code>(:close)</code> a click on the <code>x</code>, which such a window always has. A window that is opened with <code>:events t :drag t</code> keeps <code>(:drag 40 30 1)</code> as well, for the pointer that was moved with the left button held; of several such moves that nobody has taken yet, it keeps the last.</li>
+      <li><code>clara.windows:next-event</code> gives what happened next, and waits when nothing has: for as long as it takes, or for so many milliseconds, after which it gives <code>NIL</code>. <code>(:key 97)</code> is a key, <code>(:pointer 12 30 1)</code> a button that went down or came up, with the place on the inside and the buttons, and <code>(:close)</code> a click on the <code>x</code>, which such a window always has. A window that is opened with <code>:events t :drag t</code> keeps <code>(:drag 40 30 1)</code> as well, for the pointer that was moved with the left button held; of several such moves that nobody has taken yet, it keeps the last. One that is opened with <code>:drop t</code> keeps <code>(:drop 40 30 "/hello.lisp")</code> for a text that the pointer let go on it. The program of such a window says what the pointer carries once it has taken the button that went down, and not before: <code>carry</code> gives <code>NIL</code> while a button is still among what the window keeps.</li>
       <li>A key is the code of the character it types. The keys that type none have codes too, past the last that a character can have, which is <code>char-code-limit</code>: <code>clara.input:+up+</code>, <code>+down+</code>, <code>+left+</code>, <code>+right+</code>, <code>+home+</code>, <code>+end+</code>, <code>+page-up+</code>, <code>+page-down+</code>, <code>+insert+</code>, and <code>+f1+</code> for the first of the twelve function keys, with the others after it. Escape is 27, Delete 127, and a key that is typed with <kbd>Alt</kbd> held has <code>clara.input:+alt+</code> added to its code.</li>
       <li><code>clara.windows:rename-window</code> gives a window another title.</li>
     </ul>
@@ -1647,18 +1665,22 @@ NIL
 &gt; (clara.windows:window-title (clara.windows:focused-window))
 "Jaid - /clara/"</pre>
     <p><code>:columns</code>, <code>:rows</code>, <code>:x</code>, <code>:y</code> and <code>:font</code> after the name do for this window what they do for Emma's; it is 48 by 16 without them.</p>
-    <p>The window lists what the directory holds: the directories first, each with a slash at its end, then the files, and above them all <code>../</code>, the way to the directory that this one is in. One name is picked, and shows the other way round. The title follows the window from one directory to the next.</p>
+    <p>The window lists what the directory holds: the directories first, each with a slash at its end, then the files, and above them all <code>../</code>, the way to the directory that this one is in. One name is picked, and shows the other way round. The title follows the window from one directory to the next, and the last row says what was done last, or asks.</p>
     <table class="wrap">
       <tr><td>The arrows up and down, <kbd>Page Up</kbd>, <kbd>Page Down</kbd>, <kbd>Home</kbd>, <kbd>End</kbd></td><td>pick another name.</td></tr>
       <tr><td><kbd>Enter</kbd></td><td>goes into the directory that is picked, or opens the file that is picked in a new Emma window.</td></tr>
       <tr><td><kbd>Backspace</kbd>, the arrow to the left</td><td>go to the directory that this one is in.</td></tr>
-      <tr><td>A click</td><td>picks the name it is on, and on the name that is picked does what <kbd>Enter</kbd> does.</td></tr>
+      <tr><td>A click</td><td>picks the name it is on, and on the name that is picked does what <kbd>Enter</kbd> does, once the button has come up where it went down.</td></tr>
       <tr><td><kbd>Delete</kbd></td><td>asks whether the file that is picked is to be deleted, and <kbd>y</kbd> deletes it. Any other key does not.</td></tr>
       <tr><td><kbd>Ctrl-R</kbd></td><td>reads the directory again: the window does not notice by itself what was written since.</td></tr>
       <tr><td><kbd>Ctrl-C</kbd></td><td><a href="#copying">copies</a> the name that is picked, with its directory before it, as a form at a prompt wants it: <kbd>Ctrl-V</kbd> in another window puts it in.</td></tr>
+      <tr><td><kbd>Ctrl-V</kbd></td><td>puts a copy of the file whose name was copied last into the directory that is listed, whichever window or volume the name was copied in. Where there is a file of that name already, the last row asks, and <kbd>y</kbd> has the copy take its place; any other key leaves it.</td></tr>
+      <tr><td><kbd>Ctrl-X</kbd></td><td>is <kbd>Ctrl-C</kbd> for a file that is to move: the next <kbd>Ctrl-V</kbd> in a Jaid window puts the file itself there, and it is no longer where it was. Something else that is copied in between makes a copy of it again.</td></tr>
+      <tr><td>The pointer, moved with its left button held down on a file</td><td>carries the file, which the last row says. Let go on a directory, or on <code>../</code>, in this window or in another Jaid window, the file is put into that directory, and let go anywhere else in a Jaid window, into the one that the window lists. On another volume that is a copy of it; on its own volume the file moves. The window that it was let go on comes to the top.</td></tr>
       <tr><td><kbd>Ctrl-Q</kbd>, the <code>x</code> in the title</td><td>close the window.</td></tr>
     </table>
-    <p>Every file opens in Emma, also one that is no text, which Emma says it cannot read. Directories are not made or deleted here, which <a href="#writing">two functions</a> do at a prompt, and the window shows names and no sizes or dates.</p>
+    <p>A machine with <a href="#work">more than one disk</a> has a volume for each, and there the first directory of a volume has a way up as well, which leads to the list of the volumes: each by the name of its first directory, <code>1:/</code> and <code>2:/</code>, with its size, and with words for the one that the machine started from, for the one that <code>/</code> is, and for one that cannot be written. <kbd>Enter</kbd> goes into the volume that is picked, where the title is <code>Jaid - 2:/</code>; while the volumes are listed it is <code>Jaid</code> alone. <code>(clara.windows:launch "Jaid" "2:/")</code> opens a window on the second volume straight away, and two windows side by side, one on each volume, are how a file is carried from one to the other with the pointer.</p>
+    <p>Every file opens in Emma, also one that is no text, which Emma says it cannot read. Directories are not made or deleted here, which <a href="#writing">two functions</a> do at a prompt, nor are they copied, moved or carried; and the window shows names and no sizes or dates. A file is copied through memory, whole, so one that is larger than the memory that the machine has free is not copied, which the last row says. A window does not notice what another one did: after a file has moved, the window that it went from lists it until <kbd>Ctrl-R</kbd>.</p>
 
     <h3 id="ares">Ares, the web browser</h3>
     <p><code>Ares</code> in the list opens a window on a page that Ares has of itself, which says what it is and which keys it has. Nothing is fetched until it is told where to go. From a prompt it is launched like that too, or with an address, which it goes to as its window opens:</p>
@@ -1951,7 +1973,7 @@ error: /home/song.mp3 is not a file of sound of the kind that is read here, a WA
       <tr><td><code>(get-universal-time)</code></td><td>what time it is: the seconds since 1900 began in Greenwich, by the clock of the machine's firmware as the machine was started and the time that has gone by since. An error on a machine whose firmware has no clock.</td></tr>
       <tr><td><code>(clara.pci:devices)</code></td><td>the devices on the PCI bus. <code>clara.pci:location</code> and <code>clara.pci:description</code> say where one is and what it is.</td></tr>
       <tr><td><code>(clara.disk:disks)</code></td><td>the disks that have a driver. <code>clara.disk:disk-name</code>, <code>clara.disk:disk-sectors</code> and <code>clara.disk:disk-read-only</code> say more about one.</td></tr>
-      <tr><td><code>(clara.fat:volumes)</code></td><td>the FAT volumes on those disks. Names of files are looked up on the first, or on the one that <code>clara.fat:*volume*</code> is given: <a href="#work">a disk of your own</a>.</td></tr>
+      <tr><td><code>(clara.fat:volumes)</code></td><td>the FAT volumes on those disks. Names of files are looked up on the first, or on the one that <code>clara.fat:*volume*</code> is given, unless a name says its volume itself, <code>"2:/mine.lisp"</code>: <a href="#work">a disk of your own</a>. <code>(clara:volumes)</code> gives the names that their first directories go by.</td></tr>
       <tr><td><code>(clara.fat:entries "/clara")</code></td><td>what a directory holds, with <code>clara.fat:entry-name</code>, <code>clara.fat:entry-size</code> and <code>clara.fat:entry-directory-p</code> for each entry</td></tr>
       <tr><td><code>(clara.input:devices)</code></td><td>the keyboards and pointers</td></tr>
       <tr><td><code>(clara.sound:card)</code></td><td>the sound card, in a line, or <code>NIL</code> when the machine has none that there is a driver for</td></tr>
@@ -2006,6 +2028,9 @@ error: nothing is mapped at #x0</pre>
       <tr><td><code>lisp: clara.image is passed over</code></td><td>The start before this one did not come to its prompt, so the world that was saved was not started a second time: <a href="#prompt-not-reached">A world that does not come to its prompt</a>.</td></tr>
       <tr><td><code>tools/run.sh: a machine is running from build/disk-aarch64.img already</code></td><td>There is one machine to a disk. Shut the other one down first.</td></tr>
       <tr><td><code>error: the volume in CLARA.FAT:*VOLUME* is from an earlier start</code></td><td>A variable kept a volume while the machine was started again, in a world that was saved. Take the volume from <code>(clara.fat:volumes)</code> anew: <a href="#work">A disk of your own</a>.</td></tr>
+      <tr><td><code>error: there is no volume for 2:/mine.lisp: this machine has one, 1:</code></td><td>The name says a volume that this start did not find. The machine was started without that disk, <code>WORK=</code> for one that is <a href="#work">yours</a>, or the disk has no FAT volume. <code>(clara:volumes)</code> has the ones that there are.</td></tr>
+      <tr><td><code>error: ... and ... are one file</code></td><td><code>clara:copy-file</code> was given two names of the same file: with and without its volume, or in other letters. Nothing was written.</td></tr>
+      <tr><td><code>error: the disk ... cannot be written</code>, at a prompt or in the last row of a Jaid window</td><td>The file was to go to a disk that the machine can only read. The disk that <code>make run-aarch64</code> hands a machine with a newer build is one: it is a volume like any other for as long as that machine runs, the last in Jaid's list of them.</td></tr>
       <tr><td>QEMU does not start, and says that it failed to get a lock.</td><td>Something else has one of the machine's disks. A machine that is still running from it, for one: there is one machine to a disk. Or the host: <code>make run-aarch64</code> ejects a disk that is open in the Finder by itself, and QEMU started in any other way needs it ejected first.</td></tr>
       <tr><td>A window is gone that nobody closed, or an application's window never comes.</td><td>The application failed, and its thread ended. The serial port has the reason, in a line that begins with <code>error in #&lt;THREAD</code>. When the reason is in the application's file, mend the file and launch it again: <a href="#installed">Applications in files</a>.</td></tr>
       <tr><td><code>error: the machine is not shut down: the window ... has text that is not saved</code></td><td>A program holds something that would go with the machine, and the window that says so has come to the top. Save it or close the window and ask again, or ask with <code>:force t</code>: <a href="#stop">Stopping it</a>.</td></tr>
@@ -2063,8 +2088,8 @@ error: nothing is mapped at #x0</pre>
     <p class="aside"><code>(lisp-implementation-type)</code> is <code>"ClaraOS"</code>, and <code>(lisp-implementation-version)</code> the version of the kernel.</p>
 
     <h3>The package CLARA</h3>
-    <p>Threads, locks and events, the image, and what whoever writes a console, a file system or a compiler needs: a stream made of two functions, the way a file system and a compiler tell the language that they are there, and what kind of variable a name is, <code>:special</code>, <code>:constant</code> or neither.</p>
-    <p class="names" data-package="CLARA"><code>clara:make-thread</code> <code>clara:current-thread</code> <code>clara:threadp</code> <code>clara:thread-name</code> <code>clara:thread-alive-p</code> <code>clara:all-threads</code> <code>clara:join-thread</code> <code>clara:destroy-thread</code> <code>clara:interrupt-thread</code> <code>clara:thread-yield</code> <code>clara:make-lock</code> <code>clara:acquire-lock</code> <code>clara:release-lock</code> <code>clara:with-lock-held</code> <code>clara:make-event</code> <code>clara:signal-event</code> <code>clara:wait-event</code> <code>clara:save-image</code> <code>clara:keyboard-interrupt</code> <code>clara:make-stream</code> <code>clara:provide-files</code> <code>clara:provide-compiler</code> <code>clara:variable-kind</code></p>
+    <p>Threads, locks and events, the image, <a href="#work">which volumes there are and a file like another</a>, and what whoever writes a console, a file system or a compiler needs: a stream made of two functions, the way a file system and a compiler tell the language that they are there, and what kind of variable a name is, <code>:special</code>, <code>:constant</code> or neither.</p>
+    <p class="names" data-package="CLARA"><code>clara:make-thread</code> <code>clara:current-thread</code> <code>clara:threadp</code> <code>clara:thread-name</code> <code>clara:thread-alive-p</code> <code>clara:all-threads</code> <code>clara:join-thread</code> <code>clara:destroy-thread</code> <code>clara:interrupt-thread</code> <code>clara:thread-yield</code> <code>clara:make-lock</code> <code>clara:acquire-lock</code> <code>clara:release-lock</code> <code>clara:with-lock-held</code> <code>clara:make-event</code> <code>clara:signal-event</code> <code>clara:wait-event</code> <code>clara:save-image</code> <code>clara:volumes</code> <code>clara:copy-file</code> <code>clara:keyboard-interrupt</code> <code>clara:make-stream</code> <code>clara:provide-files</code> <code>clara:provide-compiler</code> <code>clara:variable-kind</code></p>
     <p class="aside"><code>clara:keyboard-interrupt</code> is the condition that <kbd>Ctrl-C</kbd> is.</p>
 
     <h3>The package CLARA.DRAW</h3>
@@ -2078,7 +2103,7 @@ error: nothing is mapped at #x0</pre>
 
     <h3>The packages CLARA.WINDOWS and CLARA.TERMINAL</h3>
     <p><a href="#windows">Windows</a> says what each of these is for. <code>clara.windows:resume</code> is what the system calls as it starts, for a world that was saved with the window manager running.</p>
-    <p class="names" data-package="CLARA.WINDOWS"><code>clara.windows:start</code> <code>clara.windows:stop</code> <code>clara.windows:running-p</code> <code>clara.windows:resume</code> <code>clara.windows:open-window</code> <code>clara.windows:close-window</code> <code>clara.windows:show</code> <code>clara.windows:window-p</code> <code>clara.windows:window-title</code> <code>clara.windows:window-surface</code> <code>clara.windows:window-position</code> <code>clara.windows:move-window</code> <code>clara.windows:raise-window</code> <code>clara.windows:rename-window</code> <code>clara.windows:next-event</code> <code>clara.windows:windows</code> <code>clara.windows:focused-window</code> <code>clara.windows:clipboard</code> <code>clara.windows:highlight</code> <code>clara.windows:*highlight*</code> <code>clara.windows:define-application</code> <code>clara.windows:install-application</code> <code>clara.windows:unload-application</code> <code>clara.windows:remove-application</code> <code>clara.windows:applications</code> <code>clara.windows:launch</code> <code>clara.windows:*application-directory*</code> <code>clara.windows:define-command</code> <code>clara.windows:remove-command</code> <code>clara.windows:commands</code> <code>clara.windows:move-up</code> <code>clara.windows:move-down</code> <code>clara.windows:unfinished</code> <code>clara.windows:*font*</code> <code>clara.windows:*text-font*</code> <code>clara.windows:text-font</code> <code>clara.windows:key-typed</code> <code>clara.windows:pointer-moved</code></p>
+    <p class="names" data-package="CLARA.WINDOWS"><code>clara.windows:start</code> <code>clara.windows:stop</code> <code>clara.windows:running-p</code> <code>clara.windows:resume</code> <code>clara.windows:open-window</code> <code>clara.windows:close-window</code> <code>clara.windows:show</code> <code>clara.windows:window-p</code> <code>clara.windows:window-title</code> <code>clara.windows:window-surface</code> <code>clara.windows:window-position</code> <code>clara.windows:move-window</code> <code>clara.windows:raise-window</code> <code>clara.windows:rename-window</code> <code>clara.windows:next-event</code> <code>clara.windows:windows</code> <code>clara.windows:focused-window</code> <code>clara.windows:clipboard</code> <code>clara.windows:carry</code> <code>clara.windows:highlight</code> <code>clara.windows:*highlight*</code> <code>clara.windows:define-application</code> <code>clara.windows:install-application</code> <code>clara.windows:unload-application</code> <code>clara.windows:remove-application</code> <code>clara.windows:applications</code> <code>clara.windows:launch</code> <code>clara.windows:*application-directory*</code> <code>clara.windows:define-command</code> <code>clara.windows:remove-command</code> <code>clara.windows:commands</code> <code>clara.windows:move-up</code> <code>clara.windows:move-down</code> <code>clara.windows:unfinished</code> <code>clara.windows:*font*</code> <code>clara.windows:*text-font*</code> <code>clara.windows:text-font</code> <code>clara.windows:key-typed</code> <code>clara.windows:pointer-moved</code></p>
     <p class="names" data-package="CLARA.TERMINAL"><code>clara.terminal:open-terminal</code> <code>clara.terminal:terminal-p</code> <code>clara.terminal:terminal-stream</code> <code>clara.terminal:terminal-window</code> <code>clara.terminal:clear</code> <code>clara.terminal:*rows-kept*</code> <code>clara.terminal:history</code> <code>clara.terminal:*lines-kept*</code> <code>clara.terminal:repl</code></p>
 
     <h3>The package CLARA.SYNTAX</h3>
@@ -2121,7 +2146,7 @@ error: nothing is mapped at #x0</pre>
     <p class="names" data-package="CLARA.VIRTIO"><code>clara.virtio:device-type</code> <code>clara.virtio:open-device</code> <code>clara.virtio:start-device</code> <code>clara.virtio:device-p</code> <code>clara.virtio:device-pci</code> <code>clara.virtio:device-event</code> <code>clara.virtio:device-features</code> <code>clara.virtio:register-8</code> <code>clara.virtio:register-16</code> <code>clara.virtio:register-32</code> <code>clara.virtio:open-queue</code> <code>clara.virtio:queue-p</code> <code>clara.virtio:queue-size</code> <code>clara.virtio:queue-add</code> <code>clara.virtio:queue-notify</code> <code>clara.virtio:queue-take</code></p>
     <p class="names" data-package="CLARA.INPUT"><code>clara.input:start</code> <code>clara.input:devices</code> <code>clara.input:pointer</code> <code>clara.input:pointer-changed</code> <code>clara.input:set-pointer-limits</code> <code>clara.input:key-character</code> <code>clara.input:send-keys-to</code> <code>clara.input:send-pointer-to</code> <code>clara.input:*repeat-delay*</code> <code>clara.input:*repeat-interval*</code> <code>clara.input:+up+</code> <code>clara.input:+down+</code> <code>clara.input:+left+</code> <code>clara.input:+right+</code> <code>clara.input:+home+</code> <code>clara.input:+end+</code> <code>clara.input:+page-up+</code> <code>clara.input:+page-down+</code> <code>clara.input:+insert+</code> <code>clara.input:+f1+</code> <code>clara.input:+alt+</code></p>
     <p class="names" data-package="CLARA.DISK"><code>clara.disk:start</code> <code>clara.disk:disks</code> <code>clara.disk:disk-p</code> <code>clara.disk:disk-name</code> <code>clara.disk:disk-sectors</code> <code>clara.disk:disk-read-only</code> <code>clara.disk:read-sectors</code> <code>clara.disk:write-sectors</code> <code>clara.disk:flush</code> <code>clara.disk:*patience*</code></p>
-    <p class="names" data-package="CLARA.FAT"><code>clara.fat:start</code> <code>clara.fat:volumes</code> <code>clara.fat:*volume*</code> <code>clara.fat:*image-volume*</code> <code>clara.fat:volume-p</code> <code>clara.fat:volume-disk</code> <code>clara.fat:volume-kind</code> <code>clara.fat:volume-first</code> <code>clara.fat:entries</code> <code>clara.fat:entry-p</code> <code>clara.fat:entry-name</code> <code>clara.fat:entry-short</code> <code>clara.fat:entry-directory-p</code> <code>clara.fat:entry-size</code> <code>clara.fat:names</code> <code>clara.fat:file-text</code> <code>clara.fat:read-file</code> <code>clara.fat:write-file</code> <code>clara.fat:remove-file</code> <code>clara.fat:make-directory</code> <code>clara.fat:remove-directory</code> <code>clara.fat:free-bytes</code></p>
+    <p class="names" data-package="CLARA.FAT"><code>clara.fat:start</code> <code>clara.fat:volumes</code> <code>clara.fat:*volume*</code> <code>clara.fat:*image-volume*</code> <code>clara.fat:volume-p</code> <code>clara.fat:volume-disk</code> <code>clara.fat:volume-kind</code> <code>clara.fat:volume-first</code> <code>clara.fat:entries</code> <code>clara.fat:entry-p</code> <code>clara.fat:entry-name</code> <code>clara.fat:entry-short</code> <code>clara.fat:entry-directory-p</code> <code>clara.fat:entry-size</code> <code>clara.fat:names</code> <code>clara.fat:file-text</code> <code>clara.fat:read-file</code> <code>clara.fat:write-file</code> <code>clara.fat:remove-file</code> <code>clara.fat:copy-file</code> <code>clara.fat:make-directory</code> <code>clara.fat:remove-directory</code> <code>clara.fat:free-bytes</code></p>
     <p class="names" data-package="CLARA.NET"><code>clara.net:start</code> <code>clara.net:up</code> <code>clara.net:address</code> <code>clara.net:addresses</code> <code>clara.net:station</code> <code>clara.net:resolve</code> <code>clara.net:ping</code> <code>clara.net:fetch</code> <code>clara.net:fetch-text</code> <code>clara.net:connect</code> <code>clara.net:with-connection</code> <code>clara.net:serve</code> <code>clara.net:stop-serving</code> <code>clara.net:serving</code> <code>clara.net:*patience*</code> <code>clara.net:*again*</code> <code>clara.net:*name-server*</code> <code>clara.net:*name-port*</code> <code>clara.net:*ipv6*</code> <code>clara.net:*secure*</code></p>
     <p class="names" data-package="CLARA.RANDOM"><code>clara.random:start</code> <code>clara.random:bytes</code> <code>clara.random:below</code> <code>clara.random:*patience*</code></p>
     <p class="names" data-package="CLARA.TLS"><code>clara.tls:start</code> <code>clara.tls:trust</code> <code>clara.tls:roots</code></p>

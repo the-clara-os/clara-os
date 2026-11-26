@@ -23,7 +23,7 @@
            "JOIN-THREAD" "DESTROY-THREAD" "INTERRUPT-THREAD" "THREAD-YIELD"
            "MAKE-LOCK" "ACQUIRE-LOCK" "RELEASE-LOCK" "WITH-LOCK-HELD"
            "MAKE-EVENT" "SIGNAL-EVENT" "WAIT-EVENT"
-           "MAKE-STREAM" "KEYBOARD-INTERRUPT" "PROVIDE-FILES" "SAVE-IMAGE"
+           "MAKE-STREAM" "KEYBOARD-INTERRUPT" "PROVIDE-FILES" "SAVE-IMAGE" "VOLUMES" "COPY-FILE"
            "VARIABLE-KIND" "PROVIDE-COMPILER"))
 
 (defpackage "CLARA.UNSAFE"
@@ -49,7 +49,7 @@
            "SET-FRAMEBUFFER" "SET-SERIAL-DEVICE" "SET-SCREEN-CURSOR" "GIVEN-SCREEN"
            "TYPE-BYTES" "RAISE-INTERRUPT" "SERIAL-BREAK-P"
            "SET-PCI-CONFIGURATION" "SEND-MESSAGE" "MESSAGE-INTERRUPTS" "KEYBOARD-BREAKS"
-           "ALLOCATED-PAGES" "PROVIDED-FILES" "SET-HEAP-IMAGE" "PROVIDED-COMPILER"
+           "ALLOCATED-PAGES" "PROVIDED-FILES" "SET-VOLUMES" "SET-HEAP-IMAGE" "PROVIDED-COMPILER"
            "POWER" "PRESS-POWER-BUTTON" "SET-START-STATE" "SHA-512-OF"
            "ED25519-PUBLIC" "ED25519-SIGN" "ED25519-VERIFY"
            "OCTETS-OF" "OCTETS-NUMBER" "NUMBER-OCTETS" "DIGEST-OF" "HMAC-OF" "AES-GCM" "X25519-OF" "EXPT-MOD"
@@ -247,9 +247,36 @@
 
 (defvar *files* nil)
 
-(defun provide-files (&key text names write delete image)
-  (setq *files* (if (and text names) (list text names write delete (or image write))))
+(defun provide-files (&key text names write delete image copy volumes)
+  (setq *files* (if (and text names) (list text names write delete (or image write) copy volumes)))
   nil)
+
+;; VOLUMES as lisp/boot.lisp has it: the volumes that there are, each a
+;; list of the name of its first directory and what is known of it. The
+;; files here are the host's, which has no such thing, so they are whatever
+;; a test says (CLARA.HOST:SET-VOLUMES), directories of its own, and none
+;; until it does.
+(defvar *volumes* nil)
+
+(defun volumes ()
+  *volumes*)
+
+;; COPY-FILE as lisp/boot.lisp has it: a file of the name TO that holds
+;; what the file FROM holds, byte for byte, in place of one that was
+;; there, and an error when the two names are one file's. The files are
+;; the host's.
+(defun copy-file (from to)
+  (when (and (probe-file from) (probe-file to) (equal (truename from) (truename to)))
+    (error "~A and ~A are one file" from to))
+  (with-open-file (in from :element-type '(unsigned-byte 8))
+    (with-open-file (out to :direction :output :if-exists :supersede :element-type '(unsigned-byte 8))
+      (let ((bytes (make-array 4096 :element-type '(unsigned-byte 8))))
+        (loop
+          (let ((count (read-sequence bytes in)))
+            (when (zerop count)
+              (return))
+            (write-sequence bytes out :end count))))))
+  to)
 
 ;; SAVE-IMAGE as lisp/boot.lisp has it: the heap goes into a file, by way
 ;; of the file system that is there. The heap of this machine is whatever a
@@ -465,6 +492,10 @@
 
 (defun provided-files ()
   clara::*files*)
+
+;; What CLARA:VOLUMES gives from now on.
+(defun set-volumes (volumes)
+  (setq clara::*volumes* volumes))
 
 ;; Ed25519 (RFC 8032): a signature, made and checked, with big numbers. A
 ;; point of the curve is its x and y, bytes are sequences of numbers, and

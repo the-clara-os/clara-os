@@ -1,0 +1,144 @@
+> (cl:in-package "COMMON-LISP-USER")
+#<PACKAGE "COMMON-LISP-USER">
+> (mapcar (lambda (volume)                                               ; two disks, each with a volume: what the language
+            (list (car volume) (integerp (getf (cdr volume) :bytes))     ; says of them, and that names are looked up on
+                  (getf (cdr volume) :started-from) (getf (cdr volume) :current))) ; the one that the machine started from
+          (clara:volumes))
+(("1:/" T T T) ("2:/" T NIL NIL))
+> (list (directory "2:/*") (probe-file "2:/") (probe-file "2:") (probe-file "3:/") (probe-file "2:/none") (directory "3:/*"))
+(NIL "2:/" "2:/" NIL NIL NIL)
+> (with-open-file (out "2:/note.txt" :direction :output)                 ; a file by a name that says which volume
+    (write-line "kept on the second" out))
+"kept on the second"
+> (list (directory "2:/*") (probe-file "2:/NOTE.TXT") (probe-file "/note.txt") (with-open-file (in "2:/note.txt") (read-line in)))
+(("2:/note.txt") "2:/note.txt" NIL "kept on the second")
+> (with-open-file (out "2:/two.lisp" :direction :output)
+    (write-line "(defun on-two () 'loaded-from-the-second)" out))
+"(defun on-two () 'loaded-from-the-second)"
+> (list (load "2:/two.lisp") (funcall 'on-two))
+(T LOADED-FROM-THE-SECOND)
+> (list (clara:copy-file "2:/note.txt" "/note.txt")                      ; a file like another, on the other volume,
+        (with-open-file (in "/note.txt") (read-line in)) (probe-file "1:/note.txt"))
+("/note.txt" "kept on the second" "1:/note.txt")
+> (let ((font (clara.system:system-file "Go-Mono.ttf")))                 ; and one that is no text, byte for byte
+    (clara:copy-file font "2:/mono.ttf")
+    (multiple-value-bind (memory bytes pages) (clara.fat:read-file font)
+      (multiple-value-bind (mine size mine-pages) (clara.fat:read-file "2:/mono.ttf")
+        (prog1 (list (> bytes 100000) (= bytes size) (equal (clara.unsafe:sha-512 memory bytes) (clara.unsafe:sha-512 mine size)))
+          (clara.unsafe:free-memory memory pages)
+          (clara.unsafe:free-memory mine mine-pages)))))
+(T T T)
+> (clara:copy-file "/note.txt" "1:/NOTE.TXT")                            ; not onto itself, under whichever names,
+error: /note.txt and 1:/NOTE.TXT are one file
+> (clara:copy-file "/note.txt" "3:/note.txt")                            ; and not to a volume that is not there
+error: there is no volume for 3:/note.txt: this machine has 1: to 2:
+> (open "3:/note.txt")
+error: there is no volume for 3:/note.txt: this machine has 1: to 2:
+> (let ((clara.fat:*volume* (second (clara.fat:volumes))))               ; the variable is for the names that say nothing
+    (list (directory "/*") (probe-file "1:/note.txt")
+          (mapcar (lambda (volume) (getf (cdr volume) :current)) (clara:volumes))))
+(("/mono.ttf" "/note.txt" "/two.lisp") "1:/note.txt" (NIL T))
+> (list (clara:thread-alive-p (clara.windows:launch "Emma" "2:/note.txt")) ; Emma opens a file of the second volume,
+        (cursor-at 0 0) (clara.windows:window-title (clara.windows:focused-window)))
+(T OK "Emma - 2:/note.txt")
+> (until (equal (ignore-errors (with-open-file (in "2:/note.txt") (list (read-line in) (read-line in))))
+                '("and more" "kept on the second")))                     ; and saves it there
+^T and more
+^M sendkey ctrl-s
+OK
+> (list (clara.windows:key-typed 17) (until (= (length (clara.windows:windows)) 1)))
+(17 OK)
+> (progn (clara.fat:make-directory "/crate") (clara.fat:make-directory "/crate/in")
+         (dolist (name '("/crate/a.txt" "/crate/b.txt"))
+           (with-open-file (out name :direction :output) (write-line name out)))
+         (directory "/crate/*"))
+("/crate/a.txt" "/crate/b.txt" "/crate/in/")
+> (defun says (row text &optional picked)                                ; a row of the window on top begins with that; PICKED:
+    (let* ((face (clara.windows:window-surface (clara.windows:focused-window)))  ; with its colours the other way round
+           (width (* 8 (length text))) (scratch (clara.draw:allocate-surface width 16)) (same t)
+           (ink (clara.draw:color 232 227 244)) (paper (clara.draw:color 30 27 46)))
+      (if picked
+          (clara.draw:draw-text scratch 0 0 text paper ink)
+          (clara.draw:draw-text scratch 0 0 text ink paper))
+      (dotimes (y 16)
+        (dotimes (x width)
+          (unless (= (clara.draw:pixel scratch x y) (clara.draw:pixel face x (+ (* 16 row) y)))
+            (setq same nil))))
+      (clara.draw:free-surface scratch)
+      same))
+SAYS
+> (list (clara:thread-alive-p (clara.windows:launch "Jaid" "/crate/" :columns 30 :rows 6 :x 16 :y 120))  ; two windows of
+        (clara:thread-alive-p (clara.windows:launch "Jaid" "2:/" :columns 44 :rows 6 :x 300 :y 120))     ; Jaid, on the
+        (until (and (says 0 " ../" t) (says 1 " mono.ttf") (says 2 " note.txt") (says 3 " two.lisp") (says 4 " ") ; two volumes
+                    (says 6 " 4 names: Enter opens, Backspace goes up" t)))
+        (mapcar #'clara.windows:window-title (clara.windows:windows)))
+(T T OK ("Jaid - 2:/" "Jaid - /crate/" "REPL"))
+> (pointer-at 0 0 0)
+^M mouse_button 0
+^M mouse_move -5000 -5000
+OK
+> (pointer-at 56 160 0)                                                  ; over a.txt in the first window, its third row
+^M mouse_move 56 160
+OK
+> (list 'pressed (pointer-at 56 160 1)                                   ; the button goes down on it: the window comes to
+        (until (and (says 2 " a.txt" t) (says 0 " ../"))))               ; the top, and the name is picked;
+^M mouse_button 1
+(PRESSED OK OK)
+> (list 'carried (until (says 6 " carrying /crate/a.txt" t)))            ; it is moved with the button held: carried
+^M mouse_move 300 0
+(CARRIED OK)
+> (list 'let-go (pointer-at 356 160 0)                                   ; and let go on the other window, which lists
+        (until (probe-file "2:/a.txt")) (probe-file "/crate/a.txt")      ; another volume: a copy of the file is there,
+        (until (and (says 1 " a.txt" t) (says 6 " copied /crate/a.txt to 2:/a.txt" t))) ; and that window is on top
+        (mapcar #'clara.windows:window-title (clara.windows:windows))
+        (with-open-file (in "2:/a.txt") (read-line in)))
+^M mouse_button 0
+(LET-GO OK OK "/crate/a.txt" OK ("Jaid - 2:/" "Jaid - /crate/" "REPL") "/crate/a.txt")
+> (pointer-at 56 176 0)                                                  ; b.txt, in the first window,
+^M mouse_move -300 16
+OK
+> (list 'pressed-on (pointer-at 56 176 1) (until (says 3 " b.txt" t)))
+^M mouse_button 1
+(PRESSED-ON OK OK)
+> (list 'carried-up (until (says 6 " carrying /crate/b.txt" t)))         ; is carried to the directory two rows above it,
+^M mouse_move 0 -32
+(CARRIED-UP OK)
+> (list 'moved (pointer-at 56 144 0) (until (probe-file "/crate/in/b.txt")) (until (not (probe-file "/crate/b.txt")))
+        (until (and (says 2 " a.txt" t) (says 3 " ") (says 6 " moved /crate/b.txt to /crate/" t)))) ; on the same volume
+^M mouse_button 0
+(MOVED OK OK OK OK)
+> (list 'cut (until (says 6 " cut /crate/a.txt: Ctrl-V" t)) (clara.windows:clipboard)) ; Ctrl-X, for a file that is to move,
+^M sendkey ctrl-x
+(CUT OK "/crate/a.txt")
+> (pointer-at 356 224 0)                                                 ; a click on the other window, below its names,
+^M mouse_move 300 80
+OK
+> (list 'second-window (pointer-at 356 224 1)
+        (until (equal (clara.windows:window-title (clara.windows:focused-window)) "Jaid - 2:/")))
+^M mouse_button 1
+(SECOND-WINDOW OK OK)
+> (pointer-at 356 224 0)
+^M mouse_button 0
+OK
+> (list 'asked (until (says 6 " replace 2:/a.txt? y replaces it" t)) (probe-file "/crate/a.txt")) ; and Ctrl-V there: a file
+^M sendkey ctrl-v
+(ASKED OK "/crate/a.txt")
+> (list 'moved-over (until (says 6 " moved /crate/a.txt to 2:/a.txt" t)) (probe-file "/crate/a.txt")   ; of that name is
+        (with-open-file (in "2:/a.txt") (read-line in)))                                               ; there already
+^M sendkey y
+(MOVED-OVER OK NIL "/crate/a.txt")
+> (list 'volumes (until (equal (clara.windows:window-title (clara.windows:focused-window)) "Jaid")) ; Backspace, in the first
+        (until (and (says 0 " 1:/   23 MiB, the system's, / is here") (says 1 " 2:/   33 MiB" t)   ; directory of a volume:
+                    (says 6 " 2 volumes: Enter opens" t))))                                        ; the volumes
+^M sendkey backspace
+(VOLUMES OK OK)
+> (list 'the-first (until (equal (clara.windows:window-title (clara.windows:focused-window)) "Jaid - 1:/"))
+        (until (and (says 0 " ../" t) (says 1 " clara/"))))
+^M sendkey up
+^M sendkey ret
+(THE-FIRST OK OK)
+> (list (clara.windows:key-typed 17) (until (= (length (clara.windows:windows)) 2))
+        (clara.windows:key-typed 17) (until (= (length (clara.windows:windows)) 1)))
+(17 OK 17 OK)
+> (list (directory "/crate/*") (directory "/crate/in/*") (directory "2:/*"))
+(("/crate/in/") ("/crate/in/b.txt") ("2:/a.txt" "2:/mono.ttf" "2:/note.txt" "2:/two.lisp"))

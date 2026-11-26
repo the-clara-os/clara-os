@@ -13,7 +13,10 @@
 ;;;; as shutting the machine down (lisp/system.lisp). A name stands in the
 ;;;; list where it was defined, and MOVE-UP and MOVE-DOWN take it elsewhere.
 ;;;; What is cut or copied in one window is there for every other: one text,
-;;;; CLIPBOARD, which the programs of the windows write and read.
+;;;; CLIPBOARD, which the programs of the windows write and read. And what
+;;;; the pointer takes hold of in one window can be let go in another: a
+;;;; text again, which the program of the first says (CARRY) and the program
+;;;; of the second is told.
 ;;;; What the bar, the list and the titles say is written in a font of
 ;;;; outlines (lisp/type.lisp), and in the console's letters on a machine
 ;;;; that has no such font. The applications whose windows are cells of text
@@ -52,7 +55,7 @@
            "DEFINE-APPLICATION" "INSTALL-APPLICATION" "UNLOAD-APPLICATION" "REMOVE-APPLICATION"
            "APPLICATIONS" "LAUNCH" "*APPLICATION-DIRECTORY*" "DEFINE-COMMAND" "REMOVE-COMMAND" "COMMANDS"
            "MOVE-UP" "MOVE-DOWN" "UNFINISHED" "*FONT*" "*TEXT-FONT*" "TEXT-FONT" "CLIPBOARD" "HIGHLIGHT" "*HIGHLIGHT*"
-           "KEY-TYPED" "POINTER-MOVED"))
+           "CARRY" "KEY-TYPED" "POINTER-MOVED"))
 (in-package "CLARA.WINDOWS")
 
 (defstruct window
@@ -65,6 +68,8 @@
   pointer  ; a function of a place on the inside and the buttons, called when a button goes down or up there, or NIL
   drag     ; a function of a place and the buttons, called when the pointer moves while the left button is still down
            ;   that went down on the inside: the place is counted from the inside's corner, and can lie outside it; or NIL
+  drop     ; a function of a place and a text, called when the left button comes up on the inside while the pointer
+           ;   carries that text, from this window or from another (CARRY); or NIL
   close    ; a function of no arguments, called when the close box is clicked; without one there is no box
   unfinished ; a function of no arguments that says what its program has not finished, in words, or NIL: see UNFINISHED
   thread   ; the thread that opened it, whose it is to draw on and to close
@@ -102,8 +107,9 @@
 (defvar *opened* 0)         ; how many windows were opened, for where the next one goes
 (defvar *menu* nil)         ; the launcher's list is open
 (defvar *drag* nil)         ; (window dx . dy): the window that the pointer has by its frame, and where it took hold
-(defvar *held* nil)         ; (window x y dragged): the window on whose inside the left button went down and is down still,
-                            ;   where on the screen that was, and whether the pointer has been further from there since
+(defvar *held* nil)         ; (window x y dragged carried): the window on whose inside the left button went down and is down
+                            ;   still, where on the screen that was, whether the pointer has been further from there since,
+                            ;   and the text that the pointer carries from that window, or NIL: CARRY
 (defvar *pointer-x* 0)      ; where the pointer was last said to be,
 (defvar *pointer-y* 0)
 (defvar *buttons* 0)        ; and its buttons
@@ -371,22 +377,26 @@
 ;; draw. DRAG is a function like POINTER, which is called when the pointer
 ;; moves while the left button is still down that went down on the inside,
 ;; once it has left the place where that was: with where it is now, counted
-;; from the inside's corner, which can be a place outside the window. With
+;; from the inside's corner, which can be a place outside the window. DROP
+;; is a function of a place on the inside and a text, which is called when
+;; the left button comes up there while the pointer carries that text
+;; (CARRY). With
 ;; EVENTS the window has the three for itself, and keeps what
-;; they are told until its program asks: NEXT-EVENT; and with a DRAG that is
-;; not NIL it keeps the moves as well. UNFINISHED is a
+;; they are told until its program asks: NEXT-EVENT; with a DRAG that is
+;; not NIL it keeps the moves as well, and with a DROP what is let go on
+;; it. UNFINISHED is a
 ;; function that says, when it is asked, what the window's program still
 ;; holds that would be lost if the window went now, in a few words, or NIL
 ;; for nothing: a text that is not saved. It is asked before the machine is
 ;; shut down, in whatever thread does that.
-(defun open-window (title width height &key x y key pointer drag close events unfinished)
+(defun open-window (title width height &key x y key pointer drag drop close events unfinished)
   (unless (stringp title)
     (error "the title of a window is a string, and ~S is not one" title))
   (unless (and (integerp width) (>= width 24))
     (error "a window is 24 pixels wide or more, for its band to be got hold of, and ~S is not" width))
   (let* ((surface (clara.draw:allocate-surface width height))
          (window (make-window :title title :surface surface :width width :height height
-                              :key key :pointer pointer :drag drag :close close :unfinished unfinished
+                              :key key :pointer pointer :drag drag :drop drop :close close :unfinished unfinished
                               :thread (clara:current-thread)))
          (opened nil))
     (when events
@@ -395,6 +405,7 @@
             (window-key window) (lambda (code) (post window (list :key code)))
             (window-pointer window) (lambda (x y buttons) (post window (list :pointer x y buttons)))
             (window-drag window) (and drag (lambda (x y buttons) (post-drag window x y buttons)))
+            (window-drop window) (and drop (lambda (x y text) (post window (list :drop x y text))))
             (window-close window) (lambda () (post window (list :close)))))
     (unwind-protect
          (clara:with-lock-held (*lock*)
@@ -469,8 +480,10 @@
 ;;; up on its inside, with the place there; and (:CLOSE) for a click on its
 ;;; close box. A window that was opened with a DRAG as well keeps
 ;;; (:DRAG x y buttons) for the pointer that has moved with the left button
-;;; held down. Its program takes them one at a time, in a thread of its own,
-;;; where it can draw.
+;;; held down, and one that was opened with a DROP keeps (:DROP x y text)
+;;; for a text that the pointer carried and let go on its inside. Its
+;;; program takes them one at a time, in a thread of its own, where it can
+;;; draw.
 
 (defun post (window event)
   (clara:with-lock-held ((window-events-lock window))
@@ -630,7 +643,7 @@
              (raise window)
              (case part
                (:inside
-                (setq *held* (list window x y nil))
+                (setq *held* (list window x y nil nil))
                 (tell window (window-pointer window) x y buttons))
                (:frame (setq *drag* (list* window (- x (window-x window)) (- y (window-y window))))
                 nil)
@@ -649,9 +662,13 @@
 ;; know, is told where the pointer is dragged to, once it has left the
 ;; place where the button went down (+SLACK+: a hand is not that still);
 ;; and a button that changes is for PRESS, or for the program of the
-;; window that the pointer is on the inside of.
+;; window that the pointer is on the inside of. When the left button comes
+;; up while the pointer carries something (CARRY), the window that it is on
+;; the inside of is told what that is, if it takes such things, and the
+;; window that it was carried from is told where it was let go, as the last
+;; of the moves, with the button up: both before the button itself is told.
 (defun pointer-moved (x y buttons)
-  (let ((call nil))
+  (let ((call nil) (let-go nil))
     (clara:with-lock-held (*lock*)
       (when *running*
         (let ((down (/= 0 (logand buttons 1)))
@@ -668,6 +685,12 @@
                  (setq call (press x y buttons)))
                 (t
                  (cond ((not down)
+                        (let ((text (and *held* (car (nthcdr 4 *held*)))))
+                          (when text
+                            (multiple-value-bind (window part) (window-at x y)
+                              (setq let-go (list (and window (eq part :inside)
+                                                      (tell window (window-drop window) x y text))
+                                                 (tell (car *held*) (window-drag (car *held*)) x y buttons))))))
                         (setq *drag* nil
                               *held* nil))
                        (*drag*
@@ -685,9 +708,50 @@
                      (when (and window (eq part :inside))
                        (setq call (tell window (window-pointer window) x y buttons)))))))
           (settle))))
+    (dolist (function let-go)
+      (when function
+        (funcall function)))
     (when call
       (funcall call)))
   nil)
+
+;;; What the pointer carries
+;;;
+;;; A program lets something of its own be taken from its window to
+;;; another: a file's name from a list of files to another such list. The
+;;; window manager knows a window as pixels, so it cannot know what was
+;;; taken hold of; the program says it, as a text, while the left button is
+;;; down that went down on its window, and the window that the button comes
+;;; up on is told that text, when it was opened to be told (DROP). What is
+;;; carried ends with the button: nothing is carried from one press to the
+;;; next.
+
+;; Is the program of WINDOW still to take something about a button? Then
+;; what it says of the pointer is about a press before this one.
+(defun behind-p (window)
+  (and (window-events-lock window)
+       (clara:with-lock-held ((window-events-lock window))
+         (let ((found nil))
+           (dolist (event (window-events window) found)
+             (when (eq (car event) :pointer)
+               (setq found t)))))))
+
+;; The pointer carries TEXT from WINDOW, a string, or with NIL nothing any
+;; more: until the left button comes up, when the window that it comes up
+;; on the inside of is told the text. That holds only while the left button
+;; is down that went down on the inside of WINDOW, and when a window that
+;; keeps what happens to it has nothing about a button left to take, so
+;; that a program which is behind cannot give this press what belonged to
+;; one before it. T when the text is carried, and NIL when it is not.
+(defun carry (window text)
+  (unless (window-p window)
+    (error "~S is not a window" window))
+  (unless (or (null text) (stringp text))
+    (error "what the pointer carries is text, a string, and ~S is not one" text))
+  (clara:with-lock-held (*lock*)
+    (when (and *held* (eq (car *held*) window) (not (behind-p window)))
+      (rplaca (nthcdr 4 *held*) text)
+      t)))
 
 ;;; What was cut or copied
 ;;;

@@ -444,7 +444,14 @@ while [ "$i" -lt $((timeout * 4)) ]; do
     if [ "$(grep -c '^panic: \|^exception: ' "$log")" -gt "${PANICS:-0}" ]; then
         break
     fi
-    kill -0 "$pid" 2>/dev/null || break
+    # A machine that is gone says nothing more. One that turns itself off
+    # says its last line on the way out, and may have said it since this
+    # turn looked at the log: that is looked at once more before the boot
+    # is given up, and the next turn finds the line.
+    if ! kill -0 "$pid" 2>/dev/null; then
+        [ -n "$goes" ] && grep -q "$marker" "$log" && continue
+        break
+    fi
     sleep 0.25
     i=$((i + 1))
 done

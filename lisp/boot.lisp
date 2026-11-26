@@ -919,15 +919,20 @@
 ;;; for the text of the file of a name; one for the names of what the
 ;;; directory of a name holds, in order, a directory's with a slash at its
 ;;; end, or NIL when there is no such directory; one that makes a file of
-;;; a name out of bytes in memory; one that deletes the file of a name; and
+;;; a name out of bytes in memory; one that deletes the file of a name;
 ;;; one that makes a file like the third, on the volume that the machine
 ;;; was started from whatever volume the others look on, which is where a
-;;; world is saved.
+;;; world is saved; one that makes a file of what another holds; and one
+;;; that says which volumes there are. A machine can have several, and a
+;;; name can say which of them it is on, by what the file system puts
+;;; before a name for that, as in "2:/mine.lisp": nothing here looks at
+;;; that part of a name, which goes to the file system as it stands, with
+;;; the directory.
 ;;; Until then, and on a machine without a disk that has a driver, there
 ;;; are no files here, and LOAD finds the ones that the kernel read from
 ;;; the boot volume as it started.
 
-(defvar %files nil) ; the five functions, in a list, once a file system has said that it is there
+(defvar %files nil) ; the seven functions, in a list, once a file system has said that it is there
 
 (defun %file-name (name)
   (unless (stringp name)
@@ -997,15 +1002,27 @@
                 (string-equal (char pattern p) (char name n))
                 (%fits pattern name (1+ p) (1+ n))))))
 
+;; The first directory of a volume, as the file system names it, when a
+;; name is that and nothing more: "2:/", or "2:". No directory lists it, so
+;; the file system is asked for the volumes that there are.
+(defun %volume-named (name)
+  (let ((volumes (nth 6 %files)))
+    (if volumes
+        (dolist (volume (funcall volumes))
+          (if (string-equal (%plain-name name) (%plain-name (car volume)))
+              (return (car volume)))))))
+
 ;; The name of a file or of a directory as the file system has it, when
 ;; there is one of that name, and NIL when there is none.
 (defun probe-file (name)
   (multiple-value-bind (directory rest) (%split-name (%plain-name name))
     (if (= (length rest) 0)
         (if %files name)
-        (dolist (entry (%file-names directory))
-          (if (string-equal rest (%plain-name entry))
-              (return (concatenate 'string directory entry)))))))
+        (or (dolist (entry (%file-names directory))
+              (if (string-equal rest (%plain-name entry))
+                  (return (concatenate 'string directory entry))))
+            (if (= (length directory) 0)
+                (%volume-named rest))))))
 
 ;; The names that fit a pattern: what the pattern's directory holds whose
 ;; own name fits what the pattern has after its last slash, in the order
@@ -1188,7 +1205,8 @@
 
 (in-package "CLARA")
 
-(export '(make-thread with-lock-held make-stream keyboard-interrupt provide-files save-image provide-compiler))
+(export '(make-thread with-lock-held make-stream keyboard-interrupt provide-files save-image provide-compiler
+          volumes copy-file))
 
 ;; What Ctrl-C on the console is, to the computation it stops and to
 ;; whoever was reading a line.
@@ -1206,11 +1224,41 @@
 ;; file of a name (the comment on files, further up, says more). From then
 ;; on those are what OPEN, LOAD, PROBE-FILE, DIRECTORY and DELETE-FILE ask;
 ;; a file system that only reads gives the first two. IMAGE is what
-;; SAVE-IMAGE writes with, and is WRITE when nothing else is said. Without
-;; them, there is no file system any more.
-(defun provide-files (&key text names write delete image)
-  (setq cl::%files (if (and text names) (list text names write delete (or image write))))
+;; SAVE-IMAGE writes with, and is WRITE when nothing else is said; COPY
+;; makes a file of a name out of what the file of another name holds, and
+;; VOLUMES says which volumes there are, for COPY-FILE and VOLUMES below.
+;; Without them, there is no file system any more.
+(defun provide-files (&key text names write delete image copy volumes)
+  (setq cl::%files (if (and text names) (list text names write delete (or image write) copy volumes)))
   nil)
+
+;; The volumes that the file system has found, in its order: for each a
+;; list of the name of its first directory, which is what a name begins
+;; with that is to be looked up there, "2:/" for the second, and after it
+;; what the file system knows of the volume, a keyword and what it says for
+;; each fact: :BYTES, how much room it has for files, used or not;
+;; :STARTED-FROM, when the machine was started from it; :CURRENT, when it is
+;; the one that a name is looked up on which does not say its volume;
+;; :READ-ONLY, when nothing can be written to it. NIL when there is no file
+;; system.
+(defun volumes ()
+  (let ((volumes (nth 6 cl::%files)))
+    (if volumes (funcall volumes))))
+
+;; A file of the name TO that holds what the file FROM holds, byte for
+;; byte, on the same volume or on another, in place of a file that was
+;; there under that name. FROM stays. The name TO is returned.
+(defun copy-file (from to)
+  (let ((copy (nth 5 cl::%files)))
+    (cl::%file-name from)
+    (cl::%file-name to)
+    (unless copy
+      (error "the file ~A cannot be copied: ~A" from
+             (if cl::%files
+                 "the file system that is here reads files, and writes none"
+                 "no disk has a file system that is known here")))
+    (funcall copy from to)
+    to))
 
 ;; A compiler says that it is there: COMPILE makes a compiled function of a
 ;; LAMBDA form and a name, which may be NIL, LIST writes the instructions

@@ -44,6 +44,10 @@ volume the machine booted from is the first whose files can be listed,
 read, loaded, written and deleted from the prompt,
 `(directory "/*")`, `(load "/hello.lisp")` or
 `(with-open-file (out "/notes.txt" :direction :output) (write-line "kept" out))`.
+A machine with a second disk has a second volume, whose files have its
+number before their names, and
+`(clara:copy-file "/notes.txt" "2:/notes.txt")` makes a file there of one
+that is here.
 And the world can be saved: `(clara:save-image)` writes the heap to a file
 on the boot volume, and the next boot starts from that file, with
 everything that was defined, and loads no Lisp. Lisp draws: a rasterizer
@@ -69,6 +73,10 @@ boots straight into it. Three applications come with it, Emma, a text editor
 browser (lisp/ares.lisp): each is a file on the boot volume that the
 launcher loads when it is first picked, and unloads again when asked, and
 `(clara.windows:launch "Emma" "/notes.txt")` opens a file from a prompt.
+Jaid lists the volumes above their directories, and a file is copied or
+moved from one directory or volume to another with Ctrl-C, Ctrl-X and
+Ctrl-V, or by the pointer, which carries it from one window of Jaid's to
+another.
 Ares shows what a page of the web says, its text, headings, lists, tables
 and links, in the system's own letters, and goes where the links lead:
 `(clara.windows:launch "Ares" "claraos.org")`. It asks for every page by

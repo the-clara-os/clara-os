@@ -28,6 +28,11 @@
 ;;;; makes no difference. START finds the volumes on the disks and tells
 ;;;; the language where its files are from then on (CLARA:PROVIDE-FILES),
 ;;;; which is what OPEN, LOAD, PROBE-FILE, DIRECTORY and DELETE-FILE go by.
+;;;; A name is looked up on one volume, the first until *VOLUME* is given
+;;;; another, unless the name itself says which: the number of a volume
+;;;; among the ones that were found, from 1 on, and a colon, before
+;;;; everything else, as in "2:/mine.lisp". No name of a file has a colon
+;;;; in it, so nothing else begins that way.
 ;;;;
 ;;;; A file is written whole: its bytes go into clusters that the table
 ;;;; has as free, the table then chains those in every copy that the
@@ -48,7 +53,7 @@
   (:use "COMMON-LISP")
   (:export "START" "VOLUMES" "*VOLUME*" "*IMAGE-VOLUME*" "VOLUME-P" "VOLUME-DISK" "VOLUME-KIND" "VOLUME-FIRST"
            "ENTRIES" "ENTRY-P" "ENTRY-NAME" "ENTRY-SHORT" "ENTRY-DIRECTORY-P" "ENTRY-SIZE"
-           "NAMES" "FILE-TEXT" "READ-FILE" "WRITE-FILE" "REMOVE-FILE"
+           "NAMES" "FILE-TEXT" "READ-FILE" "WRITE-FILE" "REMOVE-FILE" "COPY-FILE"
            "MAKE-DIRECTORY" "REMOVE-DIRECTORY" "FREE-BYTES"))
 (in-package "CLARA.FAT")
 
@@ -851,12 +856,34 @@
 
 ;;; Names
 
-;; The parts of a name that its slashes keep apart.
+;; Where a name begins that says first which volume it is on, "2:/mine.lisp":
+;; how many characters the number and its colon are, or NIL for a name that
+;; says no such thing.
+(defun volume-prefix (name)
+  (let ((end 0))
+    (loop
+      (unless (and (< end (length name)) (<= 48 (char-code (char name end)) 57))
+        (return))
+      (setq end (1+ end)))
+    (and (> end 0) (< end (length name)) (char= (char name end) #\:) (1+ end))))
+
+;; The number that such a name begins with. One that no machine has volumes
+;; for is not worked out to its end.
+(defun volume-number (name)
+  (let ((number 0))
+    (dotimes (i (1- (volume-prefix name)) number)
+      (when (< number 1000000)
+        (setq number (+ (* 10 number) (- (char-code (char name i)) 48)))))))
+
+;; The parts of a name that its slashes keep apart, without what says
+;; which volume they are on.
 (defun name-parts (name)
   (let ((parts nil) (start 0))
     (unless (stringp name)
       (error "the name of a file is a string, and ~S is not one" name))
-    (dotimes (i (1+ (length name)))
+    (setq start (or (volume-prefix name) 0))
+    (do ((i start (1+ i)))
+        ((> i (length name)))
       (when (or (= i (length name)) (char= (char name i) #\/))
         (when (> i start)
           (setq parts (cons (subseq name start i) parts)))
@@ -885,14 +912,28 @@
 (defun find-entry (volume name)
   (find-parts volume (name-parts name)))
 
-;; The volume that names are looked up on: one of those that START found,
-;; whichever *VOLUME* was given. A volume that a variable has kept from an
-;; earlier start, in a world that was saved, knows the disk and the page
-;; frame of that time, which are somebody else's by now, so no name is
-;; looked up on it, nor on what is no volume at all.
-(defun the-volume ()
+;; The volume that a name says it is on, by its number: one of those that
+;; START found, or NIL when there are not that many.
+(defun numbered-volume (name)
+  (let ((number (volume-number name)))
+    (and (> number 0) (nth (1- number) *volumes*))))
+
+;; The volume that a name is looked up on: the one that the name says, when
+;; it says one, and otherwise, or with no name, the one that names are
+;; looked up on, whichever *VOLUME* was given, which is one of those that
+;; START found. A volume that a variable has kept from an earlier start, in
+;; a world that was saved, knows the disk and the page frame of that time,
+;; which are somebody else's by now, so no name is looked up on it, nor on
+;; what is no volume at all.
+(defun the-volume (&optional name)
   (let ((volume *volume*))
-    (cond ((null volume)
+    (cond ((and (stringp name) (volume-prefix name))
+           (or (numbered-volume name)
+               (error "there is no volume for ~A: ~A" name
+                      (cond ((null *volumes*) "no disk has a volume that is known here")
+                            ((null (cdr *volumes*)) "this machine has one, 1:")
+                            (t (format nil "this machine has 1: to ~D:" (length *volumes*)))))))
+          ((null volume)
            (error "there are no files: no disk has a volume that is known here"))
           ((member volume *volumes*)
            volume)
@@ -907,7 +948,7 @@
 ;; What the directory of a name holds: its entries, in the order of their
 ;; names.
 (defun entries (name)
-  (let ((volume (the-volume)))
+  (let ((volume (the-volume name)))
     (clara:with-lock-held ((volume-lock volume))
       (let ((directory (find-entry volume name)))
         (unless (and directory (entry-directory-p directory))
@@ -915,9 +956,12 @@
         (sorted (read-directory volume (entry-cluster directory)))))))
 
 ;; The same as names, a directory's with a slash at its end; NIL when
-;; there is no such directory.
+;; there is no such directory, or no volume of the number that the name
+;; begins with.
 (defun names (name)
-  (let ((volume (and *volume* (the-volume))))
+  (let ((volume (if (and (stringp name) (volume-prefix name))
+                    (numbered-volume name)
+                    (and *volume* (the-volume)))))
     (when volume
       (clara:with-lock-held ((volume-lock volume))
         (let ((directory (find-entry volume name)))
@@ -934,7 +978,7 @@
 ;; many bytes of them are the file, and how many page frames there are,
 ;; for whoever gives them back (CLARA.UNSAFE:FREE-MEMORY).
 (defun read-file (name)
-  (let ((volume (the-volume)))
+  (let ((volume (the-volume name)))
     (clara:with-lock-held ((volume-lock volume))
       (let ((entry (find-entry volume name)))
         (cond ((null entry)
@@ -1054,15 +1098,47 @@
               (note-free volume (- (length gone) (length clusters)))))))))
   name)
 
-;; A file of that name, on the volume that names are looked up on. The
-;; name is returned.
+;; A file of that name, on the volume that names are looked up on, or on
+;; the one that the name says. The name is returned.
 (defun write-file (name address size)
-  (put-file (the-volume) name address size nil))
+  (put-file (the-volume name) name address size nil))
+
+;; Do two names lead to one file? They do when they are on one volume and
+;; come to the same entry of the same directory, however each was spelt:
+;; with the volume said or not, in letters of either case, by a long name
+;; or by a short one.
+(defun same-file-p (name other)
+  (let ((volume (the-volume name)))
+    (and (eq volume (the-volume other))
+         (clara:with-lock-held ((volume-lock volume))
+           (multiple-value-bind (directory own) (place-of volume name)
+             (multiple-value-bind (other-directory other-own) (place-of volume other)
+               (let ((entry (find-in volume directory own))
+                     (other-entry (find-in volume other-directory other-own)))
+                 (and entry other-entry
+                      (= (entry-cluster directory) (entry-cluster other-directory))
+                      (= (entry-at entry) (entry-at other-entry))))))))))
+
+;; A file like another: what the file FROM holds, under the name TO, on the
+;; same volume or on another, in place of a file that was there under that
+;; name. It is read whole and then written whole, so each volume has its
+;; lock for its own half and nobody holds two. The two names must not be
+;; the same file's: whoever deletes FROM once there is a TO, to move a
+;; file, would be left with neither. The name TO is returned.
+(defun copy-file (from to)
+  (multiple-value-bind (memory size pages) (read-file from)
+    (unwind-protect
+         (progn
+           (when (same-file-p from to)
+             (error "~A and ~A are one file" from to))
+           (write-file to memory size))
+      (clara.unsafe:free-memory memory pages)))
+  to)
 
 ;; The file of that name is no more: its entry is deleted, and its clusters
 ;; are free.
 (defun remove-file (name)
-  (let ((volume (the-volume)))
+  (let ((volume (the-volume name)))
     (clara:with-lock-held ((volume-lock volume))
       (multiple-value-bind (directory own) (place-of volume name)
         (let ((entry (find-in volume directory own)))
@@ -1085,7 +1161,7 @@
 ;; that is the root; then the table; then its entry. In that order, like a
 ;; file. The name is returned.
 (defun make-directory (name)
-  (let ((volume (the-volume)))
+  (let ((volume (the-volume name)))
     (clara:with-lock-held ((volume-lock volume))
       (multiple-value-bind (directory own) (place-of volume name)
         (check-name own)
@@ -1120,7 +1196,7 @@
 ;; The directory of that name is no more: one that has nothing in it, and
 ;; no other.
 (defun remove-directory (name)
-  (let ((volume (the-volume)))
+  (let ((volume (the-volume name)))
     (clara:with-lock-held ((volume-lock volume))
       (multiple-value-bind (directory own) (place-of volume name)
         (let ((entry (find-in volume directory own)))
@@ -1148,10 +1224,32 @@
 ;; A file like WRITE-FILE makes, on the volume that a world is saved on,
 ;; whichever volume names are looked up on: a machine starts from one disk,
 ;; and finds its world there or nowhere. It is a world, which goes where
-;; the one before it was when the volume has no room for the two.
+;; the one before it was when the volume has no room for the two. A name
+;; that says another volume is refused: the file would not be where its
+;; name says.
 (defun write-image (name address size)
   (let ((*volume* (if (member *image-volume* *volumes*) *image-volume* (car *volumes*))))
+    (when (and (stringp name) (volume-prefix name) (not (eq (numbered-volume name) *volume*)))
+      (error "a world is saved on the volume that the machine was started from, and ~A is on another" name))
     (put-file (the-volume) name address size t)))
+
+;; What the language says of the volumes (CLARA:VOLUMES): for each, in the
+;; order in which they were found, a list of the name of its first
+;; directory, "1:/" for the first, and what is known of it, a keyword and
+;; then what it says: :BYTES, how large its files can be together;
+;; :STARTED-FROM, when the machine was started from it; :CURRENT, when it
+;; is the one that a name is looked up on which does not say its volume;
+;; and :READ-ONLY, when its disk cannot be written.
+(defun described ()
+  (let ((number 0))
+    (mapcar (lambda (volume)
+              (setq number (1+ number))
+              (append (list (format nil "~D:/" number)
+                            :bytes (* 512 (volume-clusters volume) (volume-cluster-sectors volume)))
+                      (if (eq volume *image-volume*) (list :started-from t) nil)
+                      (if (eq volume *volume*) (list :current t) nil)
+                      (if (clara.disk:disk-read-only (volume-disk volume)) (list :read-only t) nil)))
+            *volumes*)))
 
 ;;; Starting
 
@@ -1182,7 +1280,7 @@
   (cond (*volumes*
          (setq *volume* (car *volumes*))
          (clara:provide-files :text #'file-text :names #'names :write #'write-file :delete #'remove-file
-                              :image #'write-image)
+                              :image #'write-image :copy #'copy-file :volumes #'described)
          (when (cdr *volumes*)
            (format t "files: names are looked up on the first of these volumes~%")))
         (t
