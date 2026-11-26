@@ -37,7 +37,7 @@ Build with `make` (Homebrew's llvm and lld under /opt/homebrew/opt when they
 are there, otherwise clang and lld-link from the PATH; `LLVM=` and `LLD=`
 name other directories). `make test` runs the host tests of the Lisp
 files under SBCL (`make host-test`, a minute), then boots both
-architectures headless under QEMU, nineteen boots in about five minutes,
+architectures headless under QEMU, twenty boots in some six minutes,
 types a session at each kernel, and saves what each screen shows to
 build/screen-<name>.png; look at those images when a change touches the
 display. `make run-aarch64` and `make run-x86_64` open a QEMU window with
@@ -183,7 +183,9 @@ Rules:
   there takes from `clara.unsafe:allocate-memory` it gives back on every
   way out, with UNWIND-PROTECT, and whatever looks at a volume's table
   holds the volume's lock. Whatever looks a name up takes its volume from
-  `the-volume`, which gives `clara.fat:*volume*` only when START found it:
+  `the-volume`, which it hands the name, since a name can say its volume
+  (below, under volumes), and which gives `clara.fat:*volume*` for a name
+  that does not, and only when START found it:
   a user binds that variable to a second volume, and a world that was
   saved can hold a volume of an earlier start, with a disk and a page
   frame that are no longer its own. The host tests have the other side:
@@ -541,7 +543,7 @@ Rules:
 - What DISASSEMBLE writes is in a session and in the manual, and a line
   of a session that begins with two spaces is one that is typed: a line of
   a listing begins with its number.
-- `make test` boots nineteen times. Three machines, x86_64, AArch64 with GIC
+- `make test` boots twenty times. Three machines, x86_64, AArch64 with GIC
   version 3, and AArch64 emulated with GIC version 2, whose files in build/
   are named aarch64-gic2, each from a disk of another kind, and each twice:
   the first boot is typed tools/session.txt, which ends by saving the world,
@@ -590,7 +592,9 @@ Rules:
   server on this computer and upgrades to it (aarch64-network,
   tools/network.txt), and two boots for the user
   manual, named manual and manual-again: what the manual shows of the prompt
-  is typed at them, and one for the object system, x86_64-objects, which
+  is typed at them, one for a machine with two volumes, aarch64-volumes,
+  which is typed tools/volumes.txt (below, under volumes), and one for the
+  object system, x86_64-objects, which
   is typed tools/objects.txt (below, under the object system). The serial
   port of each is QEMU's standard input and
   output: the log is what the kernel printed, and a FIFO feeds it what the
@@ -1086,7 +1090,10 @@ Rules:
   ends with the machine turning itself off is given
   `MARKER='^clara: turning the machine off'`: nothing is typed to end it,
   it may end with a `^M` line, the machine has to be gone by itself ten
-  seconds later, and there is no screen to save. To press the power
+  seconds later, and there is no screen to save. Such a machine can say
+  its last line and be gone between two looks of tools/boottest.sh at
+  its log, so the script looks once more when the machine is gone
+  (0.0.61: x86_64-power failed that way once, with the line in its log). To press the power
   button: `^M system_powerdown`. tools/run.sh no longer passes QEMU
   `-no-reboot`, so a machine that starts itself again does.
 - A function in a file of the world cannot have a name of Common Lisp's,
@@ -1843,6 +1850,69 @@ Rules:
   tests make under /tmp and delete (`scratch`, `write-scratch`), and the
   one function that lists a directory is replaced by `host-names`
   (`clara.jaid::*names*`): SBCL's DIRECTORY gives pathnames.
+- Volumes (Julio's issue #52; DESIGN.md has what was decided). A name
+  that begins with a number and a colon is on the volume of that number,
+  `"2:/mine.lisp"`, counted from 1 in the order of `(clara.fat:volumes)`,
+  and any other name is where it always was, on `clara.fat:*volume*`.
+  lisp/fat.lisp is the one place that reads that part of a name
+  (`volume-prefix`): `name-parts` passes over it, and every function there
+  that takes a name hands it to `the-volume`, as a new one does. `names`
+  alone gives NIL for a volume that is not there, which is what makes
+  PROBE-FILE and DIRECTORY say that there is no such file; everything else
+  is an error that says which volumes there are. lisp/boot.lisp takes a
+  name apart at its slashes and knows nothing of this, but for
+  `%volume-named`: the first directory of a volume is in no directory.
+  The language has two functions for what Common Lisp has no word for,
+  `clara:volumes` and `clara:copy-file`, which the file system hands over
+  with the rest (`provide-files :copy :volumes`, seven functions now).
+  What `volumes` says of a volume is read by programs and only ever added
+  to. `copy-file` reads a file whole and writes it whole, so it is
+  `put-file`'s order and no new way of writing, and it refuses two names
+  that lead to one entry (`same-file-p`), however they are spelt: a move
+  is a copy and then a delete, in whoever moves, and a file that was
+  moved onto itself would be gone. SBCL never loads lisp/boot.lisp, so
+  the two are the boots' to try (tools/volumes.txt, and the manual's
+  section on a disk of one's own); under SBCL `clara:copy-file` copies a
+  file of the host's, and `clara:volumes` says what a test told it
+  (`clara.host:set-volumes`). The tests of the file system have two
+  volumes on one disk (`two-volumes`, `volume-holds`, `held`). A machine
+  that `make run-*` handed a newer build has that build's disk as one
+  more volume, which cannot be written: `the disk ... cannot be written`.
+- What the pointer carries (lisp/windows.lisp, `carry`; the same issue).
+  `*held*` has a fifth place for it, a text, which the program of the
+  window says while the left button is down that went down there, and
+  which goes with the press. When the button comes up, `pointer-moved`
+  tells the window that it is on the inside of (`:drop`, `(:drop x y
+  text)`), then the window that the text came from, through its DRAG with
+  the buttons as they are, none, and then the button as ever (`let-go`,
+  and `call` after it): a test holds the three to that order. `carry`
+  gives NIL to a window that still has a `(:pointer ...)` to take
+  (`behind-p`), so a program that is behind the pointer cannot give this
+  press what an earlier one took hold of. A window that never calls
+  `carry` is told nothing new.
+- Jaid and volumes (lisp/jaid.lisp). The directory `""` is the list of
+  the volumes, above every first directory: `above` says where the way up
+  leads, which is nowhere on a machine with one volume, so nothing that
+  such a machine shows has changed. `volume-of` and `whole-name` say
+  which volume a name is on, by what the language says of the volumes,
+  and never by reading the name for a number: under SBCL the two volumes
+  of the tests are two directories of the host's, named `one/` and
+  `two/` under a `*default-pathname-defaults*` of the test's. `*found*`
+  is PROBE-FILE, which gives a pathname under SBCL, so the tests put
+  `host-found` there, as they put `host-names` into `*names*`. A question
+  of the last row is `asked`, its words and what y does, for a file that
+  is to be deleted and for one that would be replaced. `pressed` is the
+  name that the button went down on and whether letting go of it there
+  opens it, and the first move takes it away: what is carried is not
+  opened. `put` is where a file comes to a directory, by Ctrl-V and by
+  the pointer, and `transfer` the copy, and the delete after it for a
+  move. In the tests `browser-events` does to a browser what happened to
+  its window, as its thread would, and `browser-pointer` moves the
+  made-up screen's pointer to a place of its window. tools/volumes.txt
+  starts in the world that the first AArch64 session saved, so `until`,
+  `pointer-at`, `shows` and `cursor-at` are there, and defines `says`, a
+  row of the window on top with its colours either way round; the sizes
+  that it expects of the volumes are those of that boot's disks.
 - What an application does with a file it does with the language: OPEN,
   READ-LINE, PROBE-FILE, DIRECTORY, DELETE-FILE. So it only ever sees what
   lisp/boot.lisp makes of the file system, on ClaraOS, and that side is

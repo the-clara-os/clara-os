@@ -4647,6 +4647,183 @@
                            (or problems (list "its files are not what they were")))))))
     ;; Both ways there are requests at which the older world is still the one; only one way has any at which there is none.
     (check (list roomy t t roomy) (list roomy (< 8 request 500) (> older 0) (zerop none)))))
+
+;;; A name that says its volume, and a file like another. A name is looked
+;;; up on the volume whose number it begins with, "2:/b.txt", whatever
+;;; *VOLUME* holds, and a name that says none where it always was. A file is
+;;; copied byte for byte, also one that is no text, from one volume to
+;;; another and within one, and what each volume holds afterwards is read
+;;; here without the file system.
+
+(defun two-volumes ()
+  (make-disk :old
+             (cons 63 (fat-bytes (make-fat-volume 12 `(("a.txt" "on the first")
+                                                       ("data" (("bytes.bin" ,*binary*) ("EMPTY" "")))))))
+             (cons 8000 (fat-bytes (make-fat-volume 16 '(("b.txt" "on the second")
+                                                         ("kept" (("b.txt" "kept there")))
+                                                         ("also" (("c.txt" "there as well"))))
+                                                    :cluster-sectors 4)))))
+
+;; What the volume at a sector of a disk holds, each file as its name and
+;; its bytes, and what is out of order there.
+(defun volume-holds (disk first)
+  (multiple-value-bind (files problems) (inspect-volume (subseq disk (* 512 first)))
+    (list (mapcar (lambda (file) (cons (car file) (coerce (cdr file) 'list))) files) problems)))
+
+;; A file of such a list: its name, and its bytes, which are a text's when
+;; a text is given.
+(defun held (name contents)
+  (cons name (coerce (if (stringp contents) (octets contents) contents) 'list)))
+
+(defun said-refusing (function)
+  (handler-case (progn (funcall function) nil)
+    (error (condition) (princ-to-string condition))))
+
+(let ((disk (two-volumes)))
+  (start-files disk)
+  (let ((pages (clara.host:allocated-pages)))
+    (check '(("a.txt" "data/") ("a.txt" "data/") ("also/" "b.txt" "kept/") ("b.txt") ("bytes.bin" "EMPTY") nil nil nil)
+           (list (clara.fat:names "/") (clara.fat:names "1:/") (clara.fat:names "2:/") (clara.fat:names "2:/kept")
+                 (clara.fat:names "1:data") (clara.fat:names "3:/") (clara.fat:names "0:/") (clara.fat:names "2:/none")))
+    (check '("on the first" "on the second" "kept there" "on the first" ("b.txt"))
+           (list (text-of-file "1:/a.txt") (text-of-file "2:/b.txt") (text-of-file "2:kept/B.TXT") (text-of-file "001:/A.txt")
+                 (mapcar #'clara.fat:entry-name (clara.fat:entries "2:/kept"))))
+    ;; The variable is for the names that say nothing, and for no others.
+    (let ((clara.fat:*volume* (second (clara.fat:volumes))))
+      (check '("on the second" "on the first" ("also/" "b.txt" "kept/") ("a.txt" "data/"))
+             (list (text-of-file "/b.txt") (text-of-file "1:/a.txt") (clara.fat:names "/") (clara.fat:names "1:/"))))
+    ;; A name that says its volume needs nothing of the variable: not a volume there at all, nor one of this start.
+    (dolist (held (list nil "second" (clara.fat::copy-volume (second (clara.fat:volumes)))))
+      (let ((clara.fat:*volume* held))
+        (check '("on the second" "on the first" ("b.txt") ("a.txt" "data/"))
+               (list (text-of-file "2:/b.txt") (text-of-file "1:/a.txt") (clara.fat:names "2:/kept") (clara.fat:names "1:/")))))
+    ;; A volume that is not there, and what only looks like the number of one.
+    (check '((:error "there is no volume for 3:/a.txt: this machine has 1: to 2:")
+             (:error "there is no volume for 0:/a.txt: this machine has 1: to 2:")
+             (:error "there is no volume for 12345678901234567890:/a.txt: this machine has 1: to 2:")
+             (:error "there is no file /a:b") (:error "there is no file x:/a.txt") (:error "there is no file :/a.txt"))
+           (mapcar #'text-of-file '("3:/a.txt" "0:/a.txt" "12345678901234567890:/a.txt" "/a:b" "x:/a.txt" ":/a.txt")))
+    (check-condition error (clara.fat:entries "3:/"))
+    (check-condition error (put-text "3:/new.txt" "nowhere"))
+    (check-condition error (clara.fat:remove-file "3:/a.txt"))
+    (check-condition error (clara.fat:make-directory "3:/made"))
+    (check-condition error (clara.fat:remove-directory "3:/data"))
+    ;; Writing, deleting and directories, by a name that says where.
+    (check '("2:/new.txt" "2:/made" "2:/made/inner.txt")
+           (list (put-text "2:/new.txt" "written by its name") (clara.fat:make-directory "2:/made")
+                 (put-text "2:/made/inner.txt" "inner")))
+    (check '(("also/" "b.txt" "kept/" "made/" "new.txt") ("inner.txt") ("a.txt" "data/"))
+           (list (clara.fat:names "2:/") (clara.fat:names "2:/made/") (clara.fat:names "/")))
+    (check '("2:/made/inner.txt" "2:/made" ("also/" "b.txt" "kept/" "new.txt"))
+           (list (clara.fat:remove-file "2:/made/inner.txt") (clara.fat:remove-directory "2:/made") (clara.fat:names "2:/")))
+    ;; A file like another: on the other volume, either way; on its own, under another name; in the place of a
+    ;; file that was there; and one with nothing in it.
+    (check '("2:/bytes.bin" "1:/b.txt" "/data/a copy of a.txt" "2:/kept/b.txt" "2:/EMPTY" "/b.txt")
+           (list (clara.fat:copy-file "/data/bytes.bin" "2:/bytes.bin") (clara.fat:copy-file "2:/b.txt" "1:/b.txt")
+                 (clara.fat:copy-file "/a.txt" "/data/a copy of a.txt") (clara.fat:copy-file "1:/a.txt" "2:/kept/b.txt")
+                 (clara.fat:copy-file "1:/data/EMPTY" "2:/EMPTY")
+                 (clara.fat:copy-file "/a.txt" "/b.txt")))      ; in the place of another file of its own directory
+    ;; Two names are one file's when they lead to one entry, and not otherwise: every file of the two volumes
+    ;; against every other, and against itself.
+    (let ((names '("1:/a.txt" "1:/b.txt" "1:/data/EMPTY" "1:/data/a copy of a.txt" "1:/data/bytes.bin"
+                   "2:/EMPTY" "2:/also/c.txt" "2:/b.txt" "2:/bytes.bin" "2:/kept/b.txt" "2:/new.txt")))
+      (check t (loop for name in names
+                     always (loop for other in names
+                                  always (eq (clara.fat::same-file-p name other) (string= name other))))))
+    ;; What is not copied: a file onto itself, however the two names are spelt; a directory; what is not there;
+    ;; to where there is no directory, or a directory of that name, or no volume.
+    (check '("/a.txt and 1:/A.TXT are one file" "2:/kept/b.txt and 2:kept/B.TXT are one file"
+             "/data is a directory, and not a file" "there is no file /none.txt"
+             "there is no directory for a file 2:/nowhere/a.txt to be in"
+             "there is no directory for a file /nowhere/a.txt to be in" "2:/kept is a directory, and not a file"
+             "there is no volume for 3:/a.txt: this machine has 1: to 2:"
+             "there is no volume for 3:/a.txt: this machine has 1: to 2:")
+           (list (said-refusing (lambda () (clara.fat:copy-file "/a.txt" "1:/A.TXT")))
+                 (said-refusing (lambda () (clara.fat:copy-file "2:/kept/b.txt" "2:kept/B.TXT")))
+                 (said-refusing (lambda () (clara.fat:copy-file "/data" "2:/data")))
+                 (said-refusing (lambda () (clara.fat:copy-file "/none.txt" "2:/none.txt")))
+                 (said-refusing (lambda () (clara.fat:copy-file "/a.txt" "2:/nowhere/a.txt")))
+                 (said-refusing (lambda () (clara.fat:copy-file "/a.txt" "/nowhere/a.txt")))
+                 (said-refusing (lambda () (clara.fat:copy-file "/a.txt" "2:/kept")))
+                 (said-refusing (lambda () (clara.fat:copy-file "/a.txt" "3:/a.txt")))
+                 (said-refusing (lambda () (clara.fat:copy-file "3:/a.txt" "/a.txt")))))
+    (check (list (list (list (held "/a.txt" "on the first") (held "/b.txt" "on the first")
+                             (held "/data/EMPTY" "") (held "/data/a copy of a.txt" "on the first")
+                             (held "/data/bytes.bin" *binary*))
+                       nil)
+                 (list (list (held "/EMPTY" "") (held "/also/c.txt" "there as well") (held "/b.txt" "on the second")
+                             (held "/bytes.bin" *binary*) (held "/kept/b.txt" "on the first")
+                             (held "/new.txt" "written by its name"))
+                       nil)
+                 pages)
+           (list (volume-holds disk 63) (volume-holds disk 8000) (clara.host:allocated-pages)))
+    ;; What the language is told of the volumes: their names, how large each is, which one a name is looked up on
+    ;; that does not say, and which the machine was started from, once somebody has said so.
+    (check '(("1:/" :bytes 1536000 :current t) ("2:/" :bytes 10240000)) (clara.fat::described))
+    (let ((clara.fat:*volume* (second (clara.fat:volumes))) (clara.fat:*image-volume* (first (clara.fat:volumes))))
+      (check '(("1:/" :bytes 1536000 :started-from t) ("2:/" :bytes 10240000 :current t)) (clara.fat::described)))
+    (check (list #'clara.fat:copy-file '(("1:/" :bytes 1536000 :current t) ("2:/" :bytes 10240000)))
+           (list (sixth (clara.host:provided-files)) (funcall (seventh (clara.host:provided-files)))))
+    ;; A world is saved on the volume that the machine was started from, under a name that says that volume
+    ;; or none: a name that says another is not written somewhere else than it says.
+    (check '("a world is saved on the volume that the machine was started from, and 2:/world.image is on another"
+             "1:/world.image" "/other.image" ("a.txt" "b.txt" "data/" "other.image" "world.image")
+             ("also/" "b.txt" "bytes.bin" "EMPTY" "kept/" "new.txt"))
+           (list (said-refusing (lambda () (clara.fat::write-image "2:/world.image" 0 0)))
+                 (clara.fat::write-image "1:/world.image" 0 0) (clara.fat::write-image "/other.image" 0 0)
+                 (clara.fat:names "/") (clara.fat:names "2:/")))
+    (let ((clara.fat:*volume* (second (clara.fat:volumes))) (clara.fat:*image-volume* (second (clara.fat:volumes))))
+      (check '("a world is saved on the volume that the machine was started from, and 1:/world.image is on another"
+               "2:/world.image")
+             (list (said-refusing (lambda () (clara.fat::write-image "1:/world.image" 0 0)))
+                   (clara.fat::write-image "2:/world.image" 0 0))))))
+;; A second disk, which cannot be written: the language is told so, a file
+;; is copied from it, and none to it, which leaves both volumes as they
+;; were.
+(let ((first (fat-bytes (make-fat-volume 12 '(("a.txt" "on the first")))))
+      (second (fat-bytes (make-fat-volume 12 '(("b.txt" "on the second"))))))
+  (new-disks (list 3 first) (list 4 second :read-only t))
+  (said-by #'clara.disk:start)
+  (said-by #'clara.fat:start)
+  (check '((("1:/" :bytes 1536000 :current t) ("2:/" :bytes 1536000 :read-only t)) "1:/b.txt"
+           "the disk 00:04.0 cannot be written" "the disk 00:04.0 cannot be written" ("a.txt" "b.txt") ("b.txt"))
+         (list (clara.fat::described) (clara.fat:copy-file "2:/b.txt" "1:/b.txt")
+               (said-refusing (lambda () (clara.fat:copy-file "1:/a.txt" "2:/a.txt")))
+               (said-refusing (lambda () (clara.fat:copy-file "1:/a.txt" "2:/b.txt")))
+               (clara.fat:names "1:/") (clara.fat:names "2:/")))
+  (check (list (list (list (held "/a.txt" "on the first") (held "/b.txt" "on the second")) nil)
+               (list (list (held "/b.txt" "on the second")) nil))
+         (list (volume-holds first 0) (volume-holds second 0))))
+;; A disk that stops while a file is copied onto another, at every request
+;; that it could stop at: the file that is copied is whole whenever it
+;; stops, and the other one is what it was or what it was to be.
+(let ((request 0) (stopped t) (older 0))
+  (loop while (and stopped (< request 200))
+        do (incf request)
+           (let ((disk (two-volumes)) (count 0))
+             (start-files disk)
+             (setf (vdev-watch *disk*)
+                   (lambda ()
+                     (when (= (incf count) request)
+                       (setf (vdev-answer *disk*) 1))))
+             (setq stopped (not (ignore-errors (clara.fat:copy-file "1:/data/bytes.bin" "2:/kept/b.txt") t)))
+             (destructuring-bind (first second) (list (volume-holds disk 63) (volume-holds disk 8000))
+               (let ((now (cdr (assoc "/kept/b.txt" (car second) :test #'string=))))
+                 (incf *checks*)
+                 (when (equal now (cdr (held "" "kept there")))
+                   (incf older))
+                 (unless (and (null (cadr first))
+                              (equal (cdr (held "" *binary*)) (cdr (assoc "/data/bytes.bin" (car first) :test #'string=)))
+                              (every (lambda (problem)
+                                       (or (search "are in no file, and not free" problem)
+                                           (search "the copies of the table differ" problem)))
+                                     (cadr second))
+                              (if stopped
+                                  (or (equal now (cdr (held "" "kept there"))) (equal now (cdr (held "" *binary*))))
+                                  (and (null (cadr second)) (equal now (cdr (held "" *binary*))))))
+                   (failed "a disk that stopped at request ~D of copying a file is left out of order: ~{~A~^; ~}"
+                           request (or (cadr first) (cadr second) (list "its files are not what they were"))))))))
+  (check '(t t) (list (< 4 request 200) (> older 0))))
 (new-bus)
 (said-by #'clara.disk:start)
 (said-by #'clara.fat:start)
@@ -8439,6 +8616,106 @@
   (check '((:pointer 10 10 1) (:pointer 30 15 0) nil) (loop repeat 3 collect (clara.windows:next-event kept 0)))
   (clara.windows:close-window kept))
 
+;; What the pointer carries. The program of a window says what the pointer
+;; has taken hold of there, a text, while the left button is down that went
+;; down on the window's inside. When the button comes up, the window that
+;; it comes up on the inside of is told the text and the place, if it was
+;; opened to be told; the window that the text was carried from is told
+;; where it was let go, as a last move with no button; and then the button
+;; is told as ever. Nothing is carried once the button is up, and a window
+;; that never said anything is told nothing new.
+(let* ((heard nil)
+       (from (clara.windows:open-window "from" 80 40 :x 20 :y 60
+                                        :pointer (lambda (x y buttons) (push (list :from x y buttons) heard))
+                                        :drag (lambda (x y buttons) (push (list :from-drag x y buttons) heard))
+                                        :drop (lambda (x y text) (push (list :from-drop x y text) heard))))
+       (to (clara.windows:open-window "to" 80 40 :x 150 :y 120
+                                      :pointer (lambda (x y buttons) (push (list :to x y buttons) heard))
+                                      :drop (lambda (x y text) (push (list :to-drop x y text) heard))))
+       (deaf (clara.windows:open-window "deaf" 60 30 :x 200 :y 45
+                                        :pointer (lambda (x y buttons) (push (list :deaf x y buttons) heard)))))
+  (flet ((heard ()
+           (prog1 (reverse heard) (setq heard nil))))
+    ;; With no button down nothing is carried; nor from a window that the button did not go down on.
+    (clara.windows:pointer-moved 30 70 0)
+    (check '(nil nil) (list (clara.windows:carry from "too early") clara.windows::*held*))
+    (clara.windows:pointer-moved 30 70 1)
+    (check '(nil t) (list (clara.windows:carry to "not from here") (clara.windows:carry from "/a.lisp")))
+    (clara.windows:pointer-moved 160 130 1)
+    (clara.windows:pointer-moved 160 130 0)
+    (check '((:from 10 10 1) (:from-drag 140 70 1) (:to-drop 10 10 "/a.lisp") (:from-drag 140 70 0) (:to 10 10 0)) (heard))
+    (check '(nil nil 0) (list clara.windows::*held* (clara.windows:carry from "too late") (wrong-pixels)))
+    ;; The next press carries nothing of the one before it, and a press that says nothing is as it always was.
+    (clara.windows:pointer-moved 30 70 1)
+    (clara.windows:pointer-moved 160 130 1)
+    (clara.windows:pointer-moved 160 130 0)
+    (check '((:from 10 10 1) (:from-drag 140 70 1) (:to 10 10 0)) (heard))
+    ;; On a window that takes nothing, and on the desk, only the window that it came from is told.
+    (clara.windows:pointer-moved 30 70 1)
+    (check t (clara.windows:carry from "/b.lisp"))
+    (clara.windows:pointer-moved 210 55 1)
+    (clara.windows:pointer-moved 210 55 0)
+    (check '((:from 10 10 1) (:from-drag 190 -5 1) (:from-drag 190 -5 0) (:deaf 10 10 0)) (heard))
+    (clara.windows:pointer-moved 30 70 1)
+    (check t (clara.windows:carry from "/b.lisp"))
+    (clara.windows:pointer-moved 130 200 1)
+    (clara.windows:pointer-moved 130 200 0)
+    (check '((:from 10 10 1) (:from-drag 110 140 1) (:from-drag 110 140 0)) (heard))
+    ;; The band of a window is not its inside: what is let go there is let go on nothing.
+    (clara.windows:pointer-moved 30 70 1)
+    (check t (clara.windows:carry from "/b.lisp"))
+    (clara.windows:pointer-moved 160 110 1)
+    (clara.windows:pointer-moved 160 110 0)
+    (check '((:from 10 10 1) (:from-drag 140 50 1) (:from-drag 140 50 0)) (heard))
+    ;; On the window that it came from, that window is told all three.
+    (clara.windows:pointer-moved 30 70 1)
+    (check t (clara.windows:carry from "/c.lisp"))
+    (clara.windows:pointer-moved 50 90 1)
+    (clara.windows:pointer-moved 50 90 0)
+    (check '((:from 10 10 1) (:from-drag 30 30 1) (:from-drop 30 30 "/c.lisp") (:from-drag 30 30 0) (:from 30 30 0)) (heard))
+    ;; What is carried can be another text, and nothing again; and it is a text.
+    (clara.windows:pointer-moved 30 70 1)
+    (check '(t t) (list (clara.windows:carry from "/one") (clara.windows:carry from "/two")))
+    (clara.windows:pointer-moved 160 130 1)
+    (clara.windows:pointer-moved 160 130 0)
+    (check '((:from 10 10 1) (:from-drag 140 70 1) (:to-drop 10 10 "/two") (:from-drag 140 70 0) (:to 10 10 0)) (heard))
+    (clara.windows:pointer-moved 30 70 1)
+    (check '(t t) (list (clara.windows:carry from "/one") (clara.windows:carry from nil)))
+    (clara.windows:pointer-moved 160 130 1)
+    (clara.windows:pointer-moved 160 130 0)
+    (check '((:from 10 10 1) (:from-drag 140 70 1) (:to 10 10 0)) (heard))
+    (check-condition error (clara.windows:carry from 5))
+    (check-condition error (clara.windows:carry "from" "/a.lisp"))
+    (check 0 (wrong-pixels)))
+  (clara.windows:close-window from)
+  (clara.windows:close-window to)
+  (clara.windows:close-window deaf))
+;; A window that keeps what happens to it keeps what is let go on it, when
+;; it asked. Its program cannot have the pointer carry anything while it
+;; still has a button to take: what it would say belongs to a press before
+;; this one.
+(let ((kept (clara.windows:open-window "kept" 80 40 :x 150 :y 120 :events t :drag t :drop t))
+      (plain (clara.windows:open-window "plain" 80 40 :x 20 :y 60 :events t)))
+  (clara.windows:pointer-moved 160 130 1)
+  (check nil (clara.windows:carry kept "/early.lisp"))
+  (check '(:pointer 10 10 1) (clara.windows:next-event kept 0))
+  (check t (clara.windows:carry kept "/a.lisp"))
+  (clara.windows:pointer-moved 180 135 1)
+  (clara.windows:pointer-moved 180 135 0)
+  (check '((:drag 30 15 1) (:drop 30 15 "/a.lisp") (:drag 30 15 0) (:pointer 30 15 0) nil)
+         (loop repeat 5 collect (clara.windows:next-event kept 0)))
+  ;; One that did not ask keeps the button and nothing else.
+  (clara.windows:pointer-moved 160 130 1)
+  (clara.windows:next-event kept 0)
+  (check t (clara.windows:carry kept "/b.lisp"))
+  (clara.windows:pointer-moved 30 70 1)
+  (clara.windows:pointer-moved 30 70 0)
+  (check '(((:drag -120 -50 0) nil) ((:pointer 10 10 0) nil) 0)
+         (list (loop repeat 2 collect (clara.windows:next-event kept 0))
+               (loop repeat 2 collect (clara.windows:next-event plain 0)) (wrong-pixels)))
+  (clara.windows:close-window kept)
+  (clara.windows:close-window plain))
+
 ;;; Applications that are files. The files are the host's, in a directory of
 ;;; this run's own: LOAD, OPEN and DELETE-FILE are SBCL's here.
 
@@ -9539,10 +9816,11 @@
 
 ;; The window of a browser against its list, after it was drawn: the names
 ;; from the first in the window on, the one that is picked with its colours
-;; the other way round, and the status.
-(defun browser-wrong (browser)
+;; the other way round, and the status. TEXTS are what the rows of the
+;; names say when that is more than the names, as it is for the volumes.
+(defun browser-wrong (browser &optional texts)
   (clara.jaid::render browser)
-  (let ((names (clara.jaid::browser-names browser)) (top (clara.jaid::browser-top browser))
+  (let ((names (or texts (clara.jaid::browser-names browser))) (top (clara.jaid::browser-top browser))
         (columns (clara.jaid::browser-columns browser)))
     (wrong-cells (clara.jaid::browser-surface browser)
                  (append (loop for r below (clara.jaid::browser-rows browser)
@@ -9615,10 +9893,10 @@
     ;; Delete asks, and deletes the file when the answer is y; a directory
     ;; is not deleted.
     (check '(4 0 1) (picked 127))
-    (check (list (concatenate 'string "delete " *shelf* "a.txt? y deletes it") (concatenate 'string *shelf* "a.txt"))
-           (list (clara.jaid::status browser) (clara.jaid::browser-doomed browser)))
+    (check (list (concatenate 'string "delete " *shelf* "a.txt? y deletes it") t)
+           (list (clara.jaid::status browser) (functionp (cdr (clara.jaid::browser-asked browser)))))
     (browser-keys browser 110)                                               ; n, or any other key
-    (check '(nil t) (list (clara.jaid::browser-doomed browser) (and (probe-file (concatenate 'string *shelf* "a.txt")) t)))
+    (check '(nil t) (list (clara.jaid::browser-asked browser) (and (probe-file (concatenate 'string *shelf* "a.txt")) t)))
     (browser-keys browser 127 121)
     (check (list '(("../" "many/" "sub/" "Zed/" "b.txt") 4) nil (concatenate 'string "deleted " *shelf* "a.txt") 0)
            (list (browser-state browser) (probe-file (concatenate 'string *shelf* "a.txt"))
@@ -9627,7 +9905,7 @@
     (check '(("../" "many/" "sub/" "Zed/") 3) (browser-state browser))
     (browser-keys browser 127)
     (check '("a directory is not deleted from here" nil 0)
-           (list (clara.jaid::browser-message browser) (clara.jaid::browser-doomed browser) (browser-wrong browser)))
+           (list (clara.jaid::browser-message browser) (clara.jaid::browser-asked browser) (browser-wrong browser)))
     ;; Ctrl-R reads the directory again, with the same name picked.
     (write-scratch "tree/new.txt" "new")
     (check '(("../" "many/" "sub/" "Zed/") 3) (browser-state browser))
@@ -9642,18 +9920,30 @@
       (browser-keys browser clara.input:+home+ 3)
       (check (list whole nil) (list (clara.windows:clipboard) (clara.jaid::browser-message browser))))
     ;; A click picks the name it is on, and on the name that is picked
-    ;; opens it; below the names, on the status and with a button that comes
-    ;; up it does nothing.
+    ;; opens it, when the button comes up where it went down; below the
+    ;; names and on the status it does nothing, and neither does a button
+    ;; that comes up on another name than it went down on, or one that was
+    ;; down on a name which it was the first to pick.
     (clara.jaid::point browser 20 1)
     (check '(1 0) (list (clara.jaid::browser-picked browser) (browser-wrong browser)))
+    (clara.jaid::point browser 20 0)
     (clara.jaid::point browser 60 1)
     (check 3 (clara.jaid::browser-picked browser))
-    (clara.jaid::point browser 20 0)
+    (clara.jaid::point browser 20 0)                                        ; up on another name
     (clara.jaid::point browser 70 1)
+    (clara.jaid::point browser 70 0)
     (check (list 3 *shelf*) (list (clara.jaid::browser-picked browser) (clara.jaid::browser-directory browser)))
+    (clara.jaid::point browser 60 1)                                        ; down on the name that is picked: nothing yet,
+    (check (list 3 *shelf* '(3 . t))
+           (list (clara.jaid::browser-picked browser) (clara.jaid::browser-directory browser)
+                 (clara.jaid::browser-pressed browser)))
+    (clara.jaid::point browser 30 0)                                        ; and nothing when it comes up elsewhere;
+    (check (list *shelf* nil) (list (clara.jaid::browser-directory browser) (clara.jaid::browser-pressed browser)))
     (clara.jaid::point browser 60 1)
+    (clara.jaid::point browser 63 0)                                        ; in the same row, it is opened
     (check (list (concatenate 'string *shelf* "Zed/") '("../" "z.txt")) (list (clara.jaid::browser-directory browser) (clara.jaid::browser-names browser)))
     (clara.jaid::point browser 40 1)                                        ; two names, and this is the third row
+    (clara.jaid::point browser 40 0)
     (check '(0 0) (list (clara.jaid::browser-picked browser) (browser-wrong browser)))
     ;; Closing, by the key and by the box.
     (browser-keys browser 17)
@@ -9750,6 +10040,235 @@
                  (clara.jaid::browser-font console) (clara.draw:surface-width (clara.jaid::browser-surface console))
                  (clara.draw:surface-height (clara.jaid::browser-surface console))
                  (let ((*cell-font* (clara.type:font "Mono" 15 :bold t))) (browser-wrong said)) (browser-wrong console)))))
+(clara.windows:stop)
+
+;; Volumes. Which there are is the language's to say, and the language is
+;; SBCL's here, which knows of none: the tests say (CLARA.HOST:SET-VOLUMES),
+;; and two directories of this run's stand for two volumes, each named as a
+;; volume's first directory is. A name of the host's that begins with no
+;; slash is in the directory that *DEFAULT-PATHNAME-DEFAULTS* names, so the
+;; two are short names, "one/" and "two/".
+(defun host-found (name)
+  (let ((found (probe-file name)))
+    (cond ((null found) nil)
+          ((or (pathname-name found) (pathname-type found)) name)
+          ((clara.jaid::directory-name-p name) name)
+          (t (concatenate 'string name "/")))))
+
+;; What the machine says when it has no page frames for a file: no error.
+(define-condition no-memory (storage-condition) ()
+  (:report "there are no 43 page frames side by side to be had"))
+
+;; Whatever has happened to the window of a browser is done to the browser,
+;; as its own thread would do it.
+(defun browser-events (browser)
+  (loop for event = (clara.windows:next-event (clara.jaid::browser-window browser) 0)
+        while event
+        do (clara.jaid::happened browser event)))
+
+;; The pointer at a place of the inside of a browser's window, with those
+;; buttons.
+(defun browser-pointer (browser x y buttons)
+  (multiple-value-bind (left top) (clara.windows:window-position (clara.jaid::browser-window browser))
+    (clara.windows:pointer-moved (+ left x) (+ top y) buttons)))
+
+(write-scratch "one/a.txt" "first" "second")
+(write-scratch "one/sub/inner.txt" "inner")
+(write-scratch "one/Zed" "a file that is called Zed")
+(write-scratch "two/a.txt" "another a")
+(write-scratch "two/b.txt" "b")
+(write-scratch "two/Zed/z.txt" "z")
+(setq clara.jaid::*found* #'host-found)
+;; What a name says of its volume, with volumes named as ClaraOS names them.
+(clara.host:set-volumes '(("1:/" :bytes 1069547520 :started-from t :current t) ("2:/" :bytes 34603008)))
+(check '(("1:/" "1:/" "2:/" "2:/") ("1:/a.txt" "1:/a.txt" "1:/home/a.txt" "2:/a.txt" "1:/A.txt")
+         (t t nil nil) ("" "" "" "/" "2:/" "2:/clara/" "/clara/") (t t t nil nil nil))
+       (list (mapcar #'clara.jaid::volume-of '("/a.txt" "a.txt" "2:/a.txt" "2:/"))
+             (mapcar #'clara.jaid::whole-name '("/a.txt" "a.txt" "//home/a.txt" "2:/a.txt" "1:/A.txt"))
+             (list (clara.jaid::same-volume-p "/a.txt" "1:/home/") (clara.jaid::same-volume-p "2:/a.txt" "2:/")
+                   (clara.jaid::same-volume-p "/a.txt" "2:/") (clara.jaid::same-volume-p "2:/a.txt" "/home/"))
+             (mapcar #'clara.jaid::above '("" "/" "2:/" "/clara/" "2:/clara/" "2:/clara/apps/" "/clara/apps/"))
+             (mapcar #'clara.jaid::first-directory-p '("/" "1:/" "2:/" "3:/" "2:/clara/" ""))))
+(check '("2:/" "2:/" "2:/clara/" "/" "one/" "one/" "Jaid" "Jaid - 2:/" "2:/" "" "a.txt" "a.txt" "")
+       (append (mapcar #'clara.jaid::parent '("2:/" "2:/clara/" "2:/clara/apps/" "/" "one/" "one/sub/"))
+               (mapcar #'clara.jaid::title '("" "2:/"))
+               (mapcar #'clara.jaid::directory-of '("2:/a.txt" "a.txt")) (mapcar #'clara.jaid::own-name '("2:/a.txt" "a.txt" "2:/"))))
+(check '("0 bytes" "1023 bytes" "1 KiB" "100 KiB" "1023 KiB" "1 MiB" "1020 MiB")
+       (mapcar #'clara.jaid::size '(0 1023 1024 102400 1048575 1048576 1069547520)))
+(check '("1:/   1020 MiB, the system's, / is here" "2:/   33 MiB" "12:/  2 KiB, / is here" "123:/ 100 bytes, cannot be written"
+         "1234:/ ")
+       (let ((browser (clara.jaid::make-browser :directory ""
+                                                :volumes '(("1:/" :bytes 1069547520 :started-from t :current t)
+                                                           ("2:/" :bytes 34603008) ("12:/" :bytes 2048 :current t)
+                                                           ("123:/" :bytes 100 :read-only t) ("1234:/")))))
+         (mapcar (lambda (name) (clara.jaid::row-text browser name)) '("1:/" "2:/" "12:/" "123:/" "1234:/"))))
+;; One volume, or none that is known: nothing is above its first directory.
+(clara.host:set-volumes '(("1:/" :bytes 1069547520 :started-from t :current t)))
+(check '("/" "1:/" "1:/") (mapcar #'clara.jaid::above '("/" "1:/" "1:/clara/")))
+(clara.host:set-volumes nil)
+(check '("/" nil "/a.txt" t) (list (clara.jaid::above "/") (clara.jaid::volume-of "/a.txt") (clara.jaid::whole-name "/a.txt")
+                                   (clara.jaid::same-volume-p "/a.txt" "/home/")))
+
+(new-desk :width 700 :height 260)
+(setq clara.windows::*applications* *defined-applications*)
+(clara.host:set-volumes '(("one/" :bytes 1069547520 :started-from t :current t) ("two/" :bytes 34603008)))
+(let* ((*default-pathname-defaults* (pathname *scratch*))
+       (a (clara.jaid::open-browser "one/" :columns 40 :rows 4 :x 10 :y 60))
+       (b (clara.jaid::open-browser "two" :columns 40 :rows 4 :x 350 :y 60))
+       (volumes '("one/  1020 MiB, the system's, / is here" "two/  33 MiB")))
+  (flet ((said (browser &rest codes)
+           (apply #'browser-keys browser codes)
+           (clara.jaid::status browser))
+         (copied (text)
+           (setf (clara.windows:clipboard) text)))
+    ;; The first directory of a volume has a way up when there is another volume to go to.
+    (check '((("../" "sub/" "a.txt" "Zed") 0) (("../" "Zed/" "a.txt" "b.txt") 0) ("Jaid - two/" "Jaid - one/") 0 0)
+           (list (browser-state a) (browser-state b) (titles) (browser-wrong a) (browser-wrong b)))
+    ;; It leads to the volumes, with the one picked that it came from: their names, and what is known of each.
+    (browser-keys a 8)
+    (check (list '(("one/" "two/") 0) "" '("Jaid - two/" "Jaid") "2 volumes: Enter opens" 0)
+           (list (browser-state a) (clara.jaid::browser-directory a) (titles) (clara.jaid::status a) (browser-wrong a volumes)))
+    ;; Nothing is above them, and nothing of them is deleted; a volume is gone into like a directory, and
+    ;; the way up from it leads back with it picked.
+    (check '("2 volumes: Enter opens" "" "a directory is not deleted from here" 0)
+           (list (said a 8) (clara.jaid::browser-directory a) (said a 127) (browser-wrong a volumes)))
+    (browser-keys a clara.input:+down+ 10)
+    (check '((("../" "Zed/" "a.txt" "b.txt") 0) "two/" "Jaid - two/" 0)
+           (list (browser-state a) (clara.jaid::browser-directory a)
+                 (clara.windows:window-title (clara.jaid::browser-window a)) (browser-wrong a)))
+    (browser-keys a clara.input:+left+)
+    (check '((("one/" "two/") 1) 0) (list (browser-state a) (browser-wrong a volumes)))
+    (browser-keys a clara.input:+up+ 13)
+    (check '((("../" "sub/" "a.txt" "Zed") 0) "one/") (list (browser-state a) (clara.jaid::browser-directory a)))
+    ;; Ctrl-C copies the name, and Ctrl-V in a directory puts a copy of that file there. Where a file of the
+    ;; name is already, the row asks first, and any answer but y leaves everything as it was.
+    (check '("copied one/a.txt" "one/a.txt" "replace two/a.txt? y replaces it" "another a
+" "4 names" "another a
+")
+           (list (said a clara.input:+down+ clara.input:+down+ 3) (clara.windows:clipboard) (said b 22)
+                 (scratch-text "two/a.txt") (subseq (said b 110) 0 7) (scratch-text "two/a.txt")))
+    (check '("copied one/a.txt to two/a.txt" "first
+second
+" "first
+second
+" (("../" "Zed/" "a.txt" "b.txt") 2) 0)
+           (list (said b 22 121) (scratch-text "two/a.txt") (scratch-text "one/a.txt") (browser-state b) (browser-wrong b)))
+    ;; Where the file is itself, where a directory has its name, and where the list is of the volumes, nothing
+    ;; is put; nor is a directory, or what is no file's name, or nothing.
+    (check '("one/a.txt is there already" "there is a directory two/Zed/" "a directory is not copied from here"
+             "there is no file two/none.txt" "there is no file (a form" "nothing was copied that could be put here")
+           (list (said a 22) (progn (browser-keys a clara.input:+end+ 3) (said b 22))
+                 (progn (copied "two/Zed/") (said a 22)) (progn (copied "two/none.txt") (said a 22))
+                 (progn (copied (format nil "(a form~%  of two lines)")) (said a 22)) (progn (copied "") (said a 22))))
+    (copied "two/a.txt")
+    (browser-keys a 8)
+    (check '("a file goes into a directory, and this is the list of the volumes" 0) (list (said a 22) (browser-wrong a volumes)))
+    (browser-keys a 10)
+    ;; A file that the machine has no memory for is not copied, and the window says so and goes on: to the
+    ;; language that is no error, and nothing that takes errors would have taken it.
+    (let ((real #'clara:copy-file))
+      (setf (symbol-function 'clara:copy-file) (lambda (from to) (declare (ignore from to)) (error 'no-memory)))
+      (unwind-protect
+           (check '("two/b.txt is not copied: there are no 43 page frames side by side to be had" nil
+                    (("../" "sub/" "a.txt" "Zed") 0) 0)
+                  (progn (copied "two/b.txt")
+                         (list (said a 22) (probe-file "one/b.txt") (browser-state a) (browser-wrong a))))
+        (setf (symbol-function 'clara:copy-file) real)))
+    ;; A file of another directory, which is new where it goes: it is picked there.
+    (browser-keys a clara.input:+down+ 10 clara.input:+down+ 3)
+    (check '("one/sub/inner.txt" "copied one/sub/inner.txt to two/inner.txt" (("../" "Zed/" "a.txt" "b.txt" "inner.txt") 4) "inner
+" 0)
+           (list (clara.windows:clipboard) (said b 22) (browser-state b) (scratch-text "two/inner.txt") (browser-wrong b)))
+    ;; Ctrl-X is Ctrl-C for a file that Ctrl-V is to move: the file is where it was put, and no longer where
+    ;; it was. The window that it went from says so when it reads its directory again.
+    (check '("cut two/b.txt: Ctrl-V moves it" "two/b.txt" "two/b.txt" "moved two/b.txt to one/sub/b.txt" nil "b
+" nil (("../" "b.txt" "inner.txt") 1) 0)
+           (list (said b clara.input:+up+ 24) (clara.windows:clipboard) clara.jaid::*cut* (said a 22)
+                 (probe-file "two/b.txt") (scratch-text "one/sub/b.txt") clara.jaid::*cut* (browser-state a) (browser-wrong a)))
+    (check '("there is no file two/b.txt" (("../" "Zed/" "a.txt" "b.txt" "inner.txt") 3) (("../" "Zed/" "a.txt" "inner.txt") 0))
+           (list (said a 22) (browser-state b) (progn (browser-keys b 18) (browser-state b))))
+    ;; A directory is not moved. And what was cut is copied, and not moved, once something else was copied
+    ;; after it, here or in another program.
+    (check '("a directory is not moved from here" nil "cut two/inner.txt: Ctrl-V moves it" "copied one/sub/b.txt" nil
+             "copied one/sub/b.txt to two/b.txt" t)
+           (list (said b clara.input:+down+ 24) clara.jaid::*cut* (said b clara.input:+end+ 24) (said a 3) clara.jaid::*cut*
+                 (said b 22) (and (probe-file "one/sub/b.txt") t)))
+    (check '("cut two/b.txt: Ctrl-V moves it" "there is no file something else" nil t)
+           (list (said b 24) (progn (copied "something else") (said a 22)) clara.jaid::*cut* (and (probe-file "two/b.txt") t)))
+    ;; The pointer. A name that it takes hold of and moves is carried, which the row says, and is not opened
+    ;; when the button comes up. Let go on another window of the kind, it is put into the directory that is
+    ;; listed there: a copy of it, since that is another volume, and that window comes to the top, where its
+    ;; question is answered. The window that it was carried from carries nothing any more.
+    (browser-keys a 8 clara.input:+home+)
+    (browser-pointer a 20 37 1)
+    (browser-events a)
+    (check '((("../" "sub/" "a.txt" "Zed") 2) (2) nil) (list (browser-state a) (clara.jaid::browser-pressed a) (clara.jaid::browser-carrying a)))
+    (browser-pointer a 26 37 1)
+    (browser-events a)
+    (check '("one/a.txt" nil "carrying one/a.txt" "one/a.txt" 0)
+           (list (clara.jaid::browser-carrying a) (clara.jaid::browser-pressed a) (clara.jaid::status a)
+                 (fifth clara.windows::*held*) (browser-wrong a)))
+    (browser-pointer b 30 70 1)
+    (browser-pointer b 30 70 0)
+    (browser-events b)
+    (browser-events a)
+    (check '("replace two/a.txt? y replaces it" nil "4 names" ("Jaid - two/" "Jaid - one/") nil)
+           (list (clara.jaid::status b) (clara.jaid::browser-carrying a) (subseq (clara.jaid::status a) 0 7) (titles)
+                 clara.windows::*held*))
+    (check '("copied one/a.txt to two/a.txt" 0 0 0) (list (said b 121) (browser-wrong a) (browser-wrong b) (wrong-pixels)))
+    ;; Let go on a directory, it is put into that one, and on the volume that it was on already it moves.
+    (browser-pointer a 20 53 1)
+    (browser-pointer a 30 53 1)
+    (browser-events a)
+    (check "carrying one/Zed" (clara.jaid::status a))
+    (browser-pointer a 30 21 1)
+    (browser-pointer a 30 21 0)
+    (browser-events a)
+    (check '("moved one/Zed to one/sub/Zed" (("../" "sub/" "a.txt") 2) nil nil t 0)
+           (list (clara.jaid::status a) (browser-state a) (clara.jaid::browser-carrying a) (probe-file "one/Zed")
+                 (and (probe-file "one/sub/Zed") t) (browser-wrong a)))
+    ;; On the way up of a volume's first directory there is no directory to put it into; a directory is not
+    ;; carried; and a text that is no file's name is said to be none.
+    (browser-pointer b 20 37 1)
+    (browser-pointer b 30 37 1)
+    (browser-events b)
+    (browser-pointer b 30 5 1)
+    (browser-pointer b 30 5 0)
+    (browser-events b)
+    (check '("a file goes into a directory, and this is the list of the volumes" (("../" "Zed/" "a.txt" "b.txt" "inner.txt") 2))
+           (list (clara.jaid::status b) (browser-state b)))
+    (browser-pointer a 20 21 1)
+    (browser-pointer a 30 21 1)
+    (browser-events a)
+    (check '("a directory is not carried from here" nil nil) (list (clara.jaid::status a) (clara.jaid::browser-carrying a)
+                                                                  (fifth clara.windows::*held*)))
+    (browser-pointer a 30 21 0)
+    (browser-events a)
+    (check '((("../" "sub/" "a.txt") 1) "one/") (list (browser-state a) (clara.jaid::browser-directory a)))
+    (clara.jaid::happened b '(:drop 5 5 "no such thing"))
+    (check '("there is no file no such thing" 0 0 0) (list (clara.jaid::status b) (browser-wrong a) (browser-wrong b) (wrong-pixels)))
+    (clara.jaid::happened b (list :drop 5 70 (format nil "one/sub/inner.txt~%and a second line")))   ; a name, to the end of its line
+    (check '("replace two/inner.txt? y replaces it" "5 names")
+           (list (clara.jaid::status b) (subseq (said b 110) 0 7)))
+    ;; A name that was carried is not opened when the button comes up, also where it is let go in its own row:
+    ;; the file is there already, and no editor opens.
+    (browser-pointer a 20 37 1)
+    (browser-pointer a 20 37 0)
+    (browser-events a)
+    (check '((("../" "sub/" "a.txt") 2) nil) (list (browser-state a) (clara.jaid::browser-pressed a)))
+    (browser-pointer a 20 37 1)
+    (browser-pointer a 30 37 1)
+    (browser-events a)
+    (check '("carrying one/a.txt" nil) (list (clara.jaid::status a) (clara.jaid::browser-pressed a)))
+    (browser-pointer a 30 39 0)
+    (browser-events a)
+    (check '("one/a.txt is there already" ("Jaid - one/" "Jaid - two/") nil 0)
+           (list (clara.jaid::status a) (titles) (clara.jaid::browser-carrying a) (browser-wrong a))))
+  (clara.windows:close-window (clara.jaid::browser-window a))
+  (clara.windows:close-window (clara.jaid::browser-window b)))
+(clara.host:set-volumes nil)
+(setq clara.jaid::*found* #'probe-file
+      clara.jaid::*cut* nil)
 (clara.windows:stop)
 (setq clara.jaid::*names* #'clara.jaid::names-in)
 (sb-ext:delete-directory *scratch* :recursive t)

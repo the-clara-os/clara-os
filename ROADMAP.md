@@ -2235,6 +2235,144 @@ Infrastructure, done:
   and go when the deployment asks more than once or takes the artifact's
   number.
 
+- **Volumes** (2026-11-25, version 0.0.61). A machine with a second disk
+  had a second volume that a variable reached, `clara.fat:*volume*`, set
+  or bound at a prompt, and Jaid listed the volume that the variable
+  held and no other (issue #52: "Be able to select other volumes in Jaid
+  and the ability to copy/move files between volumes. Being able to drag
+  and drop files between volumes."). Now a name says which volume it is
+  on, by a number and a colon before everything else: `"2:/mine.lisp"`
+  is on the second, in the order of the boot report, whatever the
+  variable holds and in every thread, and a name that says nothing is
+  where it always was. The file system reads that part of a name
+  (lisp/fat.lisp, `the-volume`), so OPEN, LOAD, PROBE-FILE, DIRECTORY
+  and DELETE-FILE take such names as they stand, Emma opens and saves a
+  file of the second volume when she is given its name, and what was
+  copied in one window is a name that means the same file in every
+  other. The language has two functions more, in CLARA:
+  `(clara:volumes)`, the volumes that there are, each as the name of its
+  first directory and what is known of it, how large it is, whether the
+  machine was started from it, whether it is the one for the names that
+  say nothing, and whether it cannot be written; and `(clara:copy-file
+  from to)`, a file that holds what another holds, byte for byte, text
+  or not, on its own volume or on another, in place of one that was
+  there, and never onto itself, by whichever two names. In Jaid the
+  volumes are a list above the first directories: the way up from the
+  first directory of a volume leads there when the machine has more than
+  one, with each volume's size and words for the system's, for the one
+  that `/` is and for one that cannot be written, and Enter goes into
+  the one that is picked. Ctrl-V puts a copy of the file whose name was
+  copied last into the directory that is listed, Ctrl-X is Ctrl-C for a
+  file that Ctrl-V is to move, and where a file of the name is already
+  the last row asks before anything is replaced. And the pointer carries
+  a file: moved with its button held on a name, it is said to carry it,
+  and let go on a directory, in that window or in another window of
+  Jaid's, the file is put there, a copy of it on another volume, and the
+  file itself on its own. That is a thing of the window manager's now
+  (lisp/windows.lisp): `(clara.windows:carry window text)` is what a
+  program's window has the pointer carry, a text, while its button is
+  down, and a window that was opened with `:drop` is told what was let
+  go on it, and where. A name in Jaid is opened when the button comes up
+  on it, and no longer when it goes down, since what can be carried
+  cannot be opened by taking hold of it. A machine with one volume shows
+  what it showed. DESIGN.md has the decisions under "Volumes, and a file
+  that goes from one to another"; the manual says it under "Files", "A
+  disk of your own", whose transcripts are by such names now, "Jaid, the
+  file browser", "A window of your own", with a transcript of what the
+  pointer carries, in three rows of its table of what goes wrong, and in
+  its lists of names. The host tests have two volumes on one disk of
+  their own making: names of every kind looked up on both, with the
+  variable holding the other volume, none, and one of an earlier start;
+  files written, deleted and directories made by such names; a volume
+  that is not there, to each function; files copied both ways, within a
+  volume, onto other files and into the place of one in their own
+  directory, one of 3000 bytes that are no text, and one with nothing in
+  it; every pair of the names that the two volumes then hold against
+  whether they are one file; what each volume holds afterwards, read
+  without the file system; what the language is told of the volumes,
+  with clusters of four sectors on one; a second disk that cannot be
+  written, which is copied from and not to; a world that is to be saved
+  under a name of another volume, which is refused; and a disk that
+  stops at each request of a copy in turn, after which the file that was
+  copied is whole and the other is what it was or what it was to be. The
+  window manager is held to what three windows are told, one that takes
+  what is let go, one that does not, and the one that it was carried
+  from, with the pointer let go on each, on a band and on the desk, and
+  to a window that keeps what happens to it, whose program cannot have
+  the pointer carry anything while it has a button to take. Jaid is
+  driven on two directories of the host's that stand for two volumes:
+  the list of them and what its rows say, the way up and back, Ctrl-C
+  and Ctrl-V with the question and both answers, Ctrl-X and Ctrl-V, what
+  is refused and in which words, a file that the machine has no memory
+  for, and the pointer of the made-up screen, which takes a name from
+  one window to the other, to a directory of its own window, to the way
+  up, and back into its own row. 18785 checks, in 87 s on the Mac, where
+  main takes 86 with its 18678. `make test` has a twentieth boot,
+  aarch64-volumes (tools/volumes.txt, 13 s on the Mac), in the world
+  that the first AArch64 session saved, with a second disk: it asks
+  which volumes there are, writes, reads, loads and finds files by names
+  that say their volume, copies one that is no text to the other volume
+  and holds the two against each other by their sums, is refused a copy
+  onto the same file and to a volume that is not there, opens a file of
+  the second volume in Emma and saves it there, and then has two windows
+  of Jaid's, one on each volume, where QEMU's mouse carries a file from
+  the one and lets it go on the other, and on a directory of its own
+  volume, Ctrl-X and Ctrl-V move one to where a file of that name is
+  already, with the question answered, and the way up lists the two
+  volumes; the host's checker looks at both volumes afterwards. The
+  manual's transcripts of a disk of one's own and of what the pointer
+  carries are typed at its two boots. `make test` passed on the Mac, the
+  host tests and all twenty boots, and in a container of Ubuntu 26.04,
+  CI's release, where the new boot takes 17 s and fsck.fat finds both of
+  its volumes in order. Mistakes that were planted, one at a time, in
+  copies of the tree, with the host tests after each, 87: 27 in what
+  lisp/fat.lisp gained, 11 in lisp/windows.lisp and 49 in
+  lisp/jaid.lisp. Six got through the tests as they were first written.
+  Five have their test now: two names that come to the same place of two
+  directories, which are two files; a name that says its volume while
+  the variable holds no volume of this start; how large a volume is
+  whose clusters are more than a sector; a size in KiB; and a text of
+  two lines that is let go, which is a name as far as its first line.
+  One showed a condition in the code that nothing needed, the longest of
+  several volumes that a name could begin with, and that is gone. Two
+  change nothing that can be seen. One of the six had counted as
+  noticed: the one check that failed in its run was of a sound card,
+  which reads the card's last line before it is all written, once in 80
+  runs with seven at a time (#195). And six in lisp/boot.lisp, which
+  SBCL never loads, each built in a copy of the tree and booted: the
+  session of the volumes noticed five, and the first session the sixth.
+  The first whole `make test` of this version failed at x86_64-power
+  with the machine's last line in its log: tools/boottest.sh looked at
+  the log and then at the machine, which had said the line and gone in
+  between. It looks at the log once more now when a machine that turns
+  itself off is gone; with five seconds put between the two looks, the
+  boot failed the same way every time before that and passes after. A
+  copy of the disk of Julio's machine, which ran 0.0.60-756088c7, with a
+  copy of his work disk, took this system at once, with its 17 forms,
+  its package, its list and its variable. His own `copy-file`, in
+  `init.lisp`, which binds `clara.fat:*volume*` around
+  `clara.fat:read-file` and `write-file`, and the commands of his
+  launcher that push and pull two files with it, did what they did, and
+  so did the two that load a file from either volume; Galculator opened.
+  That machine has three volumes, the third being this build's own disk,
+  which `tools/run.sh` hands a machine with a newer build: Jaid lists it
+  as `3:/ 33 MiB, cannot be written`, and a copy to it says `the disk
+  00:06.0 cannot be written`. Found on the way, and put right: a file
+  that the machine has no memory for is no error to the language but a
+  STORAGE-CONDITION, which nothing that takes errors takes, so Jaid's
+  thread would have ended and its window gone; it says `... is not
+  copied:` and the machine's words in its last row. Not tried: UTM, a
+  keyboard and a mouse of flesh, and a file of more than some hundred
+  KiB. What it left, as issues: #187, a volume is named by its number
+  and not by its label; #188, a directory is not copied, moved or
+  carried; #189, what is let go is copied to another volume and moved on
+  its own; #190, the pointer shows nothing of what it carries; #191, no
+  window but Jaid's takes what is let go on it; #192, a window of Jaid's
+  does not notice what another one did; #193, a file is copied through
+  memory, whole; #194, the way up to the volumes is there only on a
+  machine with more than one; and #195, the check of the sound card's
+  last words.
+
 Infrastructure, for sessions with budget left over:
 
 - Read the UART base from ACPI (SPCR or DBG2) instead of assuming
@@ -3153,15 +3291,16 @@ M15b, work kept as text, what it left:
   the file.
 - (Settled in M15c: a world that came back as an image loads what the
   two files have that it has not.)
-- A LOAD is written down as it was typed, and the name of a file does not
-  say which volume it is on: a new world looks it up on the volume that
+- A LOAD is written down as it was typed, and a name that does not say
+  which volume it is on is looked up, in a new world, on the volume that
   the machine started from. A file that was loaded from a disk of the
   user's own, with `clara.fat:*volume*` set, is not found there, which the
-  report says. The volume has no name of its own yet. A LET of the
-  variable does not reach another thread, so the Editor and the file
-  browser follow a SETQ only, and a user who sets it has to set it back.
-  Which disk is the user's is "the second" still; a machine with more
-  disks needs a mark on the volume.
+  report says. Since 0.0.61 a name can say its volume, `(load
+  "2:/mine.lisp")`, and that is found wherever the variable points, in
+  every thread, so the editor and the file browser need no SETQ any more
+  to reach a second disk. The volume has no name of its own yet: which
+  disk is the user's is "the second" still, by its number, and a machine
+  with more disks needs a mark on the volume (issue #187).
 - The file is read and written whole for every form that is written down,
   and read a form at a time to find the one to replace. That is nothing
   for the hundreds of forms of a session and grows with the file; nothing
@@ -4780,8 +4919,10 @@ No milestone yet, to be picked up when they start to matter:
   the language. It reads a directory when it comes to it and when it is
   told to, and does not notice what is written meanwhile. Every file opens
   in the editor, which refuses what is no text. It makes no directories and
-  deletes none, as nothing in the system does yet, and renames and copies
-  nothing. It lists the volume that names are looked up on, and no other.
+  deletes none, as nothing in the system does yet, and renames nothing
+  (issue #105). Since 0.0.61 it lists every volume, and copies and moves
+  files, though no directories (issue #188); that a window
+  does not notice what was written meanwhile is issue #192.
 - Keys. A key that types no character is a code from CHAR-CODE-LIMIT on,
   and whoever is handed codes has to pass over the ones it does not know:
   the console does, for a line, and so do the two applications. The
@@ -4943,7 +5084,8 @@ No milestone yet, to be picked up when they start to matter:
   disks on the PCI bus: the kernel does not know which disk it was booted
   from, and with the boot disk first on the bus, as QEMU and UTM have it,
   that is the ESP. Another volume is reached by binding
-  `clara.fat:*volume*`, and there is no name that says which volume; one
+  `clara.fat:*volume*`, or, since 0.0.61, by a name that says its number,
+  `"2:/mine.lisp"`; one
   that START did not find is refused. A
   name has no `.` and no `..` in it. Letters match whatever their case as
   far as ASCII goes, where FAT means every alphabet; a short name outside
@@ -4964,8 +5106,9 @@ No milestone yet, to be picked up when they start to matter:
   that takes the place of another needs room for both until its entry has
   changed, all but a world that is saved, which goes where the one before
   it was when there is no room for both (0.0.55, above). Directories are
-  found and not made, and nothing is renamed or
-  moved. There is no clock, so every file is of the first of January 1980. A
+  found and not made, and nothing is renamed; a file is copied, whole,
+  since 0.0.61, and moved by a copy and a delete. There is no clock, so
+  every file is of the first of January 1980. A
   volume is not marked as in use while it is written to, so nothing tells
   whoever mounts it next that a write was cut short; what is left then is
   clusters that belong to no file, for a program that mends volumes to give

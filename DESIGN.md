@@ -602,7 +602,9 @@ architectures (kernel/vm.c).
   follows from how many clusters it has, as its specification says, and
   from nothing that the volume says of itself. Names are looked up on the
   first that was found, the one the machine was started from, until
-  `clara.fat:*volume*` is given another: a second disk is how a user's
+  `clara.fat:*volume*` is given another, and since 0.0.61 a name can say
+  for itself which volume it means (below, under volumes): a second disk
+  is how a user's
   files outlive the system's disk, which is made again for every newer
   system. The volumes are found again at every start, and a name is looked
   up on one of those and on nothing else: a volume that a saved world
@@ -988,7 +990,9 @@ architectures (kernel/vm.c).
   writes files with OPEN, and the browser lists a directory with DIRECTORY:
   neither knows of disks or of FAT. The price is what the language does not
   say, the size of a file for one, which the browser therefore does not
-  show.
+  show. Where the browser needed what Common Lisp has no word for, which
+  volumes there are and a file like another, the language was given the
+  word, and not the browser the file system (below, under volumes).
 - A program takes what happens to its window in its own thread. The window
   manager's three functions for a key, a button and the close box are
   called in the thread of the device, where nothing may draw; a window that
@@ -3231,6 +3235,142 @@ architectures (kernel/vm.c).
 - The first prompt, before the window manager, and what the kernel says
   of a fault keep the console's letters: they need no file, and they are
   what is left when something else is not.
+
+## Volumes, and a file that goes from one to another (decided for issue #52, 2026-11-25)
+
+- A name says which volume it is on (Julio: "Be able to select other
+  volumes in Jaid and the ability to copy/move files between volumes.
+  Being able to drag and drop files between volumes"). Until now a volume
+  was something that a variable held, `clara.fat:*volume*`, and a name
+  meant another file when the variable was another volume. That is enough
+  for a form at a prompt, and it is not enough for anything that hands a
+  name on: the browser gives the editor the name of the file to open,
+  what was copied is a name for another window to use, a file loads
+  another by its name, and a variable that was bound in one thread is not
+  bound in the next. So the volume is part of the name, and goes wherever
+  the name goes.
+- It is said by a number and a colon before everything else:
+  `"2:/mine.lisp"` is on the second volume, in the order in which the
+  volumes were found, which is the order of the boot report and of
+  `(clara.fat:volumes)`. No name of a file on a FAT volume has a colon in
+  it, so nothing else can begin that way, and a name that says nothing is
+  looked up where it always was, on the volume that the variable holds:
+  whatever was written before means what it meant. A number, because it
+  is the one thing that every volume has and no two share. What a volume
+  calls itself, its label, need not be there, need not be the only one of
+  its kind on a machine, and is in the letters of an alphabet that the
+  volume does not name. The price of the number is that it is the disk's
+  place among the machine's disks: a disk that is put before another
+  changes the other's number, and a machine that is started without its
+  second disk has no `2:`. A name of that kind is then an error that says
+  which volumes there are, and to PROBE-FILE and DIRECTORY there is no
+  such file.
+- The file system reads that part of a name, and nothing above it does
+  (lisp/fat.lisp, `the-volume`). The language's functions for files take a
+  name apart at its slashes and hand the directory on as it stands, so
+  OPEN, LOAD, PROBE-FILE, DIRECTORY and DELETE-FILE needed nothing, and
+  neither did the editor, whose window is titled with the name that it
+  was given. One thing the language had to learn: the first directory of
+  a volume is in no directory, so PROBE-FILE asks which volumes there are
+  when a name is `2:/` and nothing more.
+- The language has two more functions, in CLARA, which a file system hands
+  it with the others: `clara:volumes` and `clara:copy-file`. An
+  application runs on what the language has, so that it runs under SBCL
+  on the host's files and knows nothing of disks; Common Lisp has no word
+  for either, and the browser cannot do without. `volumes` gives each
+  volume as the name of its first directory, which is what a name on it
+  begins with, and after it what is known of the volume, a keyword and
+  what it says: how large it is, whether the machine was started from it,
+  whether it is the one for the names that say nothing, and whether its
+  disk cannot be written. That list is read by programs, so it is only
+  ever added to.
+- A file is copied as bytes, whole: read into page frames with one
+  volume's lock, written from them with the other's. It is the one way
+  that a file is written here (above, under disks and files), so the
+  order that lets a machine stop at any moment holds for a copy as for
+  any file: the file that was there under the name is whole until the
+  copy has its entry. Nobody holds two locks. And it is no text on the
+  way, where OPEN would have refused whatever is not UTF-8 and written
+  every line with an end. The price is memory: a file that is larger than
+  what the machine has free is not copied.
+- The two names of a copy must not be the same file's, and the file
+  system is what says so, by the entry that each name leads to and not by
+  how the names are spelt: with a volume and without, in letters of
+  either case, by a long name and by a short one. A move is a copy and
+  then a delete, in that order, so that a machine which stops between the
+  two has the file twice and never not at all; whoever moved a file onto
+  itself by two spellings would have deleted it.
+- Nothing is renamed, and a file that moves within its volume is copied
+  like one that leaves it. An entry that changed its directory would be
+  quicker and would need no room for the file a second time; it is a
+  second way of writing, with an order of its own to get right, and
+  belongs with renaming (issue #105).
+- In Jaid the volumes are a list above the first directories. The way up
+  from the first directory of a volume leads there, and Enter on a volume
+  goes into it, so another volume is selected the way another directory
+  is. A machine with one volume has nowhere to go up to, and there the
+  first directory has no way up, as before: nothing that such a machine
+  showed has changed. The window is titled `Jaid` while it lists the
+  volumes, by the rule of Emma's, which is `Emma` while the text has no
+  file.
+- A file is copied and moved by the keys that copy and move text. Ctrl-C
+  in Jaid had been the name of what is picked, for another window; Ctrl-V
+  in Jaid takes what was copied last for the name of a file, and puts a
+  copy of that file into the directory that is listed. Ctrl-X is Ctrl-C
+  for a file that is to move. Those are the keys that every other system
+  has for it, in its windows of files as in its texts. What was copied
+  stays what it is, one text for all the windows: a name that was copied
+  in a REPL can be put in Jaid, and one that was copied in Jaid typed at
+  a prompt. That a name was cut is Jaid's own to know, and holds while
+  the name is still what was copied last.
+- Nothing is replaced unasked. Where a file of the name is already, the
+  last row of the window asks, as it does before a file is deleted, and
+  only y replaces.
+- What the pointer takes hold of in one window and lets go in another is
+  the window manager's to hand on, and it is a text, like what is copied
+  (lisp/windows.lisp, `carry`). The window manager knows a window as
+  pixels and cannot know what a press took hold of, so the program says
+  it, while the left button is down that went down on its window; the
+  window that the button comes up on is told the text and the place, if
+  it was opened to be told; and the window that it was carried from is
+  told where it was let go, as the last of the moves, with no button
+  down. What is carried belongs to one press and ends with it, so a text
+  that nobody took cannot be let go later, somewhere else. A window that
+  keeps what happens to it cannot say what is carried while it still has
+  a button to take: its program is behind the pointer then, and what it
+  would say belongs to an earlier press. The price is that such a press
+  carries nothing, which is what a hand finds when it is quicker than
+  the machine.
+- A name in Jaid is opened when the button comes up where it went down,
+  on the name that was picked already, and no longer when it goes down:
+  what can be carried cannot be opened by taking hold of it.
+- What is let go on a directory goes into it, and anywhere else on a
+  window of Jaid's into the directory that the window lists. On another
+  volume there is a copy afterwards, and on its own volume the file has
+  moved: the rule of the Finder and of the Explorer, for the reason of
+  the keys. The window that it was let go on comes to the top, since that
+  is where the question is asked and where the file shows.
+- What is not there. A directory is not copied, moved or carried. The
+  pointer shows nothing of what it carries; the last row of the window
+  that it came from says it. No other program takes what is let go on it.
+  A window of Jaid's does not notice what another one did. A volume shows
+  by its number and its size, and not by its label, nor by how much of it
+  is free.
+- It is tested where it can be seen. Under SBCL: two volumes on one disk
+  that the tests make up, with names of every kind looked up, written and
+  deleted on both, files copied both ways and within one, onto others and
+  not onto themselves, every pair of names held against whether they are
+  one file, what each volume holds afterwards read without the file
+  system, and a disk that stops at each request of a copy in turn; the
+  window manager with three windows, of which one takes what is let go,
+  one does not, and one is where it came from, and what each is told;
+  and Jaid on two directories of the host's that stand for two volumes,
+  with the keys, the question, and the pointer of the made-up screen
+  taking a name from one window to the other. And a boot
+  (tools/volumes.txt): a machine with a second disk writes, loads and
+  copies by such names, opens and saves a file of the second volume in
+  Emma, and in two windows of Jaid QEMU's mouse carries a file to the
+  other volume and to a directory of its own, and the keys move one.
 
 ## Conventions
 

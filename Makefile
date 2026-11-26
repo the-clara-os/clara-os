@@ -213,7 +213,19 @@ host-test:
 # disk, with a volume that has nothing on it, given to it the way
 # tools/run.sh gives a user's machine a disk of the user's own (WORK=): the
 # manual keeps a file there, and the machine that is started again has to
-# find it. Then the object system (lisp/clos.lisp): a machine is typed
+# find it. Then volumes: a machine with such a second disk, in the world
+# that the first session of its kind saved, is typed tools/volumes.txt. It
+# has to say which volumes it has, find, write, load and delete files by
+# names that say their volume, copy a file that is no text from the one to
+# the other byte for byte, and open and save one there in Emma; and in two
+# windows of Jaid (lisp/jaid.lisp), one on each volume, the mouse has to
+# carry a file from the one and let it go on the other, where a copy of it
+# has to be afterwards, and on a directory of its own volume, where it has
+# to move to; Ctrl-X and Ctrl-V have to move a file to the other volume,
+# in the place of the one of that name, once the window was told y; and
+# the way up from a volume's first directory has to list the two. The
+# host's checker looks at both volumes afterwards.
+# Then the object system (lisp/clos.lisp): a machine is typed
 # tools/objects.txt, the transcript that the host tests have answered by
 # that file under SBCL and by SBCL's own object system, and has to give
 # the same answers a third time. Then AArch64 once more,
@@ -294,6 +306,9 @@ test: all host-test release-test $(BUILD)/system-other/stamp $(BUILD)/system-bro
 	NAME=manual WORK=$(BUILD)/work.img SESSION=$(BUILD)/manual-first.txt tools/boottest.sh aarch64 -machine gic-version=3
 	NAME=manual-again DISK=$(BUILD)/boot-manual.img WORK=$(BUILD)/work-manual.img SESSION=$(BUILD)/manual-again.txt \
 		EXPECT='^lisp: the heap is an image;;^lisp:   of the functions .* and 0 are walked' \
+		tools/boottest.sh aarch64 -machine gic-version=3
+	NAME=aarch64-volumes DISK=$(BUILD)/boot-aarch64.img WORK=$(BUILD)/work.img SESSION=tools/volumes.txt \
+		EXPECT='^lisp: the heap is an image;;^files: names are looked up on the first of these volumes' \
 		tools/boottest.sh aarch64 -machine gic-version=3
 	NAME=x86_64-objects SESSION=tools/objects.txt tools/boottest.sh x86_64
 	NAME=aarch64-stress SESSION=tools/stress.txt TIMEOUT=900 DISK=$(BUILD)/boot-aarch64.img SPOIL=1 \
