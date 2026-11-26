@@ -39,7 +39,9 @@ manager, and the applications are Lisp programs loaded into that world.
   lambda-list keywords, conditions with handler-case and unwind-protect.
   Since M20, classes, generic functions and methods ("Objects", below),
   and since 0.0.62 the directives of FORMAT ("The directives of FORMAT",
-  below). Later: floats, and the directives of FORMAT for them.
+  below). Since 0.0.63 a time is taken apart, into the hour, the day and
+  the rest ("The clock", below). Later: floats, and the directives of
+  FORMAT for them.
 - **Interpreter first, compiler later.** The substrate evaluates Lisp with an
   interpreter written in C. A compiler is written in Lisp once the world
   can host it, which it is since M14a ("The compiler", below): it makes
@@ -3463,6 +3465,98 @@ architectures (kernel/vm.c).
   alone. What only a kernel has, the way through C for a condition, the
   stream's start of a line, the five before the file is loaded, is in
   the sessions of the boots and in the self-test's texts.
+
+## The clock (decided for issue #57, 2026-11-26)
+
+- The bar says the day and the time at its right-hand end (Julio: "Time
+  and date on the window manager, perhaps on the top bar, far right").
+  That end is where the system's name stood. The clock has it now, and the
+  name stands before the clock, 16 pixels away: a bar's far end is where a
+  clock is looked for, and the name says the same thing all day. Where a
+  screen has room for one of the two, it is the clock.
+- It says `Thu Nov 26 00:52`: the day of the week, the month, the day of
+  it, the hour and the minute. No year, which nobody looks at a bar for;
+  no seconds, which move at the edge of what is being read; and the hour
+  of twenty-four, which needs no word after it to say which half of the
+  day is meant. All of
+  that is a choice, and somebody else's will be another, so the words are
+  a function's and not the system's: `clara.windows:*clock*` holds a
+  function that makes a string of a time, and `clara.windows:day-and-time`
+  is the one that the system comes with. The variable holds the name and
+  not the function as the system comes, so it shows what it is at a
+  prompt, and a function that is defined again is the clock at once.
+- A function, and not a pattern for FORMAT, although FORMAT has its
+  directives now: a pattern cannot turn the hour 13 into 1, pick a word
+  for a number, or leave the date out on a narrow screen, and whoever
+  wants another clock wants one of those.
+- The window manager has a thread of its own for it, the first: until
+  now everything there ran in the thread of a keyboard, a mouse or a
+  program. The thread asks the function every second: what it says is
+  what the bar says, and the bar is put together again only when the
+  words are others than before, which for the clock that the system comes
+  with is once a minute. So the bar is right within a second of the
+  minute; a time zone that is set, or another function, shows within a
+  second, where a clock that was asked once a minute would have left
+  whoever set it wondering for most of one; and a function that says the
+  seconds is a clock with seconds. Asking costs 11 millionths of a second
+  at a kernel that the Mac runs itself, a hundred thousandth of the
+  second. A thread that wakes by itself is paid for by every boot, most by
+  the boot that collects at every safe point: that boot has no window
+  manager, and so no clock.
+- The function is called in that thread and nowhere else, with no lock
+  held. One that fails leaves the bar without a clock, and that is said
+  on the serial port once, not every minute. One that never comes back
+  costs the clock and nothing else: START does not ask the clock itself,
+  so the bar is first drawn without one, and a world that was saved with
+  such a function still starts.
+- The time is the one that there was: what the firmware's clock said in
+  the handoff, and the ticks since (kernel/timer.c). That is Greenwich's
+  time, and nothing tells a machine where it stands: the firmware of
+  QEMU's machines says no time zone on either architecture, which was
+  looked at. So it is a variable, `clara:*time-zone*`, counted as Common
+  Lisp counts a time zone, in hours that the place is behind Greenwich,
+  which is 5 for New York in winter. It is in the language's package and
+  not in the window manager's, because the language is what goes by it:
+  `decode-universal-time` without a time zone, and whatever else tells the
+  time one day, a calendar for one.
+- `decode-universal-time` and `get-decoded-time` are Common Lisp's, in
+  lisp/boot.lisp: the arithmetic of kernel/timer.c the other way round,
+  with the day of the week from the fact that 1900 began on a Monday. A
+  time zone is a whole number of hours there, since the language has no
+  ratios, and daylight saving time is never in force, since nothing knows
+  when it is: both are what the standard's ninth and eighth value are for,
+  and both are left as they are until the language can say more. There is
+  no `encode-universal-time`, which no clock needs. lisp/tls.lisp keeps
+  its own few lines for the dates of certificates, which are Greenwich's
+  whatever the variable says.
+- The time zone goes across an upgrade in the account of the world that
+  leaves, `(:time-zone 5)`, as the order of the launcher's list does. It
+  is a number that was said at a prompt, which is no definition, so the
+  text of `/home` does not have it; and every newer build that `make run`
+  hands a machine makes the world anew, which would put the machine back
+  in Greenwich several times a day. The account is read after the text,
+  so what was said last holds. The clock's function does not go across:
+  it may be one that the text defines, and the text is loaded anyway.
+- What the clock cannot know. A machine that is paused counts no time,
+  and is behind by that much for as long as it runs: eight seconds of
+  QEMU's `stop` were eight seconds lost (issue #207). The firmware's clock
+  is read once, as the machine starts, and a driver for the clock itself
+  would be what reads it again.
+- It is tested without a clock that moves. The thread sleeps until the
+  time can be divided by `clara.windows::*beat*`, which is 1, and START
+  makes no thread at all when that is NIL: under SBCL it is NIL, the
+  tests tell the time themselves (`tell-time`, with a time of their
+  choosing), and hold every pixel of the bar against a rule of their own,
+  at every width at which something comes or goes, in both kinds of
+  letters. A thread that woke by SBCL's clock would draw on a test's
+  screen in the middle of a look at it. That the thread wakes by itself is
+  tried where time is real, in the world that each machine saved and
+  started again: its session gives the window manager another clock and
+  waits for the bar's words to be that clock's, with nobody telling it,
+  and then gives the system's own back and holds the pixels of the bar
+  against the day and the time. The first session of a machine has two
+  lines for the clock that wait for nothing: its boot is the one that has
+  the fewest seconds to spare on a slow runner of CI.
 
 ## Conventions
 

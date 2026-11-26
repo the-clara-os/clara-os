@@ -21,6 +21,9 @@
 ;;;; outlines (lisp/type.lisp), and in the console's letters on a machine
 ;;;; that has no such font. The applications whose windows are cells of text
 ;;;; ask here which font that text is in (TEXT-FONT).
+;;;; The right-hand end of the bar says what this system is and, after that,
+;;;; the day and the time: a clock, which a thread of its own asks every
+;;;; second (*CLOCK*).
 ;;;;
 ;;;; Nothing here draws on the screen. What the screen is to show is put
 ;;;; together on a surface of the same size, out of sight: the desk, the
@@ -55,7 +58,7 @@
            "DEFINE-APPLICATION" "INSTALL-APPLICATION" "UNLOAD-APPLICATION" "REMOVE-APPLICATION"
            "APPLICATIONS" "LAUNCH" "*APPLICATION-DIRECTORY*" "DEFINE-COMMAND" "REMOVE-COMMAND" "COMMANDS"
            "MOVE-UP" "MOVE-DOWN" "UNFINISHED" "*FONT*" "*TEXT-FONT*" "TEXT-FONT" "CLIPBOARD" "HIGHLIGHT" "*HIGHLIGHT*"
-           "CARRY" "KEY-TYPED" "POINTER-MOVED"))
+           "CARRY" "*CLOCK*" "DAY-AND-TIME" "KEY-TYPED" "POINTER-MOVED"))
 (in-package "CLARA.WINDOWS")
 
 (defstruct window
@@ -85,6 +88,7 @@
 (defconstant +bar+ 20)      ; the launcher's bar, along the top of the screen, is this high,
 (defconstant +item+ 20)     ; and so is a line of its list
 (defconstant +button+ 112)  ; the bar's button, at its left-hand end, is this wide
+(defconstant +gap+ 16)      ; between two things that the bar's right-hand end says
 (defconstant +band+ 21)     ; from the top of a window's frame to its inside
 (defconstant +box+ 16)      ; the close box is this wide, and as high as the band
 (defconstant +events-limit+ 1024) ; what happens to a window and waits to be taken; what happens past that is dropped
@@ -114,6 +118,14 @@
 (defvar *pointer-y* 0)
 (defvar *buttons* 0)        ; and its buttons
 (defvar *name* "")          ; the system and its version, for the right-hand end of the bar
+(defvar *clock* 'day-and-time) ; what makes the words of the bar's clock: a function of a time, the seconds since 1900 began
+                            ;   in Greenwich, that gives a string, or the name of one; NIL for a bar without a clock
+(defvar *time* nil)         ; what the clock said last, which is what the bar says after the system's name; NIL: nothing
+(defvar *timekeeper* nil)   ; the thread that asks the clock
+(defvar *beat* 1)           ; how many seconds what the clock said holds: its thread asks it whenever the time can be
+                            ;   divided by that. With NIL there START makes no such thread, and the time is told by
+                            ;   whoever calls TELL-TIME: the tests, whose screens nothing may draw on unasked
+(defvar *mute* nil)         ; the clock that failed and was said to have, so that it is said once and not every second
 (defvar *font* (list "Sans" 13)) ; what the bar, the list and the titles are written in: a font of outlines, said as
                             ;   CLARA.TYPE:FONT is told, its name, its size and what else it takes, in a list; or such a
                             ;   font itself; or NIL for the console's letters. START reads it.
@@ -235,10 +247,15 @@
     (clara.draw:fill-rectangle *back* 0 +bar+ width (- (clara.draw:surface-height *back*) +bar+) *desk*)
     (clara.draw:fill-rectangle *back* 0 0 width +bar+ *paper*)
     (label 8 0 +bar+ "Applications" *ink*)
-    ;; What this system is, where there is room to say so.
-    (let ((x (- width 8 (label-width *name*))))
-      (when (>= x +button+)
-        (label x 0 +bar+ *name* *ink*)))))
+    ;; From the right: what time it is, when a clock has said so, and before
+    ;; that what this system is, each where there is room left to say it.
+    (let ((end (- width 8)))
+      (dolist (words (list *time* *name*))
+        (when words
+          (let ((x (- end (label-width words))))
+            (when (>= x +button+)
+              (label x 0 +bar+ words *ink*)
+              (setq end (- x +gap+)))))))))
 
 ;; A window: its frame, lit when it has the focus, its title, cut short
 ;; where the close box begins, the box, and its inside, as its program
@@ -1117,6 +1134,81 @@
     (rearranged))
   (arrangement))
 
+;;; The clock
+;;;
+;;; The bar's right-hand end says the day and the time, after what the
+;;; system is. The words are what a function makes of a time, the seconds
+;;; since 1900 began in Greenwich (GET-UNIVERSAL-TIME): the function that
+;;; *CLOCK* holds or names, which is DAY-AND-TIME as the system comes and
+;;; anybody's after that. A thread of the window manager's asks it every
+;;; second, and the bar is put together again when it says something else
+;;; than it said, which the system's own does once a minute: so the bar is
+;;; right within a second of the minute, and within a second of somebody
+;;; saying another time zone or another clock. The function is called in
+;;; that thread, with no lock held: one that fails leaves a bar without a
+;;; clock, which is said once, and one that never comes back costs the clock
+;;; and nothing else. A machine that does not know what time it is has no
+;;; clock.
+
+;; The day and the time as the bar says them, "Thu Nov 26 00:52": the day
+;; of the week, the month and the day of it, and the hour, of twenty-four,
+;; and the minute, at the place that CLARA:*TIME-ZONE* says.
+(defun day-and-time (time)
+  (multiple-value-bind (second minute hour day month year weekday) (decode-universal-time time clara:*time-zone*)
+    (declare (ignore second year))
+    (format nil "~A ~A ~D ~2,'0D:~2,'0D"
+            (nth weekday '("Mon" "Tue" "Wed" "Thu" "Fri" "Sat" "Sun"))
+            (nth (1- month) '("Jan" "Feb" "Mar" "Apr" "May" "Jun" "Jul" "Aug" "Sep" "Oct" "Nov" "Dec"))
+            day hour minute)))
+
+;; What the clock says of TIME: the string that the function of *CLOCK*
+;; makes of it, or NIL, which is a bar without a clock: when there is no
+;; function, when it gives no string or one with nothing in it, and when it
+;; fails, which is said for the first time that it does.
+(defun clock-words (time)
+  (let ((clock *clock*))
+    (and clock
+         (handler-case (let ((words (funcall clock time)))
+                         (setq *mute* nil)
+                         (and (stringp words) (> (length words) 0) words))
+           (error (condition)
+             (unless (eq clock *mute*)
+               (setq *mute* clock)
+               (format t "windows: the bar has no clock, since ~S failed: ~A~%" clock condition))
+             nil)))))
+
+;; It is TIME: the clock is asked, and what it says is what the bar says
+;; from now on, put together again when that is something else than the bar
+;; said. T when there is a window manager to say it.
+(defun tell-time (time)
+  (let ((words (clock-words time)))
+    (clara:with-lock-held (*lock*)
+      (when *running*
+        (unless (equal words *time*)
+          (setq *time* words)
+          (damaged +button+ 0 (clara.draw:surface-width *back*) +bar+)
+          (settle))
+        t))))
+
+;; How many seconds it is from TIME until a time that can be divided by
+;; BEAT: the whole of it when TIME can.
+(defun until-beat (time beat)
+  (- beat (mod time beat)))
+
+;; The clock's thread: it tells the time, and then sleeps until the time
+;; can be divided by *BEAT* again, which is a second later. It ends when the
+;; machine does not know what time it is, when the window manager has
+;; stopped, and when another thread is the clock's by now.
+(defun keep-time ()
+  (loop
+    (let ((now (ignore-errors (get-universal-time))) (beat *beat*))
+      (unless (and now beat
+                   (clara:with-lock-held (*lock*)
+                     (eq *timekeeper* (clara:current-thread)))
+                   (tell-time now))
+        (return))
+      (sleep (until-beat now beat)))))
+
 ;;; Starting and stopping
 
 (defun running-p ()
@@ -1133,8 +1225,9 @@
 ;; The window manager takes the screen, the keyboard and the pointer, and
 ;; launches the application that was defined first, which is the REPL
 ;; (lisp/terminal.lisp), so that there is somewhere to type. The console
-;; goes on with the serial port alone. T when the window manager is
-;; running after this, and NIL on a machine without a screen.
+;; goes on with the serial port alone, and the clock's thread begins to
+;; tell the time. T when the window manager is running after this, and NIL
+;; on a machine without a screen.
 (defun start ()
   (let ((started nil))
     (clara:with-lock-held (*lock*)
@@ -1148,6 +1241,7 @@
                 *dim* (clara.draw:color 74 68 102)
                 *dark* (clara.draw:color 0 0 0)
                 *name* (concatenate 'string (lisp-implementation-type) " " (lisp-implementation-version))
+                *time* nil
                 *letters* (letters)
                 *windows* nil
                 *dirty* nil
@@ -1166,7 +1260,11 @@
           (damaged 0 0 (clara.draw:surface-width screen) (clara.draw:surface-height screen))
           (settle)
           (clara.input:send-keys-to #'key-typed)
-          (clara.input:send-pointer-to #'pointer-moved))))
+          (clara.input:send-pointer-to #'pointer-moved)
+          ;; The thread looks whether it is the clock's before it does anything,
+          ;; with the lock, so it finds itself here.
+          (when *beat*
+            (setq *timekeeper* (clara:make-thread #'keep-time :name "clock"))))))
     (when (and started *applications*)
       (launch (application-name (first-defined))))
     (running-p)))
@@ -1174,15 +1272,17 @@
 ;; The window manager lets go of the screen, the keyboard and the pointer,
 ;; and the console has them again. The applications are stopped, and each
 ;; closes its windows as it goes; a window that some other thread opened is
-;; no longer on the screen, and is still that thread's to close. T when
-;; the window manager was running.
+;; no longer on the screen, and is still that thread's to close. The clock's
+;; thread is stopped with them. T when the window manager was running.
 (defun stop ()
   (let ((threads nil) (stopped nil))
     (clara:with-lock-held (*lock*)
       (when *running*
         (setq stopped t
-              threads *launched*
+              threads (if *timekeeper* (cons *timekeeper* *launched*) *launched*)
               *running* nil
+              *timekeeper* nil
+              *time* nil
               *launched* nil
               *dirty* nil
               *menu* nil
@@ -1221,6 +1321,8 @@
           *made* nil
           *dirty* nil
           *launched* nil
+          *timekeeper* nil
+          *time* nil
           *menu* nil
           *drag* nil
           *held* nil)

@@ -24,7 +24,7 @@
            "MAKE-LOCK" "ACQUIRE-LOCK" "RELEASE-LOCK" "WITH-LOCK-HELD"
            "MAKE-EVENT" "SIGNAL-EVENT" "WAIT-EVENT"
            "MAKE-STREAM" "KEYBOARD-INTERRUPT" "PROVIDE-FILES" "SAVE-IMAGE" "VOLUMES" "COPY-FILE"
-           "VARIABLE-KIND" "PROVIDE-COMPILER" "PROVIDE-FORMAT"))
+           "VARIABLE-KIND" "PROVIDE-COMPILER" "PROVIDE-FORMAT" "*TIME-ZONE*"))
 
 (defpackage "CLARA.UNSAFE"
   (:use "COMMON-LISP")
@@ -318,6 +318,12 @@
 (defun provide-format (&optional function)
   (setq *format* function)
   nil)
+
+;; Where the machine is, for the time of day: the hours that its place is
+;; behind Greenwich. On ClaraOS it is what DECODE-UNIVERSAL-TIME goes by
+;; when it is told no time zone; SBCL's own asks the host for that, so
+;; whatever is to tell the same time on both hands the variable over.
+(defvar *time-zone* 0)
 
 ;;; CLARA.HOST: the machine that is not there
 

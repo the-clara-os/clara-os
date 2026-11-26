@@ -26,6 +26,7 @@
           member assoc remove-if remove-if-not remove find-if find position-if position
           every some reduce sort getf get
           zerop plusp minusp evenp oddp abs max min expt
+          decode-universal-time get-decoded-time
           char= char< char-code-limit concatenate make-string make-array macroexpand
           define-condition make-condition ignore-errors
           condition warning serious-condition storage-condition
@@ -444,6 +445,50 @@
   (let ((result 1))
     (dotimes (i power result)
       (setq result (* result base)))))
+
+;;; The time of day
+;;;
+;;; A time is a count of seconds since 1900 began in Greenwich, which is
+;;; what GET-UNIVERSAL-TIME gives (kernel/lisp/builtin.c). A day is counted
+;;; as kernel/timer.c counts it, from the first of March of a year that can
+;;; be divided by 400, where the leap days fall at the ends of the years, of
+;;; the fours of years and of the centuries: 693901 such days had gone by
+;;; when 1900 began, on a Monday.
+
+;; What a time is at a place, in nine values: the second, the minute, the
+;; hour, the day of the month, the month, the year, the day of the week,
+;; which is 0 for a Monday and 6 for a Sunday, whether daylight saving time
+;; is in force, which nothing here knows, so NIL, and the time zone.
+;; TIME-ZONE is how many hours the place is behind Greenwich, 5 for New York
+;; in winter and -1 for Berlin; when none is given it is what
+;; CLARA:*TIME-ZONE* says.
+(defun decode-universal-time (time &optional (time-zone clara::*time-zone*))
+  (unless (and (integerp time) (>= time 0))
+    (error "a time is a count of seconds since 1900 began, an integer that is not negative, and ~S is not one" time))
+  (unless (and (integerp time-zone) (<= -24 time-zone 24))
+    (error "a time zone is so many hours behind Greenwich, an integer from -24 to 24, and ~S is not one" time-zone))
+  (let* ((there (- time (* 3600 time-zone)))
+         (days (floor there 86400))
+         (seconds (- there (* 86400 days)))
+         (count (+ days 693901))
+         (era (floor count 146097))
+         (of-era (- count (* 146097 era)))
+         (year-of-era (floor (- (+ of-era (floor of-era 36524)) (floor of-era 1460) (floor of-era 146096)) 365))
+         (of-year (- of-era (- (+ (* 365 year-of-era) (floor year-of-era 4)) (floor year-of-era 100))))
+         (part (floor (+ (* 5 of-year) 2) 153))
+         (month (if (< part 10) (+ part 3) (- part 9))))
+    (values (mod seconds 60) (mod (floor seconds 60) 60) (floor seconds 3600)
+            (+ (- of-year (floor (+ (* 153 part) 2) 5)) 1)
+            month
+            (+ year-of-era (* 400 era) (if (<= month 2) 1 0))
+            (mod days 7)
+            nil
+            time-zone)))
+
+;; What time it is, in those nine values: an error on a machine that does
+;; not know.
+(defun get-decoded-time ()
+  (decode-universal-time (get-universal-time)))
 
 ;;; Characters, strings and vectors
 
@@ -1218,7 +1263,14 @@
 (in-package "CLARA")
 
 (export '(make-thread with-lock-held make-stream keyboard-interrupt provide-files save-image provide-compiler
-          volumes copy-file provide-format))
+          volumes copy-file provide-format *time-zone*))
+
+;; Where this machine is, for the time of day: how many hours its place is
+;; behind Greenwich, as DECODE-UNIVERSAL-TIME counts a time zone, 5 for New
+;; York in winter and -1 for Berlin. Nothing tells a machine that: it is
+;; Greenwich's time until somebody says otherwise, and it is the same
+;; number in summer as in winter until somebody changes it.
+(defvar *time-zone* 0)
 
 ;; What Ctrl-C on the console is, to the computation it stops and to
 ;; whoever was reading a line.

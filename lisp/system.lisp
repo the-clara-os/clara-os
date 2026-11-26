@@ -927,6 +927,11 @@
     (format out " ~S" name))
   (format out ")~%"))
 
+;; Is it a time zone, as DECODE-UNIVERSAL-TIME takes one and the account
+;; writes one: so many whole hours behind Greenwich?
+(defun time-zone-p (zone)
+  (and (integerp zone) (<= -24 zone 24)))
+
 ;; The account of this world, for the system TO, which is to take this
 ;; one's place.
 (defun carry (to)
@@ -938,6 +943,8 @@
                   (when order
                     (write-names out "applications" (first order))
                     (write-names out "commands" (second order))))
+                (when (time-zone-p clara:*time-zone*)
+                  (format out "(:time-zone ~D)~%" clara:*time-zone*))
                 (dolist (package (user-packages))
                   (let ((in (package-name package)) (own nil))
                     (do-symbols (symbol package)
@@ -1009,14 +1016,27 @@
       (error (condition)
         (tell "world: the launcher's list is not in the order that it had before: ~A" condition)))))
 
+;; The machine is where the old world was told that it is, for the time of
+;; day: the time zone is a number that somebody said at a prompt, which no
+;; text has unless /home/init.lisp says it, and the account goes by what was
+;; said last.
+(defun stand (carried)
+  (let* ((line (assoc :time-zone carried))
+         (zone (and (consp (cdr line)) (cadr line))))
+    (when (and (time-zone-p zone) (not (eql zone clara:*time-zone*)))
+      (setq clara:*time-zone* zone)
+      (tell "world: the time zone is ~D, as it was in the world before" zone))))
+
 ;; This world was made in the place of the one that left the account, and
 ;; has the text of /home in it. The launcher's list gets the order that it
-;; had. The variables get the values that they had come to, where those
-;; were written down and are not the ones that the text gave them; and what
-;; the old world had and this one has not is said: a function that nothing
-;; defines here, a variable without a value.
+;; had, and the machine the time zone. The variables get the values that
+;; they had come to, where those were written down and are not the ones
+;; that the text gave them; and what the old world had and this one has not
+;; is said: a function that nothing defines here, a variable without a
+;; value.
 (defun arrive (carried)
   (arrange carried)
+  (stand carried)
   (let ((put nil) (made nil) (lost nil) (with-value nil))
     (dolist (form carried)
       (when (and (eq (car form) :value) (stringp (second form)) (stringp (third form)) (stringp (fourth form)))

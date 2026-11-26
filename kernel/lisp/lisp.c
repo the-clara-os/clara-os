@@ -893,6 +893,23 @@ static const struct {
       "((3 2 1) B (3) 3 3)" },
     { "(list (equal '(1 \"a\" (b)) (list 1 \"a\" '(b))) (eq \"a\" \"a\") (eql 1 1))", "(T NIL T)" },
     { "(list (max 1 3 2) (min 1 3 2) (abs -5) (expt 2 10) (evenp 4))", "(3 1 5 1024 T)" },
+    /* the time of day, taken apart: the second, the minute, the hour, the day, the month, the year, the day of the
+     * week with 0 for a Monday, no daylight saving time, and the time zone, which is hours behind Greenwich. The
+     * first second of 2026, there and in New York; the last second of a 29th of February; a March that follows one,
+     * and a March that follows a 28th in a year that can be divided by 4; and the day before 1900 began */
+    { "(multiple-value-list (decode-universal-time 3976214400 0))", "(0 0 0 1 1 2026 3 NIL 0)" },
+    { "(multiple-value-list (decode-universal-time 3976214400 5))", "(0 0 19 31 12 2025 2 NIL 5)" },
+    { "(multiple-value-list (decode-universal-time 4044430799 -11))", "(59 59 23 29 2 2028 1 NIL -11)" },
+    { "(list (multiple-value-list (decode-universal-time 3160857599 -1))"
+      " (multiple-value-list (decode-universal-time 6316531200 0)) (multiple-value-list (decode-universal-time 0 24)))",
+      "((59 59 0 1 3 2000 2 NIL -1) (0 0 0 1 3 2100 0 NIL 0) (0 0 0 31 12 1899 6 NIL 24))" },
+    /* told no time zone, it goes by the one that the machine is said to be in */
+    { "(let ((clara:*time-zone* -1)) (multiple-value-list (decode-universal-time 3160857599)))",
+      "(59 59 0 1 3 2000 2 NIL -1)" },
+    { "(decode-universal-time -1)",
+      "error: a time is a count of seconds since 1900 began, an integer that is not negative, and -1 is not one" },
+    { "(decode-universal-time 0 25)",
+      "error: a time zone is so many hours behind Greenwich, an integer from -24 to 24, and 25 is not one" },
     { "(getf '(a 1 b 2) 'b)", "2" },
     /* places */
     { "(let ((l (list 1 2 3))) (setf (car l) 'a (cadr l) 'b) (incf (nth 2 l) 10) l)", "(A B 13)" },
@@ -1788,6 +1805,10 @@ static const struct {
     { "(handler-case (let ((now (get-universal-time))) (list (> now 3976214400) (<= now (get-universal-time))))"
       " (error (c) (format nil \"~A\" c)))",
       "(T T)", "\"this machine does not know what time it is: its firmware did not say\"" },
+    /* and that time taken apart: nine values, of which the year is this one or a later one */
+    { "(handler-case (let ((now (multiple-value-list (get-decoded-time)))) (list (length now) (>= (nth 5 now) 2026)))"
+      " (error (c) (format nil \"~A\" c)))",
+      "(9 T)", "\"this machine does not know what time it is: its firmware did not say\"" },
     /* what the firmware said about the machine */
     { "(list (keywordp (clara.unsafe:serial-device)) (integerp (nth-value 1 (clara.unsafe:serial-device)))"
       " (let ((screen (multiple-value-list (clara.unsafe:framebuffer)))) (or (null (car screen)) (length screen))))",

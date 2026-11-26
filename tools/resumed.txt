@@ -53,7 +53,31 @@ error: the thread #<THREAD "spinner"> was stopped
 (NIL T T)
 > (list (clara:current-thread) (- (length (clara:all-threads)) *threads*)
         (clara.windows:running-p) (mapcar #'clara.windows:window-title (clara.windows:windows)) (where))
-(#<THREAD "listener"> 1 T ("REPL") (40 64))
+(#<THREAD "listener"> 2 T ("REPL") (40 64))
+> (progn (setq clara.windows:*clock* (lambda (time) (if (integerp time) "another clock" "no time"))) ; the second is
+    (list (clara:thread-name clara.windows::*timekeeper*)               ; the clock's: it asks whatever clock there is,
+          (until (equal clara.windows::*time* "another clock"))))       ; a time, within the second
+("clock" OK)
+> (progn                                                                ; (in a PROGN: nothing needs it written down)
+    (defun bar-shows (words)                                            ; the right-hand end of the bar says what the
+      (let* ((screen (clara.draw:screen)) (font clara.windows::*letters*) ; system is and, after 16 pixels, WORDS
+             (name (concatenate 'string (lisp-implementation-type) " " (lisp-implementation-version)))
+             (wide (+ (clara.draw:text-width name font) 16 (clara.draw:text-width words font)))
+             (left (- (clara.draw:surface-width screen) 8 wide)) (top (floor (- 20 (clara.windows::label-height)) 2))
+             (scratch (clara.draw:allocate-surface wide 20)) (ink (clara.draw:color 232 227 244)) (same t))
+        (clara.draw:fill-rectangle scratch 0 0 wide 20 (clara.draw:color 30 27 46))
+        (clara.draw:draw-text scratch 0 top name ink nil font)
+        (clara.draw:draw-text scratch (- wide (clara.draw:text-width words font)) top words ink nil font)
+        (dotimes (y 20)
+          (dotimes (x wide)
+            (unless (= (clara.draw:pixel scratch x y) (clara.draw:pixel screen (+ left x) y))
+              (setq same nil))))
+        (clara.draw:free-surface scratch)
+        same))
+    (setq clara.windows:*clock* 'clara.windows:day-and-time)            ; the system's own again: the day and the time,
+    (until (and (equal clara.windows::*time* (clara.windows:day-and-time (get-universal-time))) ; which the bar shows
+                (bar-shows clara.windows::*time*))))
+OK
 > (let ((lock (clara:make-lock)))
     (mapc #'clara:join-thread
           (mapcar (lambda (n) (clara:make-thread (lambda () (clara:with-lock-held (lock) (incf *jobs* n)))))

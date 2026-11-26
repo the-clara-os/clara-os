@@ -248,6 +248,11 @@ net: by IPv6 it is fec0::5054:ff:fe12:3456, fe80::2 is the way out
 ("52:54:00:12:34:56" "10.0.2.15")
 > (list (< -1 (clara.random:below 6) 6) (< (abs (- (get-universal-time) {{now}})) 900) (length clara.net:*secure*))
 (T T 12)
+> (let* ((before (get-universal-time)) (now (multiple-value-list (get-decoded-time))) (after (get-universal-time)))
+    (list (multiple-value-list (decode-universal-time 3976214400 5)) clara:*time-zone*   ; the time of day, taken apart
+          (or (equal now (multiple-value-list (decode-universal-time before 0)))
+              (equal now (multiple-value-list (decode-universal-time after 0))))))
+((0 0 19 31 12 2025 2 NIL 5) 0 T)
 > (list (< -1 (clara.net:ping "10.0.2.2") 1000) (clara.net::card-trouble clara.net::*card*) (clara.net::card-dropped clara.net::*card*))
 (T NIL 0)
 > (progn (clara.net:serve 7 (lambda (stream) (write-line (string-upcase (read-line stream)) stream))) (clara.net:with-connection (stream "127.0.0.1" 7) (write-line "to myself" stream) (read-line stream)))
@@ -455,6 +460,10 @@ OK
 K
 > (list (clara.windows:running-p) (clara.windows:applications) (clara.windows:start) (clara.windows:start))
 (NIL ("REPL" "Emma" "Jaid" "Ares" "Parker") T T)
+> (list (clara:thread-name clara.windows::*timekeeper*)                 ; the clock has a thread, and says the day and
+        (clara.windows:day-and-time 3976214400)                         ; the time, at the place that the machine is
+        (let ((clara:*time-zone* 5)) (clara.windows:day-and-time 3976214400))) ; said to be in
+("clock" "Thu Jan 1 00:00" "Wed Dec 31 19:00")
 > (list (clara.windows:stop) (clara.windows:running-p)                 ; and the console has the screen again, cleared
         (= (clara.draw:pixel (clara.draw:screen) 700 300) (clara.draw:color 30 27 46)) (clara.windows:start))
 (T NIL T T)
