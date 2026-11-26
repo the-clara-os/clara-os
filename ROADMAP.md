@@ -2373,6 +2373,31 @@ Infrastructure, done:
   machine with more than one; and #195, the check of the sound card's
   last words.
 
+- **Dependabot** (2026-11-25, issue #53; the system is as it was, and so
+  is its version). .github/dependabot.yml has Dependabot look at the
+  actions that the two workflows use, every Friday, and open a pull
+  request when one of them has a newer version than the workflow names:
+  the lines that Julio's other repositories have for it. Actions are the
+  one thing here that it can read. The tools in Python use what Python
+  comes with, there is no Dockerfile and no submodule, and the fonts and
+  the list of roots are files. The four actions are named by their major
+  version and each is on its newest, `actions/checkout` and
+  `actions/upload-artifact` on 7, `actions/upload-pages-artifact` and
+  `actions/deploy-pages` on 5, so the merge opens no pull request, and
+  the first one comes with the next major version of one of them. Its
+  pull requests carry `chore`, where Dependabot would otherwise make two
+  labels of its own in the repository. CI tries a newer action of ci.yml
+  on such a pull request; one of site.yml is first run by the Website
+  run that its merge starts. Checked: the file read back as YAML, and
+  its entry the same as the one in those repositories, where Dependabot
+  has opened pull requests with it, but for the label; what `labels` and
+  a `directory` of `/` mean, in GitHub's reference for the file; the
+  newest release of each of the four actions, asked of GitHub; and what
+  the tools in Python import. Not tried, since Dependabot reads the file
+  on main: Dependabot itself. What it left is issue #198: with an action
+  named by its major version, the releases in between run here without a
+  pull request.
+
 Infrastructure, for sessions with budget left over:
 
 - Read the UART base from ACPI (SPCR or DBG2) instead of assuming

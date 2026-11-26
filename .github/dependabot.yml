@@ -1,0 +1,33 @@
+# Dependabot, for what the repository takes from elsewhere under a version
+# that is written down: the actions of the two workflows
+# (.github/workflows/ci.yml and site.yml). Every Friday it looks whether
+# one of them has a newer version than the workflow names, and opens a
+# pull request that names it. The workflows name an action by its major
+# version, `actions/checkout@v7`, so the releases in between arrive by
+# themselves, and a pull request comes when there is a new major version.
+#
+# CI runs such a pull request like any other, with the workflows as the
+# pull request has them, so a newer action in ci.yml is tried before the
+# merge. One in site.yml is not: that workflow runs on main and nowhere
+# else, and the run that the merge starts is the first to use it. Look at
+# that run, as after every merge that starts one.
+#
+# Nothing else here has a list that Dependabot reads. The tools in Python
+# use what Python comes with, and there is no Dockerfile and no submodule.
+# What the system carries of other people's, the fonts (fonts/) and the
+# list of roots (lisp/roots.pem), are files that are replaced by hand. A
+# requirements file, a Dockerfile or a submodule that is added gets its
+# entry here in the same change.
+#
+# The pull requests carry `chore`, the label that such work has here.
+# Without those two lines Dependabot makes two labels of its own in the
+# repository, `dependencies` and `github_actions`, and uses them.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "friday"
+    labels:
+      - "chore"
