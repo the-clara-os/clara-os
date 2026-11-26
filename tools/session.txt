@@ -193,6 +193,19 @@ error: nothing is mapped at #x0
 T
 > (with-output-to-string (s) (format s "~D and ~S" 1 "two"))
 "1 and \"two\""
+> (format nil "~{~A~^, ~} and the ~:R of ~R, ~:D in all, #x~4,'0X" '(1 2 3) 2 12 1234567 255)
+"1, 2, 3 and the second of twelve, 1,234,567 in all, #x00FF"
+> (progn (write-string "in the middle of a line") (format t "~&~10A|~6@A|~%~&~A~%" "left" "right" "and one new line"))
+in the middle of a line
+left      | right|
+and one new line
+NIL
+> (handler-case (error "~D file~:P ~:[could not~;could~] be read: ~{~A~^, ~}" 2 nil '("a" "b")) (error (c) (format nil "~A" c)))
+"2 files could not be read: a, b"
+> (error "~@(~R~) is too many" 12)
+error: Twelve is too many
+> (format nil "~,2F" 1)
+error: FORMAT does not know the directive #\F in "~,2F"
 > (read-from-string "(a . b) c")
 (A . B)
 7

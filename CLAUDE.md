@@ -37,7 +37,7 @@ Build with `make` (Homebrew's llvm and lld under /opt/homebrew/opt when they
 are there, otherwise clang and lld-link from the PATH; `LLVM=` and `LLD=`
 name other directories). `make test` runs the host tests of the Lisp
 files under SBCL (`make host-test`, a minute), then boots both
-architectures headless under QEMU, twenty boots in some six minutes,
+architectures headless under QEMU, twenty-one boots in some six minutes,
 types a session at each kernel, and saves what each screen shows to
 build/screen-<name>.png; look at those images when a change touches the
 display. `make run-aarch64` and `make run-x86_64` open a QEMU window with
@@ -543,7 +543,7 @@ Rules:
 - What DISASSEMBLE writes is in a session and in the manual, and a line
   of a session that begins with two spaces is one that is typed: a line of
   a listing begins with its number.
-- `make test` boots twenty times. Three machines, x86_64, AArch64 with GIC
+- `make test` boots twenty-one times. Three machines, x86_64, AArch64 with GIC
   version 3, and AArch64 emulated with GIC version 2, whose files in build/
   are named aarch64-gic2, each from a disk of another kind, and each twice:
   the first boot is typed tools/session.txt, which ends by saving the world,
@@ -595,7 +595,10 @@ Rules:
   is typed at them, one for a machine with two volumes, aarch64-volumes,
   which is typed tools/volumes.txt (below, under volumes), and one for the
   object system, x86_64-objects, which
-  is typed tools/objects.txt (below, under the object system). The serial
+  is typed tools/objects.txt (below, under the object system), and one for
+  the directives of FORMAT, aarch64-format, in the world that the first
+  AArch64 session saved, which is typed tools/format.txt (below, under
+  the directives of FORMAT). The serial
   port of each is QEMU's standard input and
   output: the log is what the kernel printed, and a FIFO feeds it what the
   session types. QEMU's hvf has no version 2, and UTM uses version 3.
@@ -1199,6 +1202,52 @@ Rules:
   of, and fails when one of those is defined again, which is why the
   classes that are defined again there are a family that is never
   refused.
+- The directives of FORMAT (lisp/format.lisp, the package CLARA.FORMAT,
+  Julio's issues #56 and #81; DESIGN.md has what was decided). The
+  substrate does five, `~A ~S ~D ~%` and `~~` with nothing between the
+  tilde and the character (`format` in builtin.c), and `%FORMAT` gives a
+  character in place of a string when a control string has anything
+  else: FORMAT in lisp/boot.lisp then asks the function that the file
+  handed over (`clara:provide-format`, `cl::%formatter`), which does the
+  whole control string, the five too. So the five are in two places, and
+  a change to what one of them writes is a change to both: the same
+  argument has to come to the same text whether its control string has a
+  sixth directive or not. What a condition says takes the same way from
+  C (`condition_of`, `format_in_lisp`), which calls FORMAT itself. A
+  directive is a clause of `obey`; one that has an end is also in the
+  strings of letters in `read-pieces` and `read-clauses`. An error there
+  is worded with the five and nothing else: the function must not need
+  itself to say what is wrong. Whatever leaves in the middle, a `~^`, goes
+  by THROW, so what a directive has put in the job for a while, another
+  stream, another list of arguments, it puts back after its CATCH or in
+  an UNWIND-PROTECT. boot.lisp, the compiler, lisp/native.lisp, the
+  processors' files and lisp/clos.lisp are loaded before the file, so a
+  control string that runs while those load keeps to the five; any other
+  file may use them all.
+- The tests of FORMAT. SBCL's own FORMAT is the second opinion, as its
+  object system is for lisp/clos.lisp. tools/format.txt is a transcript
+  that is answered three times: by the file under SBCL, to the letter;
+  by SBCL's FORMAT, which has to fail where the answer is an error and
+  to give the same text otherwise; and by a kernel, aarch64-format of
+  `make test`. Its forms are `(format nil ...)` and nothing that writes
+  to a stream, so every answer is a string or an error that the file
+  words itself. A new directive, or another way for one to be wrong,
+  gets its forms there: type the form and what should come back, and the
+  host tests say what each side answers when that is not it. The control
+  strings that chance writes (`any-directive` and what it calls in
+  lisp/host/tests.lisp) are given to both sides with arguments that fit:
+  a new directive gets a piece there, with exactly the arguments that it
+  takes, since a loop that takes nothing goes round for good on both
+  sides and the run then ends at its two minutes. No piece is a `~W`:
+  SBCL refuses one in a control string that has a `~:;` anywhere between
+  a `~<` and its `~>`. Where the file is not SBCL on purpose it is asked
+  alone, in the checks under that heading. What only a kernel has is in
+  tools/session.txt, on all three machines: a condition's text by way of
+  C, and a `~&` on a stream that is in the middle of a line. And
+  `(cl::%self-test)` is typed in a world that has the file
+  (tools/resumed.txt), where the texts of `evaluations` were first run
+  without it: a text there about FORMAT gives one answer both times, so
+  it keeps to the five, or to an error that both word alike.
 - An instance follows its class at two places and no others: a look at a
   slot (`current`) and a call of a generic function with it
   (`class-in-call`, from `dispatch` and `applicable`). CLASS-OF changes
@@ -1258,7 +1307,7 @@ Rules:
   in the order of `world` in lisp.c (the compiler, then native and the file
   of the machine's own processor, arm64.lisp or x86-64.lisp, whose name
   is the machine's in `*features*`, then clos, which is the exception
-  above, and then the console, draw, pci,
+  above, then format, and then the console, draw, pci,
   virtio, usb, input, disk, fat, type, random, net, hda, sound, syntax, the
   listener, windows, terminal, system, tls and parker), and
   lisp/host/tests.lisp loads the same files: a new one goes into both, and what its package exports goes into

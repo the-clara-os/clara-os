@@ -1198,7 +1198,11 @@ PRIMITIVE(p_load)
  * here is to make the string: PRIN1-TO-STRING and PRINC-TO-STRING for an
  * object, %FORMAT for a control string and its arguments, which knows
  * five directives: ~A and ~S for an argument as PRINC and PRIN1 write it,
- * ~D for an integer, ~% for a new line, and ~~. */
+ * ~D for an integer, ~% for a new line, and ~~. Those are what most
+ * control strings are made of. One with anything else in it, a parameter,
+ * a modifier, another directive, is Lisp's to do (lisp/format.lisp, which
+ * FORMAT in lisp/boot.lisp hands it to): %FORMAT then gives the character
+ * that it stopped at, in place of a string. */
 
 /* Where the printer writes when it makes a string: its bytes become
  * characters again, counted the first time through and stored the second,
@@ -1284,9 +1288,12 @@ static int ask_for_texts(lisp *base)
     return 1;
 }
 
-/* Says 0 after failing. */
+/* Says 0 after failing, and 2 when the control string has something in it
+ * that is not one of the five: nothing has failed then, *beyond is the
+ * character that stands there after the tilde, and what was written means
+ * nothing. */
 static int format(void (*put)(void *to, char c), void *to, lisp control, unsigned argc, const lisp *argv,
-                  struct lisp_printing *ask)
+                  struct lisp_printing *ask, uint32_t *beyond)
 {
     const struct lisp_string *s = lisp_as_string(control);
     uint64_t length = lisp_length(s->header);
@@ -1307,8 +1314,8 @@ static int format(void (*put)(void *to, char c), void *to, lisp control, unsigne
         else if (c == '~')
             put(to, '~');
         else if (c != 'A' && c != 'S' && c != 'D') {
-            lisp_fail("FORMAT does not know the directive ~S in ~S", lisp_character(c), control);
-            return 0;
+            *beyond = c;
+            return 2;
         } else if (used == argc) {
             lisp_fail("FORMAT has no argument left for a directive of ~S", control);
             return 0;
@@ -1320,18 +1327,27 @@ static int format(void (*put)(void *to, char c), void *to, lisp control, unsigne
 
 /* What FORMAT makes of a control string and its arguments, in a new
  * string; 0 after failing. The control string and the arguments are on
- * the value stack, since Lisp may run in the middle. */
-static lisp format_string(lisp *control, unsigned argc, const lisp *argv)
+ * the value stack, since Lisp may run in the middle. A control string
+ * with more in it than the five directives is 0 as well, with nothing
+ * failed and the character that says so in *beyond, which is 0 otherwise. */
+static lisp format_string(lisp *control, unsigned argc, const lisp *argv, lisp *beyond)
 {
     struct sink sink = { NULL, 0, 0, 0, 0 };
     struct lisp_printing ask = { NULL, NULL };
     lisp *base = lisp_stack(), string = 0;
+    uint32_t c = 0;
 
+    *beyond = 0;
     if (!lisp_push(NIL) || !lisp_push(NIL) || !lisp_push(NIL))
         return 0;
     ask.found = &base[0];
-    if (!format(sink_put, &sink, *control, argc, argv, &ask))
+    switch (format(sink_put, &sink, *control, argc, argv, &ask, &c)) {
+    case 0:
         goto out;
+    case 2:
+        *beyond = lisp_character(c);
+        goto out;
+    }
     ask.found = NULL;
     ask.texts = &base[2];
     if (base[0] != NIL) {
@@ -1339,7 +1355,7 @@ static lisp format_string(lisp *control, unsigned argc, const lisp *argv)
             goto out;
         base[2] = base[1];
         sink.length = 0;
-        format(sink_put, &sink, *control, argc, argv, &ask);
+        format(sink_put, &sink, *control, argc, argv, &ask, &c);
     }
     if (!lisp_heap_room(1 + (sink.length + 1) / 2)) {
         no_room();
@@ -1350,20 +1366,54 @@ static lisp format_string(lisp *control, unsigned argc, const lisp *argv)
     sink.room = sink.length;
     sink.length = 0;
     base[2] = base[1];
-    format(sink_put, &sink, *control, argc, argv, &ask);
+    format(sink_put, &sink, *control, argc, argv, &ask, &c);
 out:
     lisp_stack_drop(base);
     return string;
 }
 
-PRIMITIVE(p_format) /* a control string and its arguments */
+/* A control string and its arguments: the text, or the character that
+ * %FORMAT stopped at, from which only FORMAT in Lisp goes on. */
+PRIMITIVE(p_format)
 {
-    lisp string;
+    lisp string, beyond;
 
     if (!lisp_is(argv[0], LISP_STRING))
         return lisp_fail("FORMAT wants a string to go by, and ~S is not one", argv[0]);
-    string = format_string(&argv[0], argc - 1, argv + 1);
-    return string ? string : NIL;
+    string = format_string(&argv[0], argc - 1, argv + 1, &beyond);
+    return string ? string : beyond ? beyond : NIL;
+}
+
+/* The same for what a condition says, when the control string has more in
+ * it than the five directives: FORMAT itself makes the text, the function
+ * in Lisp, (format nil control argument...), with lisp/format.lisp behind
+ * it once that file is loaded. The control string and its arguments are
+ * the ARGC values at ARGV, and BEYOND is the character that %FORMAT
+ * stopped at. 0 after failing. */
+static lisp format_in_lisp(unsigned argc, const lisp *argv, lisp beyond)
+{
+    lisp function = lisp_as_symbol(lisp_symbol_in(lisp_roots.common_lisp, "FORMAT", 1))->function;
+    lisp *base = lisp_stack(), said = 0;
+    unsigned i = 0;
+
+    if (function == LISP_UNBOUND) { /* boot.lisp has not come to it yet */
+        lisp_fail("FORMAT does not know the directive ~S in ~S", beyond, argv[0]);
+        return 0;
+    }
+    if (lisp_push(NIL))
+        while (i < argc && lisp_push(argv[i]))
+            i++;
+    if (i == argc) {
+        said = lisp_apply(function, argc + 1, base);
+        if (lisp_unwinding())
+            said = 0;
+        else if (!lisp_is(said, LISP_STRING)) {
+            lisp_fail("FORMAT made ~S of the control string ~S, and no string", said, argv[0]);
+            said = 0;
+        }
+    }
+    lisp_stack_drop(base);
+    return said;
 }
 
 /* What the printer makes of an object, in a new string; 0 after failing.
@@ -1569,12 +1619,13 @@ PRIMITIVE(p_condition_slots)
  * values. */
 static lisp condition_of(unsigned argc, lisp *argv, lisp simple)
 {
-    lisp cl = lisp_roots.common_lisp, datum = argv[0], said, arguments = NIL;
+    lisp cl = lisp_roots.common_lisp, datum = argv[0], said, beyond, arguments = NIL;
 
     if (lisp_is(datum, LISP_CONDITION) && argc == 1)
         return datum;
     if (lisp_is(datum, LISP_STRING)) {
-        if (!(said = format_string(&argv[0], argc - 1, argv + 1)))
+        if (!(said = format_string(&argv[0], argc - 1, argv + 1, &beyond))
+            && !(beyond && (said = format_in_lisp(argc, argv, beyond))))
             return 0;
         while (--argc)
             arguments = lisp_cons(argv[argc], arguments);
