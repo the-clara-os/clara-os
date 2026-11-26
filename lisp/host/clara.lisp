@@ -24,7 +24,7 @@
            "MAKE-LOCK" "ACQUIRE-LOCK" "RELEASE-LOCK" "WITH-LOCK-HELD"
            "MAKE-EVENT" "SIGNAL-EVENT" "WAIT-EVENT"
            "MAKE-STREAM" "KEYBOARD-INTERRUPT" "PROVIDE-FILES" "SAVE-IMAGE" "VOLUMES" "COPY-FILE"
-           "VARIABLE-KIND" "PROVIDE-COMPILER"))
+           "VARIABLE-KIND" "PROVIDE-COMPILER" "PROVIDE-FORMAT"))
 
 (defpackage "CLARA.UNSAFE"
   (:use "COMMON-LISP")
@@ -308,6 +308,15 @@
 
 (defun provide-compiler (&key compile list evaluate)
   (setq *compiler* (if compile (list compile list evaluate)))
+  nil)
+
+;; The directives of FORMAT are handed over the same way (lisp/format.lisp,
+;; PROVIDE-FORMAT). FORMAT is SBCL's own here, which is what the tests hold
+;; that file against, so the function is kept for them to call.
+(defvar *format* nil)
+
+(defun provide-format (&optional function)
+  (setq *format* function)
   nil)
 
 ;;; CLARA.HOST: the machine that is not there

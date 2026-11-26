@@ -228,7 +228,11 @@ host-test:
 # Then the object system (lisp/clos.lisp): a machine is typed
 # tools/objects.txt, the transcript that the host tests have answered by
 # that file under SBCL and by SBCL's own object system, and has to give
-# the same answers a third time. Then AArch64 once more,
+# the same answers a third time. Then the directives of FORMAT
+# (lisp/format.lisp), the same way: a machine in the world that the first
+# AArch64 session saved is typed tools/format.txt, which the host tests
+# have answered by that file under SBCL and by SBCL's own FORMAT. Then
+# AArch64 once more,
 # with the collector at every safe point of the evaluator: whatever the
 # evaluator fails to hold on to is gone at its next call. Its disk is the
 # one that the first session of that machine left, which has two things on
@@ -311,6 +315,8 @@ test: all host-test release-test $(BUILD)/system-other/stamp $(BUILD)/system-bro
 		EXPECT='^lisp: the heap is an image;;^files: names are looked up on the first of these volumes' \
 		tools/boottest.sh aarch64 -machine gic-version=3
 	NAME=x86_64-objects SESSION=tools/objects.txt tools/boottest.sh x86_64
+	NAME=aarch64-format DISK=$(BUILD)/boot-aarch64.img SESSION=tools/format.txt EXPECT='^lisp: the heap is an image' \
+		tools/boottest.sh aarch64 -machine gic-version=3
 	NAME=aarch64-stress SESSION=tools/stress.txt TIMEOUT=900 DISK=$(BUILD)/boot-aarch64.img SPOIL=1 \
 		EXPECT='^lisp: clara.image is not resumed: it is not what was saved;;^lisp: a collection at every safe point: boot.lisp once more in [0-9]\{4,\}, [0-9]* texts once more in [0-9]\{5,\};;^lisp: a collection at the safe points of compiled code, [0-9]* to a text: [0-9]* texts once more in [0-9]\{4,\};;^lisp: a collection at the safe points of code for the processor, [0-9]* to a text: [0-9]* texts in [0-9]\{3,\}' \
 		tools/boottest.sh aarch64 -machine gic-version=3

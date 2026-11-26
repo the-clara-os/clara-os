@@ -844,9 +844,21 @@
   (write-string " " stream)
   object)
 
+(defvar %formatter nil) ; the function that lisp/format.lisp handed over, once it is loaded
+
 ;; T is *STANDARD-OUTPUT*, and NIL is no stream at all: the string itself.
+;; The substrate makes the text of a control string that has no more in it
+;; than its five directives, ~A ~S ~D ~% and ~~, and for any other it gives
+;; the character that it stopped at. Such a control string is
+;; lisp/format.lisp's to do, which is also told whether the text begins a
+;; line, for a ~& at its beginning.
 (defun format (destination control &rest arguments)
   (let ((text (apply #'%format control arguments)))
+    (unless (stringp text)
+      (unless %formatter
+        (error "FORMAT does not know the directive ~S in ~S" text control))
+      (setq text (funcall %formatter control arguments
+                          (if destination (%stream-fresh (%output destination)) t))))
     (if destination
         (progn (write-string text destination) nil)
         text)))
@@ -1206,7 +1218,7 @@
 (in-package "CLARA")
 
 (export '(make-thread with-lock-held make-stream keyboard-interrupt provide-files save-image provide-compiler
-          volumes copy-file))
+          volumes copy-file provide-format))
 
 ;; What Ctrl-C on the console is, to the computation it stops and to
 ;; whoever was reading a line.
@@ -1269,6 +1281,16 @@
 ;; compiled before it runs.
 (defun provide-compiler (&key compile list evaluate)
   (setq cl::%compiler (if compile (list compile list evaluate)))
+  nil)
+
+;; The directives of FORMAT say that they are there (lisp/format.lisp):
+;; FUNCTION makes the text of a control string and the list of its
+;; arguments, and is told as a third argument whether that text begins a
+;; line. From then on it is what FORMAT asks for every control string with
+;; more in it than the five directives that the substrate does. Without a
+;; function those five are all that there is again.
+(defun provide-format (&optional function)
+  (setq cl::%formatter function)
   nil)
 
 ;; The world is saved: all that is in the heap goes into a file, and a

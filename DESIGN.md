@@ -37,8 +37,9 @@ manager, and the applications are Lisp programs loaded into that world.
   packages, conses, fixnums, characters and strings, vectors, hash tables,
   closures, special variables, multiple values, macros, defstruct, the
   lambda-list keywords, conditions with handler-case and unwind-protect.
-  Since M20, classes, generic functions and methods ("Objects", below).
-  Later: floats, the rest of format.
+  Since M20, classes, generic functions and methods ("Objects", below),
+  and since 0.0.62 the directives of FORMAT ("The directives of FORMAT",
+  below). Later: floats, and the directives of FORMAT for them.
 - **Interpreter first, compiler later.** The substrate evaluates Lisp with an
   interpreter written in C. A compiler is written in Lisp once the world
   can host it, which it is since M14a ("The compiler", below): it makes
@@ -3371,6 +3372,97 @@ architectures (kernel/vm.c).
   copies by such names, opens and saves a file of the second volume in
   Emma, and in two windows of Jaid QEMU's mouse carries a file to the
   other volume and to a directory of its own, and the keys move one.
+
+## The directives of FORMAT (decided for issues #56 and #81, 2026-11-26)
+
+- FORMAT has its directives, and not two more of them (Julio's issues:
+  "FORMAT does not know the directive #\2 in \"~23@a\"", from his
+  calculator, and "FORMAT does not know the directive #\{ in
+  \"~{~a:~10t~a~%~}~%\""; and when he named them: "so far I've recorded
+  two issues with FORMAT directives"). The substrate knew five, `~A ~S ~D
+  ~%` and `~~`, with nothing between the tilde and the character, and each
+  control string that somebody knew from another Lisp was the next thing
+  that it refused. A parameter, a modifier, a loop and a column are one
+  piece of work, the taking apart of a control string, and with that done
+  each further directive is a few lines. So the whole of section 22.3 of
+  the standard is there as far as the system's objects go: `~A ~S ~W`,
+  `~D ~B ~O ~X ~R`, `~C`, `~% ~& ~| ~~` and the tilde at the end of a
+  line, `~T`, `~*`, `~?`, `~(`, `~[`, `~{`, `~^`, `~P` and `~<`, each
+  with its parameters, `V` and `#` among them, and its modifiers.
+- What is left out is what there is nothing to write with. `~F ~E ~G`
+  and `~$` are for numbers with a fraction, and there are none: an
+  integer could be written with a point and noughts behind it, and that
+  would be a directive that does one of the things it is for. They come
+  with the numbers. `~_`, `~I`, `~/`, `~:T` and a `~<` that ends in `~:>`
+  are the pretty printer's, and there is none. Each of them is refused,
+  in the words that an unknown directive always was, or, for the last
+  two, with the reason, since their letters are known. So are a function
+  as a control string and FORMATTER, which makes one.
+- It is Lisp, a file of the world (lisp/format.lisp), and the five stay
+  where they were, in C. Nearly every control string in the system and in
+  a user's program is made of the five, and for those nothing has
+  changed: `%FORMAT` makes the text as before, at the price that it
+  always had, which is the price that every line of the boot report, and
+  every form of the boot that collects at each safe point, pays. When it
+  comes to anything else after a tilde it stops and gives that character
+  in place of a string, and FORMAT, in lisp/boot.lisp, hands the whole
+  control string to the function that the file handed over
+  (`clara:provide-format`, as a file system and a compiler say that they
+  are there), which does the five as well, so that there is one reading
+  of a control string that has more. Until the file is loaded, and in a
+  world without it, the five are all that there is, and the error says
+  what it said. In C the same thing would have been written twice over:
+  what stands in a `~(` or a `~<` is written somewhere else first, a loop
+  goes back in the control string, and the printer there goes through
+  everything twice, to count and then to store.
+- What a condition says is made in C, when the condition is made
+  (`condition_of`), and takes the same way: where the five are not
+  enough, C calls FORMAT itself, the function in Lisp, with NIL for the
+  stream. So `(error "~D file~:P could not be read" 2)` says what it
+  should, and an error in a control string of ERROR's is the error that
+  is heard of.
+- The text of a call is made whole, in a string stream, and handed to
+  the stream in one piece, as it always was: what two threads write with
+  one call each does not come out in pieces of each other.
+- Columns are counted in the call. `~T` and the `~:;` of a `~<` need to
+  know where a line stands, and a stream here knows one thing about
+  that, whether it is at the start of a line (`%stream-fresh`), which
+  FORMAT asks and passes on: a `~&` at the beginning of a text writes a
+  new line when the stream is in the middle of one. For the rest, the
+  file counts what it has written since the last new line, and takes a
+  line that the call did not begin to have begun where the call did,
+  which is the second of the three things that the standard allows a
+  FORMAT to do there. A stream that knew its column would make it the
+  first.
+- Where the standard leaves a thing open, the file does what SBCL does,
+  since SBCL's FORMAT is what the tests hold it against: a parameter
+  that is a character is looked at when something is padded with it; a
+  `~:;` makes the last part of a `~[` the one for every other number
+  only when it is the last divider; `~@(` makes the first letter or
+  digit a capital and everything after it small; a field that does not
+  have to grow may be told to grow by nothing; a `~^` in an argument
+  that is the body of a `~{~}` ends that time through; a `~W` between a
+  `~<` and its `~>` is refused. Three things it does on purpose that
+  SBCL does not: an argument that is to be gone through has to be a
+  list, also when it is never taken from; a parameter that is to be a
+  number has to be one, also when it is not used; and what is no integer
+  is written by `~B ~O ~X` and `~R` as `~A` writes it, with the integers
+  in it in tens, because the printer has no radix to be told
+  (`*print-base*`).
+- The words of an error are the system's: what was found, where, and
+  what would have been right, with the control string. The function that
+  words them uses the five and nothing else, so that it never needs
+  itself.
+- How it is tested. Under SBCL the file's function and SBCL's FORMAT
+  are given the same control strings and arguments: a transcript of 157
+  forms (tools/format.txt), which a kernel is typed too, so that the
+  three give one answer, and ten thousand control strings that chance
+  writes, of every directive but `~W`, nested three deep, with the
+  arguments that they take. An error on one side has to be an error on
+  the other. Where the file differs from SBCL on purpose it is asked
+  alone. What only a kernel has, the way through C for a condition, the
+  stream's start of a line, the five before the file is loaded, is in
+  the sessions of the boots and in the self-test's texts.
 
 ## Conventions
 

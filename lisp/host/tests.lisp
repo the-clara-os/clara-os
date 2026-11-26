@@ -70,6 +70,7 @@
 (load-source "lisp/native.lisp")               ; what makes code for the processor of that, and the two processors,
 (load-source "lisp/arm64.lisp")                ; of which a kernel loads its own
 (load-source "lisp/x86-64.lisp")
+(load-source "lisp/format.lisp")               ; the directives of FORMAT, which is SBCL's own here
 (load-source "lisp/font.lisp")
 (load-source "lisp/console.lisp")
 (load-source "lisp/draw.lisp")
@@ -565,6 +566,290 @@
       (when (= (mod (+ j step) 3) 0)
         (both "(list (rs *rd~D*) (handler-case (own~D *rd~D*) (error () 'gone)) (handler-case (more~D *rd~D*) (error () 'none)) (typep *rd~D* 'rd~D) (typep *rd~D* 'rd~D))"
               j j j i j j i j (chance 30))))))
+
+;;; The directives of FORMAT (lisp/format.lisp). FORMAT is SBCL's own here,
+;;; so what that file makes of a control string is asked of the function
+;;; that it handed over, and SBCL's FORMAT is the second opinion, a piece
+;;; of these tests that nobody here wrote: the two have to make the same
+;;; text of a control string and its arguments, or both have to refuse it.
+
+(check t (functionp clara::*format*))
+
+(defun our-format (control &rest arguments)
+  (funcall clara::*format* control arguments t))
+
+;; Two worlds again: FORMAT.SBCL has Common Lisp as SBCL has it, and in
+;; FORMAT.CLARA the name FORMAT is a function that asks lisp/format.lisp.
+(defvar *their-format* (make-package "FORMAT.SBCL" :use '("COMMON-LISP")))
+(defvar *our-format* (make-package "FORMAT.CLARA" :use '("COMMON-LISP")))
+(shadow '("FORMAT") *our-format*)
+(setf (symbol-function (find-symbol "FORMAT" *our-format*))
+      (lambda (destination control &rest arguments)
+        (when destination
+          (error "tools/format.txt writes to no stream, and a form of it names ~S" destination))
+        (apply #'our-format control arguments)))
+
+;; tools/format.txt is typed at a kernel by `make test`, which holds the
+;; kernel to its answers. Here the same forms are given to lisp/format.lisp
+;; under SBCL, which has to give those answers to the letter, and to SBCL's
+;; own FORMAT, which has to give them too, and to fail, in whatever words,
+;; where the answer is an error. So every error in that file is one that
+;; lisp/format.lisp words itself, and no form there shows what the two put
+;; differently.
+(let ((entries (transcript "tools/format.txt")))
+  (check t (> (length entries) 140))
+  (dolist (entry entries)
+    (destructuring-bind (text expected) entry
+      (incf *checks*)
+      (let ((ours (answer-of text *our-format*)))
+        (unless (equal ours expected)
+          (failed "~A~%   lisp/format.lisp answers ~S~%   and tools/format.txt has ~S" text ours expected)))
+      (multiple-value-bind (theirs error) (answer-of text *their-format*)
+        (cond ((some (lambda (line) (starts-with "error: " line)) expected)
+               (unless error
+                 (failed "~A~%   SBCL answers ~S~%   where tools/format.txt has an error" text theirs)))
+              ((not (equal theirs expected))
+               (failed "~A~%   SBCL answers ~S~%   and tools/format.txt has ~S" text theirs expected)))))))
+
+;; Where lisp/format.lisp is not SBCL on purpose, it is asked alone.
+(flet ((ours (control &rest arguments)
+         (handler-case (apply #'our-format control arguments)
+           (error (condition) (princ-to-string condition)))))
+  ;; There are no numbers with a fraction, so the four directives for them are not there, where SBCL
+  ;; writes an integer with a point: 1.0.
+  (check "FORMAT does not know the directive #\\F in \"~8,2f\"" (ours "~8,2f" 1))
+  (check "FORMAT does not know the directive #\\E in \"~e\"" (ours "~e" 1))
+  (check "FORMAT does not know the directive #\\G in \"~g\"" (ours "~g" 1))
+  (check "FORMAT does not know the directive #\\$ in \"~$\"" (ours "~$" 1))
+  ;; Nor is there a pretty printer. SBCL's does nothing for the first two when nothing is printed
+  ;; prettily, calls a function for the third, and writes a list for the last two.
+  (check "FORMAT does not know the directive #\\_ in \"a~_b\"" (ours "a~_b"))
+  (check "FORMAT does not know the directive #\\I in \"a~2ib\"" (ours "a~2ib"))
+  (check "FORMAT does not know the directive #\\/ in \"~/pprint-linear/\"" (ours "~/pprint-linear/" '(1 2)))
+  (check "FORMAT has no pretty printer, which the ~:T in \"a~8:tb\" is for" (ours "a~8:tb"))
+  (check "FORMAT has no pretty printer, which the ~< to ~:> in \"~<~a ~a~:>\" is for" (ours "~<~a ~a~:>" '(1 2)))
+  ;; What is no integer is written by ~X as by ~A. SBCL writes the integers inside it in that radix.
+  (check "(255 TEN) (255 TEN)" (ours "~x ~2r" '(255 ten) '(255 ten)))
+  (check "(FF TEN)" (format nil "~x" '(255 ten)))
+  ;; An argument that is to be gone through is looked at before the first time through, and has to be
+  ;; a list. SBCL does not look at one that it never takes anything from.
+  (check "FORMAT wants a list to go through for the ~{ in \"~0{~a~}\", and 5 is not one" (ours "~0{~a~}" 5))
+  (check "" (format nil "~0{~a~}" 5))
+  ;; A number where a number is wanted is looked at whether it is used or not.
+  (check "FORMAT wants a number for a parameter of the ~D in \"~,,,'xd\", and #\\x is not one" (ours "~,,,'xd" 5))
+  (check "5" (format nil "~,,,'xd" 5)))
+
+;; The third argument of the function says whether the text begins a line, which a ~& at its beginning
+;; asks about; and a column is counted from where the text begins, whether a line begins there or not.
+(check (list "a" (format nil "~%a") (format nil "a~%b") "     x")
+       (list (funcall clara::*format* "~&a" nil t) (funcall clara::*format* "~&a" nil nil)
+             (funcall clara::*format* "a~&b" nil nil) (funcall clara::*format* "~5tx" nil nil)))
+
+;; Control strings that chance writes. A piece of one is its text and a
+;; function that makes arguments for it, other ones at every call, so that
+;; a piece can stand in a loop, in a part that is chosen, or in another
+;; control string: every directive that there is but ~W, with parameters
+;; and modifiers, nested three deep. Each is given to both sides with its
+;; arguments. No piece takes fewer arguments than it is given, and a loop
+;; always has something in it: a loop that takes nothing goes round for
+;; good, on both sides, and one with nothing in it means something else.
+;; (~W is in the transcript. SBCL refuses one anywhere in a control string
+;; that has a ~:; between a ~< and its ~>, whatever that ~:; divides.)
+(defun control-piece (text &optional (arguments (lambda () nil)))
+  (cons text arguments))
+
+(defun piece-arguments (piece)
+  (funcall (cdr piece)))
+
+(defun one-of (&rest things)
+  (nth (chance (length things)) things))
+
+(defun any-object ()
+  (case (chance 9)
+    (0 (- (chance 2000) 1000))
+    (1 (one-of "" "a" "Hello" "two words" "MiXed"))
+    (2 (one-of 'a 'symbol :key))
+    (3 nil)
+    (4 (one-of #\a #\Z #\7))
+    (5 (list 1 "two" 'three))
+    (6 (chance 10))
+    (7 (one-of "x" "yy" "zzz"))
+    (t (chance 100000))))
+
+(defun any-integer ()
+  (case (chance 6)
+    (0 0)
+    (1 (chance 10))
+    (2 (- (chance 2000) 1000))
+    (3 (chance 1000000))
+    (4 (- (chance 1000000000)))
+    (t (* (chance 100000) (chance 100000) 91))))
+
+(defun any-modifiers ()
+  (one-of "" "" ":" "@" ":@"))
+
+(defun any-pad ()
+  (one-of "'*" "'0" "' " "'." "'x"))
+
+(defun some-directives (depth most)
+  (let ((pieces nil))
+    (dotimes (i (1+ (chance most)))
+      (push (any-directive depth) pieces))
+    (setq pieces (nreverse pieces))
+    (control-piece (apply #'concatenate 'string (mapcar #'car pieces))
+                   (lambda () (apply #'append (mapcar #'piece-arguments pieces))))))
+
+(defun loop-body (depth most)
+  (let ((inside (some-directives depth most)))
+    (if (string= (car inside) "") (control-piece "-") inside)))
+
+;; So many times the arguments of a piece, one after the other, or with LISTS each time's in a list of its own.
+(defun times-over (piece &optional lists)
+  (let ((all nil))
+    (dotimes (i (chance 4) all)
+      (setq all (if lists (cons (piece-arguments piece) all) (append (piece-arguments piece) all))))))
+
+(defun any-choice (depth)
+  (case (chance 4)
+    (0 (let ((no (some-directives (1- depth) 2)) (yes (some-directives (1- depth) 2)))
+         (control-piece (format nil "~~:[~A~~;~A~~]" (car no) (car yes))
+                        (lambda ()
+                          (if (zerop (chance 2))
+                              (cons nil (piece-arguments no))
+                              (cons (one-of t 0 "x") (piece-arguments yes)))))))
+    (1 (let ((inside (some-directives (1- depth) 2)))
+         (control-piece (format nil "~~@[~~a~A~~]" (car inside))
+                        (lambda ()
+                          (if (zerop (chance 2)) (list nil) (cons (one-of 1 "y" 'z) (piece-arguments inside)))))))
+    (t (let* ((parts (let ((parts nil))
+                       (dotimes (i (1+ (chance 4)) parts)
+                         (push (some-directives (1- depth) 2) parts))))
+              (otherwise (and (cdr parts) (zerop (chance 2))))
+              (plain (if otherwise (1- (length parts)) (length parts)))
+              (text (with-output-to-string (out)
+                      (write-string "~[" out)
+                      (let ((left (length parts)))
+                        (dolist (part parts)
+                          (write-string (car part) out)
+                          (decf left)
+                          (when (plusp left)
+                            (write-string (if (and otherwise (= left 1)) "~:;" "~;") out))))
+                      (write-string "~]" out))))
+         (control-piece text
+                        (lambda ()
+                          (let* ((index (1- (chance (+ 3 (length parts)))))
+                                 (part (cond ((< -1 index plain) (nth index parts))
+                                             (otherwise (car (last parts))))))
+                            (cons index (and part (piece-arguments part))))))))))
+
+(defun any-loop (depth)
+  (let ((inside (loop-body (1- depth) 3))
+        (between (one-of "" "~^, " "~^ " "~^"))
+        (limit (one-of "" "" "" "1" "2" "0"))
+        (end (one-of "~}" "~}" "~:}")))
+    (case (chance 4)
+      (0 (control-piece (format nil "~~~A{~A~A~A" limit (car inside) between end)
+                        (lambda () (list (times-over inside)))))
+      (1 (control-piece (format nil "~~~A:{~A~A~A" limit (car inside) (one-of between "~:^; ") end)
+                        (lambda () (list (times-over inside t)))))
+      (2 (control-piece (format nil "~~~A{~~}" limit)
+                        (lambda () (list (concatenate 'string (car inside) between) (times-over inside)))))
+      (t (control-piece (format nil "~~{~A~~#[~~; and ~~:;, ~~]~~}" (car inside))
+                        (lambda () (list (times-over inside))))))))
+
+(defun any-field (depth)
+  (let ((parts (let ((parts nil))
+                 (dotimes (i (1+ (chance 3)) parts)
+                   (push (some-directives (1- depth) 2) parts)))))
+    (control-piece (with-output-to-string (out)
+                     (format out "~~~A~A<"
+                             (one-of "" (chance 30) (format nil "~D,~D,~D,~A" (chance 30) (1+ (chance 5)) (chance 3) (any-pad)))
+                             (any-modifiers))
+                     (let ((left (length parts)))
+                       (dolist (part parts)
+                         (write-string (car part) out)
+                         (decf left)
+                         (when (plusp left)
+                           (write-string "~;" out))))
+                     (write-string "~>" out))
+                   (lambda () (apply #'append (mapcar #'piece-arguments parts))))))
+
+(defun any-directive (depth)
+  (flet ((with-object (text)
+           (control-piece text (lambda () (list (any-object)))))
+         (with-integer (text)
+           (control-piece text (lambda () (list (any-integer))))))
+    (case (chance (if (plusp depth) 30 20))
+      ((0 1 2) (control-piece (one-of "" " " ", " "ab" "x-y" "Tab" "  " "one two" "A" (string #\Newline) ": " "!")))
+      (3 (with-object (format nil "~~~A~A" (any-modifiers) (one-of "a" "s" "A" "S"))))
+      (4 (with-object (format nil "~~~D~A~A" (chance 12) (any-modifiers) (one-of "a" "s"))))
+      (5 (with-object (format nil "~~~D,~D,~D,~A~A~A" (chance 14) (1+ (chance 4)) (chance 3) (any-pad) (any-modifiers)
+                              (one-of "a" "s"))))
+      (6 (with-integer (format nil "~~~A~A" (any-modifiers) (one-of "d" "b" "o" "x"))))
+      (7 (control-piece (format nil "~~~D,~A,~A,~D~A~A" (chance 14) (any-pad) (one-of "'," "'." "' ") (1+ (chance 4))
+                                (any-modifiers) (one-of "d" "b" "o" "x"))
+                        (lambda () (list (if (zerop (chance 8)) (one-of "text" 'name #\c nil) (any-integer))))))
+      (8 (with-integer (format nil "~~~D~Ar" (+ 2 (chance 35)) (any-modifiers))))
+      (9 (with-integer (one-of "~r" "~:r")))
+      (10 (control-piece (one-of "~@r" "~:@r") (lambda () (list (1+ (chance 3999))))))
+      (11 (control-piece (one-of "~c" "~:c" "~@c") (lambda () (list (one-of #\a #\B #\7 #\- #\~)))))
+      (12 (control-piece (format nil "~~~A~A" (one-of "" "" "0" "1" "2" "3") (one-of "%" "&" "~" "&" "%"))))
+      (13 (control-piece (format nil "~~~D,~D~At" (chance 20) (chance 8) (one-of "" "" "@"))))
+      (14 (control-piece (format nil "~~~A~At" (one-of "" (chance 30)) (one-of "" "@"))))
+      (15 (control-piece (format nil "~~d item~~~Ap" (one-of ":" ":@")) (lambda () (list (chance 4)))))
+      (16 (control-piece (one-of "~p" "~@p") (lambda () (list (one-of 0 1 2 'x nil)))))
+      (17 (if (zerop (chance 2))
+              (with-object (one-of "~a~:*~s" "~s~:*~a"))
+              (control-piece (one-of "~*~a" "~a~*" "~a~a~2:*~s~s") (lambda () (list (any-object) (any-object))))))
+      (18 (with-object (one-of "~s" "~:s" "~@a")))
+      (19 (control-piece (format nil "~~~A" (one-of (format nil "~%   ") (format nil ":~%  ") (format nil "@~%    ")))))
+      ((20 21) (let ((inside (some-directives (1- depth) 3)))
+                 (control-piece (format nil "~~~A(~A~~)" (any-modifiers) (car inside)) (cdr inside))))
+      ((22 23) (any-choice depth))
+      ((24 25 26) (any-loop depth))
+      (27 (let ((inside (some-directives (1- depth) 3)))
+            (if (zerop (chance 2))
+                (control-piece "~?" (lambda () (list (car inside) (piece-arguments inside))))
+                (control-piece "~@?" (lambda () (cons (car inside) (piece-arguments inside)))))))
+      (t (any-field depth)))))
+
+;; A whole control string and arguments for it: some pieces, and now and
+;; then an end that takes whatever arguments are left.
+(defun any-control-string ()
+  (let* ((pieces (some-directives 3 5))
+         (end (case (chance 8)
+                (0 (let ((inside (loop-body 1 2)))
+                     (control-piece (format nil "~~@{~A~A~~}" (car inside) (one-of "" "~^, "))
+                                    (lambda () (times-over inside)))))
+                (1 (let ((inside (loop-body 1 2)))
+                     (control-piece (format nil "~~:@{~A~A~~}" (car inside) (one-of "" "~:^; " "~^."))
+                                    (lambda () (times-over inside t)))))
+                (2 (control-piece "~^ and ~a" (lambda () (if (zerop (chance 2)) nil (list (any-object))))))
+                (3 (control-piece "~#[none~;~a~;~a and ~a~:;~a, ~a and more~]"
+                                  (lambda ()
+                                    (let ((items nil))
+                                      (dotimes (i (chance 5) items)
+                                        (push i items))))))
+                (t (control-piece "")))))
+    (values (concatenate 'string (car pieces) (car end))
+            (append (piece-arguments pieces) (piece-arguments end)))))
+
+;; Ten thousand of them. Where one side refuses, the other has to.
+(let ((*chance* 20261125) (*print-pretty* nil) (refused 0) (longest 0))
+  (dotimes (i 10000)
+    (multiple-value-bind (control arguments) (any-control-string)
+      (let ((ours (handler-case (apply #'our-format control arguments)
+                    (error (condition) (list :refused (princ-to-string condition)))))
+            (theirs (handler-case (apply #'format nil control arguments)
+                      (error (condition) (list :refused (princ-to-string condition))))))
+        (incf *checks*)
+        (setq longest (max longest (length control)))
+        (when (consp ours)
+          (incf refused))
+        (unless (if (consp ours) (consp theirs) (equal ours theirs))
+          (failed "~S with the arguments ~S:~%   lisp/format.lisp makes ~S~%   and SBCL ~S" control arguments ours theirs)))))
+  ;; Most of them are gone through to their ends, and the long ones are long.
+  (check '(t t) (list (< 50 refused 1000) (> longest 250))))
 
 ;;; Whatever the compiler makes from here on is translated for the two
 ;;; processors as well (lisp/native.lisp), each function for both, and the

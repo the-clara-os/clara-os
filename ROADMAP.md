@@ -2397,6 +2397,112 @@ Infrastructure, done:
   on main: Dependabot itself. What it left is issue #198: with an action
   named by its major version, the releases in between run here without a
   pull request.
+- **The directives of FORMAT** (2026-11-26, version 0.0.62). FORMAT knew
+  five directives, `~A ~S ~D ~%` and `~~`, with nothing between the tilde
+  and the character, and refused every other control string in the words
+  of Julio's issues #56, "FORMAT does not know the directive #\2 in
+  \"~23@a\"", which his calculator said, and #81, "FORMAT does not know
+  the directive #\{ in \"~{~a:~10t~a~%~}~%\"". Both strings give what
+  they should now, and so does the rest of what the standard has for
+  FORMAT, as far as the system has the objects to write: parameters
+  (numbers, a character after a quote, `V` for an argument and `#` for
+  how many are left) and the two modifiers; `~A ~S ~W` in fields; `~D ~B
+  ~O ~X` with widths, signs and commas; `~R` in any radix, in words (`~R`,
+  `~:R`) and in Roman numerals (`~@R`, `~:@R`); `~C`; `~% ~& ~| ~~` so
+  many times, and a tilde at the end of a line; `~T`, to a column; `~*`,
+  which says which argument comes next; `~?`, another control string;
+  `~(` to `~)`, the case of letters; `~[` to `~]`, one part of several;
+  `~{` to `~}`, again and again, in its four kinds; `~^`, which leaves;
+  `~P`; and `~<` to `~>`, a field with its parts spread out. What ERROR,
+  WARN and SIGNAL say is written by the same directives.
+  It is a file of the world, lisp/format.lisp (the package CLARA.FORMAT,
+  which exports nothing), the fourth that a machine loads, some 860
+  lines: a control string is taken apart into strings and directives,
+  with what stands between a `~[`, `~{`, `~(` or `~<` and its end inside
+  the directive, and gone through; the text is made in a string stream
+  and handed over whole. The five stay in C and cost what they did:
+  `%FORMAT` gives the character that it stopped at when a control string
+  has more than the five, FORMAT in lisp/boot.lisp then asks the function
+  that the file handed over (`clara:provide-format`, a new name in
+  CLARA), and until the file is loaded the five are all there is, with
+  the error that there always was. A condition's text, which C makes,
+  takes the same way (`format_in_lisp`, kernel/lisp/builtin.c): C calls
+  FORMAT. Nothing of what an object is has changed, so an image's number
+  has not. DESIGN.md has what was decided ("The directives of FORMAT"),
+  the manual a chapter with a table of them ("Text by a pattern").
+  What it does not do: `~F ~E ~G` and `~$`, since there are no numbers
+  with a fraction (issue #200), and the pretty printer's `~_ ~I ~/ ~:T`
+  and `~<` to `~:>`, since there is none (issue #201); they are refused
+  as an unknown directive is. `~T` counts from where a call began to
+  write when the call did not begin the line, because a stream does not
+  know its column (issue #202). `~B ~O ~X` and `~R` write what is no
+  integer as `~A` does, with the integers inside it in tens, where
+  Common Lisp writes those in the radix, because the printer has no
+  `*print-base*` (issue #203). A control string is a string: no function,
+  and no FORMATTER to make one (issue #204). And `~(` knows the letters
+  that `char-upcase` knows, which are those of ASCII (issue #205). A loop
+  whose body takes no argument, `(format nil "~{x~}" '(1))`, goes round
+  until Ctrl-C or until the memory is full, as in any Common Lisp.
+  What it costs, at a kernel that the Mac runs itself: ten thousand
+  calls of `(format nil "~A, ~A, ~A" 1 2 3)` take less than a hundredth
+  of a second, as before, since the five are C's; of `(format nil
+  "~{~A~^, ~}" '(1 2 3))` 70 milliseconds, seven millionths of a second
+  a call; of `(format nil "~10A|~5D" "abc" 42)` 40; and of `(format nil
+  "~:D" 1234567)` 20. A control string with a sixth directive is taken
+  apart at every call, and nothing is kept of it.
+  How it was checked. SBCL's own FORMAT is the second opinion, the piece
+  of the tests that nobody here wrote. tools/format.txt, 157 forms of
+  which 46 are refused, is answered three times, by the file under SBCL
+  to the letter, by SBCL's FORMAT, and by a kernel (aarch64-format, the
+  twenty-first boot of `make test`, four seconds in the world that the
+  first AArch64 session saved): the kernel gave the file's answers at
+  its first boot, to every form. The host tests also give both sides ten
+  thousand control strings that chance writes, with every directive but
+  `~W`, three deep, and arguments that fit; three hundred thousand of
+  them were run once by hand and came to no difference, with 6512
+  refused by both. Writing those found, in the order in which they
+  came: a loop with nothing in it but a tilde at the end of a line,
+  which has a body and was taken for one that has none; an argument
+  that was to be a control string or a list, and that SBCL does not
+  look at when the loop never goes round; a body that came as an
+  argument and was never gone through, so that the loop did not end,
+  which was a mistake of this file's and not a difference; and three
+  times a piece of the generator's own that took fewer arguments than
+  it was given. Where the file is not SBCL on purpose it is asked
+  alone: the nine directives that are left out, what is no integer in
+  a radix, a list that is asked for before the loop, and a number that
+  is asked for where it is not used. tools/session.txt has, on all three
+  machines, a control string with six directives, a `~&` on a stream in
+  the middle of a line, a condition whose text needs the file, at a
+  HANDLER-CASE and at the top, and `~F` refused; the manual's chapter is
+  typed at its two boots; and a text of the self-test asks for a
+  condition with an unknown directive, which is answered alike before
+  the file is loaded and after, and with a collection at every safe
+  point. Eighty mistakes were planted in the file, one at a time, each
+  in a copy of the tree, with the host tests cut after the section: 71
+  were noticed, and the nine that were not were things that no form had
+  asked about (a parameter left out at the end, a `V` that finds NIL, a
+  least padding below nought, `~@*` without a number, what a `~:@{`
+  leaves of the arguments, a `~^` with a parameter in a body that came
+  as an argument, three parameters of `~^` of which two are the same,
+  and the two numbers of a `~:;` in a field). The transcript has eight
+  forms more for them, and all eighty are noticed. Seven more were
+  planted in the kernel's side (kernel/lisp/builtin.c, lisp/boot.lisp),
+  each built and booted, and all seven were noticed: three by the new
+  text of the self-test as the kernel started, four by the first
+  session.
+  A copy of the disk of Julio's machine, which ran 0.0.61-4d08143c, with
+  a copy of his work disk beside it, took the build at once and came up
+  as 0.0.62 with its 17 forms: his own `ls` and `print-columns`, the six
+  commands that push, pull and load his two files, and his calculator,
+  loaded, launched and clicked, did what they did before, and the two
+  control strings of his issues gave their text there.
+  `make test` on the Mac, the host tests with 29241 checks (18785
+  before; the two minutes that they are given are no nearer: 88 seconds
+  with the new ones and 88 without) and all twenty-one boots, and the
+  same in a container of Ubuntu 26.04, CI's release, whose SBCL is 2.6.0
+  where the Mac's is 2.6.10 (950 seconds there; the new boot 7, and the
+  boot that collects at every safe point 213).
 
 Infrastructure, for sessions with budget left over:
 
@@ -5299,13 +5405,15 @@ No milestone yet, to be picked up when they start to matter:
   `coerce`, and the functions on strings beyond `make-string`,
   `string=`, `string-equal`, `string-lessp`, `subseq`, `string-upcase`
   and `string-downcase`; those two and `char-upcase` and
-  `char-downcase` know the letters of ASCII, and take no `:start` and
-  `:end`. MAKE-STRING takes `:initial-element` and
+  `char-downcase` know the letters of ASCII (issue #205), and take no
+  `:start` and `:end`. MAKE-STRING takes `:initial-element` and
   refuses `:element-type`, and MAKE-ARRAY a length and
   `:initial-element`; what is wrong with an argument of either is said
   under the name of its function in C, `%MAKE-STRING` and `%MAKE-VECTOR`,
   and a length that is no length is called an index there.
-  FORMAT knows `~A ~S ~D ~%` and `~~`. The functions on sequences take
+  FORMAT has its directives since 0.0.62 (lisp/format.lisp, "The
+  directives of FORMAT" above) but the ones for numbers with a fraction,
+  issue #200, and the pretty printer's, #201. The functions on sequences take
   lists only, SUBSEQ strings as well, and of their keyword arguments
   `:test`, with `:key` for MEMBER and ASSOC and `:initial-value` for
   REDUCE; FIND, FIND-IF, POSITION and POSITION-IF take strings and

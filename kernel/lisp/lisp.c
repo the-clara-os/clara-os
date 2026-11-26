@@ -974,6 +974,9 @@ static const struct {
     { "(list (string= \"ABC\" 'abc) (string= \"a\" \"b\") (concatenate 'string \"ab\" \"cd\"))", "(T NIL \"abcd\")" },
     { "(format nil \"~A and ~S: ~D~%\" \"a\" \"b\" 42)", "\"a and \\\"b\\\": 42\n\"" },
     { "(format nil \"~Q\")", "error: FORMAT does not know the directive #\\Q in \"~Q\"" },
+    /* what a condition says is FORMAT's to make too, by way of Lisp when the substrate's five are not enough */
+    { "(handler-case (error \"~Q is wrong with ~A\" 1) (error (c) (format nil \"~A\" c)))",
+      "\"FORMAT does not know the directive #\\\\Q in \\\"~Q is wrong with ~A\\\"\"" },
     { "(list (symbol-name 'foo) (eq (intern \"FOO\") 'foo) (symbolp (gensym)) (symbol-package (gensym)))",
       "(\"FOO\" T T NIL)" },
     { "(intern \"CAR\")", "CAR :INHERITED" },
@@ -2248,8 +2251,8 @@ static void load(const char *file)
  * are the beginning of the world. */
 static void new_world(void)
 {
-    static const char *const world[] = { "compiler.lisp", "native.lisp",   "clos.lisp",    "font.lisp",
-                                         "console.lisp",
+    static const char *const world[] = { "compiler.lisp", "native.lisp",   "clos.lisp",    "format.lisp",
+                                         "font.lisp",     "console.lisp",
                                          "draw.lisp",     "pci.lisp",      "virtio.lisp",  "usb.lisp",      "input.lisp",
                                          "disk.lisp",     "fat.lisp",      "type.lisp",     "random.lisp",   "net.lisp",
                                          "hda.lisp",      "sound.lisp",    "syntax.lisp",   "listener.lisp",
