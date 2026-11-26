@@ -2293,6 +2293,19 @@ Rules:
   lisp/fat.lisp writes is tried in the container below before it is
   pushed. The serial logs and screenshots of
   a run are in its artifact, boot-reports.
+- Dependabot (.github/dependabot.yml, issue #53) looks at the actions of
+  the two workflows every Friday and opens a pull request, labelled
+  `chore`, when one has a newer version than the workflow names. The
+  workflows name an action by its major version, so that is the next
+  major one, and the releases in between run without a pull request
+  (issue #198). CI tries a newer action of ci.yml on Dependabot's pull
+  request. One of site.yml is first run by the Website run that the
+  merge starts, since nothing of that workflow can be tried before: read
+  what the action's release says has changed before the merge, and look
+  at that run after it. Whatever else comes to have a list of versions
+  that Dependabot reads, a requirements file for the tools in Python, a
+  Dockerfile, a submodule, gets its entry in that file in the same
+  change.
 - To see a change the way CI will before pushing it, with Docker running:
   a container of the Ubuntu release that the runners have, ubuntu:26.04,
   with the packages from the workflow, a copy of the tree without build/,
