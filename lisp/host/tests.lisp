@@ -97,6 +97,14 @@
 (load-source "lisp/ares.lisp")
 (defvar *defined-applications* clara.windows::*applications*) ; what the files defined, for the tests to put back
 (defvar *defined-commands* clara.windows::*commands*)
+;; The window manager's clock has a thread that tells the time every second.
+;; A thread that woke by itself in the middle of a test would draw on its
+;; screen, and what the clock of this computer says is nothing that a test
+;; can expect: so there is no such thread here, the tests tell the time
+;; themselves (CLARA.WINDOWS::TELL-TIME), and the tests of the thread give
+;; it a beat that never comes round.
+(check 1 clara.windows::*beat*)
+(setq clara.windows::*beat* nil)
 
 ;; What this system knows of where ClaraOS is published, and the key that
 ;; it holds a release against: an address that begins with https:// and
@@ -220,6 +228,60 @@
   (incf *checks*)
   (unless (or (string= name "QUASIQUOTE") (external-p name "COMMON-LISP"))
     (failed "the evaluator has the special form ~A, which Common Lisp does not have" name)))
+
+;;; The time of day. DECODE-UNIVERSAL-TIME is Lisp, in boot.lisp, and SBCL
+;;; has one of its own, which is the second opinion on it: the definition is
+;;; read out of the file, from the line that it begins on to the empty line
+;;; after it, into a package where the name is another symbol, and the two
+;;; are given the same times and time zones. The edges that a calendar has,
+;;; in every time zone; every day of the months around a 29th of February,
+;;; around the end of a century that has none and around the end of one that
+;;; has; and then whatever chance picks, up to the largest integer that the
+;;; machine has.
+
+(defpackage "CLARA.TIME-TESTS"
+  (:use "COMMON-LISP")
+  (:shadow "DECODE-UNIVERSAL-TIME"))
+
+(let* ((text (file-text "lisp/boot.lisp"))
+       (start (search (format nil "~%(defun decode-universal-time ") text))
+       (end (and start (search (format nil "~%~%") text :start2 (1+ start))))
+       (*package* (find-package "CLARA.TIME-TESTS")))
+  (check t (and end t))
+  (eval (read-from-string (subseq text (1+ start) end))))
+
+(defun decoded-apart (time zone)
+  (let ((here (multiple-value-list (clara.time-tests::decode-universal-time time zone)))
+        (there (multiple-value-list (decode-universal-time time zone))))
+    (and (not (equal here there)) (list time zone here there))))
+
+(check nil (loop for time in (list 0 1 59 60 3599 3600 86399 86400 86401 3976214400 (1- (expt 2 32)) (expt 2 32)
+                                   (expt 2 40) (expt 2 50) (- (expt 2 62) 100000))
+                 append (loop for zone from -24 to 24
+                              when (decoded-apart time zone) collect it)))
+(check nil (loop for (year month) in '((1900 2) (2000 2) (2028 2) (2099 12) (2100 2) (2400 2))
+                 append (loop for day from -31 to 31
+                              append (loop for zone in '(0 5 -11)
+                                           for time = (+ (encode-universal-time 59 59 23 28 month year 0) (* day 86400))
+                                           when (or (decoded-apart time zone) (decoded-apart (1+ time) zone)) collect it))))
+(check nil (let ((state (sb-ext:seed-random-state 57)))
+             (loop repeat 20000
+                   when (decoded-apart (random (expt 2 (1+ (random 61 state))) state) (- (random 49 state) 24))
+                     collect it)))
+;; Told no time zone, it goes by CLARA:*TIME-ZONE*, where SBCL's asks the
+;; computer; and what is no time, or no time zone, is refused in its words.
+(check '((0 0 19 31 12 2025 2 nil 5) (0 0 0 1 1 2026 3 nil 0))
+       (list (let ((clara:*time-zone* 5)) (multiple-value-list (clara.time-tests::decode-universal-time 3976214400)))
+             (multiple-value-list (clara.time-tests::decode-universal-time 3976214400))))
+(check '("a time is a count of seconds since 1900 began, an integer that is not negative, and -1 is not one"
+         "a time is a count of seconds since 1900 began, an integer that is not negative, and \"now\" is not one"
+         "a time zone is so many hours behind Greenwich, an integer from -24 to 24, and 25 is not one"
+         "a time zone is so many hours behind Greenwich, an integer from -24 to 24, and -25 is not one"
+         "a time zone is so many hours behind Greenwich, an integer from -24 to 24, and 11/2 is not one"
+         "a time zone is so many hours behind Greenwich, an integer from -24 to 24, and NIL is not one")
+       (mapcar (lambda (arguments)
+                 (condition-text (lambda () (apply #'clara.time-tests::decode-universal-time arguments))))
+               '((-1 0) ("now" 0) (0 25) (0 -25) (0 11/2) (0 nil))))
 
 ;;; What the files of the world call. Each of them loads here, under SBCL,
 ;;; which has all of Common Lisp, and on the machine, which has the part of
@@ -5361,6 +5423,7 @@
 
 (defvar *desk-width* 0)
 (defvar *desk-height* 0)
+(defvar *bar-clock* nil)                       ; what the bar's clock should be saying: a test says so when it has told the time
 
 (defun eventually (function)
   (loop repeat 1000
@@ -5397,6 +5460,7 @@
   (clara.input:send-pointer-to nil)
   (setq clara.windows::*running* nil
         clara.windows::*arranged* nil
+        *bar-clock* nil                        ; no time was told yet on this desk
         clara.windows::*commands* commands
         clara.windows::*applications*
         (mapcar (lambda (application)
@@ -5454,13 +5518,29 @@
           ((and box (label-rule "x" (- x (- (+ wx width) (floor (+ 16 (label-wide "x")) 2))) (- y (- wy 21)) 21 text frame)))
           (t frame))))
 
+;; What the system is, as the bar says it.
+(defun system-name ()
+  (format nil "~A ~A" (lisp-implementation-type) (lisp-implementation-version)))
+
+;; What the right-hand end of the bar says, and where each of it begins:
+;; from the right, what the clock said, when it has said something, and
+;; then what the system is, with 16 pixels between the two, each only where
+;; it leaves the button alone.
+(defun bar-says ()
+  (let ((end (- *desk-width* 8)) (says nil))
+    (dolist (words (list *bar-clock* (system-name)) says)
+      (when words
+        (let ((at (- end (label-wide words))))
+          (when (>= at 112)
+            (push (cons words at) says)
+            (setq end (- at 16))))))))
+
 (defun bar-rule (x y)
-  (let* ((name (format nil "~A ~A" (lisp-implementation-type) (lisp-implementation-version)))
-         (at (- *desk-width* 8 (label-wide name))))
-    (cond ((>= y 20) nil)
-          ((label-rule "Applications" (- x 8) y 20 +ink+ +paper+))
-          ((and (>= at 112) (label-rule name (- x at) y 20 +ink+ +paper+)))
-          (t +paper+))))
+  (cond ((>= y 20) nil)
+        ((label-rule "Applications" (- x 8) y 20 +ink+ +paper+))
+        ((loop for (words . at) in (bar-says)
+               thereis (label-rule words (- x at) y 20 +ink+ +paper+)))
+        (t +paper+)))
 
 ;; The launcher's list: the applications and under them the commands, with
 ;; a line across where the commands begin, when there are both.
@@ -5777,6 +5857,199 @@
        (with-output-to-string (*standard-output*)
          (check nil (clara.windows:resume))))
 (check "" (with-output-to-string (*standard-output*) (check nil (clara.windows:resume)))) ; and one that was not
+
+;;; The clock (Julio's issue #57): the right-hand end of the bar says the
+;;; day and the time, after what the system is. The words are what a
+;;; function makes of a time, and the bar is put together again when they
+;;; are other words than before.
+
+;; The day and the time, as the system's own function says them, at the
+;; place that CLARA:*TIME-ZONE* says: the first moment of 2026 was a
+;; Thursday in Greenwich, the evening before in New York, and late in the
+;; morning in Sydney.
+(defvar *new-year* (encode-universal-time 0 0 0 1 1 2026 0))
+(check 3976214400 *new-year*)
+(check '("Thu Jan 1 00:00" "Wed Dec 31 19:00" "Thu Jan 1 11:00" "Thu Jan 1 00:59" "Thu Jan 1 01:00" "Thu Nov 26 05:52"
+         "Thu Nov 26 00:52")
+       (list (clara.windows:day-and-time *new-year*)
+             (let ((clara:*time-zone* 5)) (clara.windows:day-and-time *new-year*))
+             (let ((clara:*time-zone* -11)) (clara.windows:day-and-time *new-year*))
+             (clara.windows:day-and-time (+ *new-year* 3599))
+             (clara.windows:day-and-time (+ *new-year* 3600))
+             (clara.windows:day-and-time (encode-universal-time 7 52 5 26 11 2026 0))
+             (let ((clara:*time-zone* 5)) (clara.windows:day-and-time (encode-universal-time 7 52 5 26 11 2026 0)))))
+;; Every day of a week, with the day that only a leap year has in it, and
+;; every month.
+(check '("Mon Feb 28 23:59" "Tue Feb 29 23:59" "Wed Mar 1 23:59" "Thu Mar 2 23:59" "Fri Mar 3 23:59" "Sat Mar 4 23:59"
+         "Sun Mar 5 23:59")
+       (loop for day from 0 below 7
+             collect (clara.windows:day-and-time (+ (encode-universal-time 59 59 23 28 2 2028 0) (* day 86400)))))
+(check '("Jan 15" "Feb 15" "Mar 15" "Apr 15" "May 15" "Jun 15" "Jul 15" "Aug 15" "Sep 15" "Oct 15" "Nov 15" "Dec 15")
+       (loop for month from 1 to 12
+             collect (subseq (clara.windows:day-and-time (encode-universal-time 0 0 12 15 month 2026 0)) 4 10)))
+;; A time zone that is none is an error, which is the clock's to bear.
+(check-condition error (let ((clara:*time-zone* "EST")) (clara.windows:day-and-time *new-year*)))
+(check 0 clara:*time-zone*)                                                  ; Greenwich, until somebody says otherwise
+
+;; What the clock says is what the function of CLARA.WINDOWS:*CLOCK* makes
+;; of a time, or the function that it names: nothing with no function, with
+;; one that gives no string, and with one that gives a string with nothing
+;; in it.
+(check '(clara.windows:day-and-time "Thu Jan 1 00:00" "it is 3976214400" nil nil nil)
+       (cons clara.windows:*clock*
+             (mapcar (lambda (clock)
+                       (let ((clara.windows:*clock* clock))
+                         (clara.windows::clock-words *new-year*)))
+                     (list 'clara.windows:day-and-time (lambda (time) (format nil "it is ~D" time)) nil
+                           (lambda (time) (list time)) (lambda (time) (declare (ignore time)) "")))))
+;; A function that fails says nothing either, and that it failed is said
+;; once, however often it is asked, and again when it has not failed in
+;; between.
+(defun broken-clock (time)
+  (if (evenp time) (error "no clock for ~D" time) "odd"))
+
+(let ((clara.windows:*clock* 'broken-clock))
+  (check (format nil "windows: the bar has no clock, since BROKEN-CLOCK failed: no clock for 0~%~
+                      windows: the bar has no clock, since BROKEN-CLOCK failed: no clock for 4~%")
+         (with-output-to-string (*standard-output*)
+           (check '(nil nil "odd" nil nil)
+                  (mapcar #'clara.windows::clock-words '(0 2 1 4 6))))))
+(setq clara.windows::*mute* nil)
+
+;; On the screen. Nobody has told the time on a new desk: the bar says what
+;; the system is, at its end, as it always did. Then the time is told, and
+;; the bar says it at the end, with the system before it; a second time
+;; within the minute changes nothing, the next minute does, and a day of two
+;; digits takes the system's name a little to the left.
+(defun told (time says)
+  (setq *bar-clock* says)
+  (list (clara.windows::tell-time time) clara.windows::*time* (wrong-pixels)))
+
+;; The desk is as wide as it takes for both to have room in the console's
+;; letters, whatever the Lisp that runs the tests calls itself, which is the
+;; system's name here: the button, the name, the 16 pixels, the widest that
+;; the clock says below, the 8 pixels at the end, and 24 to spare.
+(defvar *clock-desk* (+ 112 (* 8 (length (system-name))) 16 (* 8 (length "Sat Jan 10 00:01")) 8 24))
+
+(new-desk :width *clock-desk* :height 100
+          :applications (list (cons "One" (lambda () 'done)) (cons "Two" (lambda () 'done))))
+(check '(nil 0) (list clara.windows::*time* (wrong-pixels)))
+(check '(t "Thu Jan 1 00:00" 0) (told *new-year* "Thu Jan 1 00:00"))
+(check (list (- *clock-desk* 8 120 16 (label-wide (system-name))) (- *clock-desk* 8 120))
+       (mapcar #'cdr (bar-says)))                                             ; where the two begin, by the tests' rule
+(check '(t "Thu Jan 1 00:00" 0) (told (+ *new-year* 59) "Thu Jan 1 00:00"))
+(check '(t "Thu Jan 1 00:01" 0) (told (+ *new-year* 60) "Thu Jan 1 00:01"))
+(check '(t "Sat Jan 10 00:01" 0) (told (+ *new-year* 60 (* 9 86400)) "Sat Jan 10 00:01"))
+(check '(t "Thu Jan 1 00:00" 0) (told *new-year* "Thu Jan 1 00:00"))
+;; Under the pointer, beside a window that lies as high as a window can, and
+;; with the launcher's list open, the bar is as right afterwards.
+(let ((window (clara.windows:open-window "Under the clock" 150 40 :x (- *clock-desk* 160) :y 0)))
+  (check (list (list (- *clock-desk* 160) 41) 0)
+         (list (multiple-value-list (clara.windows:window-position window)) (wrong-pixels)))
+  (clara.windows:pointer-moved (- *clock-desk* 60) 4 0)                       ; on the clock
+  (check '(t "Thu Jan 1 00:02" 0) (told (+ *new-year* 120) "Thu Jan 1 00:02"))
+  (clara.windows:pointer-moved 5 5 1)
+  (clara.windows:pointer-moved 5 5 0)
+  (check '(t t "Thu Jan 1 00:03" 0) (cons clara.windows::*menu* (told (+ *new-year* 180) "Thu Jan 1 00:03")))
+  (clara.windows:pointer-moved (- *clock-desk* 60) 90 1)                      ; the list shuts
+  (clara.windows:pointer-moved (- *clock-desk* 60) 90 0)
+  (check '(nil 0) (list clara.windows::*menu* (wrong-pixels)))
+  (clara.windows:close-window window))
+;; Another function is another clock. One whose words the bar has no room
+;; for leaves the bar without a clock, and so does none at all: the system's
+;; name is at the end again.
+(setq clara.windows:*clock* (lambda (time) (format nil "~D past" (mod time 60))))
+(check '(t "7 past" 0) (told (+ *new-year* 7) "7 past"))
+(defvar *long-words* (make-string (floor *clock-desk* 8) :initial-element #\m))  ; as wide as the desk
+
+(setq clara.windows:*clock* (lambda (time) (declare (ignore time)) *long-words*))
+(check (list t *long-words* 0) (told *new-year* *long-words*))
+(check '(nil 1) (list (assoc *long-words* (bar-says) :test #'equal) (length (bar-says))))
+(setq clara.windows:*clock* nil)
+(check '(t nil 0) (told *new-year* nil))
+(setq clara.windows:*clock* 'clara.windows:day-and-time)
+(check '(t "Thu Jan 1 00:00" 0) (told *new-year* "Thu Jan 1 00:00"))
+;; Stopping forgets what the clock said, and without a window manager there
+;; is nobody to tell the time to.
+(setq *bar-clock* nil)
+(check '(t t nil 0) (list (clara.windows:stop) (clara.windows:start) clara.windows::*time* (wrong-pixels)))
+(check '(t "Thu Jan 1 00:00" 0) (told *new-year* "Thu Jan 1 00:00"))
+;; So does a world that was saved while the clock said something, and is
+;; started again.
+(with-output-to-string (*standard-output*) (clara.draw:start))             ; the machine is another now
+(setq *bar-clock* nil)
+(with-output-to-string (*standard-output*)
+  (check t (clara.windows:resume)))
+(check '(nil 0) (list clara.windows::*time* (wrong-pixels)))
+;; And one that is started again on a machine without a screen, where there
+;; is no window manager to start, and nobody to tell the time to.
+(check '(t "Thu Jan 1 00:00" 0) (told *new-year* "Thu Jan 1 00:00"))
+(clara.host:reset-machine)
+(with-output-to-string (*standard-output*) (clara.draw:start))
+(with-output-to-string (*standard-output*)
+  (check nil (clara.windows:resume)))
+(check '(nil nil nil) (list clara.windows::*time* (clara.windows::tell-time *new-year*) clara.windows::*time*))
+
+;; A screen of any width, in the console's letters and in letters of
+;; outlines: one that has room for neither the clock nor the system's name,
+;; for the shorter of the two and no more, for the clock and not a pixel
+;; more, for the clock and all but a pixel of the name, and for both. The
+;; clock comes first: where there is room for one of them, it is the
+;; clock's when the clock fits.
+(dolist (letters '(nil t))
+  (new-desk :height 24 :letters letters)
+  (let* ((clock (label-wide "Thu Jan 1 00:00")) (name (label-wide (system-name)))
+         (both (+ 112 clock 16 name 8)))
+    ;; a width, how many things its bar says before the time is told, and how many after
+    (dolist (row (list (list (+ 112 (min clock name) 7) 0 0)
+                       (list (+ 112 (min clock name) 8) (if (<= name clock) 1 0) 1)
+                       (list (+ 112 clock 8) (if (<= name clock) 1 0) 1)
+                       (list (1- both) 1 1)
+                       (list both 1 2)))
+      (new-desk :width (first row) :height 24 :letters letters)
+      (check (list letters row 0 (second row)) (list letters row (wrong-pixels) (length (bar-says))))
+      (check (list letters row '(t "Thu Jan 1 00:00" 0) (third row))
+             (list letters row (told *new-year* "Thu Jan 1 00:00") (length (bar-says)))))
+    (check (list letters '(t "Wed Dec 31 19:00" 0))                          ; the widest of them, at another place
+           (list letters (let ((clara:*time-zone* 5)) (told *new-year* "Wed Dec 31 19:00"))))))
+
+;; The clock's thread. With a beat, START makes it, and it tells the time
+;; as it starts: nobody else does in what follows. It tells it again when
+;; the time can be divided by the beat, which is a second on a machine and
+;; an hour here, and which no test waits for: the machines of `make test`
+;; do (tools/session.txt). Starting a window manager
+;; that runs makes no second thread; a thread that is not the clock's,
+;; another having been made in its place, ends without telling anything;
+;; and stopping the window manager stops the thread in the middle of its
+;; sleep.
+(defvar *clock-says* "one")
+(setq clara.windows:*clock* (lambda (time) (declare (ignore time)) *clock-says*)
+      clara.windows::*beat* 3600)
+(new-desk :width 360 :height 24)
+(setq *bar-clock* "one")
+(let ((keeper clara.windows::*timekeeper*) (threads (length (clara:all-threads))))
+  (check '("clock" t) (list (clara:thread-name keeper) (clara:thread-alive-p keeper)))
+  (check t (eventually (lambda () (and (equal clara.windows::*time* "one") (eql (wrong-pixels) 0)))))
+  (check '(t t) (list (clara.windows:start) (eq keeper clara.windows::*timekeeper*)))
+  (check threads (length (clara:all-threads)))
+  (setq *clock-says* "two")
+  (let ((other (clara:make-thread #'clara.windows::keep-time :name "clock")))
+    (check '(t "one" t) (list (eventually (lambda () (not (clara:thread-alive-p other))))
+                              clara.windows::*time* (clara:thread-alive-p keeper))))
+  (check '(t nil nil) (list (clara.windows:stop) clara.windows::*timekeeper* clara.windows::*time*))
+  (check t (eventually (lambda () (not (clara:thread-alive-p keeper))))))
+;; How long the thread sleeps: until the time can be divided by the beat,
+;; which is all of the beat when the time can.
+(check '(60 1 59 30 1 3600)
+       (list (clara.windows::until-beat 3976214400 60) (clara.windows::until-beat 3976214459 60)
+             (clara.windows::until-beat 3976214461 60) (clara.windows::until-beat 3976214430 60)
+             (clara.windows::until-beat 3976214400 1) (clara.windows::until-beat 3976214400 3600)))
+;; And without a beat there is no thread: the tests' own way.
+(setq clara.windows::*beat* nil
+      clara.windows:*clock* 'clara.windows:day-and-time)
+(new-desk :height 24)
+(check '(nil nil t) (list clara.windows::*timekeeper* (find "clock" (clara:all-threads) :key #'clara:thread-name :test #'equal)
+                          (clara.windows:stop)))
 
 ;; Commands: under the applications in the launcher's list, with a line
 ;; across where they begin. A click on one calls its function in a thread
@@ -11422,7 +11695,7 @@ second
 (setq clara.fat:*volume* (first (clara.fat:volumes)))
 (check nil (on-disk *other-disk* "/clara/carried"))
 (let ((account (on-disk *machine-disk* "/clara/carried")))
-  (check 0 (search (format nil "(:carried \"0.0.0-host\" \"0.0.1-new\")~%(:name ") account))
+  (check 0 (search (format nil "(:carried \"0.0.0-host\" \"0.0.1-new\")~%(:time-zone 0)~%(:name ") account))
   (check t (and (search (format nil "(:name \"PLAYGROUND\" \"*COUNT*\" :variable)~%(:value \"PLAYGROUND\" \"*COUNT*\" \"3\")~%~
                                      (:name \"PLAYGROUND\" \"*LOCK*\" :variable)~%~
                                      (:name \"PLAYGROUND\" \"*RING*\" :variable)~%~
@@ -11444,7 +11717,8 @@ second
 ;; cannot be written down goes all the same, and says so.
 (let ((clara.windows::*running* t))
   (clara.system::carry "0.0.1-new"))
-(check 0 (search (format nil "(:carried \"0.0.0-host\" \"0.0.1-new\")~%(:windows)~%(:name ") (on-disk *machine-disk* "/clara/carried")))
+(check 0 (search (format nil "(:carried \"0.0.0-host\" \"0.0.1-new\")~%(:windows)~%(:time-zone 0)~%(:name ")
+                 (on-disk *machine-disk* "/clara/carried")))
 ;; The launcher's list, once a line of it was moved: the applications and
 ;; the commands by their names, in the order that they have. A list that
 ;; nobody moved a line of is not spoken of, and the next system has it as
@@ -11459,8 +11733,23 @@ second
   (clara.windows:move-up "Right")
   (clara.system::carry "0.0.1-new")
   (check 0 (search (format nil "(:carried \"0.0.0-host\" \"0.0.1-new\")~%~
-                                (:applications \"One\" \"The \\\"second\\\" of them\")~%(:commands \"Right\" \"Left\")~%(:name ")
+                                (:applications \"One\" \"The \\\"second\\\" of them\")~%(:commands \"Right\" \"Left\")~%~
+                                (:time-zone 0)~%(:name ")
                    (on-disk *machine-disk* "/clara/carried"))))
+;; The time zone, which is where the machine was said to be for the time of
+;; day (lisp/boot.lisp): the account has it, so many whole hours behind
+;; Greenwich, and has no such line for what is no time zone.
+(check '(t t t t nil nil nil nil nil)
+       (mapcar #'clara.system::time-zone-p '(0 5 -24 24 25 -25 "five" nil (5))))
+(dolist (zone '(5 -11))
+  (let ((clara:*time-zone* zone))
+    (clara.system::carry "0.0.1-new"))
+  (check (list zone t)
+         (list zone (and (search (format nil "~%(:time-zone ~D)~%(:name " zone) (on-disk *machine-disk* "/clara/carried")) t))))
+(dolist (zone '("EST" 25))
+  (let ((clara:*time-zone* zone))
+    (clara.system::carry "0.0.1-new"))
+  (check (list zone nil) (list zone (search "(:time-zone" (on-disk *machine-disk* "/clara/carried")))))
 (clara.fat:remove-file "/clara/carried")
 (clara.fat:make-directory "/clara/carried")
 (check t (let ((said (said-by-all (lambda () (clara.system:start-again :save nil)))))
@@ -11629,6 +11918,30 @@ second
                  (and (search "world: the launcher's list is in the order that its lines were moved into" said) t)
                  (and (search "world: the launcher's list is not in the order that it had before: " said) t)
                  (and (search "world: it is saved as it is now" said) t)))))
+
+;; The machine is where the account says that it was, for the time of day:
+;; the time zone of the world before, which is said when it is another than
+;; this world's. An account without one, which a system before 0.0.63 left,
+;; and one whose time zone is none leave the machine where it is.
+(dolist (row '((((:time-zone 5)) 0 5 t) (((:time-zone -11)) 4 -11 t) (((:time-zone 4)) 4 4 nil) (nil 4 4 nil)
+               (((:time-zone 25)) 4 4 nil) (((:time-zone "five")) 0 0 nil) (((:time-zone)) 0 0 nil) (((:time-zone . 5)) 0 0 nil)))
+  (setq clara:*time-zone* (second row))
+  (check (list row (third row)
+               (if (fourth row) (format nil "world: the time zone is ~D, as it was in the world before~%" (third row)) ""))
+         (let ((said (said-by (lambda () (clara.system::stand (cons '(:carried "0.0.0-host" "0.0.1-new") (first row)))))))
+           (list row clara:*time-zone* said))))
+;; And through a whole start, after the text: /home/init.lisp says one time
+;; zone, and the world before had been told another since.
+(setq clara:*time-zone* 0)
+(trial-disk (format nil "(:carried \"0.0.0-host\" \"0.0.1-new\")~%(:time-zone -11)~%")
+            (list "init.lisp" "(setq clara:*time-zone* 4)"))
+(check '(t -11)
+       (list (and (search (format nil "home: /home/init.lisp is loaded, 1 form~%~
+                                       world: the time zone is -11, as it was in the world before~%")
+                          (said-by-all #'clara.system:start))
+                  t)
+             clara:*time-zone*))
+(setq clara:*time-zone* 0)
 
 ;; A world that came back as an image takes what the two files have that
 ;; it has not: what was defined after it was saved, and what somebody

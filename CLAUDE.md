@@ -1789,6 +1789,53 @@ Rules:
   letters reach below the baseline as a distance, 236, where a number below
   nought is meant, and `fit` takes either: `*font-facts*` has what FreeType
   reads, the number as it stands.
+- The clock (lisp/windows.lisp, Julio's issue #57; DESIGN.md has what was
+  decided). What the right-hand end of the bar says is `*time*`, the words
+  that the function of `clara.windows:*clock*` made of a time, and before
+  them `*name*`: `paint-desk` draws the two from the right, and `bar-says`
+  of the tests is the same rule written a second time, so a change to
+  where either stands is a change to both. Only `tell-time` changes the
+  words, with the lock, and it calls the bar dirty from the button on. The
+  function is called outside the lock and only in the clock's thread
+  (`keep-time`, `*timekeeper*`), never by START: a world that was saved
+  with a clock that does not come back has to start. The thread asks the
+  function every second (`clara.windows::*beat*`, the seconds that it
+  sleeps until, is 1), which costs a hundred thousandth of the second and
+  is what lets a time zone that was set show at once. It is paid for by
+  every boot that runs the window manager, and the boot that collects at
+  every safe point runs none: should one ever, the clock is the first
+  thing to be given a longer beat there. With NIL for the beat START
+  makes no thread, and that is how lisp/host/tests.lisp runs. A thread
+  that woke by SBCL's clock would draw on a test's screen in the middle of
+  a check, so there the tests tell the time themselves, a time of their
+  choosing, and say what the bar should be saying in `*bar-clock*`. No
+  host test waits for a second to be over, since the host tests have no
+  time to spare (issue #122): that the thread wakes by itself is
+  tools/resumed.txt's to show, on all three machines, in the world that
+  came back, whose boots take seconds. It is not tools/session.txt's: on a
+  slow runner of CI the first x86_64 boot has taken 88 of its 90 seconds,
+  so nothing that waits, and no function that has to be compiled for it,
+  goes into that session for a thing that another boot can show. A
+  session never shows the time. It holds the bar against
+  `clara.windows::*time*` (`bar-shows`, defined in tools/resumed.txt, inside
+  a PROGN) and the words against `(clara.windows:day-and-time
+  (get-universal-time))`, inside `until`, since a minute can end between
+  two looks. And one more thread runs with the window manager: a count of
+  threads in a session is one higher than it was before 0.0.63.
+- The time of day (lisp/boot.lisp, "The time of day"). SBCL never loads
+  that file, and has a DECODE-UNIVERSAL-TIME of its own, which is the
+  second opinion: the host tests read the DEFUN out of the file into a
+  package where the name is another symbol, and give both the same times
+  and time zones. So the definition begins at the start of a line and ends
+  at an empty one, and calls nothing that is only this file's. Under SBCL
+  `clara:*time-zone*` is the stand-in's, which SBCL's own function knows
+  nothing of: a file of the world hands it over, `(decode-universal-time
+  time clara:*time-zone*)`, and never leaves the time zone out. A text of
+  `evaluations` binds the variable and does not read the world's:
+  `(cl::%self-test)` is typed in worlds where somebody has set it. The
+  account of a world that leaves always has the time zone (`(:time-zone
+  n)`, `stand` in lisp/system.lisp), so the tests of the account write
+  that line out.
 - A thread that is stopped while it reads the disk, by
   `clara:destroy-thread` or by a Ctrl-C, leaves the disk refusing every read
   after it (issue #174). So a session closes an application by its own

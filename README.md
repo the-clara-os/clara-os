@@ -66,7 +66,7 @@ in the console's letters or in any such font
 `(clara.windows:start)` takes the screen from the console and puts windows
 on it, each a surface that its program draws on, with the focus, the keys
 and the pointer going to the one that is picked, a launcher along the top,
-and the REPL, a listener in a window (lisp/terminal.lisp), which is the
+which says the day and the time at its end, and the REPL, a listener in a window (lisp/terminal.lisp), which is the
 same world as the prompt on the serial port. A world that is saved while it runs
 boots straight into it. Three applications come with it, Emma, a text editor
 (lisp/emma.lisp), Jaid, a file browser (lisp/jaid.lisp), and Ares, a web

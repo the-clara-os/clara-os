@@ -2504,6 +2504,119 @@ Infrastructure, done:
   where the Mac's is 2.6.10 (950 seconds there; the new boot 7, and the
   boot that collects at every safe point 213).
 
+- **The clock** (2026-11-26, version 0.0.63). The window manager's bar
+  says the day and the time at its right-hand end, `Thu Nov 26 00:52`, as
+  Julio's issue #57 asks: "Time and date on the window manager, perhaps on
+  the top bar, far right". What the system is, which stood at that end,
+  stands before it, 16 pixels away, and a screen with room for one of the
+  two has the clock. The words are a function's: `clara.windows:*clock*`
+  holds one that makes a string of a time, the seconds since 1900 began in
+  Greenwich, or the name of one, which is `clara.windows:day-and-time` as
+  the system comes; NIL is a bar without a clock. A thread of the window
+  manager's own, named `clock`, asks the function every second and has the
+  bar put together again when it says something else, which the system's
+  own does once a minute. A function that fails leaves the bar without a
+  clock and is said to have failed once, on the serial port; one that
+  never comes back costs the clock and nothing else, since nothing but
+  that thread calls it.
+  The time is the one that there was, the firmware's clock in the handoff
+  and the ticks since, which is Greenwich's. Where the machine stands is
+  `clara:*time-zone*`, a new name in CLARA: the hours that the place is
+  behind Greenwich, as Common Lisp counts a time zone, 0 until somebody
+  says otherwise. The language has `decode-universal-time` and
+  `get-decoded-time` for it (lisp/boot.lisp), which go by that variable
+  when they are told no time zone. The time zone stays with a world that
+  is saved, and goes across an upgrade in the account of the world that
+  leaves (`(:time-zone 5)`, lisp/system.lisp), since every newer build
+  that `make run` hands a machine makes its world anew. Nothing of what an
+  object is has changed, so an image's number has not. DESIGN.md has what
+  was decided ("The clock"), the manual a section ("The clock") with what
+  to type.
+  What it does not do. A time zone is a whole number of hours, there being
+  no ratios (issue #209), and it is the same number in summer and in
+  winter until it is changed by hand (issue #208). Nothing puts a
+  time together: there is no `encode-universal-time` (issue #210). A
+  machine that is paused counts no time and is behind afterwards, by eight
+  seconds after eight seconds of QEMU's `stop`, until it is started again
+  (issue #207): the firmware's clock is read once. And what the clock
+  says, the hour of twenty-four, no year, no seconds, and that it stands
+  after the system's name, were picked here and are Julio's to change
+  (issue #211).
+  What it costs, at a kernel that the Mac runs itself: the system's clock
+  makes its words in 10 millionths of a second, and a thousand times told
+  with other words each time, the bar put together again every time, take
+  70 milliseconds. So the thread costs a hundred thousandth of each
+  second. `decode-universal-time` takes 0.2 millionths.
+  How it was checked. SBCL's own `decode-universal-time` is the second
+  opinion on the one in lisp/boot.lisp, which SBCL never loads: the host
+  tests read the definition out of the file into a package where the name
+  is another symbol, and give both the edges in every time zone, the days
+  around six ends of February and of a century, and twenty thousand times
+  that chance picks; a million and a half were given once by hand, with
+  every day of four hundred years among them, and came to no difference.
+  Seven texts of the self-test have the same at every boot, walked,
+  compiled and translated. The window manager's tests have no thread for
+  the clock: they tell the time themselves, a time of their choosing, and
+  hold every pixel of the bar against a rule of their own, in the
+  console's letters and in letters of outlines, at the five widths at
+  which something comes or goes, under the pointer, beside a window, with
+  the launcher's list open, after a stop and in a world that came back.
+  That the thread wakes by itself is tried where the time is real, in the
+  world that each of the three machines saved and started again, which
+  has one thread more than it had: tools/resumed.txt gives the window
+  manager another clock and waits for the bar's words to be that clock's
+  with nobody telling it, gives the system's own back, and holds the
+  pixels of the bar against the day and the time. tools/session.txt takes
+  a time apart and asks the clock for two times, which waits for nothing;
+  tools/upgrade.txt sets the time zone before its upgrade and finds it
+  after; and the manual's section is typed at its two boots. The firmware of QEMU's two machines says no time zone,
+  2047 in the word for it, which a temporary line in the handoff printed
+  on both.
+  Forty-six mistakes were planted in the three files, one at a time, each
+  in a copy of the tree, with the host tests cut after the section that
+  the mistake belongs to. Of the first forty-five, 44 were noticed; the
+  one that was not was the words that RESUME forgets, which START forgets
+  once more when it runs, so a world that comes back on a machine without
+  a screen has a test now, which notices. The forty-sixth is the same
+  line in START, and nothing can notice that one: STOP and RESUME have
+  forgotten the words before it, as they have the windows and the rest of
+  what START begins with. Two checks that had noticed by ending the run,
+  one of them after its two minutes, fail in seconds now. Nine more were
+  planted in the system itself, each copy built and booted: three were
+  noticed by the new texts of the self-test as the kernel started, two by
+  the first session, two by the session of the world that came back, and
+  one by the upgrade's. The ninth, a bar that is called dirty and not put
+  together, is put together by the next window that draws: that one is
+  the host tests' to notice, and they do.
+  A copy of the disk of Julio's machine, which ran 0.0.61-4d08143c, with
+  a copy of his work disk beside it, took the build at once and came up
+  as 0.0.63 with its 17 forms: his `ls` and `print-columns`, the commands
+  that push, pull and load his two files, and his calculator, loaded and
+  launched, did what they did before, and with the time zone set to 5 the
+  bar said the time on his wall, `Thu Nov 26 02:14`.
+  `make test` on the Mac, the host tests with 29353 checks (29241
+  before) and all twenty-one boots, and the same in a container of Ubuntu
+  26.04, CI's release, whose SBCL is 2.6.0 where the Mac's is 2.6.10 (960
+  seconds there, 950 before; the first x86_64 boot 74, and the boot that
+  collects at every safe point 212). The container's first run found what
+  the Mac could not. Debian's SBCL calls itself `SBCL 2.6.0.debian`, six
+  characters more than the Mac's, and what the Lisp is called is the
+  system's name in the host tests: a desk of the new tests, 360 pixels
+  wide, had no room for it beside the clock, and a check said so. The
+  desk is as wide as the name needs now.
+  CI's limits, which this slice ran into. Main's run for the merge before
+  it was cancelled at the thirty minutes that a job has, in its last
+  boot, on a slow runner; started again, it passed in 25m26s. On that
+  runner the host tests had taken 118 of their 120 seconds (issue #122)
+  and the first x86_64 boot 88 of its 90 (issue #93). So this slice adds
+  nothing to either. The rule of the tests for the bar is worked out for
+  a pixel of the bar and no longer for every pixel of the screen, which
+  takes as much off the host tests as the new sections, half a second
+  together, put on: 86.4 and 86.3 seconds with them on the Mac, 86.2 and
+  86.8 without, run in turn. And nothing that waits, and no function that
+  has to be compiled for the purpose, is typed at a first boot: the two
+  lines that tools/session.txt has for the clock ask it for two times.
+
 Infrastructure, for sessions with budget left over:
 
 - Read the UART base from ACPI (SPCR or DBG2) instead of assuming
@@ -5413,7 +5526,11 @@ No milestone yet, to be picked up when they start to matter:
   and a length that is no length is called an index there.
   FORMAT has its directives since 0.0.62 (lisp/format.lisp, "The
   directives of FORMAT" above) but the ones for numbers with a fraction,
-  issue #200, and the pretty printer's, #201. The functions on sequences take
+  issue #200, and the pretty printer's, #201. A time is taken apart since
+  0.0.63 (DECODE-UNIVERSAL-TIME and GET-DECODED-TIME, "The clock" above),
+  in whole hours of a time zone (issue #209) and without daylight saving
+  time (#208), and not put together: ENCODE-UNIVERSAL-TIME is issue #210.
+  The functions on sequences take
   lists only, SUBSEQ strings as well, and of their keyword arguments
   `:test`, with `:key` for MEMBER and ASSOC and `:initial-value` for
   REDUCE; FIND, FIND-IF, POSITION and POSITION-IF take strings and

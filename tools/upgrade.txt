@@ -12,6 +12,8 @@
 DOUBLED
 > (progn (defun not-written-down () 'inside-a-progn) (setq *jobs* 'changed-and-not-defined-again))
 CHANGED-AND-NOT-DEFINED-AGAIN
+> (setq clara:*time-zone* 5)
+5
 > (defun doubled (n)
     ;; defined a second time: this is the one that is kept
     (+ n n))
@@ -60,6 +62,9 @@ clara: starting the machine again
 (T "A picture" T)
 > (clara.terminal:history)
 NIL
+> (list clara:*time-zone* (clara.windows:day-and-time 3976214400)       ; the machine is where it was said to be
+        (and (member "world: the time zone is 5, as it was in the world before" clara.system::*report* :test #'equal) t))
+(5 "Wed Dec 31 19:00" T)
 > (list (clara.windows:applications) (clara.windows:commands) (clara.windows:move-down "Tidy"))
 (("Emma" "REPL" "Jaid" "Ares" "Parker") ("Tidy" "Restart" "Shut Down") ("Restart" "Tidy" "Shut Down"))
 > (list *from-a-file* (written-down "(load (concatenate 'string \"/clara/\" \"kept.lisp\"))") (written-down "(default-of 4)") (written-down "(defun default-of (value) value)"))
