@@ -9502,24 +9502,28 @@
                                           ((null (fourth tint)) (setf (fourth tint) +highlight+)))))))
           tints))))
 
-;; The window of an editor against its text, after it was drawn.
+;; The window of an editor against its text, after it was drawn. The
+;; second value is the cells that were held to other colours, for whoever
+;; wants to count them: working them out is reading the whole text.
 (defun editor-wrong (editor)
   (clara.emma::render editor)
   (let* ((lines (clara.emma::all-lines editor))
          (top (clara.emma::editor-top editor)) (left (clara.emma::editor-left editor))
          (columns (clara.emma::editor-columns editor)) (rows (clara.emma::editor-rows editor))
-         (asking (clara.emma::editor-asking editor)))
-    (wrong-cells (clara.emma::editor-surface editor)
-                 (append (loop for r below rows
-                               collect (let ((line (or (nth (+ top r) lines) "")))
-                                         (pad (if (< left (length line)) (subseq line left) "") columns)))
-                         (list (list (pad (clara.emma::status editor) columns))))
-                 (cons (list (- (clara.emma::editor-row editor) (clara.emma::editor-top editor))
-                             (- (clara.emma::editor-column editor) (clara.emma::editor-left editor)) +ink+)
-                       (and asking
-                            (list (list rows (+ 1 (length (car asking)) (length (clara.emma::editor-answer editor)))
-                                        +paper+))))
-                 (editor-tints editor))))
+         (asking (clara.emma::editor-asking editor))
+         (tints (editor-tints editor)))
+    (values (wrong-cells (clara.emma::editor-surface editor)
+                         (append (loop for r below rows
+                                       collect (let ((line (or (nth (+ top r) lines) "")))
+                                                 (pad (if (< left (length line)) (subseq line left) "") columns)))
+                                 (list (list (pad (clara.emma::status editor) columns))))
+                         (cons (list (- (clara.emma::editor-row editor) (clara.emma::editor-top editor))
+                                     (- (clara.emma::editor-column editor) (clara.emma::editor-left editor)) +ink+)
+                               (and asking
+                                    (list (list rows (+ 1 (length (car asking)) (length (clara.emma::editor-answer editor)))
+                                                +paper+))))
+                         tints)
+            tints)))
 
 (defun keys (editor &rest codes)
   (dolist (code codes)
@@ -9535,7 +9539,7 @@
          (list (editor-state editor) (clara.windows:window-title (clara.emma::editor-window editor))
                (clara.draw:surface-width (clara.emma::editor-surface editor))
                (clara.draw:surface-height (clara.emma::editor-surface editor))))
-  (check '(0 0 "Ctrl-S saves, Ctrl-O opens a file, Ctrl-E evaluates, Ctrl-Q closes")
+  (check '(0 0 "Ctrl-S saves, Ctrl-O opens, Ctrl-F finds, Ctrl-E evaluates, Ctrl-Q closes")
          (list (editor-wrong editor) (wrong-pixels) (clara.emma::editor-message editor)))
   (keys editor "ab")
   (check '((("ab") 0 2) " a text with no file yet, not " nil 0)       ; the words, cut to the row
@@ -9754,7 +9758,7 @@
 ;; hundred of them as they come: the two have the same text, the cursor at
 ;; the same place and the same lines in the window, and every cell of the
 ;; window shows it.
-(defstruct ref (lines (list "")) (row 0) (column 0) (cut "") cutting (top 0) (left 0) mark pressed)
+(defstruct ref (lines (list "")) (row 0) (column 0) (cut "") cutting (top 0) (left 0) mark pressed sought)
 
 (defun ref-line (ref)
   (nth (ref-row ref) (ref-lines ref)))
@@ -9830,11 +9834,45 @@
           (ref-mark ref) (ref-pressed ref))
     (ref-go ref (+ (ref-top ref) (floor y 16)) (+ (ref-left ref) (floor (+ x 4) 8)))))
 
+;; What is looked for there, the slow way: the text is one string, which
+;; SBCL searches, from the cursor on and then from its start. A line that
+;; a window of ROWS rows does not show comes to its middle. What comes back
+;; is what the editor's status row should say of it, or NIL for what was
+;; found further down.
+(defun ref-find (ref words rows)
+  (let* ((text (ref-text ref)) (cursor (ref-index ref (cons (ref-row ref) (ref-column ref))))
+         (further (search words text :start2 cursor :test #'char-equal))
+         (at (or further (search words text :test #'char-equal))))
+    (setf (ref-sought ref) words
+          (ref-pressed ref) nil
+          (ref-cutting ref) nil)
+    (if at
+        (let* ((row (count #\Newline text :end at))
+               (column (- at (let ((before (position #\Newline text :end at :from-end t))) (if before (1+ before) 0))))
+               (place (cons row column))
+               (behind (+ at (length words)))
+               (alone (= at (or (search words text :start2 behind :test #'char-equal)
+                                (search words text :test #'char-equal)))))
+          (setf (ref-mark ref) place
+                (ref-row ref) row
+                (ref-column ref) (+ column (length words)))
+          (unless (< -1 (- row (ref-top ref)) rows)
+            (setf (ref-top ref) (max 0 (- row (floor rows 2)))))
+          (cond (alone "the only one in the text")
+                ((not further) "none further down: the first in the text")))
+        (concatenate 'string "not in the text: " words))))
+
 ;; A key: the ones that have to do with what is highlighted, and then the
-;; others, as they were before anything could be.
+;; others, as they were before anything could be. Ctrl-G is one of them
+;; once something was looked for: an editor that is asked before that asks
+;; what to find, and the walk below gives that question up.
 (defun ref-key (ref code rows &aux (code (if (= code 22) 25 code))) ; Ctrl-V is Ctrl-Y
   (setf (ref-pressed ref) nil)
-  (cond ((= code 3)
+  (cond ((= code 7)
+         (setf (ref-cutting ref) nil)
+         (when (ref-sought ref)
+           (ref-find ref (ref-sought ref) rows)))
+        ((= code 3)
          (setf (ref-cutting ref) nil)
          (let ((marked (ref-marked ref)))
            (when marked
@@ -9910,7 +9948,8 @@
 (setf (clara.windows:clipboard) "")
 (let ((editor (clara.emma::open-editor nil :columns 12 :rows 5 :x 20 :y 60))
       (ref (make-ref)) (state (sb-ext:seed-random-state 13)) (apart 0) (wrong 0) (pixels 0) (most 0)
-      (colored 0) (hinted 0) (deepest 0) (lit 0) (taken 0))
+      (colored 0) (hinted 0) (deepest 0) (lit 0) (taken 0)
+      (found 0) (around 0) (alone 0) (missed 0) (unsaid 0))
   (dotimes (step 700)
     (let* ((kind (random 100 state))
            (n (random 100 state))
@@ -9918,6 +9957,8 @@
                        ((< kind 14) 3)
                        ((< kind 17) 24)
                        ((< kind 21) 22)
+                       ((< kind 25) :find)     ; Ctrl-F, something to find, and Enter
+                       ((< kind 29) 7)         ; and the same once more
                        ((< n 30) (char-code (char "ab (((()))" (random 10 state))))
                        ((< n 34) (char-code (char "\";|\\" (random 4 state))))
                        ((< n 45) 10)
@@ -9942,6 +9983,41 @@
                (ref-point ref x y 5)
                (clara.emma::drag editor to-x to-y 1)
                (ref-drag ref to-x to-y)))
+            ((or (eq code :find) (eql code 7))
+             ;; A few characters of some line, in capitals, or what no line has; and every other time the same
+             ;; once more, right after. What the status row says of it is the second editor's word too.
+             (flet ((again ()
+                      (let ((asks (null (ref-sought ref))) (says (ref-key ref 7 5)))
+                        (clara.emma::key editor 7)
+                        (cond (asks
+                               (unless (equal (car (clara.emma::editor-asking editor)) "Find: ")
+                                 (incf unsaid))
+                               (clara.emma::key editor 27))
+                              (t
+                               (unless (equal says (clara.emma::editor-message editor))
+                                 (incf unsaid))
+                               (cond ((null says) (incf found))
+                                     ((search "the only one" says) (incf alone))
+                                     ((search "none further down" says) (incf around))
+                                     (t (incf missed))))))))
+               (when (eq code :find)
+                 (let* ((size (1+ (random 6 state)))
+                        (long (remove-if (lambda (line) (< (length line) size)) (ref-lines ref)))
+                        (words (if (or (null long) (< n 8))
+                                   "b)a"
+                                   (let* ((line (nth (random (length long) state) long))
+                                          (start (random (- (length line) size -1) state)))
+                                     (string-upcase (subseq line start (+ start size))))))
+                        (says (ref-find ref words 5)))
+                   (keys editor 6 words 10)
+                   (unless (equal (or says "Ctrl-G finds the next one") (clara.emma::editor-message editor))
+                     (incf unsaid))
+                   (cond ((null says) (incf found))
+                         ((search "the only one" says) (incf alone))
+                         ((search "none further down" says) (incf around))
+                         (t (incf missed)))))
+               (when (or (eql code 7) (< n 50))
+                 (again))))
             (t
              (let ((marked (ref-marked ref)) (lines (ref-lines ref)))
                (clara.emma::key editor code)
@@ -9950,10 +10026,11 @@
                  (incf taken)))))
       (when (ref-marked ref)
         (incf lit))
-      (unless (zerop (editor-wrong editor))     ; which draws it
-        (incf wrong))
-      ;; What the walk came by: cells in other colours, hints, and how deep.
-      (let ((tints (editor-tints editor)))
+      ;; The window is drawn and held against the text, and what the walk
+      ;; came by is counted: cells in other colours, hints, and how deep.
+      (multiple-value-bind (cells tints) (editor-wrong editor)
+        (unless (zerop cells)
+          (incf wrong))
         (incf colored (length tints))
         (when (find-if #'fourth tints)
           (incf hinted))
@@ -9961,10 +10038,11 @@
           (setq deepest (max deepest (or (position (third tint) *levels*) 0)))))
       (ref-view ref 5 12)
       (unless (equal (list (ref-lines ref) (ref-row ref) (ref-column ref) (ref-cut ref) (ref-top ref) (ref-left ref)
-                           (ref-mark ref))
+                           (ref-mark ref) (ref-sought ref))
                      (append (editor-state editor)
                              (list (clara.windows:clipboard) (clara.emma::editor-top editor)
-                                   (clara.emma::editor-left editor) (clara.emma::editor-mark editor))))
+                                   (clara.emma::editor-left editor) (clara.emma::editor-mark editor)
+                                   (clara.emma::editor-sought editor))))
         (incf apart))
       (setq most (max most (length (ref-lines ref))))
       (when (zerop (mod step 50))
@@ -9973,6 +10051,10 @@
   (check '(0 0 0 t) (list apart wrong pixels (> most 12)))
   (check '(t t t) (list (> colored 1500) (> hinted 20) (>= deepest 3)))
   (check '(t t) (list (> lit 50) (> taken 20)))  ; and with something highlighted, often, which keys then took out
+  ;; And things were looked for: found further down, found from the start
+  ;; again, found with no other in the text, and not found, with the status
+  ;; row saying which each time.
+  (check '(0 t t t t) (list unsaid (> found 10) (> around 5) (> alone 10) (> missed 10)))
   (clara.windows:close-window (clara.emma::editor-window editor)))
 
 ;; The parentheses of a text. A pair has the colour of its level, the
@@ -10224,6 +10306,140 @@
     (check '(1 1) (cdr (editor-state editor))))
   (clara.windows:close-window (clara.emma::editor-window editor)))
 
+;; Finding (Julio's issue #59). Ctrl-F asks in the status row what to find,
+;; and Enter looks for it from the cursor on, a letter in either case: what
+;; is found is highlighted, with the cursor behind it, and a line that the
+;; window does not show comes to the middle of it. Ctrl-G looks for the
+;; same once more, from the start of the text again when there is none
+;; further down, which the row says, as it says that there is no other and
+;; that there is none.
+(let* ((file (write-scratch "find.lisp" "(defun one (x)" "  (two x))" "" "(defun two (y)" "  (list 'Two y \"TWO\"))"
+                            ";; and one more: two"))
+       (editor (clara.emma::open-editor file :columns 30 :rows 3)))
+  (flet ((found ()                       ; drawn first, since the window follows the cursor when it is drawn
+           (let ((wrong (editor-wrong editor)))
+             (list (cdr (editor-state editor)) (clara.emma::editor-mark editor) (clara.emma::editor-top editor)
+                   (clara.emma::editor-message editor) wrong)))
+         (asked ()
+           (list (car (clara.emma::editor-asking editor)) (clara.emma::editor-answer editor) (editor-wrong editor))))
+    ;; Before anything was looked for, Ctrl-G asks as Ctrl-F does. A question
+    ;; that is given up has looked for nothing, and neither has one that got
+    ;; no answer.
+    (keys editor 7)
+    (check '("Find: " "" 0) (asked))
+    (keys editor "tw" 27)
+    (check '(nil nil ((0 0) nil 0 nil 0))
+           (list (clara.emma::editor-asking editor) (clara.emma::editor-sought editor) (found)))
+    (keys editor 6 10)
+    (check '(nil nil ((0 0) nil 0 nil 0))
+           (list (clara.emma::editor-asking editor) (clara.emma::editor-sought editor) (found)))
+    (keys editor 6)
+    (check '("Find: " "" 0) (asked))
+    (keys editor "two" 10)
+    (check '(((1 6) (1 . 3) 0 "Ctrl-G finds the next one" 0) "two" nil nil)
+           (list (found) (clara.emma::editor-sought editor) (clara.emma::editor-asking editor)
+                 (clara.emma::editor-changed editor)))
+    ;; The next one, from the line under it, which is the window's last
+    ;; row and has the cursor drawn in it: the line of what is found comes
+    ;; to the middle row, and the line that the cursor was in to the first,
+    ;; without the bar that was drawn there.
+    (keys editor clara.input:+down+)
+    (clara.emma::render editor)
+    (keys editor 7)
+    (check '((3 10) (3 . 7) 2 nil 0) (found))
+    (keys editor 7)                              ; one with a capital,
+    (check '((4 12) (4 . 9) 2 nil 0) (found))
+    (keys editor 3)                              ; which is copied as the text has it,
+    (check "Two" (clara.windows:clipboard))
+    (keys editor 7)                              ; and one in capitals, in the same line
+    (check '((4 19) (4 . 16) 2 nil 0) (found))
+    (keys editor 7)
+    (check '((5 20) (5 . 17) 4 nil 0) (found))
+    (keys editor 7)                              ; none further down: the first one again, and the row says so
+    (check '((1 6) (1 . 3) 0 "none further down: the first in the text" 0) (found))
+    ;; What is typed takes the place of what was found, as it does of
+    ;; anything that is highlighted, and the next one is found from there.
+    (keys editor "2")
+    (check '(((1 4) nil 0 nil 0) "  (2 x))" t)
+           (list (found) (clara.emma::editor-line editor) (clara.emma::editor-changed editor)))
+    (keys editor 7)
+    (check '((3 10) (3 . 7) 2 nil 0) (found))
+    ;; What is not there: the row says so, with what was looked for, and
+    ;; everything is as it was, what is highlighted too.
+    (keys editor 6 "three" 10)
+    (check '(((3 10) (3 . 7) 2 "not in the text: three" 0) "three") (list (found) (clara.emma::editor-sought editor)))
+    (keys editor 7)
+    (check '((3 10) (3 . 7) 2 "not in the text: three" 0) (found))
+    ;; The only one: the row says so when it is found, further down or
+    ;; from the start again, and when it is found again where it is.
+    (keys editor 6 "MORE" 10)
+    (check '((5 15) (5 . 11) 4 "the only one in the text" 0) (found))
+    (keys editor 7)
+    (check '((5 15) (5 . 11) 4 "the only one in the text" 0) (found))
+    (keys editor 6 "tWO Y" 10)                   ; a space is a character like another, and the capitals may be the question's
+    (check '((4 14) (4 . 9) 4 "the only one in the text" 0) (found))
+    ;; One that begins at the cursor is found, and one that the cursor is in
+    ;; the middle of is passed.
+    (keys editor clara.input:+up+ clara.input:+home+ clara.input:+right+ clara.input:+right+ clara.input:+right+
+          clara.input:+right+ clara.input:+right+ clara.input:+right+ clara.input:+right+)
+    (check '((3 7) nil 3 nil 0) (found))
+    (keys editor 6 "two" 10)
+    (check '((3 10) (3 . 7) 3 "Ctrl-G finds the next one" 0) (found))
+    (keys editor clara.input:+left+ 7)
+    (check '((4 12) (4 . 9) 3 nil 0) (found))
+    ;; Ctrl-V in the question puts in the first line of what was copied.
+    (setf (clara.windows:clipboard) (format nil "one~%two"))
+    (keys editor 6 22)
+    (check '("Find: " "one" 0) (asked))
+    (keys editor 10)
+    (check '((5 10) (5 . 7) 3 "Ctrl-G finds the next one" 0) (found))
+    ;; A line below the window comes to its middle row, and in a line that
+    ;; is longer than the window is wide, the window goes along the line to
+    ;; the end of what was found.
+    (keys editor clara.input:+page-down+ clara.input:+end+ ";; a line of more than thirty characters ends in six"
+          clara.input:+page-up+ clara.input:+page-up+ clara.input:+page-up+ clara.input:+home+)
+    (check '((0 0) nil 0 nil 0) (found))
+    (keys editor 6 "six" 10)
+    (check '(((6 52) (6 . 49) 5 "the only one in the text" 0) 23)
+           (list (found) (clara.emma::editor-left editor))))
+  (clara.windows:close-window (clara.emma::editor-window editor)))
+;; A text with nothing in it; what is longer than any line; one that lies
+;; over the next, which is one and no more; and two in one line, the first
+;; of which is found from the cursor behind the second.
+(let ((editor (clara.emma::open-editor nil :columns 20 :rows 2)))
+  (flet ((found ()
+           (let ((wrong (editor-wrong editor)))
+             (list (cdr (editor-state editor)) (clara.emma::editor-mark editor) (clara.emma::editor-message editor) wrong))))
+    (keys editor 6 "a" 10)
+    (check '((0 0) nil "not in the text: a" 0) (found))
+    (keys editor "aaa" 6 "aaaa" 10)
+    (check '((0 3) nil "not in the text: aaaa" 0) (found))
+    (keys editor 6 "aa" 10)
+    (check '((0 2) (0 . 0) "the only one in the text" 0) (found))
+    (keys editor 7)
+    (check '((0 2) (0 . 0) "the only one in the text" 0) (found))
+    (keys editor clara.input:+home+ 11 "ab ab" 6 "AB" 10)
+    (check '((0 2) (0 . 0) "none further down: the first in the text" 0) (found))
+    (keys editor 7)
+    (check '((0 5) (0 . 3) nil 0) (found))
+    (keys editor 7)
+    (check '((0 2) (0 . 0) "none further down: the first in the text" 0) (found))
+    ;; The middle of a window of two rows is its second: a line below the
+    ;; window comes there, and one above it to the first when the text
+    ;; begins with it.
+    (keys editor clara.input:+end+ 10 "c" 10 "d" 10 "e x" clara.input:+page-up+ clara.input:+page-up+ clara.input:+page-up+
+          clara.input:+home+)
+    (check '(((0 0) nil nil 0) 0) (list (found) (clara.emma::editor-top editor)))
+    (keys editor 6 "X" 10)
+    (check '(((3 3) (3 . 2) "the only one in the text" 0) 2) (list (found) (clara.emma::editor-top editor)))
+    (keys editor 6 "AB" 10)
+    (check '(((0 2) (0 . 0) "none further down: the first in the text" 0) 0) (list (found) (clara.emma::editor-top editor)))
+    (keys editor 6 "d" 10)                       ; the third line, to the second row,
+    (check '(((2 1) (2 . 0) "the only one in the text" 0) 1) (list (found) (clara.emma::editor-top editor)))
+    (keys editor 6 "c" 10)                       ; and the line in the first row, which the window shows, stays there
+    (check '(((1 1) (1 . 0) "the only one in the text" 0) 1) (list (found) (clara.emma::editor-top editor))))
+  (clara.windows:close-window (clara.emma::editor-window editor)))
+
 ;; Ctrl-E evaluates the forms of the text, in order, as LOAD would: how
 ;; many there were is said; what goes wrong is said with the line that the
 ;; form begins on, where the cursor goes; and Ctrl-C stops them.
@@ -10287,6 +10503,12 @@
   (check t (eventually (lambda () (zerop (wrong-cells face '("big red roses ") (list (list 0 4 +ink+)))))))
   (clara.windows:key-typed 19)
   (check t (eventually (lambda () (equal (scratch-text "poem.txt") (format nil "big red roses~%  violets~%~%end~%")))))
+  (clara.windows:key-typed 6)                                                ; Ctrl-F, what to find, and Enter
+  (type-text "ROSE")
+  (clara.windows:key-typed 10)
+  (check t (eventually (lambda ()
+                         (zerop (wrong-cells face '("big red roses ") (list (list 0 12 +ink+))
+                                             (loop for column from 8 below 12 collect (list 0 column +ink+ +highlight+)))))))
   (multiple-value-bind (x y) (clara.windows:window-position window)
     (click (+ x 34) (+ y 20))                                                ; the fifth cell of the second row
     (type-text "#")

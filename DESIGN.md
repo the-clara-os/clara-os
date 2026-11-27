@@ -3664,6 +3664,81 @@ architectures (kernel/vm.c).
   prompt show in it. It costs what nine lines cost to put into words,
   and draws nothing when they say what they said.
 
+## Finding (decided for issue #59, 2026-11-27)
+
+- Emma finds text (Julio: "Add ability to find text in Emma editor").
+  Ctrl-F asks `Find: ` in the status row, Enter looks for what was typed
+  there, and Ctrl-G looks for the same once more. Ctrl-F is the key that
+  finding has nearly everywhere, and Ctrl-G the key for the next one in a
+  good many places, the programs of the Mac among them, where it goes
+  with the other key of the two. Emma had neither in use.
+- The question is the status row's, which asked for the name of a file
+  before (`ask`): what is typed is the answer, Backspace takes a character
+  back, Ctrl-V adds the first line of what was copied, Escape gives it up.
+  So the text is looked for when Enter hands it over, and not while it is
+  typed. An answer of nothing looks for nothing.
+- It is looked for from the cursor to the end of the text, and then from
+  the start of the text down to the cursor, so the place where the cursor
+  stands never decides whether a thing is found, only which one comes
+  first. An editor that stopped at the end would have its user go to the
+  top of the text before every look. The row says when the looking began
+  again at the start, since the window then moves up where a hand expected
+  it to move down.
+- What is found is highlighted, by the mark and the cursor that the
+  pointer highlights with, the cursor behind it. Nothing new is drawn for
+  it, and everything that is done to what is highlighted is done to what
+  was found: Ctrl-C copies it, a character or Ctrl-V takes its place, a
+  key that moves the cursor leaves it. That is also how one thing is put
+  in the place of another, with Ctrl-G for the next: there is no key for
+  that of its own. And because the cursor is behind what was found, the
+  next look begins there, so what is found twice in a row is never the
+  same place, nor one that lies over it: `aa` is in `aaa` once.
+- A letter is found in either case. Most of what is looked for in a text
+  here is a name of Lisp, which the reader takes in either, and whoever
+  looks for a word in a sentence means the word at the start of a
+  sentence too. The letters are those that `string-downcase` knows, the
+  ones from `a` to `z` (issue #205). Every other character is itself.
+  Both strings are made small letters and then held against each other
+  a character at a time, by a loop of the editor's own, because the
+  language has no `search`, no `char-equal` and no `string-equal` for a
+  part of a string (issues #84, #231 and #232).
+- What is looked for lies in one line, since the row reads one line and a
+  line's end cannot be typed there. So the text is gone through a line at
+  a time, each made small letters as it is come to, and nothing is put
+  together of the whole text.
+- A line that the window does not show comes to the middle of the window,
+  where a key that moves the cursor moves the window no further than it
+  has to: what was found is read with the lines above it and below it,
+  and a definition that was looked for by its name has its body under it.
+  A line that the window shows stays where it is.
+- The row says what a hand could not see for itself: that the looking
+  began again at the start (`none further down: the first in the text`);
+  that what was found is the only one, which it is when the next one
+  behind it is itself, so every look that finds something looks once
+  more from there; and that there is none, with what was looked for,
+  since a slip of the finger is the usual reason. After Ctrl-F has found
+  one of several it says that Ctrl-G finds the next one, which is where
+  that key is learned. What is not found changes nothing, what is
+  highlighted included.
+- Each window remembers what was looked for in it (`sought`), as it has
+  its own text, and forgets it when it closes. What was copied is the one
+  thing that the windows share, and Ctrl-V brings it into the question.
+- What it costs: a look through all of lisp/net.lisp, 2783 lines and 130
+  KiB, takes 3.6 thousandths of a second at a kernel that the Mac runs
+  itself. Each line is copied in small letters for the look, so a look
+  leaves as much to collect as it went through.
+- It is tested where it can be seen. Under SBCL the tests press the keys
+  and look at every cell of the window: what is highlighted, where the
+  cursor and the window are, and what the row says, for what is found
+  further down, from the start again, where it was, and not at all; for
+  capitals on either side; for what begins at the cursor and what the
+  cursor is in the middle of; for a line that is longer than the window
+  is wide. And among other keys as they come the editor is held against
+  the second one of the tests, which keeps the text as one string and has
+  SBCL's SEARCH look through it. A boot presses Ctrl-F and Ctrl-G on
+  QEMU's keyboard in a window of Emma and looks at the cells that are
+  highlighted (tools/volumes.txt).
+
 ## Conventions
 
 - C: lower_snake_case for functions and files. Kernel-wide symbols carry

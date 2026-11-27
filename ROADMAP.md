@@ -2773,6 +2773,147 @@ Infrastructure, done:
   draws, the list, the bar, a frame, the pointer, were all noticed. A
   scratch array of 32-bit numbers in the host's copy of a rectangle,
   which the profile also pointed at, was tried and gained nothing.
+- **Finding** (2026-11-27, version 0.0.65). Emma finds text, which Julio's
+  issue #59 asks for: "Add ability to find text in Emma editor". Ctrl-F
+  asks `Find: ` in the row under the text, and Enter looks for what was
+  typed there, from the cursor to the end of the text and then from the
+  start of the text down to the cursor. What is found is highlighted,
+  with the cursor behind it, and a line that the window did not show
+  comes to the middle of it. Ctrl-G looks for the same once more from
+  there, and asks as Ctrl-F does while nothing was looked for. A letter
+  is found in either case, every other character is itself, and what is
+  looked for lies in one line. The row says what came of a look when
+  that is not plain to see: `Ctrl-G finds the next one` after Ctrl-F has
+  found one of several, `none further down: the first in the text` when
+  the looking began again at the start, `the only one in the text` when
+  there is no other, and `not in the text: ` with what was looked for,
+  in which case nothing moves.
+  What is found is highlighted by the mark and the cursor that the
+  pointer highlights with, so nothing new is drawn for it, and what is
+  done to anything that is highlighted is done to it: Ctrl-C copies it as
+  the text has it, and a character or Ctrl-V takes its place, which with
+  Ctrl-G for the next one is how one thing is put where another was.
+  The words that a window with no file begins with name the key, and
+  say `Ctrl-O opens` where they said `Ctrl-O opens a file`, to make room
+  for it: `Ctrl-S saves, Ctrl-O opens, Ctrl-F finds, Ctrl-E evaluates,
+  Ctrl-Q closes`, 73 characters of the 79 that a window of 80 columns
+  has room for. Nothing of what an object is has
+  changed, so an image's number has not. DESIGN.md has what was decided
+  ("Finding"), and the manual a passage in Emma's section, two rows in
+  the table of its keys and one among the things that go wrong.
+  What it does not do. Nothing is found backwards (issue #223) or while
+  it is typed (issue #224), nothing tells a capital from a small letter
+  (issue #225), and no key puts one text in the place of another (issue
+  #226). One place is highlighted, and nothing says how many there are
+  (issue #227). What was looked for is its window's and goes with it
+  (issue #228). The keys, what the row says and where the window goes
+  were picked here and are Julio's to change (issue #229). And the close
+  box of a window whose row is asking something does nothing, which was
+  so before any of this and is met more often now that the row asks more
+  (issue #230).
+  What came up beside it. The machine has neither `char-equal` nor a
+  `string-equal` for a part of a string, which is why the editor makes
+  small letters of both strings and has a loop of its own for where one
+  begins in the other: the comparisons of characters that are not there
+  are issue #231, and those of strings #232. And the functions that
+  Julio has typed since the last slice, from Practical Common Lisp, call
+  `parse-integer` and `y-or-n-p`, which are not there either (issues
+  #233 and #234), behind `*query-io*`, which is his own #222.
+  What it costs. Nothing until a key asks for it. A look through all of
+  lisp/net.lisp, 2783 lines and 130 KiB, takes 3.6 thousandths of a
+  second at a kernel that the Mac runs itself, and each line is copied
+  in small letters as it is come to, so a look leaves as much to collect
+  as it went through. A look that finds something looks once more from
+  there, to say whether that is the only one, which is a second pass
+  through the text only when it is.
+  How it was checked. The host tests press the keys in a window of three
+  rows over a file of six lines and look at every cell after each: what
+  is highlighted, where the cursor and the window are and what the row
+  says, for what is found further down, from the start again, with no
+  other in the text, and not at all; for capitals in the text and in the
+  question; for what begins at the cursor and what the cursor stands in
+  the middle of; for a question that is given up, one with no answer,
+  and one that Ctrl-V answers; for what is typed over what was found; and
+  for a line that is longer than the window is wide. A second window has
+  a text with nothing in it, something longer than any line, one that
+  lies over the next, and two in one line. The application in its own
+  thread takes the keys from the window manager. And in the walk of
+  seven hundred keys as they come, the editor is held against the second
+  one of the tests, which keeps the text as one string and has SBCL's
+  SEARCH look through it: there things are looked for that some line
+  has, in capitals, or that none has, and looked for again, and the two
+  have to agree on the text, the cursor, the window, what is highlighted
+  and what the row says. At a kernel, tools/volumes.txt presses Ctrl-F
+  and Ctrl-G on QEMU's keyboard in the window that Emma has open on a
+  file of the second volume, with capitals for what the text has small,
+  and holds the cells that are highlighted against letters that it draws
+  beside them, three times: the first place, the next, and the first
+  again.
+  The walk found a mistake of this change's own that the checks written
+  for the keys had not. A line that comes to the middle of the window
+  moves the rows outside the drawing, and a row was copied with the bar
+  of the cursor that was drawn in it, which then stood where no cursor
+  was, eleven times in the seven hundred steps. Whatever moves the rows
+  takes the cursor away first now (`lift-cursor`), as the drawing always
+  did, and a check draws the window before the key that brings the line
+  up, since a cursor that was never drawn leaves nothing behind.
+  Sixty-nine mistakes were planted in lisp/emma.lisp, one at a time,
+  each in a copy of the tree, with the host tests cut after the editor's
+  sections. Sixty-eight were noticed. The one that was not is no mistake
+  that shows: a cursor that was taken away and is still counted as drawn
+  has its row drawn once more than it has to be. Four of the sixty-eight
+  ended the run with an error of SBCL's and not with a failed check,
+  which counts: an index past the end of a line, a window that begins
+  above the first line of the text. One case was written wrongly the
+  first time, with a parenthesis too many, and noticed for that: it was
+  planted again as it was meant. A line that comes to a third of the way
+  down the window, and not to its middle, was noticed by the walk alone,
+  a window of three rows having one row for both: a window of two rows
+  is looked at now, and notices it as well. Six more were planted in the
+  system itself, each copy built and booted on AArch64 with the first
+  session and then with tools/volumes.txt: each of the two keys given
+  another code, capitals in the question that find nothing, nothing
+  highlighted, the cursor before what was found, and no beginning again
+  at the start. All six were noticed there, and a seventh copy with a
+  comment changed and nothing else passed.
+  A copy of the disk of Julio's machine, which ran 0.0.64-e3c254ea, with
+  a copy of his work disk beside it, took the build at once and came up
+  as 0.0.65 with its 20 forms: `ls`, the six commands that push, pull
+  and load his two files, his list of records, to which one was added,
+  and his calculator, loaded and launched, did what they did before, and
+  the three functions that he has written since for reading a record at
+  a prompt are defined there. Emma opened his `/galculator.lisp`, 367
+  lines, and `Find: Defun lihp` came to `(defun lihp ()` in line 32, in
+  the middle row of the window, with `the only one in the text` under
+  it.
+  `make test` on the Mac, the host tests with 29671 checks (29616
+  before) and all twenty-one boots, in 636 seconds (632 before), and the
+  same in a container of Ubuntu 26.04, CI's release, whose SBCL is 2.6.0
+  where the Mac's is 2.6.10 (988 seconds there, 970 before; the first
+  x86_64 boot 76, the boot of the volumes 18, and the boot that collects
+  at every safe point 219). The keys were pressed once more by hand at
+  an x86_64 kernel, in the world that its first session saved: found,
+  the next, the third, the first again, typed over, and not found.
+  CI's limits, which this slice had to stay clear of. Main's run for the
+  merge before it had the host tests at 114 of their 120 seconds (issue
+  #122) and the first x86_64 boot at 83 of its 90 (issue #213), on a
+  runner that was not of the slowest kind. The host tests: their
+  sections on the editor take 2.65 seconds on main, took 2.67 with the
+  new checks, and take 2.63 now that the walk works the colours of the
+  window out once a step and not twice (`editor-wrong` gives them as a
+  second value), three runs each. The whole of the tests, run in turn
+  with main's, twice: 87.6 and 87.6 seconds on main, 87.7 and 88.7 with
+  this; and in the other order, since the last of four had been the
+  slowest, 88.4 and 88.3 with this and then 88.3 and 88.5 on main. The
+  first boot: no line of a first session is new, and the keys are
+  pressed in tools/volumes.txt, whose boot took 17 of its 90 seconds on
+  CI. But a first session loads Emma's file twice, and the file is six
+  functions longer: at an x86_64 kernel that the Mac emulates, as CI
+  does, a load takes 0.62 seconds where it took 0.56, four loads each.
+  That is some 0.12 seconds of a first boot on the Mac and some 0.17 on
+  a slow runner, and it cannot be told from one boot to the next: in the
+  container the first x86_64 boot, run in turn with main's, twice, took
+  80.8 and 80.4 seconds on main and 79.7 and 80.5 with this.
 
 Infrastructure, for sessions with budget left over:
 
@@ -5301,8 +5442,9 @@ No milestone yet, to be picked up when they start to matter:
 - The editor. A text is strings in the heap, one to the line, and a
   character that is typed makes a new string of its line: a line of many
   thousands of characters is slow to type in, and a file of many megabytes
-  does not fit. There is no undo, no search, nothing is marked, and what is
-  cut is one piece of text that each window keeps for itself. A file is
+  does not fit. There is no undo. What is looked for is found forwards,
+  at Enter, a letter in either case, and one place at a time (0.0.65,
+  "Finding" above, with the issues for each). A file is
   read and written as its lines: one that does not end in a new line has
   one after it was saved, and whether its lines ended in a carriage return
   as well is kept only because the carriage return stays in the line, where
@@ -5537,7 +5679,7 @@ No milestone yet, to be picked up when they start to matter:
   it and the directories as they were asked for. LOAD looks on the disk
   first: a file in the root of the volume with the name of a boot file
   takes its place. SORT takes lists, and STRING-EQUAL and STRING-LESSP two
-  strings and no keywords.
+  strings and no keywords (issue #232).
 - The disks of `make test`. A machine boots from build/boot-<name>.img,
   which tools/mkdisk.py makes of build/esp for every first boot: a volume of
   the kind 32 behind a GUID partition table for x86_64, one of the kind 16
@@ -5675,7 +5817,8 @@ No milestone yet, to be picked up when they start to matter:
   `symbol-macrolet`, `progv`; `typep`, `typecase`, `check-type`; `elt`,
   `coerce`, and the functions on strings beyond `make-string`,
   `string=`, `string-equal`, `string-lessp`, `subseq`, `string-upcase`
-  and `string-downcase`; those two and `char-upcase` and
+  and `string-downcase` (the other comparisons of strings are issue
+  #232); those two and `char-upcase` and
   `char-downcase` know the letters of ASCII (issue #205), and take no
   `:start` and `:end`. MAKE-STRING takes `:initial-element` and
   refuses `:element-type`, and MAKE-ARRAY a length and
@@ -5688,6 +5831,8 @@ No milestone yet, to be picked up when they start to matter:
   0.0.63 (DECODE-UNIVERSAL-TIME and GET-DECODED-TIME, "The clock" above),
   in whole hours of a time zone (issue #209) and without daylight saving
   time (#208), and not put together: ENCODE-UNIVERSAL-TIME is issue #210.
+  PARSE-INTEGER is not there (issue #233), nor are Y-OR-N-P and
+  YES-OR-NO-P (#234).
   The functions on sequences take
   lists only, SUBSEQ strings as well, and of their keyword arguments
   `:test`, with `:key` for MEMBER and ASSOC and `:initial-value` for
@@ -5696,8 +5841,9 @@ No milestone yet, to be picked up when they start to matter:
   0.0.45. The others on strings and vectors are issue #83, and COUNT,
   SEARCH, FIND-IF-NOT and POSITION-IF-NOT, which are not there, #84. SETF knows the places that boot.lisp lists with DEFSETF and the
   ones DEFSTRUCT adds. `eq` and `eql` are one function, `char=` and
-  `char<` take two characters. A file in lisp/ that needs one of these
-  loads under SBCL and not here: only a boot tells.
+  `char<` take two characters, and the ten other comparisons of
+  characters are not there (issue #231). A file in lisp/ that needs one
+  of these loads under SBCL and not here: only a boot tells.
 - What `#+` and `#-` leave out still has to be syntax that the reader
   knows, apart from its symbols, numbers and characters, which are
   passed over.
