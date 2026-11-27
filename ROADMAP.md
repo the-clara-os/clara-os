@@ -2756,8 +2756,23 @@ Infrastructure, done:
   every key. On a desk that is narrower than the window, which lies over
   its left edge, and looking at the rows that a key changed, they take
   half a second. The whole of the host tests, run in turn with main's,
-  twice: 89.6 and 89.3 seconds on main, 88.8 and 88.8 with this, which
-  is nothing that can be told from one run to the next.
+  twice: 89.6 and 89.3 seconds on main, 88.8 and 88.8 with this, so on
+  the Mac the new tests could not be told from one run to the next.
+  The slice's own run on CI was on a slow runner too, and said
+  otherwise. It passed, in 26m29s, with the first x86_64 boot at 89
+  seconds again and the host tests ending 120.3 seconds after their
+  command was written out, where their watchdog ends them at 120:
+  nothing was left. So the host tests were made quicker in the same
+  pull request, by what a profile of them showed. `wrong-pixels` asked
+  for the list of the windows, which copies it, and measured every name
+  of the launcher's list, for each pixel of each look at a screen, some
+  two hundred looks a run. It asks once a look now (`menu-facts`), and
+  for what the bar says as well, which takes 1.3 seconds off a run on
+  the Mac: 88.0 and 88.2 seconds before, 86.5 and 86.9 after, run in
+  turn. Eleven mistakes planted afterwards in what the window manager
+  draws, the list, the bar, a frame, the pointer, were all noticed. A
+  scratch array of 32-bit numbers in the host's copy of a rectangle,
+  which the profile also pointed at, was tried and gained nothing.
 
 Infrastructure, for sessions with budget left over:
 

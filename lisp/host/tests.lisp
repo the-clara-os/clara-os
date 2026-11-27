@@ -5547,25 +5547,36 @@
             (push (cons words at) says)
             (setq end (- at 16))))))))
 
-(defun bar-rule (x y)
+(defun bar-rule (x y says)
   (cond ((>= y 20) nil)
         ((label-rule "Applications" (- x 8) y 20 +ink+ +paper+))
-        ((loop for (words . at) in (bar-says)
+        ((loop for (words . at) in says
                thereis (label-rule words (- x at) y 20 +ink+ +paper+)))
         (t +paper+)))
 
-;; The launcher's list: the applications and under them the commands, with
-;; a line across where the commands begin, when there are both.
-(defun menu-rule (x y)
-  (let* ((applications (clara.windows:applications))
-         (names (append applications (clara.windows:commands)))
-         (width (reduce #'max (mapcar (lambda (name) (+ 16 (label-wide name))) names) :initial-value 112))
-         (height (* 20 (length names))))
-    (cond ((not (and clara.windows::*menu* (< -1 x width) (<= 20 y (+ 19 height)))) nil)
-          ((or (= x 0) (= x (1- width)) (= y 20) (= y (+ 19 height))) +ink+)
-          ((and applications (clara.windows:commands) (= y (+ 20 (* 20 (length applications))))) +ink+)
-          ((label-rule (nth (floor (- y 20) 20) names) (- x 8) (mod (- y 20) 20) 20 +ink+ +paper+))
-          (t +paper+))))
+;; The launcher's list, when it is open: its names, the applications and
+;; under them the commands, how wide and how high it is, and the row of the
+;; line across where the commands begin, when there are both. NIL when the
+;; list is shut.
+(defun menu-facts ()
+  (and clara.windows::*menu*
+       (let* ((applications (clara.windows:applications))
+              (commands (clara.windows:commands))
+              (names (append applications commands)))
+         (list names
+               (reduce #'max (mapcar (lambda (name) (+ 16 (label-wide name))) names) :initial-value 112)
+               (* 20 (length names))
+               (and applications commands (+ 20 (* 20 (length applications))))))))
+
+;; What the list puts at a place, by what MENU-FACTS said of it.
+(defun menu-rule (x y facts)
+  (and facts
+       (destructuring-bind (names width height line) facts
+         (cond ((not (and (< -1 x width) (<= 20 y (+ 19 height)))) nil)
+               ((or (= x 0) (= x (1- width)) (= y 20) (= y (+ 19 height))) +ink+)
+               ((and line (= y line)) +ink+)
+               ((label-rule (nth (floor (- y 20) 20) names) (- x 8) (mod (- y 20) 20) 20 +ink+ +paper+))
+               (t +paper+)))))
 
 (defun pointer-rule (x y)
   (let ((dx (- x clara.windows::*pointer-x*)) (dy (- y clara.windows::*pointer-y*)))
@@ -5573,22 +5584,26 @@
          (cond ((logbitp (- 11 dx) (aref clara.windows::*arrow-edge* dy)) 0)
                ((logbitp (- 11 dx) (aref clara.windows::*arrow-fill* dy)) +ink+)))))
 
-(defun should-show (x y)
+(defun should-show (x y windows menu bar)
   (or (pointer-rule x y)
-      (menu-rule x y)
-      (let ((windows (clara.windows:windows)))
-        (loop for window in windows
-              thereis (window-rule window x y (eq window (first windows)))))
-      (bar-rule x y)
+      (menu-rule x y menu)
+      (loop for window in windows
+            thereis (window-rule window x y (eq window (first windows))))
+      (bar-rule x y bar)
       +desk+))
 
 ;; How many pixels of the screen are not what they should be, and the first
-;; of them, for whoever has to find out why.
+;; of them, for whoever has to find out why. Which windows there are, what
+;; the launcher's list has and what the bar's right-hand end says are the
+;; same for every pixel of one look at the screen, so they are asked for
+;; once and not for each pixel: the list of the windows was copied, and the
+;; names of the launcher's list measured, for every pixel of every look,
+;; which took more than a second of every run of these tests.
 (defun wrong-pixels ()
-  (let ((wrong 0) (first nil))
+  (let ((wrong 0) (first nil) (windows (clara.windows:windows)) (menu (menu-facts)) (bar (bar-says)))
     (dotimes (y *desk-height*)
       (dotimes (x *desk-width*)
-        (let ((shown (pixel-at x y)) (should (should-show x y)))
+        (let ((shown (pixel-at x y)) (should (should-show x y windows menu bar)))
           (unless (= shown should)
             (incf wrong)
             (unless first

@@ -1618,7 +1618,10 @@ Rules:
   `paint-window`, `window-at` and the tests' `window-rule`: the tests hold
   every pixel of the screen against that rule after each thing they do
   (`new-desk`, `wrong-pixels`), and a walk of random steps does it 160
-  times. START is for a user and RESUME for the boot: `lisp_main` calls
+  times. What is the same for every pixel of one look, the windows that
+  there are, what the launcher's list has (`menu-facts`) and what the
+  bar says (`bar-says`), `wrong-pixels` asks for once and hands to the
+  rules: asked for each pixel, it was more than a second of every run. START is for a user and RESUME for the boot: `lisp_main` calls
   RESUME, having looked for the package, and RESUME starts the window
   manager when `*running*` was true in the world that was saved. A
   terminal (lisp/terminal.lisp) is a window with cells and a stream; the
