@@ -1262,6 +1262,14 @@ static const struct {
       "(SET-BY-A-THREAD THEIRS)" },
     /* a turn ends at a tick: the thread sets the flag while this one goes round and round */
     { "(let ((flag nil)) (clara:make-thread (lambda () (setq flag 'set))) (do () (flag flag)))", "SET" },
+    /* a macro call that two threads come to at once is replaced by the one that has expanded it first:
+       the other evaluates what it finds there, and takes nothing from under the first, which is in the
+       middle of its expansion when the collector comes by */
+    { "(defmacro at-once (&body body) (clara:thread-yield) `(progn ,@body))"
+      " (defun come-twice () (at-once (clara:thread-yield) (cl::%collect) 'all-of-it))"
+      " (let ((a (clara:make-thread #'come-twice)) (b (clara:make-thread #'come-twice)))"
+      " (list (clara:join-thread a) (clara:join-thread b)))",
+      "(ALL-OF-IT ALL-OF-IT)" },
     /* locks: without one, the threads would read the same total and additions would be lost */
     { "(let ((lock (clara:make-lock \"total\")) (total 0))"
       " (mapc #'clara:join-thread (mapcar (lambda (n) (clara:make-thread (lambda () (dotimes (i 50)"

@@ -1,14 +1,15 @@
 # Dependabot, for what the repository takes from elsewhere under a version
-# that is written down: the actions of the two workflows
-# (.github/workflows/ci.yml and site.yml). Every Friday it looks whether
+# that is written down: the actions of the three workflows
+# (.github/workflows/ci.yml, sanitizers.yml and site.yml). Every Friday it looks whether
 # one of them has a newer version than the workflow names, and opens a
 # pull request that names it. The workflows name an action by its major
 # version, `actions/checkout@v7`, so the releases in between arrive by
 # themselves, and a pull request comes when there is a new major version.
 #
-# CI runs such a pull request like any other, with the workflows as the
-# pull request has them, so a newer action in ci.yml is tried before the
-# merge. One in site.yml is not: that workflow runs on main and nowhere
+# CI and the sanitizers run such a pull request like any other, with the
+# workflows as the pull request has them, so a newer action in ci.yml or
+# in sanitizers.yml is tried before the merge. One in site.yml is not:
+# that workflow runs on main and nowhere
 # else, and the run that the merge starts is the first to use it. Look at
 # that run, as after every merge that starts one.
 #

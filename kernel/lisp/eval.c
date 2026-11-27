@@ -50,7 +50,12 @@
  * A macro call is expanded once: the expansion takes the call's place in
  * the list that holds it, so the next time round the evaluator finds the
  * expansion there. The call itself is left as it was, for whoever else
- * holds it, a quoted copy in an error message for one. */
+ * holds it, a quoted copy in an error message for one. Two threads can
+ * come to one call at once, since expanding it has safe points, and each
+ * makes an expansion of its own: the one that is done first puts its own
+ * in the call's place, and the other evaluates what it finds there. Were
+ * the place taken a second time, the first expansion would be nobody's
+ * while the thread that made it is in the middle of it. */
 #include "eval.h"
 
 enum {
@@ -1722,10 +1727,16 @@ static lisp eval_car(lisp cell, lisp env)
             lisp_values.count = 1;
         return f;
     case LISP_MACRO:
+        /* The call is on the stack while it is expanded: once another thread has put its
+         * expansion in the cell, nothing else holds the call, and its address is what the cell
+         * is held against below. */
+        *g_sp++ = form;
         f = expand(f, form);
+        g_sp--;
         if (g_unwind.to)
             return LISP_NIL;
-        lisp_as_cons(cell)->car = f;
+        if (lisp_as_cons(cell)->car == form)
+            lisp_as_cons(cell)->car = f;
         return eval_car(cell, env);
     default:
         return call(f, lisp_as_cons(form)->cdr, env);

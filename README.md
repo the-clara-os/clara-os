@@ -174,7 +174,9 @@ toolchain is involved. On macOS the tools come from Homebrew:
     brew install llvm lld qemu sbcl
 
 On Ubuntu they come from the distribution. That is also where every pull
-request is built and booted, by [.github/workflows/ci.yml](.github/workflows/ci.yml):
+request is built and booted, by [.github/workflows/ci.yml](.github/workflows/ci.yml),
+and where its C is run with the compiler's sanitizers in it, by
+[.github/workflows/sanitizers.yml](.github/workflows/sanitizers.yml):
 
     sudo apt install clang lld make qemu-system-x86 qemu-system-arm ovmf qemu-efi-aarch64 netcat-openbsd sbcl \
         python3 dosfstools
@@ -201,6 +203,14 @@ Then, on either:
                       # tools/serve.py);
                       # and what the user manual shows of the prompt is typed at one more machine,
                       # which has a second disk, as WORK= below gives one
+    make test SANITIZE=undefined
+                      # the same boots on kernels that are built to check themselves: both with clang's
+                      # checks for undefined behaviour in them, and a check that fails stops the machine
+                      # with a panic that names the line (kernel/sanitize/undefined.c)
+    make sanitize     # the C that needs no machine, as a program on this computer, with the address
+                      # sanitizer and the one for undefined behaviour in it: the self-tests of the sums,
+                      # the ciphers, the signatures and the runtime of Lisp, on a machine that
+                      # tools/host/machine.c makes up; on Ubuntu this needs libclang-rt-dev as well
     make run-aarch64  # QEMU window, serial on the terminal: type a form in either; Ctrl-C stops a form
                       # that does not end, (clara.system:shut-down) saves the world and turns the
                       # machine off, which ends QEMU, and Ctrl-A X in the terminal leaves QEMU as it is;
@@ -235,6 +245,8 @@ Layout:
     kernel/arch/     one directory per architecture: the only assembly and the only MMIO addresses
     kernel/lisp/     the Lisp runtime: objects and the heap, symbols and packages, the reader, the printer,
                      the evaluator, and the machine that compiled code runs on (vm.c)
+    kernel/sanitize/ what a kernel that checks itself calls when a check fails (SANITIZE=undefined): no part
+                     of a kernel that is built without it
     lisp/            Lisp sources: the language's own part, the compiler, the object system, the console, drawing, the drivers, the
                      file system, the fonts, the network, sound, the listener, the window manager, the terminal in a window and Parker, which installs packages,
                      all of which the kernel loads as it starts, and the four applications, emma.lisp, jaid.lisp, ares.lisp and settings.lisp, which the launcher loads when they are picked;
@@ -255,7 +267,8 @@ Layout:
                      of it), mkimage.sh (UTM disk), fontcheck.c (what FreeType says of a
                      font file, for the tests of lisp/type.lisp; built by hand, and no part of `make test`),
                      pagecheck.py (what Chrome makes of a page, for the tests of lisp/ares.lisp: the trees of
-                     lisp/host/pages.lisp; run by hand, and no part of `make test` either)
+                     lisp/host/pages.lisp; run by hand, and no part of `make test` either), host/ (the machine
+                     that `make sanitize` runs the kernel's C on, and the Lisp world as far as it comes there)
 
 ## Running in UTM
 

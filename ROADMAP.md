@@ -2915,6 +2915,134 @@ Infrastructure, done:
   container the first x86_64 boot, run in turn with main's, twice, took
   80.8 and 80.4 seconds on main and 79.7 and 80.5 with this.
 
+- **Sanitizers** (2026-11-27, version 0.0.66). The C of ClaraOS is run
+  with the compiler's sanitizers in it, which Julio's issue #60 asks for:
+  "Add sanitizer tests for the C portions, similar to the tests used in
+  hash and clicklisp. This can go in a separate workflow i think. Or
+  another job in CI." Those two are programs, and are built with
+  `-fsanitize` and run as they are. This C is a kernel, so it takes two
+  ways (DESIGN.md, "Sanitizers").
+  `make test SANITIZE=undefined` builds both kernels with every check
+  that `-fsanitize=undefined` stands for, and with the functions that a
+  failed check calls (kernel/sanitize/undefined.c), which say what was
+  about to happen, the way panic says it, and stop the machine: `panic:
+  undefined behaviour at kernel/lisp/builtin.c:204:18:
+  9223372036854775806 + 2 is not a value of 'int64_t' (aka 'long
+  long')`. The boots of `make test` are the test, with the same
+  sessions, without the tests under SBCL and the laying out of a
+  release, where no C of the kernel's runs. Such a kernel is another
+  system: the file is one of its sources, so its name has other digits,
+  its objects are in build/x86_64-undefined and build/aarch64-undefined,
+  and the two kinds are built in turn without anything being compiled
+  twice. Every boot has three times its time (`PATIENCE`,
+  tools/boottest.sh).
+  `make sanitize` builds the C that needs no machine as a program on the
+  computer that builds the system, with the address sanitizer and the
+  one for undefined behaviour: the sums, the ciphers and the signatures,
+  string.c, console.c and kernel/lisp/, each file as it stands, on a
+  machine that tools/host/machine.c makes of that computer, and the
+  world as far as it comes without code for a processor
+  (tools/host/world.c): the collector's test, boot.lisp, the evaluator's
+  texts, both once more with a collection at every safe point, the
+  compiler and its texts, with a collection at the safe points of
+  compiled code, and the compiler compiled by itself.
+  .github/workflows/sanitizers.yml runs both on every pull request and
+  every push to main, as two jobs, `ubsan` and `asan-ubsan`.
+  What they found. The kernels: nothing. No boot of `make test` brings
+  the C of either kernel to anything that C leaves undefined, under
+  either compiler. The program on the host: no report of either
+  sanitizer, and one wrong answer. Of ten that ran at once, one in some
+  forty had a text of the self-test give another answer than it should,
+  or stand still: the three threads that add to a total under a lock.
+  The threads of the host's machine take their turns at other moments
+  than a kernel's, and one of them had lost its turn in the middle of
+  expanding WITH-LOCK-HELD. The evaluator puts the expansion of a macro
+  call in the call's place, in the body of the function, which the
+  threads share. The second thread expanded the call as well, put its
+  expansion there, and was in the middle of evaluating it when the first
+  thread finished its own and put that there in turn. From then on
+  nothing held the second thread's expansion but the C that was walking
+  it, which the collector does not look at; the next collection freed
+  it, and the thread went on in what was left: it never came to
+  RELEASE-LOCK. A kernel does the same, on both processors, when the
+  moments are those, which a text makes them:
+  `(defmacro at-once (&body body) (clara:thread-yield) `(progn ,@body))`,
+  a function `(at-once (clara:thread-yield) (cl::%collect) 'all-of-it)`
+  and two threads that call it gave `(2320 ALL-OF-IT)` at an AArch64
+  kernel and `(432472 ALL-OF-IT)` at an x86_64 one, where the first
+  thread's answer is whatever the freed list had come to hold. A world
+  that is in use is compiled, and compiled code has no call to replace,
+  so this was the evaluator's alone: the texts of a kernel's own
+  self-test, at every start that makes a world, at the moments that a
+  kernel has, which had not brought it out once. Since 0.0.66 the call
+  is replaced by the first thread that has expanded it, the other
+  evaluates what it finds in its place (kernel/lisp/eval.c, `eval_car`),
+  and that text is one of the evaluator's, 482 where there were 481.
+  With it, ten at once, 120 runs: none failed.
+  Three things were found by reading and are issues: `kprintf` writes a
+  field of more than 23 characters past its buffer, which nothing asks
+  it for (#243); no test has the reader refuse a token of more than 255
+  characters (#242); and Homebrew's clang takes a signed sum that does
+  not fit to wrap around on the kernel's targets, where Ubuntu's does
+  not (#244), which is why the kernels that check themselves are built
+  with `-fno-wrapv`.
+  Checked, by planting. In a kernel, one piece of undefined behaviour to
+  a copy of the tree, built and booted, 24 kinds on AArch64 and seven of
+  them on x86_64, each with the line that the panic has to name: sums,
+  differences and products that do not fit, a negative and a quotient
+  that do not, division by zero, four kinds of shift, an index past its
+  array and one below it, a load and a store through a null pointer, a
+  pointer that is not aligned, an object too small for what is read
+  from it, an offset that wraps a pointer and one added to a null
+  pointer, code that is declared never to be reached, a function called
+  through a pointer to another kind, a bool that is 2, the zero bits of
+  0, an array of no items, a pointer assumed to be aligned that is not.
+  One was not noticed at first, the shift of a 1 into and past the sign:
+  that is the check which `-fwrapv` takes out. And in four places, on
+  both processors: the handoff, while the firmware still has the
+  machine; the timer's interrupt handler; a function of Lisp's in C,
+  which the evaluator's texts call as the kernel starts; a thread of the
+  Lisp world. On the host, fourteen mistakes, each to a copy of the tree
+  with `make sanitize` run in it. The address sanitizer stopped a write
+  past a variable of a function and a read past one of the program's,
+  both through pointers, in the kernel's own `memset` and `memcpy`; a
+  read of a page frame that had been freed; a write to the heap's
+  addresses past its last frame. The sanitizer for undefined behaviour
+  stopped an index past the S-box of AES, one past the printer's digits,
+  the field of 30 characters in `kprintf`, a shift by 32, a sum of
+  fixnums without its check, a load through a null pointer. The host's
+  machine stopped a frame that was freed twice. The self-tests stopped
+  two before a sanitizer could: a `memcpy` that writes one byte more,
+  which SHA-512 noticed, and a string written one character past its
+  end, into the header of the next object, which the collector noticed;
+  that last one is what no sanitizer sees here, since the objects of
+  the heap lie side by side. One went through, the reader with room for
+  nine more characters in a token than `token` has (#242). And the fix
+  of the evaluator taken out again: the new text failed on the host and
+  at both kernels.
+  Measured, in the container of Ubuntu 26.04, where both machines are
+  emulated as on CI, the two runs side by side: `make test` takes 1015
+  seconds, 864 of them its 21 boots, and `make test SANITIZE=undefined`,
+  which is the boots alone, 1358, of which the boots are 1289. So a boot
+  takes half as long again. The boot that collects at every safe point,
+  which is the collector's C from end to end, takes 528 seconds where it
+  took 255, and the other twenty take 761 where they took 609; the first
+  x86_64 boot 91 where it took 80, the one that fetches by HTTPS 70
+  where it took 51. Three times its time is room enough for each. On
+  the Mac, with those two containers running beside it: `make test` 668
+  seconds, and the checked boots 684, the first x86_64 boot 86 where it
+  took 66. `make sanitize` takes 19 seconds on the Mac and 22 in the
+  container, the build with it; forty runs of the program there, ten at
+  once, all came to their end. Not tried before the pull request: the
+  program on x86-64, which CI's runner is the first to run, and the
+  workflow itself.
+  What it left: the address sanitizer is not in the kernels, which need
+  a second memory for it and a compiler that has the kernel's kind of
+  it for neither target (#237); the world on the host ends before code
+  for a processor (#238); nothing is fuzzed, as hash's parser is (#239);
+  nothing looks for memory that is read before it is written (#240);
+  neither job is a check that the ruleset on main asks for (#241).
+
 Infrastructure, for sessions with budget left over:
 
 - Read the UART base from ACPI (SPCR or DBG2) instead of assuming

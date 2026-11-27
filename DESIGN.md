@@ -321,7 +321,12 @@ architectures (kernel/vm.c).
   else may hold it, quoted, to show it in a message. Without this every
   turn of a loop would expand its macros again, and until there is a
   compiler the interpreter runs everything. EVAL copies the form it is
-  given, so that data stays what it was.
+  given, so that data stays what it was. Two threads can come to one
+  call at once, since an expansion has safe points: the first to be done
+  puts its expansion in the call's place, and the other evaluates what
+  it finds there (0.0.66; until then the second took the place again,
+  and the first went on in an expansion that nothing held, which the
+  collector freed under it).
 - The Lisp world has a thread of its own, with a megabyte of stack,
   because the evaluator calls itself in C for every form inside a form.
   It looks at how far down the stack it is, and well before the guard
@@ -3738,6 +3743,116 @@ architectures (kernel/vm.c).
   SBCL's SEARCH look through it. A boot presses Ctrl-F and Ctrl-G on
   QEMU's keyboard in a window of Emma and looks at the cells that are
   highlighted (tools/volumes.txt).
+
+## Sanitizers (decided for issue #60, 2026-11-27)
+
+The C of ClaraOS is looked at by the compiler's sanitizers, as the C of a
+program is, and it takes two ways, because this C is a kernel.
+
+- **Undefined behaviour is checked in the kernels themselves.**
+  `make test SANITIZE=undefined` builds both kernels with every check that
+  clang's `-fsanitize=undefined` stands for: arithmetic that does not fit
+  its type, shifts, an index outside its array, a load through a pointer
+  that is null or not aligned for what it points at, an offset that takes a
+  pointer round the end of memory, a call through a pointer to another
+  kind of function, and the rest. Such a check needs nothing of the
+  machine: it is a comparison and a call. What it calls is in the kernel,
+  kernel/sanitize/undefined.c, one function for each kind of check under
+  the names and with the arguments that the compiler has for them, and each
+  says where it was and what was about to happen and stops the machine:
+  `panic: undefined behaviour at kernel/main.c:25:54: 2147483647 + 1 is not
+  a value of 'int'`. So the test is the boots of `make test`, with the same
+  sessions, on the machines that the C is written for, and it is all of the
+  C: the handoff, the code for each processor, the drivers' primitives, the
+  ciphers with what a server sent.
+- **A report is a panic, and nothing is gone on from.** The sanitizer can
+  be told to say what it found and to go on (the default), which finds
+  several things in one run. Here the first one stops the kernel
+  (`-fno-sanitize-recover`): a boot that has reported something has not
+  passed, tools/boottest.sh ends a boot at a line that begins with
+  `panic:`, and a kernel that goes on after undefined behaviour says
+  nothing that can be relied on. The checks are also smaller that way,
+  since what follows a failed one is no code at all.
+- **Signed overflow is undefined, whatever the compiler would make of it.**
+  From version 20 on clang takes the sum of two signed integers that does
+  not fit to wrap around on the kernel's two targets, which are Windows's
+  to it, as Microsoft's compiler does, and it leaves the check of a shift
+  to the left out for that; Ubuntu's clang 21 does not. The kernel that
+  checks itself is built with `-fno-wrapv`, so that both compilers hold it
+  to what C says, and the kernel leans on neither.
+- **Such a kernel is another system, and is never the one that is
+  released.** Its one more source is not among the files that the kernel
+  is otherwise built of (kernel/sanitize/ is no directory that the Makefile
+  takes sources from by itself), so the digits of its name are others, the
+  build links the kernels again when the kind changes, and a kernel in
+  build/esp that is not the kind that was asked for stops the build, by its
+  name. Its objects are in directories of their own. A kernel without
+  SANITIZE has no check in it and not a byte of that file: it is what it
+  was.
+- **It is slower, and is given time.** Only what runs in C is slower,
+  and a world is the processor's code through and through: where both
+  machines are emulated, as on CI, the boots take half as long again, and
+  the one that collects at every safe point, which is the collector's C
+  from end to end, twice as long. Every boot is given three times its
+  time (`PATIENCE`, tools/boottest.sh): the times were set for the
+  released kernel, with seconds to spare on a slow runner (issues #122,
+  #213), and a boot that runs out of time says nothing about the C.
+- **Addresses are checked on the computer that builds the system.** The
+  address sanitizer keeps a second memory beside the first, a byte for
+  every eight, which says what may be touched, and puts a border that may
+  not around every variable. A program gets that from the compiler and a
+  library. A kernel has to give it to itself: the second memory mapped
+  for everything that it maps, before its first instrumented instruction,
+  on two processors, under a compiler that offers the kernel's kind of
+  this sanitizer for neither of ClaraOS's targets (issue #237). So the C
+  that needs no machine is taken out of the kernel and run as a program
+  (`make sanitize`): the sums, the ciphers and the signatures, the
+  functions for bytes, the console's printing, and the runtime of Lisp.
+  Each file is compiled as it stands. What they ask of the rest of the
+  kernel is tools/host/machine.c, some sixty functions: page frames from
+  one stretch of memory, the heap's addresses, threads of which one runs
+  at a time, the timer's interrupt from a thread of its own, the console
+  on standard output, and the answers of a machine without a screen,
+  ports, a PCI bus or a power button, in the words in which a real one
+  without them gives them. The program runs their self-tests, with the
+  undefined-behaviour sanitizer in it as well.
+- **The host's machine refuses more than a real one.** A page frame that is
+  free is filled with a byte and may not be touched; a frame that is
+  mapped into the heap has its bytes at the heap's address and at no
+  other, where a real machine has it at both; the heap's addresses may be
+  touched only where a frame is mapped. All three are the address
+  sanitizer's to enforce (it can be told what may not be touched), and
+  they find the frame that is used after it was freed and the write past
+  the end of the heap, which have nothing to do with borders around
+  variables.
+- **The world there ends before the processor's code.** A world is
+  translated for the processor before it is used (M16b), and the kernel
+  panics when it is not. The host makes no such code: on x86-64 the code
+  and the two routines of entry.S go by the calling convention of the
+  kernel's target, which is not the host's, and the code is written
+  through one address and run at another, which needs page tables. So
+  tools/host/world.c does what `new_world` does up to there, the
+  collector's test, boot.lisp, the evaluator's texts, both with a
+  collection at every safe point, the compiler, its texts on the machine
+  of vm.c, with a collection at its safe points, and the compiler compiled
+  by itself. Those functions are lisp.c's own, so world.c is that file,
+  included whole, with one function after it: lisp.c does not change for
+  it, and the order of `new_world` is written down twice.
+- **What the address sanitizer does not see.** One object of the heap
+  written into from the object before it: they lie side by side, and no
+  border is between them. What that leaves is the collector's to find,
+  which walks the heap by its headers and panics at a word that leads to
+  no object. And nothing that the host does not run: code for a
+  processor, the image, the drivers' primitives on a real device's
+  registers, the substrate proper (pmm.c, vm.c, thread.c, the handoff),
+  which have the first way only.
+- **A workflow of its own.** .github/workflows/sanitizers.yml runs both
+  on every pull request and every push to main, as two jobs beside CI's
+  one, on runners of their own, so CI's thirty minutes are as they were.
+  The boots there leave out what `make test` does before them, the tests
+  of the Lisp files under SBCL and the laying out of a release: no C of
+  the kernel's runs in either. Neither job is a check that the ruleset on
+  main asks for; that is Julio's to say (issue #241).
 
 ## Conventions
 

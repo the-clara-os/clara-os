@@ -8,6 +8,9 @@
 #   macOS:  brew install llvm lld qemu sbcl
 #   Ubuntu: apt install clang lld make qemu-system-x86 qemu-system-arm ovmf qemu-efi-aarch64 netcat-openbsd sbcl
 #           python3 dosfstools
+# `make sanitize`, which is no part of `make test`, needs the libraries of
+# clang's sanitizers besides: Homebrew's llvm has them, and on Ubuntu they
+# are libclang-rt-dev.
 # Homebrew keeps llvm and lld out of the PATH, so they are looked for where it
 # puts them; anywhere else clang and lld-link come from the PATH. LLVM= and
 # LLD= name other directories.
@@ -30,6 +33,42 @@ COMMON_SRCS := $(filter-out kernel/system.c,$(wildcard kernel/*.c kernel/lisp/*.
 HEADERS     := $(wildcard kernel/*.h kernel/lisp/*.h kernel/arch/*/*.h)
 BOOT_FILES  := $(BUILD)/boot-files.stamp
 
+# A kernel that checks itself while it runs. SANITIZE=undefined builds both
+# kernels with the compiler's checks for undefined behaviour in them, every
+# one that -fsanitize=undefined stands for, and with the functions that a
+# failed check calls (kernel/sanitize/undefined.c), which say what was about
+# to happen and stop the machine. Everything else is as it is without:
+# `make test SANITIZE=undefined` is the same boots and the same sessions,
+# and whatever any of them brings the C of the kernel to do that C leaves
+# undefined ends its boot with a panic that names the line. Such a kernel
+# is slower in what it does in C, the collector most of all: where both
+# machines are emulated the boots take half as long again, and the one
+# that collects at every safe point twice as long. So every boot is given
+# three times its time (tools/boottest.sh, PATIENCE=). What `make test` does
+# before the boots is left out, the tests of the Lisp files under SBCL and
+# the laying out of a release: no C of the kernel's runs in either. A newer
+# clang takes the sum of two integers that does not fit to wrap around on
+# these targets, as Microsoft's compiler does, and leaves a check out for
+# it; this build says that it is undefined, which is what C says
+# (-fno-wrapv).
+#
+# Its objects are in directories of their own, build/x86_64-undefined and
+# build/aarch64-undefined, so nothing is compiled a second time when the
+# two kinds of kernel are built in turn. And it is another system: the file
+# above is one of its sources, so the digits of its name are others, the
+# kernels are linked again when the name changes (build/system.name,
+# below), and the build stops when a kernel in build/esp is not the one
+# that it was asked for.
+SANITIZE ?=
+ifeq ($(SANITIZE),undefined)
+CFLAGS      += -fsanitize=undefined -fno-sanitize-recover=undefined -fno-wrapv
+COMMON_SRCS += kernel/sanitize/undefined.c
+KIND        := -undefined
+export PATIENCE ?= 3
+else ifneq ($(SANITIZE),)
+$(error SANITIZE=$(SANITIZE): the kernel is built to check itself for "undefined", or without SANITIZE as it is released)
+endif
+
 # What this build is called: its version, and eight digits that are worked
 # out from every source that goes into it (tools/system.py), so that the
 # same sources are the same system wherever they are built, and a change to
@@ -46,7 +85,7 @@ SYSTEM_SRCS := $(sort kernel/system.c $(COMMON_SRCS) $(HEADERS) kernel/lisp/self
 SYSTEM      := $(VERSION)-$(shell python3 -I tools/system.py id $(SYSTEM_SRCS))
 BOOTDIR     := $(BUILD)/esp/clara/$(SYSTEM)
 
-.PHONY: all test host-test image font site screenshot release release-test clean FORCE
+.PHONY: all test host-test sanitize image font site screenshot release release-test clean FORCE
 all:
 
 # The name of this build, in a file that is written when the name is not
@@ -65,20 +104,20 @@ FORCE:
 
 # $(1) arch  $(2) clang target  $(3) extra CFLAGS  $(4) EFI file name  $(5) lld machine
 define ARCH_RULES
-$(1)_OBJS := $$(patsubst kernel/%,$(BUILD)/$(1)/%.o,$$(basename $(COMMON_SRCS) $$(wildcard kernel/arch/$(1)/*.c kernel/arch/$(1)/*.S)))
-$(BUILD)/$(1)/%.o: kernel/%.c $(HEADERS)
+$(1)_OBJS := $$(patsubst kernel/%,$(BUILD)/$(1)$(KIND)/%.o,$$(basename $(COMMON_SRCS) $$(wildcard kernel/arch/$(1)/*.c kernel/arch/$(1)/*.S)))
+$(BUILD)/$(1)$(KIND)/%.o: kernel/%.c $(HEADERS)
 	@mkdir -p $$(dir $$@)
 	$(CC) $(CFLAGS) --target=$(2) $(3) -c $$< -o $$@
-$(BUILD)/$(1)/%.o: kernel/%.S $(HEADERS)
+$(BUILD)/$(1)$(KIND)/%.o: kernel/%.S $(HEADERS)
 	@mkdir -p $$(dir $$@)
 	$(CC) $(ASFLAGS) --target=$(2) -c $$< -o $$@
-$(BUILD)/$(1)/system-%.o: kernel/system.c $(HEADERS) $(BUILD)/system.name
+$(BUILD)/$(1)$(KIND)/system-%.o: kernel/system.c $(HEADERS) $(BUILD)/system.name
 	@mkdir -p $$(dir $$@)
 	$(CC) $(CFLAGS) --target=$(2) $(3) -DCLARA_SYSTEM='"$$*"' -c $$< -o $$@
-$(ESP)/$(4): $$($(1)_OBJS) $(BUILD)/$(1)/system-$(SYSTEM).o
+$(ESP)/$(4): $$($(1)_OBJS) $(BUILD)/$(1)$(KIND)/system-$(SYSTEM).o
 	@mkdir -p $$(dir $$@)
 	$(LD) $(LDFLAGS) /machine:$(5) /out:$$@ $$^
-$(BUILD)/system-%/esp/EFI/BOOT/$(4): $$($(1)_OBJS) $(BUILD)/$(1)/system-$(VERSION)-%.o
+$(BUILD)/system-%/esp/EFI/BOOT/$(4): $$($(1)_OBJS) $(BUILD)/$(1)$(KIND)/system-$(VERSION)-%.o
 	@mkdir -p $$(dir $$@)
 	$(LD) $(LDFLAGS) /machine:$(5) /out:$$@ $$^
 all: $(ESP)/$(4)
@@ -129,6 +168,51 @@ run-%: all
 # and what the listener answers.
 host-test:
 	$(SBCL) --script lisp/host/tests.lisp
+
+# The C that needs no machine, as a program on this computer, with two of
+# the compiler's sanitizers in it: the address sanitizer, which stops the
+# program at an access to memory that is nobody's, past the end of an
+# array or of a variable, or freed, and the one for undefined behaviour.
+# That C is the sums, the ciphers and the signatures, the functions for
+# bytes, the console's printing, and the runtime of Lisp as far as a world
+# comes that makes no code for a processor (tools/host/world.c), each file
+# compiled as it stands, for a machine that tools/host/machine.c makes of
+# this computer; the first lines of that file say what it is like. The
+# program runs the self-tests of all of that, the evaluator's and the
+# compiler's texts with a collection at the safe points as well, and ends
+# with the kernel's last line, or with what a sanitizer has to say and a
+# status that stops make. It takes some seconds, and needs the sanitizers'
+# own libraries, which clang has on a Mac and which are a package of their
+# own on Ubuntu (libclang-rt-dev).
+#
+# The kernel's functions for bytes go by other names in it, so that the
+# kernel's are called and not this computer's, which have the same names
+# (string.c). A number of 64 bits is a long to this computer's compiler,
+# which the kernel never says, so what it says to kprintf is not held
+# against it here (-Wno-format); the two compilers for the machines do
+# that. And the address sanitizer is told to leave the variables of a
+# function on the stack (use-after-return): the evaluator knows how deep
+# it is by where they are.
+HOST            := $(BUILD)/host
+HOST_SRCS       := $(addprefix kernel/,string.c sha256.c sha512.c hmac.c aes.c ed25519.c bignum.c ecdsa.c console.c) \
+                   $(filter-out kernel/lisp/lisp.c,$(wildcard kernel/lisp/*.c)) tools/host/world.c
+HOST_SANITIZERS := -fsanitize=address,undefined -fno-sanitize-recover=undefined \
+                   -fsanitize-address-use-after-return=never -fno-omit-frame-pointer
+HOST_CFLAGS     := -std=c11 -O1 -g -Wall -Wextra -Werror -Ikernel $(HOST_SANITIZERS)
+HOST_BYTES      := -Dmemset=clara_memset -Dmemcpy=clara_memcpy -Dmemmove=clara_memmove -Dmemcmp=clara_memcmp \
+                   -Dstrlen=clara_strlen
+$(HOST)/tools/host/machine.o: tools/host/machine.c $(HEADERS)
+	@mkdir -p $(dir $@)
+	$(CC) $(HOST_CFLAGS) -c $< -o $@
+$(HOST)/tools/host/world.o: kernel/lisp/lisp.c
+$(HOST)/%.o: %.c $(HEADERS)
+	@mkdir -p $(dir $@)
+	$(CC) $(HOST_CFLAGS) -Wno-format -ffreestanding -fno-builtin $(HOST_BYTES) -c $< -o $@
+$(HOST)/clara: $(patsubst %.c,$(HOST)/%.o,$(HOST_SRCS)) $(HOST)/tools/host/machine.o
+	$(CC) $(HOST_SANITIZERS) $^ -o $@ -lpthread
+sanitize: $(HOST)/clara
+	ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=print_stacktrace=1 $(HOST)/clara lisp/boot.lisp lisp/compiler.lisp \
+		kernel/lisp/self-test.lisp
 
 # Then the boots. AArch64 boots twice, once for each version of its interrupt controller:
 # version 3 as UTM runs it, accelerated where the host can, and version 2
@@ -260,7 +344,7 @@ UPGRADED := EXPECT='^ClaraOS: starting the system that is to be tried;;^system: 
 POWER :=SESSION=tools/power.txt MARKER='^clara: turning the machine off' EXPECT='^lisp: the heap is an image'
 AS_UTM := UTM=1 SESSION=tools/utm.txt EXPECT='^lisp: the heap is an image;;^usb: .* is a USB controller: 8 ports, and at them 3 devices;;^input: .* is a tablet, QEMU USB Tablet;;^input: .* is a mouse, QEMU USB Mouse;;^input: .* is a keyboard, QEMU USB Keyboard;;^sound: .* is a sound card of Intel.s kind: 48000 frames a second'
 RESUME := SESSION=tools/resumed.txt EXPECT='^lisp: the heap is an image;;^type: 12 files of outlines came with the system;;^lisp: and with it [0-9]* KiB of code for the processor;;^lisp:   of the functions .* and 0 are walked;;^lisp:   the processor runs [1-9][0-9]* of the compiled ones itself, .* and the machine 3[^0-9]*$$'
-test: all host-test release-test $(BUILD)/system-other/stamp $(BUILD)/system-broken/stamp
+test: all $(if $(SANITIZE),,host-test release-test) $(BUILD)/system-other/stamp $(BUILD)/system-broken/stamp
 	tools/boottest.sh x86_64
 	NAME=x86_64-resumed DISK=$(BUILD)/boot-x86_64.img $(RESUME) tools/boottest.sh x86_64
 	MKDISK="--fat 16 --table mbr" tools/boottest.sh aarch64 -machine gic-version=3
