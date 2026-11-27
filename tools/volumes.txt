@@ -46,6 +46,16 @@ error: there is no volume for 3:/note.txt: this machine has 1: to 2:
 ^T and more
 ^M sendkey ctrl-s
 OK
+> (list 'found (until (lit 1 "kept on" 5 7)))                            ; Ctrl-F asks what to find, and what is found is
+^M sendkey ctrl-f
+^T ON
+(FOUND OK)
+> (list 'next (until (lit 1 "kept on the secon" 15 17)))                 ; highlighted, the cursor behind it; Ctrl-G finds
+^M sendkey ctrl-g
+(NEXT OK)
+> (list 'first-again (until (lit 1 "kept on" 5 7)))                      ; the next one, and the first when there is no other
+^M sendkey ctrl-g
+(FIRST-AGAIN OK)
 > (list (clara.windows:key-typed 17) (until (= (length (clara.windows:windows)) 1)))
 (17 OK)
 > (progn (clara.fat:make-directory "/crate") (clara.fat:make-directory "/crate/in")

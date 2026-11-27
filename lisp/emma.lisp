@@ -6,9 +6,10 @@
 ;;;; that of a file, read whole and written whole (OPEN, in lisp/boot.lisp),
 ;;;; or of no file yet. The arrows, Home, End, Page Up and Page Down move
 ;;;; the cursor, and so does a click; Enter, Backspace and Delete do what
-;;;; they say; and with Ctrl held, S saves, O opens another file, K cuts to
-;;;; the end of the line and Y puts back what was cut, E evaluates the text
-;;;; as LOAD would, and Q closes the window, as its close box does. The
+;;;; they say; and with Ctrl held, S saves, O opens another file, F asks for
+;;;; some text and finds it, G finds it once more, K cuts to the end of the
+;;;; line and Y puts back what was cut, E evaluates the text as LOAD would,
+;;;; and Q closes the window, as its close box does. The
 ;;;; pointer, moved with its left button held, highlights text, which Ctrl-X
 ;;;; cuts, Ctrl-C copies, and what is typed takes the place of; Ctrl-V puts
 ;;;; in what was cut or copied last, in this window or in any other
@@ -71,6 +72,7 @@
   cutting      ; the key before this one was Ctrl-K: what the next takes is added
   pressed      ; where the left button of the pointer went down last: (row . column), between two characters of the text
   mark         ; where what is highlighted began, (row . column): it is the text from there to the cursor. NIL when nothing is
+  sought       ; what was looked for last, for Ctrl-G to look for once more: a string, or NIL while nothing was
   sure         ; the key that was refused because the text is not saved: typed once more, it is obeyed
   done)        ; the window is to close
 
@@ -303,6 +305,94 @@
       (take-marked editor)
       (insert-text editor text))))
 
+;;; Finding
+;;;
+;;; Ctrl-F asks in the status row for some text and looks for it: from the
+;;; cursor to the end of the text, and then from the start of the text down
+;;; to the cursor. What is found is highlighted, with the cursor behind it,
+;;; so what is typed next takes its place, and the next look begins behind
+;;; it: Ctrl-G looks for the same text once more. A line that the window
+;;; does not show comes to the middle of it, with the lines around it. A
+;;; letter is found in either case. What is looked for lies in one line,
+;;; since one line is what the status row lets a hand type.
+
+;; Where the string WORDS begins in the string LINE, at the column START or
+;; after it, or NIL when it does not from there on. A letter of the one is
+;; the same letter of the other only in the same case: whoever asks hands
+;; both over in small letters.
+(defun found-in (line words start)
+  (let ((size (length words)) (limit (- (length line) (length words))))
+    (loop
+      (when (> start limit)
+        (return nil))
+      (let ((same 0))
+        (loop
+          (unless (and (< same size) (char= (char line (+ start same)) (char words same)))
+            (return))
+          (setq same (1+ same)))
+        (when (= same size)
+          (return start)))
+      (setq start (1+ start)))))
+
+;; The line of that number comes to the middle of the window, unless the
+;; window shows it as it is: what was found is looked at with what stands
+;; above it and below it, where a key that moves the cursor a line moves
+;; the window no further than it has to. The rows move as they were drawn,
+;; so the cursor that is drawn goes first, or its bar would move with them.
+(defun to-the-middle (editor row)
+  (let ((top (editor-top editor)) (rows (editor-rows editor)))
+    (unless (and (>= row top) (< row (+ top rows)))
+      (lift-cursor editor)
+      (scroll editor (- (max 0 (- row (floor rows 2))) top)))))
+
+;; Where WORDS, in small letters, comes next in LINES, the lines of a text,
+;; from the column COLUMN of the line of the number ROW on: (row . column),
+;; or NIL when the text does not have it. It is looked for from there to
+;; the end of the text, and then from the start of the text down to that
+;; line, in which the places from COLUMN on were looked at before. The
+;; second value says that it was found in that second part, or not at all.
+(defun next-place (lines words row column)
+  (let ((found nil) (around nil))
+    (do ((below (nthcdr row lines) (cdr below)) (number row (1+ number)) (start column 0))
+        ((or found (null below)))
+      (let ((at (found-in (string-downcase (car below)) words start)))
+        (when at
+          (setq found (cons number at)))))
+    (unless found
+      (setq around t)
+      (do ((above lines (cdr above)) (number 0 (1+ number)))
+          ((or found (> number row)))
+        (let ((at (found-in (string-downcase (car above)) words 0)))
+          (when at
+            (setq found (cons number at))))))
+    (values found around)))
+
+;; The text is looked through for WORDS, from the cursor on, and what is
+;; found is highlighted, with the cursor behind it. What comes back is words
+;; for the status row: that it is not there; that it is the only one, which
+;; it is when the next one behind it is itself; that it was found from the
+;; start of the text again, there being none between the cursor and the
+;; end; or NIL, when it was found further down and is not the only one.
+(defun look-for (editor words)
+  (let ((small (string-downcase words)) (lines (all-lines editor)))
+    (setf (editor-sought editor) words)
+    (multiple-value-bind (found around) (next-place lines small (editor-row editor) (editor-column editor))
+      (if found
+          (let* ((end (+ (cdr found) (length words)))
+                 (alone (equal found (next-place lines small (car found) end))))
+            (go-to editor (car found) end)
+            (setf (editor-mark editor) found)
+            (to-the-middle editor (car found))
+            (cond (alone "the only one in the text")
+                  (around "none further down: the first in the text")))
+          (concatenate 'string "not in the text: " words)))))
+
+;; Ctrl-F: the status row asks what to find, and says how to find the next
+;; one when that was found.
+(defun ask-to-find (editor)
+  (ask editor "Find: " (lambda (words)
+                         (or (look-for editor words) "Ctrl-G finds the next one"))))
+
 ;;; Files
 
 ;; What the window of a text is called: Emma, and after that the name of
@@ -436,9 +526,18 @@
 
 ;;; The window
 
+;; The cursor that is drawn goes with its row, which is to be drawn again.
+;; Whatever draws the rows begins with that, and so does whatever moves
+;; them: a row is copied with the bar that is drawn in it.
+(defun lift-cursor (editor)
+  (when (editor-cursor editor)
+    (setf (svref (editor-shown editor) (editor-cursor editor)) nil
+          (editor-cursor editor) nil)))
+
 ;; The text moves up in the window by so many rows, or down by as many as
 ;; the number is below nought: the rows that stay are copied to where they
-;; go, and the others are to be drawn.
+;; go, and the others are to be drawn. The cursor is not drawn then
+;; (LIFT-CURSOR).
 (defun scroll (editor delta)
   (let* ((rows (editor-rows editor)) (shown (editor-shown editor)) (surface (editor-surface editor))
          (width (* (editor-columns editor) (editor-wide editor)))
@@ -593,10 +692,7 @@
   (let ((rows (editor-rows editor)) (columns (editor-columns editor)) (surface (editor-surface editor))
         (shown (editor-shown editor)) (ink (editor-ink editor)) (paper (editor-paper editor))
         (font (editor-font editor)))
-    ;; The cursor that is drawn goes with its row, which is drawn again.
-    (when (editor-cursor editor)
-      (setf (svref shown (editor-cursor editor)) nil
-            (editor-cursor editor) nil))
+    (lift-cursor editor)
     ;; The window follows the cursor.
     (let ((row (editor-row editor)) (top (editor-top editor)))
       (cond ((< row top) (scroll editor (- row top)))
@@ -732,6 +828,11 @@
           ((= code 17)                  ; Ctrl-Q
            (when (safe-p editor code sure)
              (setf (editor-done editor) t)))
+          ((= code 6) (ask-to-find editor)) ; Ctrl-F
+          ((= code 7)                   ; Ctrl-G: what was looked for last, once more, or what to find when nothing was
+           (if (editor-sought editor)
+               (setf (editor-message editor) (look-for editor (editor-sought editor)))
+               (ask-to-find editor)))
           ((= code 11) (cut-line editor cutting)) ; Ctrl-K
           ((= code 5) (evaluate editor)) ; Ctrl-E
           ((and (>= code 32) (< code char-code-limit))
@@ -811,7 +912,7 @@
                               :ink (clara.draw:color 232 227 244) :paper (clara.draw:color 30 27 46)
                               :shown (make-array (1+ rows) :initial-element nil)
                               :paints (make-array rows :initial-element nil)
-                              :message "Ctrl-S saves, Ctrl-O opens a file, Ctrl-E evaluates, Ctrl-Q closes")))
+                              :message "Ctrl-S saves, Ctrl-O opens, Ctrl-F finds, Ctrl-E evaluates, Ctrl-Q closes")))
     (setf (car holds) editor)
     (when name
       (attempt editor (lambda () (read-in editor name)))

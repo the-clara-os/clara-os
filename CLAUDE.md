@@ -2052,6 +2052,42 @@ Rules:
   second. tools/upgrade.txt is where a kernel runs the file: it launches
   the window, presses its keys and its `>`, and finds what was set in
   the world that the newer system makes.
+- Finding (lisp/emma.lisp, Julio's issue #59; DESIGN.md has what was
+  decided). `look-for` is the one place that looks: from the cursor to
+  the end of the text and then from its start, a line at a time
+  (`found-in`, which is handed both strings in small letters), and what
+  it finds is the text from `mark` to the cursor, like what the pointer
+  highlights, so nothing new is drawn for it. What it gives back is the
+  words of the status row, and `key` and `ask-to-find` are where they are
+  put there: a new thing for the row to say of a look is a string there,
+  in `ref-find` of the tests, which words it a second time, and in the
+  manual's table. A line that the window does not show is brought to its
+  middle by `to-the-middle`, which moves the rows outside `render`: so it
+  calls `lift-cursor` first, as `render` does, and whatever else comes to
+  move the rows does too, or the bar of the cursor is copied with its row
+  and stays where no cursor is. The walk of keys found that, eleven times
+  in seven hundred steps, where the checks that were written for the key
+  had not: a check there draws the window (`render`) before the key that
+  it is about, since a cursor that was never drawn leaves nothing behind.
+  In the tests `ref-find` is the second opinion: the text as one string,
+  which SBCL's SEARCH looks through with `char-equal`. The walk looks for
+  a few characters of a line that it picks, in capitals, or for what no
+  line has, presses Ctrl-G after every other one, and counts what came of
+  it, so a change to the keys of the walk is followed by a look at those
+  counts. The words that an editor with no file begins with name five
+  keys in 73 characters, of the 79 that a window of 80 columns has room
+  for: a sixth key means fewer words for the others. A boot presses the
+  two keys in tools/volumes.txt, where Emma has a file of two lines open,
+  and holds the row against `lit`, with a string that ends before the
+  cursor's cell. It is not tools/session.txt's to show, which has no
+  seconds for it on x86_64 (issue #213). That session pays for the file
+  all the same: it launches Emma, unloads it and launches it again, on
+  all three machines, so what is added to lisp/emma.lisp is compiled
+  six times a run of `make test`. The six functions of finding made a
+  load 0.06 seconds longer where x86_64 is emulated, 0.62 for 0.56
+  (`(time (load (clara.system:system-file "emma.lisp")))` in the world
+  that the first session saved, on the kernel before and the kernel
+  after).
 - What an application does with a file it does with the language: OPEN,
   READ-LINE, PROBE-FILE, DIRECTORY, DELETE-FILE. So it only ever sees what
   lisp/boot.lisp makes of the file system, on ClaraOS, and that side is
