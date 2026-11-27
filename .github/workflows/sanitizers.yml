@@ -1,0 +1,116 @@
+# ClaraOS's C, with the compiler's sanitizers in it, two ways (issue #60).
+#
+# The kernels themselves, built to check for undefined behaviour as they
+# run (`make test SANITIZE=undefined`): both are compiled with every check
+# that clang's -fsanitize=undefined stands for, and a check that fails
+# stops the machine with a panic that names the line
+# (kernel/sanitize/undefined.c). Then the boots of CI are the test, all of
+# them, with the same sessions: whatever any of them brings the C of a
+# kernel to do that C leaves undefined ends its boot. This is all of the
+# C, the code for each processor included, on the machines that it is
+# written for.
+#
+# And the C that needs no machine, as a program on the runner, with the
+# address sanitizer and the one for undefined behaviour (`make sanitize`):
+# the sums, the ciphers and the signatures, the functions for bytes, the
+# console's printing and the runtime of Lisp, each file as it stands, on a
+# machine that tools/host/machine.c makes of the runner. The program runs
+# their self-tests, the evaluator's and the compiler's texts with a
+# collection at the safe points as well, and a sanitizer's report ends it
+# with a status that fails the job. The address sanitizer has no place in
+# a kernel of ClaraOS's yet, which is why this C is taken out of one.
+#
+# Neither job is a check that the ruleset on main asks for.
+
+name: Sanitizers
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sanitizers-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ubsan:
+    name: UndefinedBehaviorSanitizer, in Both Kernels
+    runs-on: ubuntu-latest
+    # CI's job has thirty minutes for the same boots on kernels without the
+    # checks, and has used twenty-six of them on a slow runner. These boots
+    # take half as long again where the machines are emulated.
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # The list of ci.yml, which is the one at the top of the Makefile,
+      # without SBCL: the tests of the Lisp files are no part of this.
+      - name: Install the Toolchain, QEMU and the Firmware
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang lld make \
+            qemu-system-x86 qemu-system-arm ovmf qemu-efi-aarch64 netcat-openbsd \
+            python3 dosfstools
+          clang --version
+          qemu-system-x86_64 --version
+
+      - name: Build Both Kernels to Check Themselves
+        run: make SANITIZE=undefined
+
+      - name: Boot Both Architectures
+        run: make test SANITIZE=undefined
+
+      - name: Show the Boot Reports
+        if: always()
+        run: |
+          for log in build/boot-*.log; do
+            [ -f "$log" ] || continue
+            echo "::group::$log"
+            sed 's/\x1b\[[0-9;=]*[A-Za-z]//g' "$log"
+            echo "::endgroup::"
+          done
+
+      - name: Upload the Boot Logs and Screenshots
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: sanitized-boot-reports
+          path: |
+            build/boot-*.log
+            build/session-*.txt
+            build/qemu-*.log
+            build/monitor-*.log
+            build/fsck-*.log
+            build/serve-*.log
+            build/screen-*.png
+            build/heard-*.txt
+            build/sound-*.wav
+          if-no-files-found: ignore
+
+  asan-ubsan:
+    name: AddressSanitizer and UndefinedBehaviorSanitizer, on the Runner
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # clang, and the libraries of its sanitizers, which are a package of
+      # their own. Python works out the name of the build, which the
+      # Makefile does whatever it is asked to make.
+      - name: Install the Toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang libclang-rt-dev make python3
+          clang --version
+
+      - name: Run the C That Needs No Machine
+        run: make sanitize

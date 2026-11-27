@@ -2468,13 +2468,68 @@ Rules:
   lisp/fat.lisp writes is tried in the container below before it is
   pushed. The serial logs and screenshots of
   a run are in its artifact, boot-reports.
+- The sanitizers (issue #60; .github/workflows/sanitizers.yml, two jobs
+  on every pull request and every push to main, `ubsan` and `asan-ubsan`,
+  neither of them a check that the ruleset asks for, issue #241: look
+  at them all the same, `gh pr checks` lists them beside CI's). The first
+  is `make test SANITIZE=undefined`: both kernels built with clang's
+  checks for undefined behaviour and with the functions that a failed
+  check calls (kernel/sanitize/undefined.c), and the boots of `make test`
+  on them, without the tests under SBCL and without `make release`. A
+  check that fails is a panic that names the line, `panic: undefined
+  behaviour at kernel/main.c:25:54: 2147483647 + 1 is not a value of
+  'int'`, and ends its boot. Such a kernel is another system, with other
+  digits in its name and its objects in build/<arch>-undefined, so the two
+  kinds are built in turn without `make clean`; the next plain `make`
+  puts the kernel that is released back into build/esp, and `make
+  screenshot` is for that one alone. Every boot has three times its time
+  (`PATIENCE`). The second is `make sanitize`: the C that needs no
+  machine, as a program on this computer, with the address sanitizer and
+  the one for undefined behaviour, running its self-tests in some twenty
+  seconds: the sums, the ciphers and the signatures, string.c, console.c
+  and kernel/lisp/, on a machine that tools/host/machine.c makes up. Run
+  both after a change to C. A function of the kernel's that kernel/lisp/
+  comes to call has to be in tools/host/machine.c as well, or `make
+  sanitize` does not link, and what `new_world` does before it loads
+  native.lisp is done once more in tools/host/world.c, in the same
+  order: a change to one is a change to the other. A report is a mistake
+  in the C and is put right there. No check is switched off, and no
+  function is marked for a sanitizer to pass over, without Julio's word.
+  A run of `make sanitize` that ends without a report and still not
+  well, a text of the self-test with another answer, a program that
+  stands still, is as much to go by: the threads there take their turns
+  at other moments than a kernel's do, and what the program found first
+  was no access to memory but a race of the evaluator's, one run in
+  forty with ten of them at once (0.0.66, the text with AT-ONCE in
+  kernel/lisp/lisp.c). When it fails once and passes the next time, that
+  is not chance until it has been run many times at once: `for i in 1 2
+  3 4 5 6 7 8 9 10; do (ASAN_OPTIONS=detect_leaks=0 build/host/clara
+  lisp/boot.lisp lisp/compiler.lisp kernel/lisp/self-test.lisp >
+  /tmp/host-$i.log 2>&1; echo "$i: $?") & done; wait`, a few rounds of
+  it, half a minute each.
+  What the address sanitizer sees: the variables of a function and of the
+  program, with a border around each; a page frame that is free; the
+  heap's addresses where no frame is mapped. What it does not: one object
+  of the heap written into from the one before it, since nothing lies
+  between them (the collector panics at what that leaves, when it comes
+  by); and nothing of what the host does not run, the substrate proper,
+  code for a processor, the image, a device's registers, which have the
+  first way only (issues #237, #238). To see that either still
+  notices, plant something in a copy of the tree, as for every check
+  here: ROADMAP.md has the cases that were tried, under "Sanitizers". On
+  Ubuntu `make sanitize` needs libclang-rt-dev, which `make test` does
+  not: in the container below, `apt-get install -y --no-install-recommends
+  libclang-rt-dev` first. A Mac has what it needs with Homebrew's llvm,
+  and takes its pages of 16 KiB in its stride: the host's machine maps
+  nothing, it copies a frame to the heap's address.
 - Dependabot (.github/dependabot.yml, issue #53) looks at the actions of
-  the two workflows every Friday and opens a pull request, labelled
+  the three workflows every Friday and opens a pull request, labelled
   `chore`, when one has a newer version than the workflow names. The
   workflows name an action by its major version, so that is the next
   major one, and the releases in between run without a pull request
-  (issue #198). CI tries a newer action of ci.yml on Dependabot's pull
-  request. One of site.yml is first run by the Website run that the
+  (issue #198). CI and the sanitizers try a newer action of ci.yml and of
+  sanitizers.yml on Dependabot's pull request. One of site.yml is first
+  run by the Website run that the
   merge starts, since nothing of that workflow can be tried before: read
   what the action's release says has changed before the merge, and look
   at that run after it. Whatever else comes to have a list of versions

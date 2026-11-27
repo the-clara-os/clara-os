@@ -12,6 +12,10 @@
 #                 session that ends by shutting the machine down has
 #                 "clara: turning the machine off" for it: the machine then has
 #                 to go by itself, and there is no screen left to save.)
+#        PATIENCE=3 (the boot is given that many times its TIMEOUT, whatever
+#                 that is: for a kernel that is slower than the one the times
+#                 were set for, as one that checks itself is, which the
+#                 Makefile builds with SANITIZE=)
 #        SESSION=tools/session.txt (what is typed and what has to come back;
 #                 empty: only Ctrl-D is typed. {{system}} in it is the name of
 #                 the system that was built, and {{version}} its version.)
@@ -62,7 +66,7 @@ arch=${1:?usage: tools/boottest.sh <arch> [qemu args]}
 shift
 name=${NAME:-$arch}
 marker=${MARKER:-clara: nothing more to do}
-timeout=${TIMEOUT:-90}
+timeout=$((${TIMEOUT:-90} * ${PATIENCE:-1}))
 # Does the session end with the machine turning itself off?
 case "$marker" in
 *"turning the machine off"*) goes=1 ;;
