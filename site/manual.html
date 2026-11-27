@@ -710,8 +710,8 @@ NIL</pre>
 &gt; (clara.system:system-file "boot.lisp")
 "/clara/{{version}}-8f3a1c2e/boot.lisp"</code></pre>
 <pre class="session">&gt; (clara.fat:names (clara.system:system-file ""))
-("ares.lisp" "arm64.lisp" "boot.lisp" "BOOTAA64.EFI" "BOOTX64.EFI" "Charter-Bold-Italic.ttf" "Charter-Bold.ttf" "Charter-Italic.ttf" "Charter-Regular.ttf" "clos.lisp" "compiler.lisp" "console.lisp" "disk.lisp" "draw.lisp" "emma.lisp" "fat.lisp" "font.lisp" "format.lisp" "Go-Bold-Italic.ttf" "Go-Bold.ttf" "Go-Italic.ttf" "Go-Mono-Bold-Italic.ttf" "Go-Mono-Bold.ttf" "Go-Mono-Italic.ttf" "Go-Mono.ttf" "Go-Regular.ttf" "hda.lisp" "input.lisp" "jaid.lisp" "listener.lisp" "manifest" "native.lisp" "net.lisp" "parker.lisp" "pci.lisp" "random.lisp" "roots.pem" "self-test.lisp" "sound.lisp" "syntax.lisp" "system.lisp" "terminal.lisp" "tls.lisp" "type.lisp" "usb.lisp" "virtio.lisp" "windows.lisp" "x86-64.lisp")</pre>
-    <p>Those are the system's Lisp files: the language's part that is written in Lisp, <a href="#format">the directives of <code>format</code></a>, the compiler, the console, the drivers, the file system, the window manager, what knows which <a href="#parentheses">parentheses</a> of a text belong together, what sees to <a href="#stop">the machine as a whole</a> and what installs <a href="#parker">packages</a>, and three that are not loaded until they are wanted, the <a href="#applications">applications</a> <code>emma.lisp</code>, <code>jaid.lisp</code> and <code>ares.lisp</code>. <code>native.lisp</code> is what <a href="#processor">translates for the processor</a>, with a file for each kind of processor, <code>arm64.lisp</code> and <code>x86-64.lisp</code>, of which a machine loads its own. Beside them are a second copy of the kernels and <code>manifest</code>, the list of what the system is made of, which is what <a href="#upgrade">another machine reads</a> when it takes this system from this disk. The eight files whose names end in <code>.ttf</code> are the system's <a href="#fonts">fonts</a>, and <code>roots.pem</code> is the list of whom it <a href="#https">trusts</a>. Everything outside <code>/clara</code> and <code>/EFI</code> is yours, and no system writes there but for one file in <code>/home</code>.</p>
+("ares.lisp" "arm64.lisp" "boot.lisp" "BOOTAA64.EFI" "BOOTX64.EFI" "Charter-Bold-Italic.ttf" "Charter-Bold.ttf" "Charter-Italic.ttf" "Charter-Regular.ttf" "clos.lisp" "compiler.lisp" "console.lisp" "disk.lisp" "draw.lisp" "emma.lisp" "fat.lisp" "font.lisp" "format.lisp" "Go-Bold-Italic.ttf" "Go-Bold.ttf" "Go-Italic.ttf" "Go-Mono-Bold-Italic.ttf" "Go-Mono-Bold.ttf" "Go-Mono-Italic.ttf" "Go-Mono.ttf" "Go-Regular.ttf" "hda.lisp" "input.lisp" "jaid.lisp" "listener.lisp" "manifest" "native.lisp" "net.lisp" "parker.lisp" "pci.lisp" "random.lisp" "roots.pem" "self-test.lisp" "settings.lisp" "sound.lisp" "syntax.lisp" "system.lisp" "terminal.lisp" "tls.lisp" "type.lisp" "usb.lisp" "virtio.lisp" "windows.lisp" "x86-64.lisp")</pre>
+    <p>Those are the system's Lisp files: the language's part that is written in Lisp, <a href="#format">the directives of <code>format</code></a>, the compiler, the console, the drivers, the file system, the window manager, what knows which <a href="#parentheses">parentheses</a> of a text belong together, what sees to <a href="#stop">the machine as a whole</a> and what installs <a href="#parker">packages</a>, and four that are not loaded until they are wanted, the <a href="#applications">applications</a> <code>emma.lisp</code>, <code>jaid.lisp</code>, <code>ares.lisp</code> and <code>settings.lisp</code>. <code>native.lisp</code> is what <a href="#processor">translates for the processor</a>, with a file for each kind of processor, <code>arm64.lisp</code> and <code>x86-64.lisp</code>, of which a machine loads its own. Beside them are a second copy of the kernels and <code>manifest</code>, the list of what the system is made of, which is what <a href="#upgrade">another machine reads</a> when it takes this system from this disk. The twelve files whose names end in <code>.ttf</code> are the system's <a href="#fonts">fonts</a>, and <code>roots.pem</code> is the list of whom it <a href="#https">trusts</a>. Everything outside <code>/clara</code> and <code>/EFI</code> is yours, and no system writes there but for one file in <code>/home</code>.</p>
 
     <h3 id="reading">Reading and loading</h3>
 <pre class="session">&gt; (with-open-file (in (clara.system:system-file "listener.lisp")) (list (read-line in) (read-line in)))
@@ -1174,6 +1174,7 @@ system: {{version}}-41d0c97b has come to its prompt, and is the system of this m
       <li>The window manager: it is started when it was running, with one REPL window, and a form of your text that opens a window opens it.</li>
       <li>The <a href="#order">order of the list</a> under <code>Applications</code>, when you moved a line of it: the names stand as they stood. An application or a command that is new with the system stands behind the name that it is defined after, and an application that the newer system has under another name stands where it stood under its old one, as Jaid does, which was <code>Files</code> until 0.0.54.</li>
       <li>The <a href="#clock">time zone</a> that the machine was told, <code>clara:*time-zone*</code>: the clock tells the time of the same place.</li>
+      <li>What else you set of the system's own, in <a href="#settings">Settings</a> or at a prompt, where it is no longer as the system came: the letters of the bar and of the windows of text, the clock, how loud the machine is, and how much a REPL keeps. Those are variables of the system's, <code>clara.windows:*font*</code> for one, and the report names them among your own. A value that is no text, a clock that is a function and not the name of one, does not come across, which the report says too.</li>
       <li>Not the world itself. A world belongs to the system that saved it, so the newer system makes one of its own files, and saves it without being asked: the next start is in it. What is no text is not in it: a function that no form of the text defines, a thread, a lock, a list that leads back into itself. A variable that held such a thing has what its form makes anew.</li>
     </ul>
     <p>The newer system says which is which as it starts, by name:</p>
@@ -1401,7 +1402,16 @@ T
       <tr><td><code>Applications</code></td><td>lists the applications there are, and under a line <code>Restart</code> and <code>Shut Down</code>. A click on a name starts the application, or <a href="#stop">does to the machine</a> what the name says, and a click anywhere else puts the list away.</td></tr>
       <tr><td><kbd>Alt</kbd> and <kbd>Tab</kbd></td><td>brings the lowest window to the top, and so each window in its turn.</td></tr>
     </table>
-    <p>What the bar, the list and the titles say is written in a <a href="#fonts">font</a>, <code>Sans</code> at 13 pixels. <code>clara.windows:*font*</code> says which: a list of a name, a size and whatever else <code>clara.type:font</code> takes, <code>(list "Sans" 13 :bold t)</code> for bold ones; or a font; or <code>NIL</code> for the console's letters. The window manager reads it as it starts, so another font shows after <code>(clara.windows:stop)</code>, which ends the applications that run, and <code>(clara.windows:start)</code>; it stays with a <a href="#image">world that is saved</a>. The bar and the titles keep their height, which a font of up to 16 pixels fits.</p>
+    <p>What the bar, the list and the titles say is written in a <a href="#fonts">font</a>, <code>Sans</code> at 13 pixels. <code>clara.windows:*font*</code> says which: a list of a name, a size and whatever else <code>clara.type:font</code> takes, <code>(list "Sans" 13 :bold t)</code> for bold ones; or a font; or <code>NIL</code> for the console's letters. The window manager reads it as it starts, and again when it is told that the variable holds something else: <code>(clara.windows:redraw)</code> puts the whole screen together again in the letters that the variable says by then, and the windows stay as they are. The bar and the titles keep their height, which a font of up to 16 pixels fits.</p>
+<pre class="session">&gt; (setq clara.windows:*font* (list "Serif" 14))
+("Serif" 14)
+&gt; (clara.windows:redraw)
+T
+&gt; (setq clara.windows:*font* (list "Sans" 13))
+("Sans" 13)
+&gt; (clara.windows:redraw)
+T</pre>
+    <p>The variable stays with a <a href="#image">world that is saved</a> and <a href="#across">comes across</a> to the world that a newer system makes, and <a href="#settings">Settings</a> has two lines for it. Letters that cannot be had, a family that the machine has no file of, are said on the serial port, and the console's stand in.</p>
     <p>A REPL window is a prompt like the first one, with the same <a href="#keys">keys</a>, except that <kbd>Ctrl-D</kbd> closes the window and <kbd>Ctrl-C</kbd> stops what that window is evaluating. Every prompt is in the one world: what is defined in a window is defined at the serial port and in the next window. Each has a thread of its own, so one can compute while you type in another, and each is in a package of its own choosing.</p>
     <p id="back">What a REPL window has said is not gone when it leaves the window by its top. <kbd>Page Up</kbd> shows the rows before the ones that the window shows, a window's worth less one, so that the row that was first is now last, and so on as far back as the first row that the window ever had; <kbd>Page Down</kbd> shows the rows after them, down to the last. What is written meanwhile is written, and the window goes on showing what it showed, so a form can be evaluated and what it prints looked at while it goes by. Any other key brings the last rows back, where the prompt is and where the key is typed. The window keeps the <a href="#terminals">newest 100000 rows</a> that have left it, for as long as it is open.</p>
     <p id="history">What was typed at a REPL's prompt is not gone either, once <kbd>Enter</kbd> has ended the line. The arrow up puts the line that was read last at the prompt again, as it was typed and in its colours, to be read once more with <kbd>Enter</kbd>, or changed first. The arrow up again brings the line before that one, and so on as far back as the oldest; the arrow down goes the other way, down to the line that you were typing when you pressed the first arrow, which is as you left it. So is every line that the arrows pass: what you type into a line that came back stays in it while you look at the others, until <kbd>Enter</kbd> reads one of them. That one is the newest line from then on, and the lines that were remembered are as they were.</p>
@@ -1438,7 +1448,7 @@ T
         (multiple-value-bind (second minute hour) (decode-universal-time time)
           (format nil "~D:~2,'0D ~A" (1+ (mod (+ hour 11) 12)) minute
                   (if (&lt; hour 12) "AM" "PM")))))</code></pre>
-    <p>With <code>NIL</code> there the bar has no clock. The function is asked every second, in a thread of the window manager's own that is named <code>clock</code>, and the bar is drawn again when it says something else than before: another clock shows within a second, and one that says the seconds counts them. A function that fails leaves the bar without a clock, and the serial port says why, once, in a line that begins with <code>windows: the bar has no clock</code>. What the variable holds stays with a world that is saved; a world that is made anew has the system's clock again, unless <code>/home/init.lisp</code> gives it another.</p>
+    <p>With <code>NIL</code> there the bar has no clock. The function is asked every second, in a thread of the window manager's own that is named <code>clock</code>, and the bar is drawn again when it says something else than before: another clock shows within a second, and one that says the seconds counts them. A function that fails leaves the bar without a clock, and the serial port says why, once, in a line that begins with <code>windows: the bar has no clock</code>. What the variable holds stays with a world that is saved. It <a href="#across">comes across</a> to the world that a newer system makes when it is <code>NIL</code> or a name, whose function <a href="#home">the text</a> defines there; a function itself is no text. A world that is made anew for another reason has the system's clock again, unless <code>/home/init.lisp</code> gives it another.</p>
 
     <h3 id="parentheses">Parentheses</h3>
     <p>In a REPL window, and in <a href="#editor">Emma</a>, the parentheses that belong together are in one colour. The outermost pair has the first of six colours, a pair inside it the second, and so on, and a pair that lies deeper than six takes them from the first again. So the parenthesis that closes another is found by its colour, and one that closes nothing stands out in red.</p>
@@ -1626,7 +1636,7 @@ NIL</pre>
 #&lt;THREAD "Emma"&gt;
 &gt; (clara.windows:launch "Jaid" "/" :font nil)
 #&lt;THREAD "Jaid"&gt;</code></pre>
-    <p><code>Mono</code> is the family that is made for it. A font whose letters differ in width can be had as well, and has every letter in a cell as wide as its widest, so its words come out spaced. A font that cannot be had, a file that is not there, is said on the serial port, and the window opens in the console's letters. The variable stays with a <a href="#image">world that is saved</a>, and <a href="#init"><code>/home/init.lisp</code></a> is where to say it for every world that is made anew. The first prompt, before the window manager, keeps the console's letters, and so does what the system says when something <a href="#trouble">goes wrong</a>.</p>
+    <p><code>Mono</code> is the family that is made for it. A font whose letters differ in width can be had as well, and has every letter in a cell as wide as its widest, so its words come out spaced. A font that cannot be had, a file that is not there, is said on the serial port, and the window opens in the console's letters. The variable stays with a <a href="#image">world that is saved</a> and <a href="#across">comes across</a> to the world that a newer system makes, and <a href="#init"><code>/home/init.lisp</code></a> is where to say it for any other world that is made anew. The first prompt, before the window manager, keeps the console's letters, and so does what the system says when something <a href="#trouble">goes wrong</a>.</p>
 
     <h3 id="defining-one">An application</h3>
     <p>An application is a name and a function. <code>clara.windows:launch</code> calls the function in a thread of its own and comes back with that thread once the application has its window. When the function is done, or its thread is stopped, the windows that the thread opened are closed for it.</p>
@@ -1637,10 +1647,10 @@ NIL</pre>
         (sleep 2))))
 "Hello"
 &gt; (clara.windows:applications)
-("REPL" "Emma" "Jaid" "Ares" "Parker" "Hello")
+("REPL" "Emma" "Jaid" "Ares" "Settings" "Parker" "Hello")
 &gt; (clara:join-thread (clara.windows:launch "Hello"))
 NIL</pre>
-    <p>The window is there for two seconds, and goes with its application. From now on <code>Hello</code> is in the list under <code>Applications</code>, below the five that come with the system, until it is <a href="#order">moved</a>. <code>REPL</code> is <code>clara.terminal:repl</code>, the first application and the one that is launched when the window manager starts; <code>Emma</code>, <code>Jaid</code> and <code>Ares</code> are the subject of <a href="#applications">the next chapter</a>, and <code>Parker</code> of <a href="#parker">the one after it</a>.</p>
+    <p>The window is there for two seconds, and goes with its application. From now on <code>Hello</code> is in the list under <code>Applications</code>, below the six that come with the system, until it is <a href="#order">moved</a>. <code>REPL</code> is <code>clara.terminal:repl</code>, the first application and the one that is launched when the window manager starts; <code>Emma</code>, <code>Jaid</code>, <code>Ares</code> and <code>Settings</code> are the subject of <a href="#applications">the next chapter</a>, and <code>Parker</code> of <a href="#parker">the one after it</a>.</p>
     <p>What the list has under its line are commands: a name and a function of no arguments, which is called in a thread of its own when the name is picked, and which opens no window that anything waits for.</p>
 <pre class="session">&gt; (clara.windows:commands)
 ("Restart" "Shut Down")
@@ -1652,7 +1662,7 @@ NIL</pre>
     <h3 id="order">The order of the list</h3>
     <p>A name stands in the list where it was first defined, under the ones that were there. <code>clara.windows:move-up</code> and <code>clara.windows:move-down</code> take a line one place up or down, by its name, and answer with the names of its kind as they stand then.</p>
 <pre class="session">&gt; (clara.windows:move-up "Hello")
-("REPL" "Emma" "Jaid" "Ares" "Hello" "Parker")
+("REPL" "Emma" "Jaid" "Ares" "Settings" "Hello" "Parker")
 &gt; (clara.windows:move-down "restart")
 ("Shut Down" "Restart")
 &gt; (clara.windows:move-down "Restart")
@@ -1674,7 +1684,7 @@ NIL</pre>
 <pre class="session again">&gt; (list (clara.windows:running-p) (mapcar #'clara.windows:window-title (clara.windows:windows)))
 (T ("REPL"))
 &gt; (list (clara.windows:applications) (clara.windows:commands))
-(("REPL" "Emma" "Jaid" "Ares" "Hello" "Parker") ("Shut Down" "Restart"))
+(("REPL" "Emma" "Jaid" "Ares" "Settings" "Hello" "Parker") ("Shut Down" "Restart"))
 &gt; (clara.windows:stop)
 T</pre>
     <p>What is defined comes back, the applications among it, in the order that the list was left in. The windows that were open do not: a window is pixels and a thread, and an image has neither, so the window manager starts with one REPL, as it does the first time. <code>clara.windows:stop</code> ends the applications and gives the screen back to the console, cleared; a world that is saved after that starts at the console again.</p>
@@ -1683,7 +1693,7 @@ T</pre>
 
   <section id="applications">
     <h2>{{spleen:Applications}}</h2>
-    <p>Three applications come with the system besides the REPL: Emma, an editor for text, Jaid, a browser for the files of the disk, and Ares, a browser for the web. Each is a file of Lisp among <a href="#listing">the system's own</a>, <code>emma.lisp</code>, <code>jaid.lisp</code> and <code>ares.lisp</code>, which the system does not load as it starts. The file is loaded the first time its application is picked from <code>Applications</code>, or launched from a prompt, and the application can be unloaded again while everything else goes on.</p>
+    <p>Four applications come with the system besides the REPL: Emma, an editor for text, Jaid, a browser for the files of the disk, Ares, a browser for the web, and Settings, a window that lists what there is to set of the system. Each is a file of Lisp among <a href="#listing">the system's own</a>, <code>emma.lisp</code>, <code>jaid.lisp</code>, <code>ares.lisp</code> and <code>settings.lisp</code>, which the system does not load as it starts. The file is loaded the first time its application is picked from <code>Applications</code>, or launched from a prompt, and the application can be unloaded again while everything else goes on.</p>
 
     <h3 id="editor">Emma, the editor</h3>
     <p><code>Emma</code> in the list opens a window with no text in it yet, whose title is <code>Emma</code>. From a prompt, Emma is launched with the name of a file, and the window's title is <code>Emma - </code> and that name:</p>
@@ -1793,8 +1803,45 @@ NIL
       <li>Each Ares window is a thread of its own. Its function is <code>clara.ares:browse</code>, which takes what <code>launch</code> takes after the name and comes back when the window closes.</li>
     </ul>
 
+    <h3 id="settings">Settings</h3>
+    <p><code>Settings</code> in the list opens a window that lists what there is to set of the system, a line each, under the part of the system that it belongs to, with what it is set to now. From a prompt:</p>
+<pre class="session">&gt; (find-package "CLARA.SETTINGS")
+NIL
+&gt; (clara.windows:launch "Settings")
+#&lt;THREAD "Settings"&gt;
+&gt; (list (package-name (find-package "CLARA.SETTINGS"))
+        (clara.windows:window-title (clara.windows:focused-window)))
+("CLARA.SETTINGS" "Settings")</pre>
+    <p><code>:columns</code>, <code>:rows</code>, <code>:x</code>, <code>:y</code> and <code>:font</code> after the name do for this window what they do for Emma's; it is 62 cells wide and shows all of its lines without them. It is written in <a href="#letters">the letters of the windows of text</a>, unless the screen has no room for 62 cells of those, where it is written in the console's: this is the window in which letters that came out too large are made smaller.</p>
+    <p>One line is picked, and shows the other way round. A line has a <code>&lt;</code> before its value when there is a value before that one, and a <code>&gt;</code> after it when there is one after. The last row says which variable the picked line sets, as a form at a prompt names it, and what it is for: <code>clara.sound:*volume*: how loud the machine is</code>.</p>
+    <table class="wrap">
+      <tr><td>The arrows up and down, <kbd>Page Up</kbd>, <kbd>Page Down</kbd>, <kbd>Home</kbd>, <kbd>End</kbd></td><td>pick another line.</td></tr>
+      <tr><td>The arrows to the left and to the right</td><td>give the line that is picked the value before the one that it has, and the one after it.</td></tr>
+      <tr><td>A click</td><td>picks the line it is on, and on the <code>&lt;</code> or the <code>&gt;</code> of a line does what the arrow that way does.</td></tr>
+      <tr><td><kbd>Ctrl-Q</kbd>, the <code>x</code> in the title</td><td>close the window.</td></tr>
+    </table>
+    <p>These are the lines, and the values that the arrows go through:</p>
+    <table class="wrap">
+      <tr><td><code>Time zone</code></td><td><a href="#clock"><code>clara:*time-zone*</code></a>, where the machine is: from 12 hours behind Greenwich to 14 hours ahead of it, an hour at a time. The arrow to the right makes the clock an hour later.</td></tr>
+      <tr><td><code>Volume</code></td><td><a href="#loud"><code>clara.sound:*volume*</code></a>, how loud the machine is: from 0 to 100, five at a time.</td></tr>
+      <tr><td><code>Letters of the bar</code>, and <code>their size</code></td><td><a href="#windows"><code>clara.windows:*font*</code></a>, what the bar, the list and the titles are written in: the console's letters, or a <a href="#families">family</a>, <code>Sans</code>, <code>Mono</code> or <code>Serif</code>, at 9 to 16 pixels. The screen is in them at once.</td></tr>
+      <tr><td><code>Letters of a window</code>, and <code>their size</code></td><td><a href="#letters"><code>clara.windows:*text-font*</code></a>, what a window of text is written in: the same, at 9 to 24 pixels. The windows that open from then on are in them; the ones that are open stay as they are, this one among them.</td></tr>
+      <tr><td><code>Clock</code></td><td><a href="#clock"><code>clara.windows:*clock*</code></a>, what the bar says of the time: the day and the time, or nothing.</td></tr>
+      <tr><td><code>Rows that it keeps</code></td><td><a href="#terminals"><code>clara.terminal:*rows-kept*</code></a>, how far back <kbd>Page Up</kbd> goes in a REPL window: 100, 1000, 10000 or 100000 rows, or all of them.</td></tr>
+      <tr><td><code>Lines that it remembers</code></td><td><a href="#lines"><code>clara.terminal:*lines-kept*</code></a>, how many typed lines the arrow up brings back: 100, 1000 or 10000, or all of them.</td></tr>
+    </table>
+    <p>What to know about Settings as it is now:</p>
+    <ul>
+      <li>The window keeps nothing of its own. A line sets a variable, and says what the variable holds: what you set at a prompt shows in the window within a second, and what you set in the window is what a form at a prompt finds.</li>
+      <li>A value that was set at a prompt and that is none of the line's own is said as it is, <code>37 of 100</code>, and the first arrow, either one, gives the line the nearest of its own.</li>
+      <li>Letters that the machine has no file of are not set: the last row says why not, and the line is as it was.</li>
+      <li>What is set stays with a <a href="#image">world that is saved</a>, and <a href="#across">comes across</a> to the world that a newer system makes, as it does when it was set at a prompt. A world that is made anew for another reason has the system's own values: a line in <a href="#init"><code>/home/init.lisp</code></a> says one for good.</li>
+      <li>Not everything that can be set has a line. The colours of the <a href="#parentheses">parentheses</a> and of what is <a href="#copying">highlighted</a>, the <a href="#order">order of the list</a> under <code>Applications</code>, a clock of your own, letters that are bold or slanted, and where <a href="#upgrade-network">releases</a> and <a href="#parker-sources">packages</a> come from are said at a prompt. A font that says more than a family and a size keeps the rest when a line changes one of the two.</li>
+      <li>Each Settings window is a thread of its own, and two of them show the same. Its function is <code>clara.settings:settings</code>, which takes what <code>launch</code> takes after the name and comes back when the window closes.</li>
+    </ul>
+
     <h3 id="installed">Applications in files</h3>
-    <p>The launcher knows Emma, Jaid and Ares by a name and the name of a file. <code>clara.windows:install-application</code> says so for any file, and the file itself says <code>clara.windows:define-application</code> for the function, under the same name, as its last form. Here is such a file, written from the prompt, a line of it to the string, so that this page can be tried as it stands; Emma is the place to write one.</p>
+    <p>The launcher knows Emma, Jaid, Ares and Settings by a name and the name of a file. <code>clara.windows:install-application</code> says so for any file, and the file itself says <code>clara.windows:define-application</code> for the function, under the same name, as its last form. Here is such a file, written from the prompt, a line of it to the string, so that this page can be tried as it stands; Emma is the place to write one.</p>
 <pre class="session">&gt; (defvar *greeting*
     '("(defpackage \"GREETING\" (:use \"COMMON-LISP\"))"
       "(in-package \"GREETING\")"
@@ -1817,7 +1864,7 @@ NIL
 &gt; (clara.windows:install-application "Greeting" "/greeting.lisp")
 "Greeting"
 &gt; (list (clara.windows:applications) (find-package "GREETING"))
-(("REPL" "Emma" "Jaid" "Ares" "Hello" "Parker" "Greeting") NIL)
+(("REPL" "Emma" "Jaid" "Ares" "Settings" "Hello" "Parker" "Greeting") NIL)
 &gt; (clara.windows:launch "Greeting" "Good morning")
 #&lt;THREAD "Greeting"&gt;
 &gt; (list (package-name (find-package "GREETING"))
@@ -1827,17 +1874,17 @@ NIL
 <pre class="session">&gt; (clara.windows:unload-application "Greeting")
 "Greeting"
 &gt; (list (find-package "GREETING") (clara.windows:applications))
-(NIL ("REPL" "Emma" "Jaid" "Ares" "Hello" "Parker" "Greeting"))
+(NIL ("REPL" "Emma" "Jaid" "Ares" "Settings" "Hello" "Parker" "Greeting"))
 &gt; (clara.windows:remove-application "Greeting")
 "Greeting"
 &gt; (clara.windows:applications)
-("REPL" "Emma" "Jaid" "Ares" "Hello" "Parker")</pre>
+("REPL" "Emma" "Jaid" "Ares" "Settings" "Hello" "Parker")</pre>
     <ul>
       <li><code>clara.windows:unload-application</code> stops the application wherever it runs, which closes its windows, and deletes the packages that its file made: what the file defined is gone from the world, and the memory it took comes back. The application stays in the list, and the next launch loads the file as it is by then. That is how to try a change to an application: save the file, unload, launch.</li>
       <li><code>clara.windows:remove-application</code> does the same and takes the name out of the list. It is also what takes out an application that was defined at a prompt, like <code>Hello</code>.</li>
       <li>What is typed at a prompt to define an application or to install one is <a href="#defined">written down</a> with everything else that you define, so the launcher of a world that is made again, after <a href="#upgrade">an upgrade</a> for one, has it in its list. <code>clara.windows:remove-application</code> and <code>clara.windows:remove-command</code>, typed at a prompt with the name written out, take the form that put it there out of <code>/home/defined.lisp</code> again.</li>
       <li>An application that fails, in its file or later, ends with its windows closed. The reason is said on the console, as for any thread: <code>error in #&lt;THREAD "Greeting"&gt;:</code> and what went wrong.</li>
-      <li>Emma, Jaid and Ares are unloaded and launched again the same way, and the system's <code>emma.lisp</code> can be changed in Emma: <code>(clara.system:system-file "emma.lisp")</code> is its name. A file that is installed by a name without a directory, as those three are, is one of the system's own.</li>
+      <li>Emma, Jaid, Ares and Settings are unloaded and launched again the same way, and the system's <code>emma.lisp</code> can be changed in Emma: <code>(clara.system:system-file "emma.lisp")</code> is its name. A file that is installed by a name without a directory, as those four are, is one of the system's own.</li>
       <li>What an application is installed as is part of the world, and is saved with it. Whether its file has been loaded is too: a world that is saved after Emma was used starts with Emma in it.</li>
     </ul>
   </section>
@@ -2174,7 +2221,7 @@ error: nothing is mapped at #x0</pre>
 
     <h3>The packages CLARA.WINDOWS and CLARA.TERMINAL</h3>
     <p><a href="#windows">Windows</a> says what each of these is for. <code>clara.windows:resume</code> is what the system calls as it starts, for a world that was saved with the window manager running.</p>
-    <p class="names" data-package="CLARA.WINDOWS"><code>clara.windows:start</code> <code>clara.windows:stop</code> <code>clara.windows:running-p</code> <code>clara.windows:resume</code> <code>clara.windows:open-window</code> <code>clara.windows:close-window</code> <code>clara.windows:show</code> <code>clara.windows:window-p</code> <code>clara.windows:window-title</code> <code>clara.windows:window-surface</code> <code>clara.windows:window-position</code> <code>clara.windows:move-window</code> <code>clara.windows:raise-window</code> <code>clara.windows:rename-window</code> <code>clara.windows:next-event</code> <code>clara.windows:windows</code> <code>clara.windows:focused-window</code> <code>clara.windows:clipboard</code> <code>clara.windows:carry</code> <code>clara.windows:highlight</code> <code>clara.windows:*highlight*</code> <code>clara.windows:define-application</code> <code>clara.windows:install-application</code> <code>clara.windows:unload-application</code> <code>clara.windows:remove-application</code> <code>clara.windows:applications</code> <code>clara.windows:launch</code> <code>clara.windows:*application-directory*</code> <code>clara.windows:define-command</code> <code>clara.windows:remove-command</code> <code>clara.windows:commands</code> <code>clara.windows:move-up</code> <code>clara.windows:move-down</code> <code>clara.windows:unfinished</code> <code>clara.windows:*font*</code> <code>clara.windows:*text-font*</code> <code>clara.windows:text-font</code> <code>clara.windows:*clock*</code> <code>clara.windows:day-and-time</code> <code>clara.windows:key-typed</code> <code>clara.windows:pointer-moved</code></p>
+    <p class="names" data-package="CLARA.WINDOWS"><code>clara.windows:start</code> <code>clara.windows:stop</code> <code>clara.windows:running-p</code> <code>clara.windows:resume</code> <code>clara.windows:open-window</code> <code>clara.windows:close-window</code> <code>clara.windows:show</code> <code>clara.windows:window-p</code> <code>clara.windows:window-title</code> <code>clara.windows:window-surface</code> <code>clara.windows:window-position</code> <code>clara.windows:move-window</code> <code>clara.windows:raise-window</code> <code>clara.windows:rename-window</code> <code>clara.windows:next-event</code> <code>clara.windows:windows</code> <code>clara.windows:focused-window</code> <code>clara.windows:clipboard</code> <code>clara.windows:carry</code> <code>clara.windows:highlight</code> <code>clara.windows:*highlight*</code> <code>clara.windows:define-application</code> <code>clara.windows:install-application</code> <code>clara.windows:unload-application</code> <code>clara.windows:remove-application</code> <code>clara.windows:applications</code> <code>clara.windows:launch</code> <code>clara.windows:*application-directory*</code> <code>clara.windows:define-command</code> <code>clara.windows:remove-command</code> <code>clara.windows:commands</code> <code>clara.windows:move-up</code> <code>clara.windows:move-down</code> <code>clara.windows:unfinished</code> <code>clara.windows:*font*</code> <code>clara.windows:*text-font*</code> <code>clara.windows:text-font</code> <code>clara.windows:*clock*</code> <code>clara.windows:day-and-time</code> <code>clara.windows:redraw</code> <code>clara.windows:key-typed</code> <code>clara.windows:pointer-moved</code></p>
     <p class="names" data-package="CLARA.TERMINAL"><code>clara.terminal:open-terminal</code> <code>clara.terminal:terminal-p</code> <code>clara.terminal:terminal-stream</code> <code>clara.terminal:terminal-window</code> <code>clara.terminal:clear</code> <code>clara.terminal:*rows-kept*</code> <code>clara.terminal:history</code> <code>clara.terminal:*lines-kept*</code> <code>clara.terminal:repl</code></p>
 
     <h3>The package CLARA.SYNTAX</h3>
@@ -2193,11 +2240,12 @@ error: nothing is mapped at #x0</pre>
     <p>What makes <a href="#processor">the processor's own instructions</a> of a compiled function. <code>start</code> is the system's: it asks the kernel, at every start, which processor this is and where the kernel keeps what such code reads.</p>
     <p class="names" data-package="CLARA.NATIVE"><code>clara.native:*translate*</code> <code>clara.native:translate</code> <code>clara.native:translate-all</code> <code>clara.native:translated-p</code> <code>clara.native:start</code></p>
 
-    <h3>The packages CLARA.EMMA, CLARA.JAID and CLARA.ARES</h3>
-    <p>The three <a href="#applications">applications</a> that are files. Each package is there once its application has been launched, and gone again when it is unloaded; the first name of each is the function that <code>clara.windows:launch</code> calls.</p>
+    <h3>The packages CLARA.EMMA, CLARA.JAID, CLARA.ARES and CLARA.SETTINGS</h3>
+    <p>The four <a href="#applications">applications</a> that are files. Each package is there once its application has been launched, and gone again when it is unloaded; the first name of each is the function that <code>clara.windows:launch</code> calls.</p>
     <p class="names" data-package="CLARA.EMMA"><code>clara.emma:edit</code></p>
     <p class="names" data-package="CLARA.JAID"><code>clara.jaid:browse</code></p>
     <p class="names" data-package="CLARA.ARES"><code>clara.ares:browse</code> <code>clara.ares:*home*</code></p>
+    <p class="names" data-package="CLARA.SETTINGS"><code>clara.settings:settings</code></p>
 
     <h3>The package CLARA.PARKER</h3>
     <p><a href="#parker">Packages</a> says what each of these is for. <code>clara.parker:parker</code> is the function of the application, which <code>clara.windows:launch</code> calls.</p>

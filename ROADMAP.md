@@ -2617,6 +2617,163 @@ Infrastructure, done:
   has to be compiled for the purpose, is typed at a first boot: the two
   lines that tools/session.txt has for the clock ask it for two times.
 
+- **Settings** (2026-11-27, version 0.0.64). A window that lists what there
+  is to set of the system, which Julio's issue #58 asks for: "A settings
+  application to manipulate various aspects of ClaraOS, both in the system
+  and the desktop". It is an application in a file of its own,
+  lisp/settings.lisp, which the launcher loads when `Settings` is first
+  picked, like Emma, Jaid and Ares, and it stands in the list after them.
+  The window has nine lines under three headings, each with what it is
+  set to now. System: the time zone, from 12 hours behind Greenwich to 14
+  ahead, and how loud the machine is, from 0 to 100 in fives. Desktop: the
+  letters of the bar, the list and the titles, the console's or a family,
+  and their size, from 9 to 16 pixels; the letters of a window of text and
+  their size, from 9 to 24; and the clock, the day and the time or none.
+  REPL: how many rows a window keeps for Page Up and how many typed lines
+  it remembers, so many or all. The arrows up and down, Page Up, Page
+  Down, Home and End pick a line, and the arrows to the left and to the
+  right give it the value before the one that it has, or the one after: a
+  line shows a `<` and a `>` where there is a value that way, and a click
+  on either does what the arrow does. The last row names the variable
+  that the picked line sets, as a form names it, and says what it is for.
+  Ctrl-Q and the close box close the window.
+  The window holds nothing of its own. A line sets a variable of the
+  system's, the one that a form at a prompt sets, and says what the
+  variable holds: what was set at a prompt shows in the window within a
+  second, since the window looks again when nothing has happened to it
+  for that long, and a value that is none of a line's own, 37 for how
+  loud, is said as it is and goes to the nearest of the line's at the
+  first arrow. Letters that the machine has no file of are not set, and
+  the last row says why not. The window itself is in the letters of the
+  windows of text when the screen has room for its 62 cells in them, and
+  in the console's when it has not: `Sans` at 13 pixels makes them 806
+  pixels wide, on a screen of 800, and this is the window in which
+  letters that came out too large are made smaller.
+  Two things of the system changed for it. `clara.windows:redraw` makes
+  the letters of the bar, the list and the titles again of what
+  `clara.windows:*font*` says and puts the whole screen together in them,
+  so another font shows at once, where it took a stop of the window
+  manager, which ends every application, and a start. And what was set
+  goes across an upgrade: lisp/system.lisp has the six variables besides
+  the time zone, each with the value that the system came with, and the
+  account of a world that leaves names the ones that hold something
+  else, with their values where a text can say them, in the two forms
+  that it had for a variable of the user's. So the system that comes
+  gives them their values by the code that was there, says them by name
+  in its report, and says of a clock that was a function that the
+  variable is as it makes it; it then has the screen put together again,
+  the letters of the bar having been made before the account was read.
+  It goes by the variable and not by the window: what was set at a prompt
+  goes across like what was set there. Nothing of what an object is has
+  changed, so an image's number has not. DESIGN.md has what was decided
+  ("Settings"), the manual a section ("Settings") and what `redraw` is
+  for ("Windows").
+  What it does not do. A colour has no line, and does not go across an
+  upgrade (issue #214); nor has the order of the launcher's list (issue
+  #215), anything that is said as text, such as where releases come from
+  (issue #216), or letters that are bold or slanted (issue #220). The
+  list of lines is the application's own, and nothing else adds to it
+  (issue #217). What was set is not kept as text, so a world that is
+  made from the files for another reason than an upgrade has the
+  system's own values (issue #218). A window that is open keeps the
+  letters that it opened in (issue #176), the bar's letters end at 16
+  pixels (issue #177), and a time zone is a whole number of hours that
+  knows no summer (issues #208 and #209). The lines, their words and
+  their values were picked here and are Julio's to change (issue #219).
+  What it costs. Nothing as a machine starts: the file is not in the
+  world. A window that is open and left alone puts its nine lines into
+  words once a second and draws nothing when they say what they said: a
+  thousand such looks took 20 and 30 milliseconds at a kernel that the
+  Mac runs itself, so an open window costs some 25 millionths of each
+  second.
+  How it was checked. The host tests drive the window without its
+  thread, on a desk that is narrower than the window, and look at the
+  variable after every key and at the cells of the rows that the key
+  changed, against rows that are written out there a second time: the
+  keys that pick, past the headings and at both ends; every line through
+  its values, at both ends of them and from a value that is none of
+  them; the letters of the bar on the whole screen, pixel for pixel, in
+  the console's letters and in two families; a family without a file,
+  which is refused; a window in the letters that another one set, and
+  one in the console's where the desk has no room for those; the pointer
+  on a line, on both marks and beside them, on a heading and under the
+  lines, and through the window manager; windows of four rows and of
+  one, which follow the picked line; the application
+  in its own thread, which takes its keys and shows what was set
+  elsewhere without being told; `redraw` with the launcher's list open,
+  with letters that cannot be had, and without a window manager; the
+  account of a world in which four of the six were set, and a start
+  that reads such an account and finds the bar in the letters that it
+  names. One test holds the list of the window against the list of the
+  account. At a kernel, tools/upgrade.txt launches the window in the
+  world that the first x86_64 session saved, presses its keys and
+  clicks its `>`, upgrades, and finds how loud the machine is and the
+  letters of the bar in the world that the newer system made, with the
+  line of the report that says so; the manual's section and the
+  `redraw` of its "Windows" are typed at its two boots.
+  Eighty-five mistakes were planted in the four Lisp files, one at a
+  time, each in a copy of the tree, with the host tests cut after the
+  account's section. Eighty-three were noticed. The two that were not
+  were keys that come to a heading, Page Down in a window of four rows
+  and End on a list that ends in one, which nothing had pressed: both
+  have a test now, and are noticed. Eight more were planted in the
+  system itself, each copy built and booted on AArch64 with the first
+  session and the upgrade's: six were noticed by the upgrade's session,
+  an account that says nothing of what was set, a world that arrives and
+  is not shown, a `>` and an arrow that do nothing, an arrow that picks
+  a heading, a `redraw` that keeps its letters, and one by the first
+  session, a list without `Settings`. The eighth, a variable that is
+  written down although it is as the system came, no boot can notice,
+  since both systems of `make test` are built of one source and came
+  with the same; the host tests do.
+  A copy of the disk of Julio's machine, which ran 0.0.61-4d08143c, with
+  a copy of his work disk beside it, took the build at once and came up
+  as 0.0.64 with its 17 forms: his commands in the order that he gave
+  them, `ls`, the six that push, pull and load his two files, his list
+  of records, and his calculator, loaded and launched, did what they did
+  before. The world on that disk had never been told a time zone. In
+  the window of the settings on that copy the time zone became 5, the
+  volume 95 and the letters of the bar Mono at 14 pixels, the bar said
+  the time on his wall, and the world was saved; a system of the same
+  sources under another name was then put beside it, and the world that
+  that one made had all three, by name in its report, with the rest.
+  `make test` on the Mac, the host tests with 29616 checks (29353
+  before; most of the difference is the names that the new file calls,
+  each of which is held against what the machine has) and all twenty-one
+  boots, and the same in a container of Ubuntu 26.04, CI's release, whose
+  SBCL is 2.6.0 where the Mac's is 2.6.10 (970 seconds there, 960
+  before; the first x86_64 boot 74, the upgrade's 40, and the boot that
+  collects at every safe point 218).
+  CI's limits, which this slice had to stay clear of. Main's run for the
+  merge before it passed on a slow runner in 26m17s, with the host tests
+  at 118 of their 120 seconds (issue #122) and the first x86_64 boot at
+  89 of its 90 (issue #213). So the file is not in the world, and no line
+  of a first session is new: a machine loads the file when the window is
+  first opened, and the session that opens it is the upgrade's, which has
+  300 seconds and took 29 on the Mac and 40 in the container. The tests
+  of the window took 2.6 seconds as they were first written, when they
+  looked at every cell of the window, on a desk of 520 pixels, after
+  every key. On a desk that is narrower than the window, which lies over
+  its left edge, and looking at the rows that a key changed, they take
+  half a second. The whole of the host tests, run in turn with main's,
+  twice: 89.6 and 89.3 seconds on main, 88.8 and 88.8 with this, so on
+  the Mac the new tests could not be told from one run to the next.
+  The slice's own run on CI was on a slow runner too, and said
+  otherwise. It passed, in 26m29s, with the first x86_64 boot at 89
+  seconds again and the host tests ending 120.3 seconds after their
+  command was written out, where their watchdog ends them at 120:
+  nothing was left. So the host tests were made quicker in the same
+  pull request, by what a profile of them showed. `wrong-pixels` asked
+  for the list of the windows, which copies it, and measured every name
+  of the launcher's list, for each pixel of each look at a screen, some
+  two hundred looks a run. It asks once a look now (`menu-facts`), and
+  for what the bar says as well, which takes 1.3 seconds off a run on
+  the Mac: 88.0 and 88.2 seconds before, 86.5 and 86.9 after, run in
+  turn. Eleven mistakes planted afterwards in what the window manager
+  draws, the list, the bar, a frame, the pointer, were all noticed. A
+  scratch array of 32-bit numbers in the host's copy of a rectangle,
+  which the profile also pointed at, was tried and gained nothing.
+
 Infrastructure, for sessions with budget left over:
 
 - Read the UART base from ACPI (SPCR or DBG2) instead of assuming
@@ -4411,8 +4568,9 @@ M18a and M18b, fonts, what they left:
   nothing makes a bold or an italic of an upright. Sizes are whole
   pixels, from 4 to 400, and a glyph of more than a million pixels shows
   nothing.
-- `clara.windows:*font*` is read when the window manager starts, so a
-  change shows after STOP and START, which ends the applications. The
+- `clara.windows:*font*` is read when the window manager starts, and
+  again by `clara.windows:redraw` (0.0.64), by which a change shows at
+  once; until then it took STOP and START, which ends the applications. The
   bar, the list and the bands of the windows keep their heights, 20 and
   21 pixels: a font of more than 16 pixels is cut off there, and no font
   makes them lower (#177). The console itself, before the window

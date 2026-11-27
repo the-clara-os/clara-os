@@ -1618,7 +1618,10 @@ Rules:
   `paint-window`, `window-at` and the tests' `window-rule`: the tests hold
   every pixel of the screen against that rule after each thing they do
   (`new-desk`, `wrong-pixels`), and a walk of random steps does it 160
-  times. START is for a user and RESUME for the boot: `lisp_main` calls
+  times. What is the same for every pixel of one look, the windows that
+  there are, what the launcher's list has (`menu-facts`) and what the
+  bar says (`bar-says`), `wrong-pixels` asks for once and hands to the
+  rules: asked for each pixel, it was more than a second of every run. START is for a user and RESUME for the boot: `lisp_main` calls
   RESUME, having looked for the package, and RESUME starts the window
   manager when `*running*` was true in the world that was saved. A
   terminal (lisp/terminal.lisp) is a window with cells and a stream; the
@@ -1639,7 +1642,8 @@ Rules:
   against the rows after going back and forth (`rows-show-p`). What
   the bar, the list and the titles say goes through `label`, which writes
   halfway up a strip in the window manager's letters: the font that
-  `clara.windows:*font*` names, which START makes (`*letters*`), or the
+  `clara.windows:*font*` names, which START makes and `redraw` makes again
+  (`*letters*`), or the
   console's when that is NIL or the font cannot be had. The strips keep
   their heights, so a rule of the tests for a new piece of text takes its
   place from `label-rule`.
@@ -1889,7 +1893,8 @@ Rules:
   buttons)` when it asked for the moves. That is how an
   application is written: a loop that waits, changes what it holds, and
   draws. The close box is told once until the program has taken it.
-- Applications in files (lisp/emma.lisp, lisp/jaid.lisp, lisp/ares.lisp).
+- Applications in files (lisp/emma.lisp, lisp/jaid.lisp, lisp/ares.lisp,
+  lisp/settings.lisp).
   They are in lisp/, so the build puts them on the boot volume, and they
   are not in
   `world` of lisp.c: the last lines of lisp/terminal.lisp install them
@@ -2009,6 +2014,44 @@ Rules:
   `pointer-at`, `shows` and `cursor-at` are there, and defines `says`, a
   row of the window on top with its colours either way round; the sizes
   that it expects of the volumes are those of that boot's disks.
+- Settings (lisp/settings.lisp, the package CLARA.SETTINGS, Julio's issue
+  #58; DESIGN.md has what was decided). The application holds nothing: a
+  line of `*lines*` is a variable of the system's with its words, a
+  function that reads it, the values that the window can give it, in
+  their order, and a function that sets it. A new line goes into
+  `*lines*`, its variable into `clara.system::*settings*`
+  (lisp/system.lisp), which is what takes it across an upgrade, and both
+  into the tables of the tests (`*setting-names*`, `*setting-rows*`,
+  `*setting-notes*`): a test holds the two lists against each other, and
+  a check at the top of lisp/host/tests.lisp writes the six variables out
+  with the values that the system comes with. The tests are then run by
+  a system that came with the console's letters for its bar, which is
+  what their desks have, so that an account there says nothing of the
+  bar until a test has set it. A variable of that list is one whose
+  value a text can say, or the account says only that it was set. What a
+  line sets has to hold at once, or the line's note says when it will:
+  `clara.windows:redraw` is what makes the window manager read `*font*`
+  again, and whatever else START comes to read of a variable is read
+  again there. A line makes a font before it sets a variable to it
+  (`to-be-had`), so that what cannot be had is said in the window and not
+  on the serial port. The window is in the console's letters when the
+  screen has no room for it in the windows' own (`letters-for`): whatever
+  is set in it, it has to be legible afterwards, so a new line whose
+  values make a window larger is tried at its largest. The layout is
+  `+name+`, `+back+` and `+value+`, with the `>` three cells before the
+  end of a row, and `setting-row` of the tests is the same rule written a
+  second time. The window looks at
+  its variables every `*look*` milliseconds, a thousand, which the tests
+  make five: no host test waits for a second to be over. The desk of
+  those tests is narrower than the window, which lies over its left
+  edge, and they look at the picked row, at the rows that a key changed
+  and at the status, and at every row only where a test asks for that
+  (`panel-all-wrong`): as they were first written they looked at every
+  cell, on a desk of 520 pixels, after every key, and took 2.6 seconds
+  of the two that CI has to spare there (issue #122); they take half a
+  second. tools/upgrade.txt is where a kernel runs the file: it launches
+  the window, presses its keys and its `>`, and finds what was set in
+  the world that the newer system makes.
 - What an application does with a file it does with the language: OPEN,
   READ-LINE, PROBE-FILE, DIRECTORY, DELETE-FILE. So it only ever sees what
   lisp/boot.lisp makes of the file system, on ClaraOS, and that side is

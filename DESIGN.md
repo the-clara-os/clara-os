@@ -3558,6 +3558,112 @@ architectures (kernel/vm.c).
   lines for the clock that wait for nothing: its boot is the one that has
   the fewest seconds to spare on a slow runner of CI.
 
+## Settings (decided for issue #58, 2026-11-27)
+
+- Julio's issue asks for "a settings application to manipulate various
+  aspects of ClaraOS, both in the system and the desktop". The system had
+  its settings already: they are variables, which a form at a prompt
+  sets, `clara:*time-zone*` and `clara.sound:*volume*` and the rest. So
+  the application is a window onto those variables and holds nothing of
+  its own. A line says what its variable holds, and a change sets the
+  variable, as `setq` would. The two ways are one: what was set at a
+  prompt shows in the window, which looks again every second, and what
+  was set in the window is what a form finds. An application that kept
+  its own table of what was chosen would have had to be told of every
+  `setq`, and would have been wrong whenever it was not.
+- Nine lines, under three headings. System: where the machine is, for
+  the clock, and how loud it is. Desktop: the letters of the bar, the
+  list and the titles, and their size; the letters of a window of text,
+  and their size; and whether the bar has a clock. REPL: how many rows a
+  window keeps for Page Up, and how many typed lines it remembers. They
+  are the variables that the manual tells a user to set and that have a
+  few values worth choosing among. What is not there is what has no such
+  few: a colour is three numbers (issue #214), the order of the
+  launcher's list is a list (issue #215), and where releases and packages
+  come from is a text (issue #216).
+- A line goes through its values a step at a time, with the arrows to the
+  left and to the right, and nothing is typed into it: a time zone is one
+  of 27, how loud the machine is one of 21, a size one of 8 or of 16. A
+  field that takes text would be an editor in a row, and none of the
+  nine needs one. A value that somebody set elsewhere and that is none of
+  the line's own, 37 for how loud, is said as it is, and the first step,
+  either way, goes to the nearest of the line's.
+- A line shows a `<` before its value when there is a value that way and
+  a `>` after it when there is one that way, each in a cell of its own
+  that stays where it is whatever the value says: they are what tells a
+  user that the arrows do something there, and they are where the pointer
+  clicks, as often as it likes without moving.
+- The last row names the variable that the picked line sets, the way a
+  form names it, and says what it is for: `clara.sound:*volume*: how
+  loud the machine is`. The window is the way to the variable for whoever
+  does not know its name, and should leave them knowing it.
+- The list is the application's own, in its file. There is no
+  `define-setting` for a package or a user's file to add a line with
+  (issue #217): one list has one user so far, and what a setting needs to
+  be for a second one is not known before there is a second.
+- The letters of the bar show at once. The window manager made them of
+  `clara.windows:*font*` when it started, and until now another font
+  meant stopping it, which ends every application, and starting it again.
+  `clara.windows:redraw` makes the letters again of what the variable
+  says and puts the whole screen together in them; the line calls it,
+  and so can a form. The sizes of that line end at 16 pixels, which is
+  what the strips of the bar and the titles have room for (issue #177).
+- The letters of a window do not. A window reads `clara.windows:*text-font*`
+  as it opens and keeps what it read (issue #176), so the line is for
+  the windows that open from then on, which its note says, and the
+  window of the settings itself stays in the letters that it opened in.
+- The window itself is in the letters of the windows of text when the
+  screen has room for its 62 cells in them, and in the console's when it
+  has not (`letters-for`). `Sans` at 13 pixels, the first family that the
+  arrow comes to, has cells of 13 pixels, since every cell of such a font
+  is as wide as its widest letter (issue #179), and 62 of them are wider
+  than the 800 pixels of a screen under QEMU: the `>` of every line
+  would lie outside it, in the one window where letters that came out
+  too large are made smaller.
+- Letters that the machine has no file of are not set. The line makes
+  the font before it sets the variable, and what goes wrong in that is
+  said in the last row: a bar that silently fell back to the console's
+  letters while the line said `Serif` would be a line that lies.
+- What is set goes across an upgrade, in the account of the world that
+  leaves. lisp/system.lisp has the six variables besides the time zone
+  (`clara.system::*settings*`), each with the value that it had when the
+  file was loaded, which is the one that the system came with, since
+  nothing of the user's has run by then. A world that leaves writes down
+  the ones that hold something else, as it writes the user's variables:
+  `(:name "CLARA.SOUND" "*VOLUME*" :variable)` and `(:value "CLARA.SOUND"
+  "*VOLUME*" "35")`. That is a form that the account already had, so
+  nothing new is read: `arrive` gives the variable its value, says it by
+  name among the user's, and says of a value that was no text, a clock
+  that is a function, that the variable is as this system makes it. It
+  then has the screen put together again, since the letters of the bar
+  were made before the account was read.
+- By the variable, and not by the line of the window: two lines are
+  parts of one variable, and what was set at a prompt goes across like
+  what was set in the window, since nobody should have to remember which
+  way they set a thing. The time zone keeps the line that it had,
+  `(:time-zone 5)`, which every system since 0.0.63 reads.
+- Only what is no longer as the system came. A variable that nobody set
+  has the newer system's value after an upgrade, which may be another:
+  an account that named every variable would hold a newer system to the
+  choices of an older one that nobody made.
+- The account and not the text of `/home`, for the reason that the time
+  zone is there: a `setq` is no definition, so the text does not have it,
+  and the account is read after the text, so what was set last holds. A
+  world that is made anew for another reason, an image that was deleted
+  or refused, has no account and so the system's own values, as it has
+  Greenwich's time (issue #218).
+- The application is a file that the launcher loads when it is first
+  picked, like Emma, Jaid and Ares, and not a part of the world: it
+  costs a machine nothing until then, and the first boot of CI has no
+  seconds for another file (issue #213). The six variables are named in
+  lisp/system.lisp as well, which is in the world, because the account
+  is written whether the window was ever opened or not; a test holds the
+  two lists against each other.
+- The window looks at its variables once a second when nothing happens
+  to it (`clara.settings::*look*`), which is what makes a `setq` at a
+  prompt show in it. It costs what nine lines cost to put into words,
+  and draws nothing when they say what they said.
+
 ## Conventions
 
 - C: lower_snake_case for functions and files. Kernel-wide symbols carry

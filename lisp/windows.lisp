@@ -58,7 +58,7 @@
            "DEFINE-APPLICATION" "INSTALL-APPLICATION" "UNLOAD-APPLICATION" "REMOVE-APPLICATION"
            "APPLICATIONS" "LAUNCH" "*APPLICATION-DIRECTORY*" "DEFINE-COMMAND" "REMOVE-COMMAND" "COMMANDS"
            "MOVE-UP" "MOVE-DOWN" "UNFINISHED" "*FONT*" "*TEXT-FONT*" "TEXT-FONT" "CLIPBOARD" "HIGHLIGHT" "*HIGHLIGHT*"
-           "CARRY" "*CLOCK*" "DAY-AND-TIME" "KEY-TYPED" "POINTER-MOVED"))
+           "CARRY" "*CLOCK*" "DAY-AND-TIME" "REDRAW" "KEY-TYPED" "POINTER-MOVED"))
 (in-package "CLARA.WINDOWS")
 
 (defstruct window
@@ -128,7 +128,7 @@
 (defvar *mute* nil)         ; the clock that failed and was said to have, so that it is said once and not every second
 (defvar *font* (list "Sans" 13)) ; what the bar, the list and the titles are written in: a font of outlines, said as
                             ;   CLARA.TYPE:FONT is told, its name, its size and what else it takes, in a list; or such a
-                            ;   font itself; or NIL for the console's letters. START reads it.
+                            ;   font itself; or NIL for the console's letters. START reads it, and REDRAW again.
 (defvar *letters* nil)      ; that font, as START found it, or NIL: the console's letters
 (defvar *text-font* nil)    ; what the windows that are cells of text are written in, a terminal's, an editor's, a list's:
                             ;   said like *FONT*. A window reads it as it opens: TEXT-FONT
@@ -1208,6 +1208,25 @@
                    (tell-time now))
         (return))
       (sleep (until-beat now beat)))))
+
+;;; What was read at the start
+;;;
+;;; START makes the letters of the bar, the list and the titles of what
+;;; *FONT* says at that moment, and a variable that is set afterwards
+;;; changes nothing that is on the screen. REDRAW is for whoever has set it,
+;;; at a prompt or in the window of the settings (lisp/settings.lisp).
+
+;; The letters of the bar, the list and the titles are the ones that *FONT*
+;; says now, or the console's when those cannot be had, and the whole screen
+;; is put together again in them. T when there is a window manager to do it.
+(defun redraw ()
+  (let ((letters (letters)))
+    (clara:with-lock-held (*lock*)
+      (when *running*
+        (setq *letters* letters)
+        (damaged 0 0 (clara.draw:surface-width *back*) (clara.draw:surface-height *back*))
+        (settle)
+        t))))
 
 ;;; Starting and stopping
 
