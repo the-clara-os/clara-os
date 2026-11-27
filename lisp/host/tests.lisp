@@ -92,9 +92,10 @@
 (load-source "lisp/system.lisp")
 (load-source "lisp/tls.lisp")
 (load-source "lisp/parker.lisp")
-(load-source "lisp/emma.lisp")               ; the three that the kernel leaves on the volume for the launcher to load
+(load-source "lisp/emma.lisp")               ; the four that the kernel leaves on the volume for the launcher to load
 (load-source "lisp/jaid.lisp")
 (load-source "lisp/ares.lisp")
+(load-source "lisp/settings.lisp")
 (defvar *defined-applications* clara.windows::*applications*) ; what the files defined, for the tests to put back
 (defvar *defined-commands* clara.windows::*commands*)
 ;; The window manager's clock has a thread that tells the time every second.
@@ -105,6 +106,17 @@
 ;; it a beat that never comes round.
 (check 1 clara.windows::*beat*)
 (setq clara.windows::*beat* nil)
+
+;; The variables of the system's that are a user's to set, each with the
+;; value that the system came with, which is what the account of a world
+;; that leaves holds them against (lisp/system.lisp). The desks of the tests
+;; are written in the console's letters unless a test asks for others, so
+;; the tests are run by a system that came with those: an account here says
+;; nothing of the bar's letters until a test has set them.
+(check '((clara.windows:*font* "Sans" 13) (clara.windows:*text-font*) (clara.windows:*clock* . clara.windows:day-and-time)
+         (clara.sound:*volume* . 100) (clara.terminal:*rows-kept* . 100000) (clara.terminal:*lines-kept* . 1000))
+       clara.system::*settings*)
+(rplacd (assoc 'clara.windows:*font* clara.system::*settings*) nil)
 
 ;; What this system knows of where ClaraOS is published, and the key that
 ;; it holds a release against: an address that begins with https:// and
@@ -8894,19 +8906,21 @@
     (setf (symbol-function 'clara.terminal:open-terminal) open-terminal)))
 (setq clara.windows::*applications* *defined-applications*)
 ;; What lisp/terminal.lisp defined and installed when it was loaded, and
-;; after it lisp/parker.lisp: the three that are files have a function here
+;; after it lisp/parker.lisp: the four that are files have a function here
 ;; because the tests loaded the files.
-(check '(("REPL" nil) ("Emma" "emma.lisp") ("Jaid" "jaid.lisp") ("Ares" "ares.lisp") ("Parker" nil))
+(check '(("REPL" nil) ("Emma" "emma.lisp") ("Jaid" "jaid.lisp") ("Ares" "ares.lisp") ("Settings" "settings.lisp")
+         ("Parker" nil))
        (mapcar (lambda (application)
                  (list (clara.windows::application-name application) (clara.windows::application-file application)))
                clara.windows::*applications*))
-(check '("REPL" "Emma" "Jaid" "Ares" "Parker") (clara.windows:applications))
+(check '("REPL" "Emma" "Jaid" "Ares" "Settings" "Parker") (clara.windows:applications))
 ;; The name that the file browser had before is no application's, and
 ;; whoever asks for it is told which ones there are.
-(check "there is no application \"Files\": the ones that there are are (\"REPL\" \"Emma\" \"Jaid\" \"Ares\" \"Parker\")"
+(check "there is no application \"Files\": the ones that there are are (\"REPL\" \"Emma\" \"Jaid\" \"Ares\" \"Settings\" \"Parker\")"
        (handler-case (clara.windows:launch "Files")
          (error (condition) (let ((*print-pretty* nil)) (princ-to-string condition)))))
-(check (list #'clara.terminal:repl #'clara.emma:edit #'clara.jaid:browse #'clara.ares:browse #'clara.parker:parker)
+(check (list #'clara.terminal:repl #'clara.emma:edit #'clara.jaid:browse #'clara.ares:browse #'clara.settings:settings
+             #'clara.parker:parker)
        (mapcar #'clara.windows::application-function clara.windows::*applications*))
 
 ;;; A terminal in a font of outlines. Its cells are as large as the font's,
@@ -10832,6 +10846,452 @@ second
 (sb-ext:delete-directory *scratch* :recursive t)
 (check nil (probe-file *scratch*))
 
+;;; Settings (lisp/settings.lisp): the window that lists what a user sets
+;;; of the system. What a line sets is a variable, so the tests look at the
+;;; variable after every key, and hold the cells of the window against rows
+;;; that are written out here a second time: a name, a < and a > where
+;;; there is a value that way, and between them the words for the value;
+;;; and a heading in the colour of a lit frame.
+;;; The desk has the files of two families among the system's, Sans and
+;;; Mono, and none of Serif; its bar is in the console's letters until a
+;;; test sets others; and it is narrower than the window, which lies over
+;;; its left edge, since every pixel of a desk is looked at and these tests
+;;; have no time to spare.
+
+;; What the row of a setting shows, in a window of 62 cells: its name from
+;; the fourth cell on, a < in the 29th when BACK, the words for its value
+;; from the 31st, and a > in the 60th when FORWARD.
+(defun setting-row (name back words forward)
+  (format nil "   ~25A~A ~28A ~A  " name (if back "<" " ") words (if forward ">" " ")))
+
+;; The lines of the window by their numbers: the headings, the names of the
+;; settings, what each setting's row says as the system comes, on a desk
+;; whose bar is in the console's letters, (back words forward), and what
+;; the status row says of each.
+(defvar *setting-headings* '((0 . "System") (3 . "Desktop") (9 . "REPL")))
+(defvar *setting-names*
+  '((1 . "Time zone") (2 . "Volume") (4 . "Letters of the bar") (5 . "  their size") (6 . "Letters of a window")
+    (7 . "  their size") (8 . "Clock") (10 . "Rows that it keeps") (11 . "Lines that it remembers")))
+(defvar *setting-rows*
+  '((1 t "Greenwich" t) (2 t "100 of 100" nil) (4 nil "the console's" t) (5 nil "one size only" nil)
+    (6 nil "the console's" t) (7 nil "one size only" nil) (8 nil "the day and the time" t) (10 t "100000" t)
+    (11 t "1000" t)))
+(defvar *setting-notes*
+  '((1 . "clara:*time-zone*: where the machine is, for the clock")
+    (2 . "clara.sound:*volume*: how loud the machine is")
+    (4 . "clara.windows:*font*: for the bar, the list and the titles")
+    (5 . "clara.windows:*font*: their size, in pixels")
+    (6 . "clara.windows:*text-font*: for windows that open from now on")
+    (7 . "clara.windows:*text-font*: their size, in pixels")
+    (8 . "clara.windows:*clock*: what the bar says of the time")
+    (10 . "clara.terminal:*rows-kept*: how far back Page Up goes")
+    (11 . "clara.terminal:*lines-kept*: what the arrow up brings back")))
+
+;; The rows of a window that shows all twelve lines, with the line of the
+;; number PICKED picked, and its status: what the status says of that line,
+;; unless STATUS says other words. OTHERS are the rows that say something
+;; else than they do as the system comes, each (number back words forward).
+;; Unless WHOLE, the rows are the picked one, those others and the status,
+;; and the rest are NIL, which is a row that is not looked at.
+(defun settings-rows (picked status others whole)
+  (append (loop for number below 12
+                collect (let* ((heading (cdr (assoc number *setting-headings*)))
+                               (row (cdr (or (assoc number others) (assoc number *setting-rows*))))
+                               (text (if heading
+                                         (pad (concatenate 'string " " heading) 62)
+                                         (setting-row (cdr (assoc number *setting-names*))
+                                                      (first row) (second row) (third row)))))
+                          (cond ((= number picked) (list text))
+                                ((or whole (assoc number others)) text))))
+          (list (list (pad (concatenate 'string " " (or status (cdr (assoc picked *setting-notes*)))) 62)))))
+
+;; The cells of a heading's word, which are in the colour of a lit frame:
+;; the heading in the row of that number.
+(defun heading-tints (row heading)
+  (loop for column from 1 to (length heading)
+        collect (list row column +lit+)))
+
+(defvar *heading-tints*
+  (loop for (number . heading) in *setting-headings*
+        append (heading-tints number heading)))
+
+;; How many cells of the window of a panel are not what they should be,
+;; after it was drawn: of the row that is picked, of the rows that OTHERS
+;; name, and of the status; and of every row for PANEL-ALL-WRONG.
+(defun panel-wrong (panel status &rest others)
+  (clara.settings::render panel)
+  (wrong-cells (clara.settings::panel-surface panel)
+               (settings-rows (clara.settings::panel-picked panel) status others nil)))
+
+(defun panel-all-wrong (panel status &rest others)
+  (clara.settings::render panel)
+  (wrong-cells (clara.settings::panel-surface panel)
+               (settings-rows (clara.settings::panel-picked panel) status others t)
+               nil *heading-tints*))
+
+(defun panel-keys (panel &rest codes)
+  (dolist (code codes)
+    (clara.settings::key panel code)))
+
+;; Numbers in a row, and a step from a value to the next: the one after
+;; it, the one before it, none past either end, and from a value that is
+;; none of the choices the nearest of them, the first of two that are as
+;; near, or the first of all when nothing can be near.
+(check '((3 4 5) (5 4 3) (0 5 10) nil (7) 27 21)
+       (list (clara.settings::counted 3 5 1) (clara.settings::counted 5 3 -1) (clara.settings::counted 0 10 5)
+             (clara.settings::counted 5 3 1) (clara.settings::counted 7 7 -1)
+             (length (clara.settings::counted 12 -14 -1)) (length (clara.settings::counted 0 100 5))))
+(check '(1 nil nil 1 0 2 1 nil 1 0 2 0 nil 0)
+       (list (clara.settings::step-from 5 '(5 10 15) nil) (clara.settings::step-from 5 '(5 10 15) t)
+             (clara.settings::step-from 15 '(5 10 15) nil) (clara.settings::step-from 15 '(5 10 15) t)
+             (clara.settings::step-from 6 '(5 10 15) nil) (clara.settings::step-from 14 '(5 10 15) t)
+             (clara.settings::step-from 12 '(15 10 5) nil)
+             (clara.settings::step-from nil '(5 10 nil) nil) (clara.settings::step-from nil '(5 10 nil) t)
+             (clara.settings::step-from "x" '(5 10) nil) (clara.settings::step-from 8 '(nil 5 10) t)
+             (clara.settings::step-from 7 '(5 9) nil) (clara.settings::step-from 5 nil nil)
+             (clara.settings::step-from '(5) '(5 10) t)))
+;; The words for a time zone, and for what is none.
+(check '("12 hours behind Greenwich" "1 hour behind Greenwich" "Greenwich" "1 hour ahead of Greenwich"
+         "14 hours ahead of Greenwich" "\"EST\"")
+       (mapcar #'clara.settings::zone-words '(12 1 0 -1 -14 "EST")))
+
+(new-desk :width 240 :height 160 :fonts '("Go-Regular.ttf" "Go-Mono.ttf"))
+(setq clara.windows::*applications* *defined-applications*)
+;; What says a font, taken apart and put together again with another family
+;; or another size: the rest of a list stays, a font becomes a list, and
+;; the console's letters, which have one size, get a family at 13 pixels.
+(let ((font (clara.type:font "Mono" 13)))
+  (check '(("Sans" "Mono" nil 5) (15 13 nil nil nil)
+           (("Mono" 15 :bold t) ("Sans" 13) ("Sans" 13) nil ("Sans" 13)) (("Sans" 11 :bold t) ("Mono" 12) nil ("Sans")))
+         (list (mapcar #'clara.settings::family (list '("Sans" 15 :bold t) font nil 5))
+               (mapcar #'clara.settings::size (list '("Sans" 15 :bold t) font nil 5 '("Sans")))
+               (list (clara.settings::with-family '("Sans" 15 :bold t) "Mono") (clara.settings::with-family font "Sans")
+                     (clara.settings::with-family nil "Sans") (clara.settings::with-family '("Sans" 15) nil)
+                     (clara.settings::with-family 5 "Sans"))
+               (list (clara.settings::with-size '("Sans" 15 :bold t) 11) (clara.settings::with-size font 12)
+                     (clara.settings::with-size nil 12) (clara.settings::with-size '("Sans") 12)))))
+(let ((panel (clara.settings::open-panel :x -380 :y 45)))
+  ;; As it opens: twelve lines and the status in the console's letters, the
+  ;; first setting picked, which stands under the first heading, and every
+  ;; row saying what its variable holds.
+  (check '("Settings" 496 208 1 0 0)
+         (list (clara.windows:window-title (clara.settings::panel-window panel))
+               (clara.draw:surface-width (clara.settings::panel-surface panel))
+               (clara.draw:surface-height (clara.settings::panel-surface panel))
+               (clara.settings::panel-picked panel) (panel-all-wrong panel nil) (wrong-pixels)))
+  (check-condition error (clara.settings::open-panel :columns 39))
+  (flet ((picked (&rest codes)
+           (apply #'panel-keys panel codes)
+           (clara.settings::panel-picked panel))
+         (at (number)
+           (setf (clara.settings::panel-picked panel) number))
+         (words ()
+           (clara.settings::panel-message panel)))
+    ;; The keys that pick another line: a heading is passed over, and there
+    ;; is nothing to pick above the first setting or below the last.
+    (check '(2 4 2 1 1) (list (picked clara.input:+down+) (picked clara.input:+down+) (picked clara.input:+up+)
+                              (picked clara.input:+up+) (picked clara.input:+up+)))
+    (check '(11 11 1 11 1) (list (picked clara.input:+end+) (picked clara.input:+down+) (picked clara.input:+home+)
+                                 (picked clara.input:+page-down+) (picked clara.input:+page-up+)))
+    (check '(8 10 8 0) (list (at 8) (picked clara.input:+down+) (picked clara.input:+up+) (panel-all-wrong panel nil)))
+    (check '(8 0) (list (picked 65 clara.input:+f1+ 27 10) (panel-wrong panel nil)))   ; and keys that are none of its own
+    ;; The time zone, an hour at a time: to the right the clock is later.
+    (at 1)
+    (check '(-1 0) (list (progn (panel-keys panel clara.input:+right+) clara:*time-zone*)
+                         (panel-wrong panel nil '(1 t "1 hour ahead of Greenwich" t))))
+    (check '(1 0) (list (progn (panel-keys panel clara.input:+left+ clara.input:+left+) clara:*time-zone*)
+                        (panel-wrong panel nil '(1 t "1 hour behind Greenwich" t))))
+    ;; At either end of the values there is no mark that way, and the key does nothing.
+    (setq clara:*time-zone* 12)
+    (check '(0 12) (list (panel-wrong panel nil '(1 nil "12 hours behind Greenwich" t))
+                         (progn (panel-keys panel clara.input:+left+) clara:*time-zone*)))
+    (setq clara:*time-zone* -14)
+    (check '(0 -14) (list (panel-wrong panel nil '(1 t "14 hours ahead of Greenwich" nil))
+                          (progn (panel-keys panel clara.input:+right+) clara:*time-zone*)))
+    ;; A value that somebody set elsewhere and that is none of the list's is
+    ;; said as it is, and either key gives the setting the nearest that is.
+    (setq clara:*time-zone* 20)
+    (check '(0 12) (list (panel-wrong panel nil '(1 t "20 hours behind Greenwich" t))
+                         (progn (panel-keys panel clara.input:+right+) clara:*time-zone*)))
+    (setq clara:*time-zone* 0)
+    ;; How loud the machine is, five of a hundred at a time.
+    (at 2)
+    (check '(100 95 0) (list (progn (panel-keys panel clara.input:+right+) clara.sound:*volume*)
+                             (progn (panel-keys panel clara.input:+left+) clara.sound:*volume*)
+                             (panel-wrong panel nil '(2 t "95 of 100" t))))
+    (setq clara.sound:*volume* 37)
+    (check '(0 35) (list (panel-wrong panel nil '(2 t "37 of 100" t))
+                         (progn (panel-keys panel clara.input:+left+) clara.sound:*volume*)))
+    (setq clara.sound:*volume* "loud")
+    (check '(0 0 0) (list (panel-wrong panel nil '(2 t "\"loud\"" t))
+                          (progn (panel-keys panel clara.input:+right+) clara.sound:*volume*)
+                          (panel-wrong panel nil '(2 nil "0 of 100" t))))
+    (setq clara.sound:*volume* 100)
+    ;; The letters of the bar, the list and the titles. The console's come
+    ;; before the families and have one size. A family shows at once, on
+    ;; the whole screen, at 13 pixels when it comes after the console's.
+    (at 4)
+    (check '(nil nil) (list (progn (panel-keys panel clara.input:+left+) clara.windows:*font*)
+                            (progn (at 5) (panel-keys panel clara.input:+left+ clara.input:+right+) clara.windows:*font*)))
+    (at 4)
+    (panel-keys panel clara.input:+right+)
+    (check '(("Sans" 13) t 0 0)
+           (list clara.windows:*font* (eq clara.windows::*letters* (clara.type:font "Sans" 13))
+                 (panel-all-wrong panel nil '(4 t "Sans" t) '(5 t "13 pixels" t)) (wrong-pixels)))
+    (panel-keys panel clara.input:+right+)
+    (check '(("Mono" 13) t 0)
+           (list clara.windows:*font* (eq clara.windows::*letters* (clara.type:font "Mono" 13))
+                 (panel-wrong panel nil '(4 t "Mono" t))))
+    ;; A family that the machine has no file of is not set: the status row
+    ;; says why not, until the next key, and the bar is as it was.
+    (panel-keys panel clara.input:+right+)
+    (check '(("Mono" 13) t t 0)
+           (list clara.windows:*font* (eq clara.windows::*letters* (clara.type:font "Mono" 13))
+                 (starts-with "Serif is not a font that can be had here: " (words))
+                 (panel-wrong panel (words) '(4 t "Mono" t))))
+    (check '(nil 0) (list (progn (panel-keys panel 65) (words)) (panel-wrong panel nil '(4 t "Mono" t))))
+    ;; Their size, a pixel at a time, from 9 to 16.
+    (at 5)
+    (panel-keys panel clara.input:+right+)
+    (check '(("Mono" 14) 14 0)
+           (list clara.windows:*font* (clara.type:font-size clara.windows::*letters*)
+                 (panel-wrong panel nil '(5 t "14 pixels" t))))
+    (setq clara.windows:*font* (list "Mono" 16))
+    (check '(0 ("Mono" 16)) (list (panel-wrong panel nil '(5 t "16 pixels" nil))
+                                  (progn (panel-keys panel clara.input:+right+) clara.windows:*font*)))
+    (setq clara.windows:*font* (list "Mono" 9))
+    (check '(0 ("Mono" 9)) (list (panel-wrong panel nil '(5 nil "9 pixels" t))
+                                 (progn (panel-keys panel clara.input:+left+) clara.windows:*font*)))
+    (setq clara.windows:*font* (list "Mono" 13 :underline t))               ; what else the list says stays in it
+    (at 4)
+    (check '(("Sans" 13 :underline t) nil nil 0 0)
+           (list (progn (panel-keys panel clara.input:+left+) clara.windows:*font*)
+                 (progn (panel-keys panel clara.input:+left+) clara.windows:*font*)
+                 clara.windows::*letters* (panel-all-wrong panel nil) (wrong-pixels)))
+    ;; The letters of a window of text, which a window reads as it opens:
+    ;; the one that is open stays as it is, and the next is in them.
+    (at 6)
+    (check '(nil ("Sans" 13) 0)
+           (list (progn (panel-keys panel clara.input:+left+) clara.windows:*text-font*)
+                 (progn (panel-keys panel clara.input:+right+) clara.windows:*text-font*)
+                 (panel-wrong panel nil '(6 t "Sans" t) '(7 t "13 pixels" t))))
+    (panel-keys panel clara.input:+right+)
+    (at 7)
+    (panel-keys panel clara.input:+right+)
+    (check '(("Mono" 14) nil 0)
+           (list clara.windows:*text-font* (clara.settings::panel-font panel)
+                 (panel-wrong panel nil '(6 t "Mono" t) '(7 t "14 pixels" t))))
+    (setq clara.windows:*text-font* (list "Mono" 24))                       ; from 9 pixels to 24
+    (check '(0 ("Mono" 24)) (list (panel-wrong panel nil '(6 t "Mono" t) '(7 t "24 pixels" nil))
+                                  (progn (panel-keys panel clara.input:+right+) clara.windows:*text-font*)))
+    (setq clara.windows:*text-font* (list "Mono" 9))
+    (check '(0 ("Mono" 9)) (list (panel-wrong panel nil '(6 t "Mono" t) '(7 nil "9 pixels" t))
+                                 (progn (panel-keys panel clara.input:+left+) clara.windows:*text-font*)))
+    (setq clara.windows:*text-font* (list "Mono" 14))
+    ;; A window of the settings that opens now is in those letters when the
+    ;; screen has room for it in them, and in the console's when it has not,
+    ;; so that it can be read whatever was set: this desk has room for 62
+    ;; cells of letters of 4 pixels, and for a third as many of 14.
+    (let* ((font (clara.type:font "Mono" 14))
+           (most (floor (- 240 48) (clara.draw:cell-width font)))
+           (second (clara.settings::open-panel :rows 2 :x -376 :y 44 :font font))
+           (third (clara.settings::open-panel :rows 2 :x -376 :y 44)))
+      (clara.settings::render second)
+      (check (list font nil nil font (* 62 (clara.draw:cell-width font)) (* 3 (clara.draw:cell-height font)) 0 nil 496)
+             (list (clara.settings::letters-for most) (clara.settings::letters-for (1+ most))
+                   (clara.settings::letters-for 62)
+                   (clara.settings::panel-font second) (clara.draw:surface-width (clara.settings::panel-surface second))
+                   (clara.draw:surface-height (clara.settings::panel-surface second))
+                   (let ((*cell-font* font))
+                     (wrong-cells (clara.settings::panel-surface second)
+                                  (list (pad " System" 62) (list (setting-row "Time zone" t "Greenwich" t))
+                                        (list (pad " clara:*time-zone*: where the machine is, for the clock" 62)))
+                                  nil (heading-tints 0 "System")))
+                   (clara.settings::panel-font third) (clara.draw:surface-width (clara.settings::panel-surface third))))
+      (clara.windows:close-window (clara.settings::panel-window third))
+      (clara.windows:close-window (clara.settings::panel-window second)))
+    (setq clara.windows:*text-font* (list "Mono" 4))
+    (let ((small (clara.type:font "Mono" 4))
+          (fourth (clara.settings::open-panel :rows 1 :x 4 :y 44)))
+      (check (list small (* 62 (clara.draw:cell-width small)) t)
+             (list (clara.settings::panel-font fourth) (clara.draw:surface-width (clara.settings::panel-surface fourth))
+                   (<= (* 62 (clara.draw:cell-width small)) (- 240 48))))
+      (clara.windows:close-window (clara.settings::panel-window fourth)))
+    (setq clara.windows:*text-font* nil)
+    ;; The clock, which is there or is not; another clock than the system's
+    ;; is said as it is written.
+    (at 8)
+    (check '(clara.windows:day-and-time nil 0 nil clara.windows:day-and-time)
+           (list (progn (panel-keys panel clara.input:+left+) clara.windows:*clock*)
+                 (progn (panel-keys panel clara.input:+right+) clara.windows:*clock*)
+                 (panel-wrong panel nil '(8 t "none" nil))
+                 (progn (panel-keys panel clara.input:+right+) clara.windows:*clock*)
+                 (progn (panel-keys panel clara.input:+left+) clara.windows:*clock*)))
+    (setq clara.windows:*clock* 'car)
+    (check '(0 clara.windows:day-and-time)
+           (list (panel-wrong panel nil '(8 t "CAR" t))
+                 (progn (panel-keys panel clara.input:+left+) clara.windows:*clock*)))
+    ;; How much a REPL keeps: so many, or all.
+    (at 10)
+    (check '(nil 0 100 0)
+           (list (progn (panel-keys panel clara.input:+right+) clara.terminal:*rows-kept*)
+                 (panel-wrong panel nil '(10 t "all of them" nil))
+                 (progn (panel-keys panel clara.input:+left+ clara.input:+left+ clara.input:+left+ clara.input:+left+
+                                    clara.input:+left+)
+                        clara.terminal:*rows-kept*)
+                 (panel-wrong panel nil '(10 nil "100" t))))
+    (setq clara.terminal:*rows-kept* 5000)
+    (check '(0 1000) (list (panel-wrong panel nil '(10 t "5000" t))
+                           (progn (panel-keys panel clara.input:+right+) clara.terminal:*rows-kept*)))
+    (setq clara.terminal:*rows-kept* 100000)
+    (at 11)
+    (check '(100 nil 0)
+           (list (progn (panel-keys panel clara.input:+left+) clara.terminal:*lines-kept*)
+                 (progn (panel-keys panel clara.input:+right+ clara.input:+right+ clara.input:+right+)
+                        clara.terminal:*lines-kept*)
+                 (panel-wrong panel nil '(11 t "all of them" nil))))
+    (setq clara.terminal:*lines-kept* 1000)
+    ;; The pointer: a press on the row of a setting picks it; on its < or
+    ;; its >, or on the cell beside either, it changes the setting as well;
+    ;; and anywhere else, on a heading, under the lines, or with the button
+    ;; coming up, it does nothing.
+    (flet ((pressed (column row &optional (buttons 1))
+             (clara.settings::point panel (+ (* 8 column) 3) (+ (* 16 row) 8) buttons)
+             (list (clara.settings::panel-picked panel) clara.sound:*volume*)))
+      (check '((2 100) (2 95) (2 100) (2 95) (2 90) (2 95) (2 100))
+             (list (pressed 12 2) (pressed 28 2) (pressed 59 2) (pressed 27 2) (pressed 29 2) (pressed 58 2)
+                   (pressed 60 2)))
+      (setq clara.sound:*volume* 50)
+      (check '((2 50) (2 50) (2 50) (2 50) (2 50) (2 50) (2 50) (2 50))
+             (list (pressed 26 2) (pressed 30 2) (pressed 57 2) (pressed 61 2) (pressed 28 2 0) (pressed 28 3)
+                   (pressed 28 12) (pressed 28 0)))
+      (check '((1 50) 1) (list (pressed 28 1) clara:*time-zone*))
+      (setq clara:*time-zone* 0))
+    ;; And through the window manager, which tells the window where the
+    ;; button went down: on the > of the second line, which is on the desk.
+    (clara.windows:pointer-moved (+ -380 (* 8 59) 3) (+ 45 (* 16 2) 8) 1)
+    (clara.windows:pointer-moved (+ -380 (* 8 59) 3) (+ 45 (* 16 2) 8) 0)
+    (loop for event = (clara.windows:next-event (clara.settings::panel-window panel) 0)
+          while event
+          do (clara.settings::happened panel event))
+    (check '(55 2 0 0) (list clara.sound:*volume* (clara.settings::panel-picked panel)
+                             (panel-all-wrong panel nil '(2 t "55 of 100" t)) (wrong-pixels)))
+    (setq clara.sound:*volume* 100)
+    ;; The close box and Ctrl-Q end it.
+    (check '(nil t t)
+           (list (clara.settings::panel-done panel)
+                 (progn (clara.settings::happened panel '(:close)) (clara.settings::panel-done panel))
+                 (progn (setf (clara.settings::panel-done panel) nil)
+                        (panel-keys panel 17)
+                        (clara.settings::panel-done panel)))))
+  (clara.windows:close-window (clara.settings::panel-window panel)))
+;; A window that has room for fewer rows than there are lines follows the
+;; line that is picked, and keeps the heading in sight that the line stands
+;; right under; one that has a single row shows the line.
+(let ((panel (clara.settings::open-panel :rows 4 :x -380 :y 45)))
+  (flet ((tops (&rest codes)
+           (apply #'panel-keys panel codes)
+           (clara.settings::render panel)
+           (list (clara.settings::panel-picked panel) (clara.settings::panel-top panel))))
+    (check '((1 0) (2 0) (4 1) (5 2) (4 2) (2 2) (1 0) (11 8) (1 0))
+           (list (tops) (tops clara.input:+down+) (tops clara.input:+down+) (tops clara.input:+down+)
+                 (tops clara.input:+up+) (tops clara.input:+up+) (tops clara.input:+up+) (tops clara.input:+end+)
+                 (tops clara.input:+home+)))
+    (panel-keys panel clara.input:+down+ clara.input:+down+)
+    (clara.settings::render panel)
+    (check 0 (wrong-cells (clara.settings::panel-surface panel)
+                          (list (setting-row "Time zone" t "Greenwich" t) (setting-row "Volume" t "100 of 100" nil)
+                                (pad " Desktop" 62) (list (setting-row "Letters of the bar" nil "the console's" t))
+                                (list (pad " clara.windows:*font*: for the bar, the list and the titles" 62)))
+                          nil (heading-tints 2 "Desktop")))
+    ;; A press picks the line of the row that it is in, as the window shows
+    ;; them, and the status row is no line's.
+    (check '(2 4 4) (list (progn (clara.settings::point panel 100 24 1) (clara.settings::panel-picked panel))
+                          (progn (clara.settings::point panel 100 56 1) (clara.settings::panel-picked panel))
+                          (progn (clara.settings::point panel 100 72 1) (clara.settings::panel-picked panel))))
+    ;; A page is a window's worth of lines less one, and comes to a setting:
+    ;; the one before a heading that it would land on, on the way down, and
+    ;; the one after it on the way up.
+    (check '(8 4) (list (progn (setf (clara.settings::panel-picked panel) 6)
+                               (panel-keys panel clara.input:+page-down+)
+                               (clara.settings::panel-picked panel))
+                        (progn (setf (clara.settings::panel-picked panel) 6)
+                               (panel-keys panel clara.input:+page-up+)
+                               (clara.settings::panel-picked panel)))))
+  (clara.windows:close-window (clara.settings::panel-window panel)))
+(let ((panel (clara.settings::open-panel :rows 1 :x -380 :y 45)))
+  (flet ((tops (&rest codes)
+           (apply #'panel-keys panel codes)
+           (clara.settings::render panel)
+           (list (clara.settings::panel-picked panel) (clara.settings::panel-top panel))))
+    (check '((1 1) (1 1) (4 4) (4 4) (2 2)) (list (tops) (tops) (tops clara.input:+down+ clara.input:+down+) (tops)
+                                                  (tops clara.input:+up+))))
+  (clara.windows:close-window (clara.settings::panel-window panel)))
+;; The keys and the pointer on a list that ends in a heading, where the
+;; last setting is the last that is picked, and on one that has no setting,
+;; where nothing is and the status says nothing.
+(let* ((setting (second clara.settings::*lines*))
+       (panel (clara.settings::make-panel :rows 3 :columns 62 :wide 8 :high 16 :lines (list "One" setting "Two")))
+       (bare (clara.settings::make-panel :rows 2 :columns 62 :wide 8 :high 16 :lines (list "One" "Two"))))
+  (check '(1 1 1 0 0 "")
+         (list (progn (panel-keys panel clara.input:+end+) (clara.settings::panel-picked panel))
+               (progn (panel-keys panel clara.input:+down+) (clara.settings::panel-picked panel))
+               (progn (panel-keys panel clara.input:+home+ clara.input:+up+) (clara.settings::panel-picked panel))
+               (progn (panel-keys bare clara.input:+end+ clara.input:+down+ clara.input:+left+)
+                      (clara.settings::panel-picked bare))
+               (progn (clara.settings::point bare 100 8 1) (clara.settings::panel-picked bare))
+               (clara.settings::status bare))))
+;; The application, in a thread of its own. What is typed while its window
+;; has the focus is its to take; and what somebody sets elsewhere, at a
+;; prompt, the window shows by itself, once it has looked again.
+(check 1000 clara.settings::*look*)
+(setq clara.settings::*look* 5)
+(let* ((thread (clara.windows:launch "settings" :x -380 :y 45))
+       (face (clara.windows:window-surface (clara.windows:focused-window))))
+  (check '("Settings") (titles))
+  (clara.windows:key-typed clara.input:+down+)
+  (clara.windows:key-typed clara.input:+left+)
+  (check '(t t) (list (eventually (lambda () (eql clara.sound:*volume* 95)))
+                      (eventually (lambda ()
+                                    (zerop (wrong-cells face (settings-rows 2 nil '((2 t "95 of 100" t)) nil)))))))
+  (setq clara.sound:*volume* 20
+        clara:*time-zone* 5)
+  (check t (eventually (lambda ()
+                         (zerop (wrong-cells face (settings-rows 2 nil '((1 t "5 hours behind Greenwich" t)
+                                                                         (2 t "20 of 100" t))
+                                                                 nil))))))
+  (setq clara.sound:*volume* 100
+        clara:*time-zone* 0)
+  (clara.windows:key-typed 17)
+  (check t (eventually (lambda () (and (null (clara.windows:windows)) (not (clara:thread-alive-p thread)))))))
+(setq clara.settings::*look* 1000)
+;; REDRAW with the launcher's list open, which is as wide as its names are
+;; in the letters that it is written in; with letters that cannot be had,
+;; which is said, and the console's stand in; and without a window manager.
+(clara.windows:pointer-moved 5 5 1)
+(clara.windows:pointer-moved 5 5 0)
+(setq clara.windows:*font* (list "Mono" 13))
+(check '(t t t 0) (list clara.windows::*menu* (clara.windows:redraw)
+                        (eq clara.windows::*letters* (clara.type:font "Mono" 13)) (wrong-pixels)))
+(setq clara.windows:*font* (list "Serif" 13))
+(let ((said (said-by #'clara.windows:redraw)))
+  (check '(t t nil 0)
+         (list (starts-with "windows: Serif is not a font that can be had here: " said)
+               (and (search (format nil ", so the letters are the console's~%") said) t)
+               clara.windows::*letters* (wrong-pixels))))
+(clara.windows:pointer-moved 200 150 1)
+(clara.windows:pointer-moved 200 150 0)
+(setq clara.windows:*font* nil)
+(clara.windows:stop)
+(check nil (clara.windows:redraw))
+;; Every variable that a line of the window sets is one that the account of
+;; a world that leaves takes across, or the time zone, which has a line of
+;; its own there; and the account takes none that the window does not list.
+(check '(nil nil)
+       (let ((listed (mapcar #'clara.settings::setting-variable (remove-if #'stringp clara.settings::*lines*)))
+             (taken (cons 'clara:*time-zone* (mapcar #'car clara.system::*settings*))))
+         (list (set-difference listed taken) (set-difference taken listed))))
+
 
 ;;; The stand-ins themselves, as far as what is written for ClaraOS will
 ;;; lean on them: threads, a lock, an event, as the kernel's own self-test
@@ -11750,6 +12210,28 @@ second
   (let ((clara:*time-zone* zone))
     (clara.system::carry "0.0.1-new"))
   (check (list zone nil) (list zone (search "(:time-zone" (on-disk *machine-disk* "/clara/carried")))))
+;; What was set of the system's own, the variables that the window of the
+;; settings lists (lisp/settings.lisp): one that holds something else than
+;; the system came with is in the account by its name, like a variable of
+;; the user's, with its value where a text can say that, which it cannot of
+;; a clock that is somebody's function. One that is as the system came is
+;; not spoken of, so that the next system's own value holds for it.
+(let ((clara.sound:*volume* 35) (clara.windows:*text-font* (list "Mono" 15 :bold t)) (clara.windows:*clock* #'list)
+      (clara.terminal:*rows-kept* nil))
+  (clara.system::carry "0.0.1-new"))
+(check t (and (search (format nil "~%(:time-zone 0)~%~
+                                   (:name \"CLARA.WINDOWS\" \"*TEXT-FONT*\" :variable)~%~
+                                   (:value \"CLARA.WINDOWS\" \"*TEXT-FONT*\" \"(\\\"Mono\\\" 15 :BOLD T)\")~%~
+                                   (:name \"CLARA.WINDOWS\" \"*CLOCK*\" :variable)~%~
+                                   (:name \"CLARA.SOUND\" \"*VOLUME*\" :variable)~%~
+                                   (:value \"CLARA.SOUND\" \"*VOLUME*\" \"35\")~%~
+                                   (:name \"CLARA.TERMINAL\" \"*ROWS-KEPT*\" :variable)~%~
+                                   (:value \"CLARA.TERMINAL\" \"*ROWS-KEPT*\" \"NIL\")~%(:name ")
+                      (on-disk *machine-disk* "/clara/carried"))
+              t))
+(clara.system::carry "0.0.1-new")
+(check '(nil nil) (list (search "CLARA.WINDOWS" (on-disk *machine-disk* "/clara/carried"))
+                        (search "CLARA.SOUND" (on-disk *machine-disk* "/clara/carried"))))
 (clara.fat:remove-file "/clara/carried")
 (clara.fat:make-directory "/clara/carried")
 (check t (let ((said (said-by-all (lambda () (clara.system:start-again :save nil)))))
@@ -11942,6 +12424,33 @@ second
                   t)
              clara:*time-zone*))
 (setq clara:*time-zone* 0)
+
+;; What was set of the system's own, through a whole start: the variables
+;; of this system get the values that the account has for them, the same
+;; way the user's do, and are said by name; one whose value was no text is
+;; said too, and is as this system makes it. The letters of the bar are
+;; among them, which the window manager made before the account was read:
+;; the screen is put together again in the ones that the account says.
+(trial-disk (format nil "(:carried \"0.0.0-host\" \"0.0.1-new\")~%(:windows)~%~
+                         (:name \"CLARA.WINDOWS\" \"*FONT*\" :variable)~%~
+                         (:value \"CLARA.WINDOWS\" \"*FONT*\" \"(\\\"Mono\\\" 13)\")~%~
+                         (:name \"CLARA.WINDOWS\" \"*CLOCK*\" :variable)~%~
+                         (:name \"CLARA.SOUND\" \"*VOLUME*\" :variable)~%(:value \"CLARA.SOUND\" \"*VOLUME*\" \"35\")~%"))
+(new-desk :machine nil :start nil :letters t :fonts '("Go-Mono.ttf"))
+(let ((said (said-by-all #'clara.system:start)))
+  (check '(("Mono" 13) 35 clara.windows:day-and-time t t t 0)
+         (list clara.windows:*font* clara.sound:*volume* clara.windows:*clock*
+               (clara.windows:running-p) (eq clara.windows::*letters* (clara.type:font "Mono" 13))
+               (and (search (format nil "world: 2 variables have the values that they had come to in the world before:~%~
+                                         world:   CLARA.WINDOWS::*FONT*, CLARA.SOUND::*VOLUME*~%~
+                                         world: 1 variable held what is no text, and is as its form makes it here:~%~
+                                         world:   CLARA.WINDOWS::*CLOCK*~%")
+                            said)
+                    t)
+               (wrong-pixels))))
+(clara.windows:stop)
+(setq clara.windows:*font* nil
+      clara.sound:*volume* 100)
 
 ;; A world that came back as an image takes what the two files have that
 ;; it has not: what was defined after it was saved, and what somebody

@@ -48,7 +48,9 @@
 ;;;; A world is made again when a newer system takes this one's place. The
 ;;;; system that is leaving writes down what its world had that was the
 ;;;; user's, the names of the functions and the variables, and of the
-;;;; variables the values that can be written as text (/clara/carried).
+;;;; variables the values that can be written as text (/clara/carried),
+;;;; and with them what was set of the system's own: where the machine is,
+;;;; which letters the bar is written in, how loud the machine is.
 ;;;; The system that comes makes a world of its own files, loads the text
 ;;;; of /home into it, gives the variables the values they had come to,
 ;;;; saves the world without being asked, and says what did not come
@@ -853,15 +855,30 @@
 ;;;   (:windows)                       the window manager was running
 ;;;   (:applications "NAME" ...)       the launcher's list, when its lines were moved: the applications in their order,
 ;;;   (:commands "NAME" ...)           and the commands
+;;;   (:time-zone hours)               where the machine is, for the time of day
 ;;;   (:name "PACKAGE" "NAME" :function)   a function or a macro of the user's
-;;;   (:name "PACKAGE" "NAME" :variable)   a variable of the user's
+;;;   (:name "PACKAGE" "NAME" :variable)   a variable of the user's, or one of the system's that was set
 ;;;   (:value "PACKAGE" "NAME" "text")     and its value, as COMMON-LISP-USER reads it
 ;;;
 ;;; What is the user's is what is in COMMON-LISP-USER and in the packages
-;;; that were not there when the world was made. The system that comes
-;;; makes its world, loads the text into it, puts the launcher's list in
-;;; its order, gives the variables their values, and says which names it
-;;; does not have.
+;;; that were not there when the world was made, and of the system's own
+;;; variables the ones that are a user's to set, when they are no longer as
+;;; the system came (*SETTINGS*). The system that comes makes its world,
+;;; loads the text into it, puts the launcher's list in its order, gives the
+;;; variables their values, and says which names it does not have.
+
+;; The variables of the system's that are a user's to set, the ones that
+;; the window of the settings lists (lisp/settings.lisp), each with the
+;; value that it had when this file was loaded, which is the one that the
+;; system came with: nothing of the user's has run by then. A world that
+;; leaves says the ones that hold something else, whoever set them and
+;; wherever, and the system that comes gives its own variables those
+;; values. The time zone is not among them: it has a line of its own in the
+;; account, which every system since 0.0.63 reads (STAND).
+(defvar *settings*
+  (mapcar (lambda (symbol) (cons symbol (symbol-value symbol)))
+          '(clara.windows:*font* clara.windows:*text-font* clara.windows:*clock*
+            clara.sound:*volume* clara.terminal:*rows-kept* clara.terminal:*lines-kept*)))
 
 ;; The packages whose symbols are the user's: COMMON-LISP-USER, and every
 ;; package that was made since this world was, apart from the ones that
@@ -945,6 +962,15 @@
                     (write-names out "commands" (second order))))
                 (when (time-zone-p clara:*time-zone*)
                   (format out "(:time-zone ~D)~%" clara:*time-zone*))
+                ;; What was set of the system's own, as far as a text can say it: a font that is
+                ;; said as a list goes across, and a clock that is somebody's function does not.
+                (dolist (setting *settings*)
+                  (let ((symbol (car setting)))
+                    (unless (equal (symbol-value symbol) (cdr setting))
+                      (let ((in (package-name (symbol-package symbol))) (value (as-text (symbol-value symbol))))
+                        (format out "(:name ~S ~S :variable)~%" in (symbol-name symbol))
+                        (when value
+                          (format out "(:value ~S ~S ~S)~%" in (symbol-name symbol) value))))))
                 (dolist (package (user-packages))
                   (let ((in (package-name package)) (own nil))
                     (do-symbols (symbol package)
@@ -1051,6 +1077,10 @@
                     (set symbol value)
                     (setq put (cons (written (second form) (third form)) put))))
               (error () nil))))))
+    ;; One of them may be what the window manager read as it started, before
+    ;; any of this: the letters of the bar.
+    (when (and put (clara.windows:running-p))
+      (clara.windows:redraw))
     (dolist (form carried)
       (when (and (eq (car form) :name) (stringp (second form)) (stringp (third form)))
         (let* ((package (find-package (second form)))

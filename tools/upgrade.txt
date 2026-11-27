@@ -14,6 +14,35 @@ DOUBLED
 CHANGED-AND-NOT-DEFINED-AGAIN
 > (setq clara:*time-zone* 5)
 5
+> (list (clara:thread-alive-p (clara.windows:launch "Settings" :x 300 :y 100))  ; the window of the settings, whose first
+        (clara.windows:window-title (clara.windows:focused-window)))            ; line is picked: where the machine is
+(T "Settings")
+> (list 'quieter (until (eql clara.sound:*volume* 90)))                  ; the arrow down picks how loud the machine is,
+^M sendkey down
+^M sendkey left
+^M sendkey left
+(QUIETER OK)
+> (pointer-at 0 0 0)                                                     ; and the arrow to the left makes it less, twice
+^M mouse_button 0
+^M mouse_move -5000 -5000
+OK
+> (pointer-at 776 140 0)                                                 ; the > of that line, in the 60th cell of the
+^M mouse_move 776 140
+OK
+> (list 'louder (pointer-at 776 140 1) (until (eql clara.sound:*volume* 95)))  ; third row: a click on it makes it more
+^M mouse_button 1
+(LOUDER OK OK)
+> (pointer-at 776 140 0)
+^M mouse_button 0
+OK
+> (list 'in-mono (until (equal clara.windows:*font* '("Mono" 13)))       ; the line under the next heading: the letters
+        (until (equal (clara.type:font-name clara.windows::*letters*) "Mono")))  ; of the bar are another family's at once
+^M sendkey down
+^M sendkey right
+(IN-MONO OK OK)
+> (list (clara.windows:key-typed 17)                                     ; Ctrl-Q, and the window is gone
+        (until (not (member "Settings" (mapcar #'clara.windows:window-title (clara.windows:windows)) :test #'equal))))
+(17 OK)
 > (defun doubled (n)
     ;; defined a second time: this is the one that is kept
     (+ n n))
@@ -42,7 +71,7 @@ WRITTEN-DOWN
 > (clara.windows:define-command "Tidy" (lambda () 'tidied))
 "Tidy"
 > (list (clara.windows:move-down "REPL") (clara.windows:move-up "Tidy") (clara.windows:move-up "tidy") (clara.windows:move-up "Tidy"))
-(("Emma" "REPL" "Jaid" "Ares" "Parker") ("Restart" "Tidy" "Shut Down") ("Tidy" "Restart" "Shut Down") ("Tidy" "Restart" "Shut Down"))
+(("Emma" "REPL" "Jaid" "Ares" "Settings" "Parker") ("Restart" "Tidy" "Shut Down") ("Tidy" "Restart" "Shut Down") ("Tidy" "Restart" "Shut Down"))
 > (clara.system:upgrade :from (first (clara.fat:volumes)))
 error: that volume holds no ClaraOS other than this one, {{system}}
 > (clara.system:upgrade)
@@ -65,8 +94,11 @@ NIL
 > (list clara:*time-zone* (clara.windows:day-and-time 3976214400)       ; the machine is where it was said to be
         (and (member "world: the time zone is 5, as it was in the world before" clara.system::*report* :test #'equal) t))
 (5 "Wed Dec 31 19:00" T)
+> (list clara.sound:*volume* clara.windows:*font*                        ; and what was set in the window of the
+        (clara.type:font-name clara.windows::*letters*))                 ; settings is as it was set there
+(95 ("Mono" 13) "Mono")
 > (list (clara.windows:applications) (clara.windows:commands) (clara.windows:move-down "Tidy"))
-(("Emma" "REPL" "Jaid" "Ares" "Parker") ("Tidy" "Restart" "Shut Down") ("Restart" "Tidy" "Shut Down"))
+(("Emma" "REPL" "Jaid" "Ares" "Settings" "Parker") ("Tidy" "Restart" "Shut Down") ("Restart" "Tidy" "Shut Down"))
 > (list *from-a-file* (written-down "(load (concatenate 'string \"/clara/\" \"kept.lisp\"))") (written-down "(default-of 4)") (written-down "(defun default-of (value) value)"))
 ("written by ClaraOS" 1 0 1)
 > (list (with-open-file (in "/letters/first.txt") (read-line in)) (with-open-file (in "/clara/kept.lisp") (read-line in)))
@@ -81,7 +113,7 @@ clara: starting the machine again
 > (list (clara.system:system) (getf (clara.unsafe:start-state) :resumed) (getf (clara.unsafe:start-state) :trial) (since-the-upgrade))
 ("{{version}}-other" T NIL DEFINED-IN-THE-NEW-SYSTEM)
 > (list (clara.windows:applications) (clara.windows:commands) (mapcar #'clara.windows:window-title (clara.windows:windows)))
-(("Emma" "REPL" "Jaid" "Ares" "Parker") ("Tidy" "Restart" "Shut Down") ("REPL"))
+(("Emma" "REPL" "Jaid" "Ares" "Settings" "Parker") ("Tidy" "Restart" "Shut Down") ("REPL"))
 > (setq clara.system:*releases* nil)
 NIL
 > (clara.system:upgrade)

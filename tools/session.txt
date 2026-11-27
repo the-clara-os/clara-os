@@ -459,7 +459,7 @@ OK
 > (defun k () (clara:signal-event *seen*) 'k)
 K
 > (list (clara.windows:running-p) (clara.windows:applications) (clara.windows:start) (clara.windows:start))
-(NIL ("REPL" "Emma" "Jaid" "Ares" "Parker") T T)
+(NIL ("REPL" "Emma" "Jaid" "Ares" "Settings" "Parker") T T)
 > (list (clara:thread-name clara.windows::*timekeeper*)                 ; the clock has a thread, and says the day and
         (clara.windows:day-and-time 3976214400)                         ; the time, at the place that the machine is
         (let ((clara:*time-zone* 5)) (clara.windows:day-and-time 3976214400))) ; said to be in
@@ -714,7 +714,7 @@ OK
 > (hi)
 THERE
 > (clara.windows:launch "Files")
-error: there is no application "Files": the ones that there are are ("REPL" "Emma" "Jaid" "Ares" "Parker")
+error: there is no application "Files": the ones that there are are ("REPL" "Emma" "Jaid" "Ares" "Settings" "Parker")
 > (clara:thread-alive-p (clara.windows:launch "Jaid"))
 T
 > (until (equal (mapcar #'clara.windows:window-title (clara.windows:windows))
@@ -748,13 +748,13 @@ OK
     (write-line "(clara.windows:define-application \"Hello\" #'hello)" out))
 "(clara.windows:define-application \"Hello\" #'hello)"
 > (list (clara.windows:install-application "Hello" "/clara/hello.lisp") (clara.windows:applications) (find-package "HELLO"))
-("Hello" ("REPL" "Emma" "Jaid" "Ares" "Parker" "Hello") NIL)
+("Hello" ("REPL" "Emma" "Jaid" "Ares" "Settings" "Parker" "Hello") NIL)
 > (list (clara:thread-alive-p (clara.windows:launch "Hello" "Hello, world")) (package-name (find-package "HELLO"))
         (clara.windows:window-title (clara.windows:focused-window)))
 (T "HELLO" "Hello, world")
 > (list (clara.windows:remove-application "Hello") (find-package "HELLO") (clara.windows:applications)
         (length (clara.windows:windows)))
-("Hello" NIL ("REPL" "Emma" "Jaid" "Ares" "Parker") 1)
+("Hello" NIL ("REPL" "Emma" "Jaid" "Ares" "Settings" "Parker") 1)
 > (mapcar (lambda (said)                                                 ; text in cells, in a font: a terminal whose cells
             (let* ((font (apply #'clara.type:font said))                ; are as large as the font's. How many pixels of
                    (terminal (clara.terminal:open-terminal "Letters" :columns 12 :rows 2 :font font :x 300 :y 300))

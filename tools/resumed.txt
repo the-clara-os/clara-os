@@ -95,7 +95,7 @@ T
 > (list (load "/clara/kept.lisp") (load "/clara/listener.lisp"))
 (T T)
 > (list (clara.windows:applications) (find-package "CLARA.EMMA") (package-name (find-package "CLARA.JAID")) (hi))
-(("REPL" "Emma" "Jaid" "Ares" "Parker") NIL "CLARA.JAID" THERE)
+(("REPL" "Emma" "Jaid" "Ares" "Settings" "Parker") NIL "CLARA.JAID" THERE)
 > (list 'keyboards 'and 'pointers (length (clara.input:devices)))
 (KEYBOARDS AND POINTERS 3)
 > (clara.terminal:history)
