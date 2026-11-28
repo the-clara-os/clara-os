@@ -458,11 +458,13 @@ error: the stack is full: the forms are nested too deep, or a function calls its
 &gt; (with-slots (owner balance) *account* (setq balance (* 2 balance)) (list owner balance))
 ("Clara" 350)
 &gt; *account*
-#&lt;ACCOUNT&gt;
+#&lt;ACCOUNT {400000141968}&gt;
+&gt; (list *account* (make-instance 'account :owner "Julio"))
+(#&lt;ACCOUNT {400000141968}&gt; #&lt;ACCOUNT {40000013B078}&gt;)
 &gt; (make-instance 'account :ownr "Clara")
 error: an instance of ACCOUNT cannot be made with :OWNR: no slot is filled by it, and no method takes it
 &gt; (owner (make-instance 'account))
-error: the slot OWNER of #&lt;ACCOUNT&gt; has no value</pre>
+error: the slot OWNER of #&lt;ACCOUNT {4000004503C8}&gt; has no value</pre>
     <p><code>defclass</code> takes a name, the classes that the new one is a kind of, and the slots. A slot is a name, or a name with what is said about it: <code>:initarg</code>, the keyword that fills it when an instance is made; <code>:initform</code>, a form for the value that it begins with otherwise, evaluated for each instance; <code>:reader</code>, <code>:writer</code> and <code>:accessor</code>, the names of functions that read it, write it, or both, an accessor being written with <code>setf</code>; and <code>:allocation :class</code> for a slot that the instances have between them. After the slots, <code>(:default-initargs :balance 10)</code> gives <code>make-instance</code> the arguments that a caller leaves out.</p>
     <p><code>make-instance</code> takes the name of a class and keywords with their values. A keyword that fills no slot is refused, which is how a keyword that was typed wrongly is found. A slot that got no value has none: reading it is an error, <code>slot-boundp</code> asks, and <code>slot-makunbound</code> takes a value away again. <code>slot-value</code> reads a slot by its name and <code>setf</code> writes it, <code>slot-exists-p</code> says whether an instance has such a slot, and inside <code>with-slots</code> the names of slots stand for the slots themselves, as the names that <code>with-accessors</code> gives stand for calls of the functions that read them.</p>
 
@@ -552,8 +554,15 @@ COIN
 &gt; (defmethod print-object ((coin coin) stream) (format stream "a coin of ~D" (coin-value coin)))
 #&lt;STANDARD-METHOD PRINT-OBJECT (COIN T)&gt;
 &gt; (list (make-coin :value 5) (make-point :x 1))
-(a coin of 5 #S(POINT :X 1 :Y 0))</pre>
-    <p>An instance is written as its class between <code>#&lt;</code> and <code>&gt;</code>, which says that there is no text to read it back from. A method of <code>print-object</code> for its class writes it as you like, wherever it is written: at the prompt, by <code>format</code>, inside a list. It is given the object and a stream, and <code>print-unreadable-object</code> writes the <code>#&lt;</code> and the <code>&gt;</code> around what its body writes, with the name of the class first when <code>:type</code> says so. The same goes for the structures of a type that you write such a method for.</p>
+(a coin of 5 #S(POINT :X 1 :Y 0))
+&gt; (defmethod print-object ((account audited) stream)
+    (print-unreadable-object (account stream :type t :identity t)
+      (format stream "~A" (owner account))))
+#&lt;STANDARD-METHOD PRINT-OBJECT (AUDITED T)&gt;
+&gt; (list (make-instance 'audited :owner "Gray") (make-instance 'audited :owner "Gray"))
+(#&lt;AUDITED Gray {4000003AD318}&gt; #&lt;AUDITED Gray {4000003AD728}&gt;)</pre>
+    <p>An instance is written as its class and its address between <code>#&lt;</code> and <code>&gt;</code>, which says that there is no text to read it back from. The address is where the instance lies in memory, a number in hexadecimal between braces. No two objects have the same one, and an object keeps its own for as long as it is there, in a world that is <a href="#image">saved</a> and comes back as well: it tells one instance from another that looks the same, and it is another number on your machine than on this page.</p>
+    <p>A method of <code>print-object</code> for its class writes an instance as you like, wherever it is written: at the prompt, by <code>format</code>, inside a list. It is given the object and a stream, and <code>print-unreadable-object</code> writes the <code>#&lt;</code> and the <code>&gt;</code> around what its body writes, with the name of the class first when <code>:type</code> says so and the address last when <code>:identity</code> does. It takes any object: an integer or a character lies nowhere in memory, and gets no address. The same goes for the structures of a type that you write such a method for.</p>
 
     <h3 id="again">A class that is defined again</h3>
 <pre class="session">&gt; (defclass account ()
@@ -592,7 +601,8 @@ KIND
       <li>A function <code>(setf name)</code> is made by <code>defgeneric</code>, <code>defmethod</code>, <code>:accessor</code> or <code>:writer</code>. <code>(defun (setf name) ...)</code> and <code>#'(setf name)</code> are not there.</li>
       <li>What <code>defgeneric</code> gives back says what the generic function is, and cannot be called: the function is <code>#'withdraw</code>, as for any name, and to <code>class-of</code> it is a <code>function</code>.</li>
       <li>The keywords that a generic function is called with are not held against the ones its methods take, as they are when an instance is made.</li>
-      <li>An instance is written without a number of its own: two instances of a class look alike unless a method of <code>print-object</code> tells them apart. A condition is written as before, whatever method is written for it.</li>
+      <li>A condition is written as the system writes one, whatever method of <code>print-object</code> is written for its type.</li>
+      <li>Only an instance is written with its address by itself. A function, a thread, a lock and an event have no text to read back either, and are written without one: two functions that have no name look alike.</li>
       <li><code>typep</code> knows the types above and no others: not <code>(integer 0 9)</code>, not <code>(unsigned-byte 8)</code>. There is no <code>subtypep</code>, <code>check-type</code>, <code>deftype</code> or <code>coerce</code>.</li>
       <li>A function of the system's cannot be made a generic function: <code>(defmethod car ...)</code> is refused.</li>
     </ul>
@@ -2183,7 +2193,7 @@ error: nothing is mapped at #x0</pre>
       <tr><td>Nothing is heard, and what plays gives <code>T</code>.</td><td>The card has what was asked for. Look at how loud it was to be: <code>clara.sound:*volume*</code>, the <code>:volume</code> of the call, and the volume of your own computer, which the machine's sound goes through.</td></tr>
       <tr><td><code>sound: the sound card ... has not played what it was given</code>, or a line like it</td><td>The card stopped answering while something was played, and is asked nothing more: <code>(clara.sound:card)</code> says so too. The machine goes on without sound until it is started again.</td></tr>
       <tr><td><code>error: ... has no method for the arguments ...</code></td><td>A <a href="#generic">generic function</a> was called with arguments that none of its methods is for. Write a method for their classes, or for a class above them: one whose parameters name no class is for anything.</td></tr>
-      <tr><td>An instance shows as <code>#&lt;STANDARD-OBJECT&gt;</code> in the text of an error.</td><td>The error is one of the system's own, which cannot ask a method of <code>print-object</code> how the instance is written: <code>error: CAR wants a list, and #&lt;STANDARD-OBJECT&gt; is not one</code>. It is an instance of some class, where a list, a number or a string was wanted.</td></tr>
+      <tr><td>An instance shows as <code>#&lt;STANDARD-OBJECT {400000141968}&gt;</code> in the text of an error.</td><td>The error is one of the system's own, which cannot ask a method of <code>print-object</code> how the instance is written: <code>error: CAR wants a list, and #&lt;STANDARD-OBJECT {400000141968}&gt; is not one</code>. It is an instance of some class, where a list, a number or a string was wanted, and the number is its <a href="#written">address</a>, the one that an instance of a class with no such method is written with.</td></tr>
       <tr><td><code>error: the world takes ... MiB, and the disk that it is saved on has room for ... MiB</code>, also behind <code>clara: the machine is not shut down:</code></td><td>The world has outgrown its disk and was not saved; the one that was saved before is still there. Delete what is not needed on that disk, or give the machine a larger one: <a href="#room">Room for a world</a>. After a shutdown or a start that was refused for it, the next line has the form that does it without saving.</td></tr>
       <tr><td><code>error: the volume is full: ... clusters are wanted, and ... are free</code></td><td>A file was to be written, and its disk has no room for it beside the file that it takes the place of. A cluster is 512 bytes on a disk of 35 MiB and 4096 on one of 1024. Delete what is not needed there; for the machine's own disk under QEMU, <a href="#larger">A larger disk</a>.</td></tr>
       <tr><td><code>error: the heap is full</code></td><td>A computation used the memory there is. It has been stopped, what it held is free again, and the prompt is back. A machine with more memory holds more.</td></tr>

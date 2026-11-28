@@ -2370,14 +2370,42 @@ architectures (kernel/vm.c).
   PRINC-TO-STRING and FORMAT, so an instance is written by its method
   wherever it stands, at the prompt, in a list, in the text of an error
   that a program signals. Where nobody can be asked, in what an error of
-  the substrate's says, it is `#<STANDARD-OBJECT>`. The marked types are
-  the four of lisp/clos.lisp, and any structure's type for whose class a
-  method of PRINT-OBJECT is written.
-- An instance is written as `#<ACCOUNT>`, with no number that tells it
-  from another of its class. SBCL writes the address; here the address
-  would be another on every machine, and a session or the manual could
-  never show an instance. A method of PRINT-OBJECT says what tells two
-  apart.
+  the substrate's says, it is `#<STANDARD-OBJECT {40000012A458}>`, the
+  type of the structure and its address. The marked types are the four
+  of lisp/clos.lisp, and any structure's type for whose class a method
+  of PRINT-OBJECT is written.
+- An instance is written as `#<ACCOUNT {40000012A458}>`: the name of its
+  class and the address at which it lies, in hexadecimal between braces,
+  the way SBCL writes one (Julio's issue #65: two instances of a class
+  looked the same wherever they were written). The address is what
+  `:identity t` of PRINT-UNREADABLE-OBJECT writes, of any object, last
+  before the `>`, and the method of PRINT-OBJECT for STANDARD-OBJECT
+  asks for it. It is the object's own for as long as the object is
+  there: nothing in the heap moves, and a world that was saved comes
+  back with every object where it was. So two instances never show the
+  same text, and one shows the same text every time, in a world that
+  was started again too. The substrate's part is one function,
+  `%ADDRESS`, and the printer in C writes the same number where it can
+  ask nobody, so that an error of the substrate's says which instance it
+  met. An integer or a character is a word by itself and lies nowhere:
+  `:identity` writes nothing for one.
+- The other way would have been a number counted for each class,
+  `#<ACCOUNT 2>` for the second account that was made. It comes out the
+  same at every run of a session, which the address does not, at the
+  price of a word in every instance, and it says nothing of an object
+  that is no instance, which `:identity` is asked about as well. The
+  address won because it is what the standard means by the word and
+  what every Common Lisp shows. Its price is paid in the tests: an
+  address is another on every machine and at every boot, and with a
+  change to anything that makes an object before it. So nothing that is
+  compared has one. tools/boottest.sh and the host tests take whatever
+  digits stand between braces before a `>` for `{...}`, in what a
+  session has and in what was answered: a session writes
+  `#<ACCOUNT {...}>`, the manual an address as a screen showed it, and
+  both are held to everything but the number. That two instances differ
+  and one stays the same is asked in Lisp, of the texts themselves
+  (tools/objects.txt), and that the digits are the address, at a kernel
+  (tools/resumed.txt).
 - A function that SETF writes with has the name (SETF name) in Common
   Lisp. Here it lives in a symbol of its own that the name keeps on its
   property list, and SETF calls it for a place that begins with a name

@@ -1175,17 +1175,19 @@ Rules:
   defines, and the tests say so. The list is also what site/build.py
   reads for the manual's lists of names. Everything else in the file is
   the subset, as in any file of the world, and its own names are internal
-  to CLARA.CLOS. What it asks of the kernel is seven functions at its top,
+  to CLARA.CLOS. What it asks of the kernel is eight functions at its top,
   under `#+clara`, the only place where it names a symbol of
   lisp/boot.lisp's or the substrate's (`cl::%type-of`, `cl::%structure`,
-  `cl::%condition`, `cl::%setf-name`, `cl::%printed`); under SBCL
-  lisp/host/objects.lisp defines the seven, from what SBCL knows.
+  `cl::%condition`, `cl::%setf-name`, `cl::%printed`, `cl::%address`);
+  under SBCL lisp/host/objects.lisp defines the eight, from what SBCL
+  knows.
 - SBCL's own object system is the second opinion on that file, the piece
   of its tests that nobody here wrote. tools/objects.txt is a transcript
   that is answered three times: by lisp/clos.lisp under SBCL, to the
-  letter; by SBCL's own, which has to fail where the answer is an error
-  and to go well where the answer shows a `#<`, and to give the same text
-  otherwise; and by a kernel, x86_64-objects of `make test`. So a form
+  letter, an address apart (below); by SBCL's own, which has to fail
+  where the answer is an error and to go well where the answer shows a
+  `#<`, and to give the same text otherwise; and by a kernel,
+  x86_64-objects of `make test`. So a form
   there shows nothing that the two systems put differently (the class of
   5, the text of an error of the substrate's), and every error in it is
   one that lisp/clos.lisp words itself. What only a kernel can answer is
@@ -1264,7 +1266,8 @@ Rules:
   `cl::%object-text` is asked for each, and twice with the texts in place
   (`ask_for_texts`). What is on the value stack there stays on it while
   Lisp runs. `lisp_print` and `lisp_princ` ask nobody and write such a
-  structure as its type between `#<` and `>`: that is what an error of
+  structure as its type and its address between `#<` and `>`,
+  `#<STANDARD-OBJECT {40000012A458}>`: that is what an error of
   the substrate's shows, and what the texts of the self-test see. A text
   that gives `cl::%object-text` a function puts back what was there, and
   `#'not` when nothing was, never a function of its own: such a function
@@ -1274,6 +1277,35 @@ Rules:
   (What showed it: with lisp/clos.lisp left out of `world`, the kernel
   stops with "48 of its functions and macros are still the evaluator's to
   walk".)
+- An address is never compared (Julio's issue #65; DESIGN.md has what
+  was decided). An instance of a class with no method of PRINT-OBJECT is
+  written as `#<ACCOUNT {40000012A458}>`, and `:identity t` of
+  PRINT-UNREADABLE-OBJECT writes the same number of any object, last
+  before the `>` (`write-identity`, lisp/clos.lisp; `%ADDRESS`,
+  builtin.c; the printer's own for a structure that it can ask nobody
+  about, print.c). The number is the object's for as long as it is
+  there, and another on every machine, at every boot and after any
+  change that makes an object before it. So tools/boottest.sh takes
+  whatever digits stand between braces before a `>` for `{...}`, in the
+  session and in what the kernel said (`addresses`, `check_session`),
+  and the host tests do the same with tools/objects.txt
+  (`without-addresses`). A session writes `#<ACCOUNT {...}>`; the manual
+  writes an address as a screen showed one, which reads better and is
+  held to as little. What the kernel said is in build/session-<name>.txt
+  as it said it, and build/asked-<name>.txt is the session as it was
+  compared. Whatever is to be known of an address is asked in Lisp, with
+  an answer that has no address in it: that two objects differ and one
+  stays the same, by comparing the texts (`(equal (prin1-to-string one)
+  (prin1-to-string other))`, tools/objects.txt), and that the digits are
+  the address, at a kernel, where FORMAT has `~X` and `cl::%address` is
+  there (tools/resumed.txt). Such a form shows a `#<` in its answer as
+  well, so that SBCL's own object system only has to go well with it:
+  SBCL's collector moves objects, and its addresses with them, so two
+  texts of one object can differ there once in a long while. For the
+  same reason lisp/host/objects.lisp does not ask SBCL where an object
+  lies: `address-of` there hands out numbers of its own, which an object
+  keeps. A self-test text (kernel/lisp/lisp.c) that shows a marked
+  structure cuts the address out of what it compares.
 - A function that SETF writes with, `(setf name)`, lives in a symbol that
   the name keeps under `cl::%setf` (`%setf-name`, lisp/boot.lisp). `%setf`
   calls that symbol when it has a function as the form is expanded, and

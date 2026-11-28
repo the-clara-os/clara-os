@@ -1081,6 +1081,23 @@ PRIMITIVE(p_type_of)
     return symbols[i];
 }
 
+/* (%address object): where an object lies in the heap, as a number. The
+ * object keeps it for as long as it is there, since nothing in the heap
+ * moves (heap.c), and a world that was saved comes back with every object
+ * where it was (image.c): so it tells an object from every other that is
+ * there, and PRINT-UNREADABLE-OBJECT writes it for :IDENTITY (lisp/clos.lisp),
+ * as the printer does for an instance that it can ask nobody about
+ * (print.c). NIL for what is a word by itself and lies nowhere, an integer
+ * or a character. */
+PRIMITIVE(p_address)
+{
+    lisp x = argv[0];
+
+    if (lisp_is_fixnum(x) || (x & LISP_TAG_MASK) == LISP_TAG_IMMEDIATE)
+        return NIL;
+    return lisp_fixnum((int64_t)(x & ~LISP_TAG_MASK));
+}
+
 PRIMITIVE(p_copy_structure)
 {
     const struct lisp_structure *s = lisp_as_structure(argv[0]);
@@ -1852,6 +1869,7 @@ const struct lisp_primitive lisp_primitives[] = {
     { "%STRUCTURE-SET", p_structure_set, 4, 4 },
     { "COPY-STRUCTURE", p_copy_structure, 1, 1 },
     { "%TYPE-OF", p_type_of, 1, 1 },
+    { "%ADDRESS", p_address, 1, 1 },
     { "FUNCALL", p_funcall, 1, LISP_MANY },
     { "APPLY", p_apply, 2, LISP_MANY },
     { "VALUES", p_values, 0, LISP_MANY },

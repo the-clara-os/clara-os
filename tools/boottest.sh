@@ -18,7 +18,8 @@
 #                 Makefile builds with SANITIZE=)
 #        SESSION=tools/session.txt (what is typed and what has to come back;
 #                 empty: only Ctrl-D is typed. {{system}} in it is the name of
-#                 the system that was built, and {{version}} its version.)
+#                 the system that was built, and {{version}} its version. The
+#                 address of an object, #<ACCOUNT {...}>, is not compared.)
 #        PANICS=1 (how many times the kernel is to stop with a report on the
 #                 way, a panic or an exception: 0 unless this says otherwise,
 #                 and one more than that ends the boot at once)
@@ -81,11 +82,12 @@ orders=build/monitor-$name.in
 answers=build/monitor-$name.log
 typing=build/typing-$name
 heard=build/session-$name.txt
+asked=build/asked-$name.txt
 scratch=build/scratch-$name.img
 boot=build/boot-$name.img
 wav=build/sound-$name.wav
 mkdir -p build
-rm -f "$shot" "$sock" "$keys" "$orders" "$answers" "$heard" "$typing".* "$scratch" "$wav"
+rm -f "$shot" "$sock" "$keys" "$orders" "$answers" "$heard" "$asked" "$typing".* "$scratch" "$wav"
 
 # What the machine plays goes into a file, at the pace that its card plays
 # at, so that the file has the numbers that the machine sent and no others.
@@ -314,6 +316,17 @@ echoed() {
 # begin with ^ are for this script. Where the machine was started again,
 # what the firmware and the kernel said until the kernel read once more is
 # no part of the session.
+#
+# An address is left out of the comparison. An object that has no text to
+# read back is written with the address at which it lies, between braces
+# and last before the >, #<ACCOUNT {40000012A458}> (PRINT-UNREADABLE-OBJECT
+# with :IDENTITY, lisp/clos.lisp), and that number is another on every
+# machine and at every boot. So whatever digits stand there, in the session
+# and in what the kernel said, are {...} to the comparison: a session
+# writes #<ACCOUNT {...}>, or an address as a screen showed one, and is
+# held to everything but the number. What the kernel said is in $heard as
+# it said it.
+addresses='s/{[0-9A-F][0-9A-F]*}>/{...}>/g'
 check_session() {
     [ -n "$session" ] || return 0
     last=$(LC_ALL=C tr -d '\r' < "$log" | LC_ALL=C grep -n -m 1 -- "$marker" | cut -d: -f1)
@@ -322,7 +335,8 @@ check_session() {
         !reading          { next }
                           { print }
         /^clara: starting the machine again/ { reading = 0 }' > "$heard"
-    { grep -v '^^' "$session"; [ -n "$goes" ] || echo '> '; } | diff -u - "$heard"
+    { grep -v '^^' "$session"; [ -n "$goes" ] || echo '> '; } | LC_ALL=C sed "$addresses" > "$asked"
+    LC_ALL=C sed "$addresses" "$heard" | diff -u "$asked" -
 }
 
 # Give the last line time to reach the screen, then ask the QEMU monitor for

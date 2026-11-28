@@ -33,7 +33,10 @@ NO-RADIUS
 > (handler-case (slot-value *b* 'content) (unbound-slot (c) (list 'unbound (cell-error-name c))))
 (UNBOUND CONTENT)
 > (slot-value *b* 'content)
-error: the slot CONTENT of #<BOX> has no value
+error: the slot CONTENT of #<BOX {...}> has no value
+> (list *b* (equal (handler-case (slot-value *b* 'content) (error (c) (princ-to-string c)))
+                   (format nil "the slot CONTENT of ~S has no value" *b*)))
+(#<BOX {...}> T)
 > (setf (slot-value *b* 'content) 'gold)
 GOLD
 > (slot-value *b* 'content)
@@ -41,13 +44,13 @@ GOLD
 > (progn (slot-makunbound *b* 'content) (slot-boundp *b* 'content))
 NIL
 > (slot-value *b* 'lid)
-error: #<BOX> has no slot named LID
+error: #<BOX {...}> has no slot named LID
 > (make-instance 'box :lid 1)
 error: an instance of BOX cannot be made with :LID: no slot is filled by it, and no method takes it
 > (make-instance 'box :label)
 error: an instance of BOX is made with keywords and values in turn, and :LABEL has no value
 > (handler-case (make-instance 'box :lid 1 :allow-other-keys t) (error () 'refused))
-#<BOX>
+#<BOX {...}>
 > (defmethod slot-unbound (class (b box) name) (list 'empty name))
 #<STANDARD-METHOD SLOT-UNBOUND (T BOX T)>
 > (slot-value *b* 'content)
@@ -392,11 +395,59 @@ REFUSED
 > (defclass plain () ())
 #<STANDARD-CLASS PLAIN>
 > (make-instance 'plain)
-#<PLAIN>
+#<PLAIN {...}>
+> (let ((one (make-instance 'plain)) (other (make-instance 'plain)))
+    (list one other (equal (prin1-to-string one) (prin1-to-string one)) (equal (prin1-to-string one) (prin1-to-string other))
+          (equal (prin1-to-string one) (princ-to-string one))
+          (equal (format nil "~A/~S" one other) (format nil "~S/~A" one other))))
+(#<PLAIN {...}> #<PLAIN {...}> T NIL T T)
 > (defmethod print-object ((p plain) stream) (print-unreadable-object (p stream :type t) (princ "thing" stream)))
 #<STANDARD-METHOD PRINT-OBJECT (PLAIN T)>
 > (list (make-instance 'plain) (princ-to-string (make-instance 'plain)))
 (#<PLAIN thing> "#<PLAIN thing>")
+> (defmethod print-object ((p plain) stream) (print-unreadable-object (p stream :type t :identity t) (princ "thing" stream)))
+#<STANDARD-METHOD PRINT-OBJECT (PLAIN T)>
+> (let ((one (make-instance 'plain)) (other (make-instance 'plain)))
+    (list one (equal (prin1-to-string one) (prin1-to-string one)) (equal (prin1-to-string one) (prin1-to-string other))))
+(#<PLAIN thing {...}> T NIL)
+> (defmethod print-object ((p plain) stream) (print-unreadable-object (p stream :identity t) (princ "a thing" stream)))
+#<STANDARD-METHOD PRINT-OBJECT (PLAIN T)>
+> (list (make-instance 'plain))
+(#<a thing {...}>)
+> (defmethod print-object ((p plain) stream) (print-unreadable-object (p stream :identity t)))
+#<STANDARD-METHOD PRINT-OBJECT (PLAIN T)>
+> (let ((one (make-instance 'plain))) (list one (equal (prin1-to-string one) (prin1-to-string (make-instance 'plain)))))
+(#<{...}> NIL)
+> (defmethod print-object ((p plain) stream) (print-unreadable-object (p stream)))
+#<STANDARD-METHOD PRINT-OBJECT (PLAIN T)>
+> (list (make-instance 'plain) (make-instance 'plain))
+(#<> #<>)
+> (flet ((written (object type identity)
+           (with-output-to-string (stream)
+             (print-unreadable-object (object stream :type type :identity identity) (princ "it" stream)))))
+    (list (written 'thing nil nil) (written 'thing t nil) (written 'thing nil t) (written 'thing t t)
+          (written "thing" (not nil) (car '(yes)))))
+("#<it>" "#<SYMBOL it>" "#<it {...}>" "#<SYMBOL it {...}>" "#<STRING it {...}>")
+> (flet ((written (object) (with-output-to-string (stream) (print-unreadable-object (object stream :type t :identity t)))))
+    (list (written 5) (written #\a) (written 'thing) (equal (written 'thing) (written 'thing))
+          (equal (written 'thing) (written 'other)) (let ((text "thing")) (equal (written text) (written text)))))
+("#<INTEGER>" "#<CHARACTER>" "#<SYMBOL {...}>" T NIL T)
+> (let ((seen nil))
+    (list (with-output-to-string (stream)
+            (print-unreadable-object ((progn (push 'object seen) 'thing) (progn (push 'stream seen) stream)
+                                      :type (progn (push 'type seen) nil) :identity (progn (push 'identity seen) nil))
+              (push 'body seen)))
+          (reverse seen)))
+("#<>" (OBJECT STREAM TYPE IDENTITY BODY))
+> (defstruct tag name)
+TAG
+> (defmethod print-object ((tag tag) stream)
+    (print-unreadable-object (tag stream :type t :identity t) (prin1 (tag-name tag) stream)))
+#<STANDARD-METHOD PRINT-OBJECT (TAG T)>
+> (let ((tag (make-tag :name 'red)))
+    (list tag (equal (prin1-to-string tag) (prin1-to-string tag))
+          (equal (prin1-to-string tag) (prin1-to-string (copy-tag tag)))))
+(#<TAG RED {...}> T NIL)
 > (defclass house () ((rooms :initarg :rooms :accessor rooms)))
 #<STANDARD-CLASS HOUSE>
 > (defvar *home* (make-instance 'house :rooms 3))

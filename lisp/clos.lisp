@@ -51,7 +51,7 @@
 (in-package "CLARA.CLOS")
 
 ;;; What the substrate knows, and SBCL in its place: the host tests define
-;;; these seven themselves, from what SBCL knows, before they read on
+;;; these eight themselves, from what SBCL knows, before they read on
 ;;; (lisp/host/objects.lisp).
 ;;;
 ;;; KIND-OF is what an object is to the substrate, as the name of a class:
@@ -62,11 +62,16 @@
 ;;; FUNCTION-NAMED and INSTALL-FUNCTION are the function of a name, which is
 ;;; a symbol or (SETF symbol). PRINTED-BY-METHOD tells the printer to ask
 ;;; PRINT-OBJECT for the structures of a type, and PLAIN-TEXT is a
-;;; structure as the printer writes it when it asks nobody.
+;;; structure as the printer writes it when it asks nobody. ADDRESS-OF is
+;;; where an object lies in the heap, a number that it keeps for as long as
+;;; it is there, and NIL for an integer or a character, which lie nowhere.
 #+clara
 (progn
   (defun kind-of (object)
     (cl::%type-of object))
+
+  (defun address-of (object)
+    (cl::%address object))
 
   (defun structure-slots (name)
     (get name 'cl::%structure))
@@ -1093,16 +1098,37 @@
 ;;; An instance is written by PRINT-OBJECT, which is given the object and
 ;;; a stream. The printer, which is in C, asks for the text of every
 ;;; instance that it comes to, wherever in a list (kernel/lisp/builtin.c).
+;;; With no method of its class's own an instance is written as the name of
+;;; its class and its address, #<ACCOUNT {40000012A458}>: two instances of
+;;; a class never show the same text, and one shows the same text every
+;;; time.
+
+;; What tells an object from every other that is there: its address, in
+;; hexadecimal between braces, {40000012A458}, the way SBCL writes one. It
+;; is the last thing before the > and has a space before it when something
+;; was written there. An integer or a character has no address and gets
+;; nothing. The digits are made here: FORMAT's ~X is in a file that is
+;; loaded after this one.
+(defun write-identity (object stream space)
+  (let ((address (address-of object)) (digits nil))
+    (when address
+      (do ((left address (floor left 16))) ((< left 16) (push left digits))
+        (push (mod left 16) digits))
+      (write-string (if space " {" "{") stream)
+      (dolist (digit digits)
+        (write-char (char "0123456789ABCDEF" digit) stream))
+      (write-string "}" stream))))
 
 (defmacro print-unreadable-object ((object stream &key type identity) &body body)
-  (declare (ignore identity))
-  (let ((thing (gensym)) (to (gensym)))
-    `(let ((,thing ,object) (,to ,stream))
+  (let ((thing (gensym)) (to (gensym)) (typed (gensym)) (told-apart (gensym)))
+    `(let ((,thing ,object) (,to ,stream) (,typed ,type) (,told-apart ,identity))
        (write-string "#<" ,to)
-       (when ,type
+       (when ,typed
          (prin1 (type-of ,thing) ,to)
          ,@(if body `((write-string " " ,to))))
        ,@body
+       (when ,told-apart
+         (write-identity ,thing ,to ,(if body t typed)))
        (write-string ">" ,to)
        nil)))
 
@@ -1116,7 +1142,7 @@
   object)
 
 (defmethod print-object ((object standard-object) stream)
-  (print-unreadable-object (object stream :type t))
+  (print-unreadable-object (object stream :type t :identity t))
   object)
 
 (defmethod print-object ((class class) stream)
