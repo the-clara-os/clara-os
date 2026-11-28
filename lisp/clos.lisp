@@ -313,11 +313,13 @@
           (error "there is no class named ~S" name))))
 
 ;; The class of what is no instance of a class that DEFCLASS defined,
-;; from what the substrate says it is.
+;; from what the substrate says it is. An integer is a FIXNUM: the
+;; substrate says INTEGER of every one, and there are no larger integers
+;; yet, which would be of another class below INTEGER.
 (defun class-of-kind (kind object)
-  (if (eq kind 'class)
-      (find-class (class-kind object))
-      (or (get kind 'class) (implied-class kind) (find-class 't))))
+  (cond ((eq kind 'class) (find-class (class-kind object)))
+        ((eq kind 'integer) (get 'fixnum 'class))
+        (t (or (get kind 'class) (implied-class kind) (find-class 't)))))
 
 (defun class-of (object)
   (let ((kind (kind-of object)))
@@ -332,7 +334,7 @@
 (define-class 't 'built-in-class nil)
 (define-class 'standard-object 'standard-class (list (find-class 't)))
 (dolist (row '((structure-object t)
-               (number t) (real number) (rational real) (integer rational)
+               (number t) (real number) (rational real) (integer rational) (fixnum integer)
                (character t) (symbol t)
                (sequence t) (list sequence) (cons list) (null symbol list)
                (array t) (vector array sequence) (string vector)
@@ -363,7 +365,6 @@
            ((nil) nil)
            (atom (atom object))
            (keyword (keywordp object))
-           (fixnum (integerp object))
            (boolean (if (or (eq object t) (null object)) t nil))
            (t (subclass-p (class-of object) (find-class type)))))
         ((consp type)

@@ -454,12 +454,27 @@
                '("#<BOX {40000012A458}>" "(#<A {4000002D25B0}> \"#<B it {0}>\" #<{...}>)"
                  "{12AB} {} {}> {12ab}> {12AG}> #<C {F}>")))
 
+;; The two worlds: OBJECTS.SBCL has Common Lisp as SBCL has it, and
+;; OBJECTS.CLARA the same with the names of lisp/clos.lisp in place of
+;; SBCL's.
+(defvar *theirs* (make-package "OBJECTS.SBCL" :use '("COMMON-LISP")))
+(defvar *ours* (make-package "OBJECTS.CLARA" :use '("COMMON-LISP")))
+(shadowing-import (mapcar (lambda (name) (find-symbol name "CLARA.CLOS")) *object-names*) *ours*)
+
 ;; What a listener answers to a text that is read in PACKAGE, as
 ;; lisp/listener.lisp does it: what the forms write, the values of each on
 ;; a line of its own, or the error; and whether there was an error. What
 ;; SBCL's compiler has to say of a form that is meant to fail goes nowhere.
+;; A form for lisp/clos.lisp is not compiled: SBCL's interpreter evaluates
+;; it. The file itself is compiled, a form asks the same of it either way,
+;; and compiling every one of them was a quarter of what the object system
+;; takes here. SBCL's own object system gets its forms compiled, as its
+;; users' are: it answers one of the transcript's differently when the
+;; form is interpreted, where the next MAKE-INSTANCE fills a slot again
+;; that the instances share and that was made unbound.
 (defun answer-of (text package)
-  (let ((*package* package) (*print-pretty* nil) (error nil) (*error-output* (make-broadcast-stream)))
+  (let ((*package* package) (*print-pretty* nil) (error nil) (*error-output* (make-broadcast-stream))
+        (sb-ext:*evaluator-mode* (if (eq package *ours*) :interpret :compile)))
     (values (remove "" (lines (with-output-to-string (*standard-output*)
                                 (handler-case
                                     (handler-bind ((warning #'muffle-warning))
@@ -480,13 +495,6 @@
                                     (format t "error: ~A" condition)))))
                     :test #'string=)
             error)))
-
-;; The two worlds: OBJECTS.SBCL has Common Lisp as SBCL has it, and
-;; OBJECTS.CLARA the same with the names of lisp/clos.lisp in place of
-;; SBCL's.
-(defvar *theirs* (make-package "OBJECTS.SBCL" :use '("COMMON-LISP")))
-(defvar *ours* (make-package "OBJECTS.CLARA" :use '("COMMON-LISP")))
-(shadowing-import (mapcar (lambda (name) (find-symbol name "CLARA.CLOS")) *object-names*) *ours*)
 
 ;; tools/objects.txt is typed at a kernel by `make test`, which holds the
 ;; kernel to its answers. Here the same forms are given to lisp/clos.lisp
@@ -517,16 +525,26 @@
 
 ;; Where lisp/clos.lisp is not SBCL on purpose, it is asked alone. The class
 ;; of an object of the language's own is the standard's, where SBCL has
-;; classes of its own below those: a 5 is an INTEGER here, and a FIXNUM
-;; there.
+;; classes of its own below those: a string is a STRING here, and of a
+;; class below STRING there. The one such class that is here too is
+;; FIXNUM, the class of every integer, which the transcript asks both
+;; for. What is left of it for here alone: the name of that class is the
+;; type of an integer, where SBCL says (INTEGER 0 4611686018427387903) of a
+;; 5 and BIT of a 1, and there is no class BIGNUM for the integers that
+;; are not here yet.
 (flet ((ours (text)
          (answer-of text *ours*)))
-  (check '("(INTEGER CHARACTER SYMBOL NULL CONS STRING VECTOR FUNCTION PACKAGE)")
+  (check '("(FIXNUM CHARACTER SYMBOL NULL CONS STRING VECTOR FUNCTION PACKAGE)")
          (ours "(mapcar (lambda (x) (class-name (class-of x)))
                         (list 5 #\\a 'a nil '(1) \"s\" (vector 1) #'car (find-package \"KEYWORD\")))"))
-  (check '("((NULL SYMBOL LIST SEQUENCE T) (STRING VECTOR ARRAY SEQUENCE T) (INTEGER RATIONAL REAL NUMBER T) (CONS LIST SEQUENCE T))")
+  (check '("((NULL SYMBOL LIST SEQUENCE T) (STRING VECTOR ARRAY SEQUENCE T) (INTEGER RATIONAL REAL NUMBER T) (FIXNUM INTEGER RATIONAL REAL NUMBER T) (CONS LIST SEQUENCE T))")
          (ours "(mapcar (lambda (name) (mapcar #'class-name (clara.clos::class-precedence-list (find-class name))))
-                        '(null string integer cons))"))
+                        '(null string integer fixnum cons))"))
+  (check '("(FIXNUM FIXNUM FIXNUM FIXNUM NIL \"no BIGNUM\")")
+         (ours "(list (type-of 5) (type-of 1) (type-of 0) (type-of 4611686018427387903) (find-class 'bignum nil)
+                      (handler-case (find-class 'bignum) (error () \"no BIGNUM\")))"))
+  (check '("(BIT (INTEGER 0 4611686018427387903) FIXNUM BIGNUM)")
+         (answer-of "(list (type-of 1) (type-of 5) (type-of -5) (class-name (find-class 'bignum)))" *theirs*))
   ;; A function that is defined under the name of a generic function is an ordinary function from then
   ;; on, and a method for the name makes a new generic function, with none of the old one's methods.
   ;; SBCL refuses the method.

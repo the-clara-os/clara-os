@@ -3368,6 +3368,105 @@ Infrastructure, done:
   `function` is asked for a generic function only, when the methods
   before it call on, and never for an ordinary function, which the
   printer writes itself: that is of #73's family, and is said there.
+- **The class of an integer** (2026-11-28, version 0.0.70). The class of
+  an integer is FIXNUM, with INTEGER above it, which is Julio's issue
+  #67. It was INTEGER, and there was no class FIXNUM, so `(defmethod
+  half ((n fixnum)) (ash n -1))` was answered with "there is no class
+  named FIXNUM". SBCL takes that method, and so do CCL, ECL and ABCL,
+  which were asked beside it: the class of 5 is FIXNUM in all four. M20
+  had kept to the classes that the standard names, where FIXNUM is a
+  type and no class, and the price was a program that those four take
+  and that was refused here.
+  FIXNUM is a row in the table of the classes that the language begins
+  with (lisp/clos.lisp), below INTEGER, so the classes above a 5 are
+  FIXNUM, INTEGER, RATIONAL, REAL, NUMBER and T, as SBCL has them: a
+  method for INTEGER fits a 5 as it did, and one for FIXNUM comes
+  before it. The substrate says INTEGER of every integer as before
+  (`%TYPE-OF`), and `class-of-kind` makes the class FIXNUM of that, for
+  `class-of` and for a call alike. Every integer is one, since there
+  are no larger integers yet. `type-of` is the name of the class, so
+  it says FIXNUM, and `print-unreadable-object` with `:type t` writes
+  `#<FIXNUM>`. `typep` had a line of its own for the name, which is
+  gone: FIXNUM is a class to it like any other. Nothing in C changed.
+  DESIGN.md ("Objects") has what was decided, and why the other way
+  before.
+  The tests. tools/objects.txt has thirteen forms more, which
+  lisp/clos.lisp under SBCL, SBCL's own object system and a kernel
+  answer alike: the class of 5, of 0, of a negative integer, of the
+  largest integer and of the smallest; that it is the class which
+  `find-class` gives for the name, another than INTEGER's, and one
+  that is built in; the issue's method, and what it gives for a 10 and
+  a -9 and that it is no method for a string; a generic function with a
+  method for each of the six classes, every one of which calls on, so
+  that a call says the order they stand in; a method for FIXNUM given
+  to a generic function that had answered for an integer before, and
+  one for FIXNUM and INTEGER to one of two arguments, which comes
+  before the one for INTEGER and INTEGER; `typep` with the name, with
+  the class itself and inside `or`, `and` and `not`; `typecase`; and
+  `type-of` of a negative integer, which SBCL calls FIXNUM too. What
+  the two systems put differently is asked of lisp/clos.lisp alone
+  (lisp/host/tests.lisp): the type of 5, of 1 and of 0, where SBCL
+  says `(INTEGER 0 4611686018427387903)` and BIT, that there is no
+  class BIGNUM, and the classes above FIXNUM as the file keeps them;
+  and a check asks SBCL for its side of that, so that the lines which
+  say so stay true. tools/resumed.txt, on all three machines,
+  asks for the class of 5 in a world that came back, and the manual's
+  session on types shows the class, the type and the issue's method.
+  Nineteen mistakes were planted, one at a time, and all were noticed.
+  Sixteen were in lisp/clos.lisp, the stand-in and the transcript,
+  each with the host tests up to the end of FORMAT's section after it:
+  an integer of the class INTEGER, or T; a character that is a FIXNUM;
+  FIXNUM below RATIONAL, below T, above INTEGER; a `typep` that says
+  yes to everything for the name, or no; a call that goes by INTEGER
+  where `class-of` says FIXNUM, and the other way round; a `type-of`
+  that says INTEGER; a method for FIXNUM that comes after the one for
+  INTEGER; a form in the transcript that SBCL answers differently. The
+  transcript noticed fifteen, and the sixteenth, FIXNUM below NUMBER
+  and INTEGER in that order, which no order of the classes satisfies,
+  stopped the file from loading. Three of them were planted again in a built
+  copy of the tree, with five boots after each: the boot of the
+  transcript and the manual's stopped at all three, and
+  tools/resumed.txt at the one where an integer is of the class
+  INTEGER.
+  The host tests' time. On the last two runs of CI on a slow runner the
+  host tests had taken 117.4 and 117.8 of their 120 seconds (issue
+  #122), so thirteen forms and two checks could not simply be added. A
+  form of the transcript, and of the tests that chance writes, is given
+  to lisp/clos.lisp and to SBCL's own object system, and SBCL compiled
+  each one for each. The ones for lisp/clos.lisp are now evaluated by
+  SBCL's interpreter (`answer-of`, `sb-ext:*evaluator-mode*`): the file
+  itself is compiled as it was, and a form asks the same of it either
+  way. The object system's section takes 0.51 seconds on the Mac where
+  it took 0.64 on main and 0.67 with the new forms compiled, three runs
+  of each in turn, with fifteen checks more, 29,890 for 29,875. The
+  forms for SBCL's own object system stay compiled, as its users' are:
+  with those interpreted too the section takes 0.33 seconds, but SBCL
+  then answers one form of the transcript differently, where the next
+  `make-instance` fills a slot again that the instances share and that
+  was made unbound. All sixteen mistakes above were planted with the
+  interpreter in place.
+  Measured: the world has no function more, 2,836 on AArch64, and the
+  self-test no text more, 561, so the first boots do what they did.
+  `make test` on the Mac, with a container running beside it, takes 643
+  seconds, the first x86_64 boot 63 and the boot of the transcript 23,
+  where it took 24; in a container of Ubuntu 26.04, where both machines
+  are emulated as on CI, `make` and `make test` take 1,007 seconds, the
+  first x86_64 boot 75, the boot of the transcript 42, where it took 39,
+  and the boot that collects at every safe point 224. Under the SBCL of
+  that container, which is CI's, the object system's section of the host
+  tests takes 0.56 seconds where it took 0.70, three runs of each in
+  turn. `make sanitize` passes in 20 seconds; the boots on checked
+  kernels were left to CI, since nothing in C changed but the version.
+  A copy of the disk of Julio's machine, which ran 0.0.69, with a copy
+  of his work disk took the build at once, with the 21 forms of his
+  `/home/defined.lisp`, his commands, his calendar and Galculator; the
+  issue's forms were typed there, and the method for FIXNUM was still
+  there, and called, after a start in the world that it saved.
+  What it left: there is no class BIGNUM beside FIXNUM, as nothing is
+  one yet, so a method for it is refused and `(typep 5 'bignum)` is an
+  error (#265); and `most-positive-fixnum` and `most-negative-fixnum`
+  are not there, which the transcript had to write out as numbers
+  (#266).
 
 Infrastructure, for sessions with budget left over:
 
@@ -5446,7 +5545,7 @@ M20a, M20b and M20c, objects, what they left:
   made. And a method of PRINT-OBJECT for STRUCTURE-OBJECT or for T is not
   asked for a structure: the mark is on the name of a type, and is put
   there by a method for that type's own class. This is #73.
-- Types. TYPEP knows the classes, ATOM, KEYWORD, FIXNUM and BOOLEAN, and
+- Types. TYPEP knows the classes, ATOM, KEYWORD and BOOLEAN, and
   OR, AND, NOT, MEMBER, EQL and SATISFIES. Not `(integer 0 9)`, not
   `(unsigned-byte 8)`, not `(vector ...)`, and there is no SUBTYPEP,
   CHECK-TYPE, DEFTYPE or COERCE. The class of a generic function's
@@ -5455,8 +5554,11 @@ M20a, M20b and M20c, objects, what they left:
   the class STANDARD-CLASS, which is itself of the class BUILT-IN-CLASS.
   The types and the four that are missing are #74.
 - Two calls that DESIGN.md or the pull request (#64) has, and nothing
-  above. The class of 5 is INTEGER, and there is no class FIXNUM to
-  write a method for: #67. And a DEFMETHOD makes a generic function of
+  above. The class of 5 was INTEGER, and there was no class FIXNUM to
+  write a method for. That was #67, and since 0.0.70 the class of an
+  integer is FIXNUM, below INTEGER, as in SBCL ("The class of an
+  integer", above). The class BIGNUM beside it is not there, as nothing
+  is one yet: #265. And a DEFMETHOD makes a generic function of
   an ordinary function of the user's own without a word, where the
   standard has it refused, and only a function of the system's is
   refused here: #75.
