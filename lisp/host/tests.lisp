@@ -534,6 +534,19 @@
   (check '("MORPH" "PLAIN") (ours "(defun morph (thing) thing 'plain) (morph 1)"))
   (check '("AGAIN" "error: MORPH has no method for the arguments (A)")
          (ours "(progn (defmethod morph ((thing integer)) 'again) (morph 1)) (morph 'a)"))
+  ;; What a generic function keeps is a structure that the function carries, and that structure stays
+  ;; inside lisp/clos.lisp: a program is given the function, and gives it. What takes a generic function
+  ;; says so when it is handed something else. The structure is written like the function, should the
+  ;; printer ever come to one, and the function without what it carries is no generic function to read.
+  (check '("(T T NIL NIL NIL NIL)")
+         (ours "(list (eq (clara.clos::generic-of *g*) (clara.clos::carried *g*))
+                      (equal (prin1-to-string (clara.clos::carried *g*)) (prin1-to-string *g*))
+                      (clara.clos::generic-of #'car) (clara.clos::generic-of 5) (clara.clos::carried (lambda (x) x))
+                      (clara.clos::generic-of (clara.clos::carry (lambda (x) x) (make-coin :value 1))))"))
+  (check '("error: 5 is not a generic function") (ours "(no-applicable-method 5 1 2)"))
+  (check '("error: #<FUNCTION CAR> is not a generic function") (ours "(no-next-method #'car nil 1)"))
+  (check '("(T NIL)")
+         (ours "(let ((text (clara.clos::plain-text *g*))) (list (stringp text) (search \"STANDARD-GENERIC\" text)))"))
   ;; A class that cannot be defined again as it is asked stays what it was, with the classes below it:
   ;; A would be a kind of D, which is a kind of it. SBCL leaves such a class half done.
   (check '("REFUSED" "((B C) (D B C A STANDARD-OBJECT T) (X))")
@@ -680,14 +693,24 @@
   (both "(defvar *rd~D* (make-instance 'rd~D :own '(given ~D)))" i i i)
   (when (zerop (chance 2))
     (both "(progn (defmethod rs ((thing rd~D)) (cons ~D (call-next-method))) ~D)" i i i)))
+;; What an instance is asked: (asked 3 7 12) is what (list (rs *rd3*) (own3 *rd3*) (more7 *rd3*) (typep
+;; *rd3* 'rd7) (typep *rd3* 'rd12)) would be, with GONE and NONE for a reader that fails. It is a function
+;; of the three numbers in each world, and the names are found as it runs: a form with a HANDLER-CASE in it
+;; is one that SBCL compiles before it evaluates it, three hundred times over, and a call of this is not.
+(both "(defun asked (j i k)
+         (flet ((named (control n) (intern (format nil control n))))
+           (let ((it (symbol-value (named \"*RD~~D*\" j))))
+             (list (rs it)
+                   (handler-case (funcall (named \"OWN~~D\" j) it) (error () 'gone))
+                   (handler-case (funcall (named \"MORE~~D\" i) it) (error () 'none))
+                   (typep it (named \"RD~~D\" i)) (typep it (named \"RD~~D\" k))))))")
 (dotimes (step 30)
   (let ((i (chance 30)))
     (both "(progn (defclass rd~D (~{rd~D~^ ~}) (~:[~*~*~*~;(own~D :initarg :own :initform ~D :accessor own~D) ~](more~D :initform '(more ~D) :accessor more~D))) ~D)"
           i (older i) (zerop (chance 2)) i i i i step i step)
     (dotimes (j 30)
       (when (= (mod (+ j step) 3) 0)
-        (both "(list (rs *rd~D*) (handler-case (own~D *rd~D*) (error () 'gone)) (handler-case (more~D *rd~D*) (error () 'none)) (typep *rd~D* 'rd~D) (typep *rd~D* 'rd~D))"
-              j j j i j j i j (chance 30))))))
+        (both "(asked ~D ~D ~D)" j i (chance 30))))))
 
 ;;; The directives of FORMAT (lisp/format.lisp). FORMAT is SBCL's own here,
 ;;; so what that file makes of a control string is asked of the function

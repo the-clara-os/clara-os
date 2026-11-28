@@ -2278,12 +2278,15 @@ architectures (kernel/vm.c).
 
 - Common Lisp's object system is Lisp here, a file of the world
   (lisp/clos.lisp), and not a part of the substrate. An instance, a
-  class, a generic function and a method are structures, and what they
-  hold are lists, vectors and closures: nothing was added to the heap,
-  and a world that is saved holds its classes and its instances as it
-  holds everything else. The substrate was given three things for it: a
+  class and a method are structures, a generic function is a function
+  that carries one (below), and what they hold are lists, vectors and
+  closures: the heap has no kind of object for any of them, and a world
+  that is saved holds its classes and its instances as it holds
+  everything else. The substrate was given three things for it: a
   function that says what an object is (`%type-of`), a printer that asks
-  Lisp what such a structure looks like, and SYMBOL-MACROLET. The other
+  Lisp what such a structure looks like, and SYMBOL-MACROLET; and since
+  then a fourth, the word of a function that holds the structure which
+  it carries. The other
   ways were an instance as an object of the substrate's own, which is
   more in C for nothing that can be seen yet; and the whole of it in
   lisp/boot.lisp with the rest of the language, which the evaluator would
@@ -2326,8 +2329,8 @@ architectures (kernel/vm.c).
   it is next asked. A list of the classes below would have to be kept
   right for classes that go away, with the package of an application
   that is unloaded, and nothing here could say when they do.
-- A generic function is called through an ordinary function, which
-  closes over it and hands DISPATCH the arguments in a list. What the
+- A generic function is a function: the one that is called under its
+  name, which hands DISPATCH the arguments in a list. What the
   methods that fit come to is one function of that list, made when
   arguments of some classes first arrive and kept under those classes,
   as many of them from the left as any method looks at; for a generic
@@ -2336,6 +2339,44 @@ architectures (kernel/vm.c).
   arguments and a walk through what is kept, which is what a first
   version costs and is measured in ROADMAP.md; a method could be reached
   without either, and the roadmap says how.
+- That function carries a structure with what a generic function keeps:
+  its name, its parameters, its methods and what they come to (Julio's
+  issue #66). Until 0.0.69 the structure was the generic function, and
+  the function an ordinary one beside it: DEFGENERIC gave back an object
+  that could not be called, `#'area` was a plain FUNCTION to CLASS-OF,
+  and a method for GENERIC-FUNCTION was never chosen for it, where
+  Common Lisp has one object for both. So a function has a word for a
+  structure to carry (`struct lisp_function`, kernel/lisp/lisp.h), and
+  the substrate two functions that read and write it
+  (`%FUNCTION-STRUCTURE`, `%SET-FUNCTION-STRUCTURE`). For such a
+  function `%TYPE-OF` says the type of the structure, which makes it a
+  STANDARD-GENERIC-FUNCTION to CLASS-OF, a kind of GENERIC-FUNCTION and
+  of FUNCTION; and the printer leaves it to PRINT-OBJECT as it leaves
+  the structure, so `#'area` and what DEFGENERIC gave back are written
+  as the one thing that they are, `#<STANDARD-GENERIC-FUNCTION AREA
+  (2)>`. A call does not look at the word: the evaluator, the machine
+  that runs compiled code and the code for the processor go into the
+  function as they went into it before. The structure stays inside
+  lisp/clos.lisp. A program is given the function wherever it is given a
+  generic function, by DEFGENERIC and as the first argument of
+  NO-APPLICABLE-METHOD and NO-NEXT-METHOD, and the name's function is
+  all that says whether a name has one: nothing is kept on the name's
+  property list any more. Where the printer can ask nobody, in an error
+  of the substrate's, such a function is `#<FUNCTION AREA>`, which it is
+  as well, and which has the name.
+- The other ways. A kind of function of its own, beside the five, would
+  have to be known wherever a function is called, and code for the
+  processor goes to a function's instructions without asking what kind
+  it is. An object that is a structure and can be called, which is how
+  other Lisps have it (a funcallable instance), is the same word seen
+  from the other side, with the call to teach in place of the type and
+  the printer. And a table in Lisp from functions to structures would
+  be asked at every CLASS-OF of a function, and would hold on to every
+  generic function for good, since nothing here lets go of a key that
+  only the table has. The word is eight bytes in every function. An
+  image is laid out differently for it (`FORMAT`, kernel/lisp/image.c),
+  which no machine notices: a world is started by the system that saved
+  it and by no other.
 - Methods are put together in the standard's standard way, and in no
   other: the :AROUND methods, then the :BEFORE methods, the most specific
   method with its CALL-NEXT-METHOD, and the :AFTER methods. A method is a

@@ -1175,12 +1175,13 @@ Rules:
   defines, and the tests say so. The list is also what site/build.py
   reads for the manual's lists of names. Everything else in the file is
   the subset, as in any file of the world, and its own names are internal
-  to CLARA.CLOS. What it asks of the kernel is eight functions at its top,
+  to CLARA.CLOS. What it asks of the kernel is ten functions at its top,
   under `#+clara`, the only place where it names a symbol of
-  lisp/boot.lisp's or the substrate's (`cl::%type-of`, `cl::%structure`,
-  `cl::%condition`, `cl::%setf-name`, `cl::%printed`, `cl::%address`);
-  under SBCL lisp/host/objects.lisp defines the eight, from what SBCL
-  knows.
+  lisp/boot.lisp's or the substrate's (`cl::%type-of`,
+  `cl::%function-structure`, `cl::%set-function-structure`,
+  `cl::%structure`, `cl::%condition`, `cl::%setf-name`, `cl::%printed`,
+  `cl::%address`); under SBCL lisp/host/objects.lisp defines the ten,
+  from what SBCL knows.
 - SBCL's own object system is the second opinion on that file, the piece
   of its tests that nobody here wrote. tools/objects.txt is a transcript
   that is answered three times: by lisp/clos.lisp under SBCL, to the
@@ -1258,11 +1259,43 @@ Rules:
   reads the precedence list, the slots or the layout of a class has it
   from `fresh`. A generic function drops what it keeps when its methods
   change (`tune`) and when the number has moved.
+- A generic function is a function that carries a structure (Julio's
+  issue #66; DESIGN.md has what was decided). `struct lisp_function` has
+  a word for the structure (`structure`, kernel/lisp/lisp.h), which
+  `%TYPE-OF` and the printer look at (`lisp_carried`) and a call never
+  does; `cl::%function-structure` reads it, and
+  `cl::%set-function-structure` writes it for a function that is
+  written in Lisp. A change to that struct, as to any in lisp.h, is a
+  new `FORMAT` in image.c. In lisp/clos.lisp the structure is what a
+  generic function keeps, `standard-generic-function` as before, and it
+  never leaves the file: whatever hands a generic function to a program
+  hands the function (`standard-generic-function-function`: DEFGENERIC,
+  the first argument of NO-APPLICABLE-METHOD and of NO-NEXT-METHOD), and
+  whatever takes one from a program asks `kept-by`, which says when it
+  was given something else. `generic-of` takes the structure as well,
+  so that the printer does not fail where it comes to one, in the slot
+  of a method. A name has a generic function when its function is one
+  (`generic-named`); nothing is kept on the name's property list. Under
+  SBCL the function that carries is another object than the one that
+  `carry` was handed, one of SBCL's own objects that can be called
+  (lisp/host/objects.lisp), so the file uses what `carry` gives back
+  and nothing else; on the machine the two are one, and a mistake there
+  shows under SBCL alone. A generic function is written by its method
+  of PRINT-OBJECT wherever the printer can ask, and as `#<FUNCTION
+  AREA>` where it cannot. So a session that shows `#'name` shows
+  `#<STANDARD-GENERIC-FUNCTION NAME (2)>`, with the number of its
+  methods, which is another number once a method is defined before that
+  line. What only a kernel can say of it is in tools/resumed.txt: that
+  a generic function comes back from a world that was saved as what it
+  was, the text of an error of the substrate's, and the function as
+  `plain-text` writes it. The substrate's part is in the self-test
+  (`evaluations`, kernel/lisp/lisp.c).
 - How an instance is written (kernel/lisp/print.c, builtin.c). The printer
   goes through an object twice and cannot call Lisp in between, so the
   functions that make a string for Lisp go through it three times when
   it comes to a structure whose type's name has `cl::%printed` on its
-  property list: once to note those structures, then
+  property list, or to a function that carries one (above): once to
+  note those structures, then
   `cl::%object-text` is asked for each, and twice with the texts in place
   (`ask_for_texts`). What is on the value stack there stays on it while
   Lisp runs. `lisp_print` and `lisp_princ` ask nobody and write such a

@@ -3258,6 +3258,116 @@ Infrastructure, done:
   functions without a name look alike, and so do two locks, and a
   method is written without one (#260); and nothing takes an
   address that was written back to its object (#261).
+- **A generic function is a function** (2026-11-28, version 0.0.69). What
+  `defgeneric` gives back can be called, and is the function that the
+  name has, which is Julio's issue #66. It gave back an object that
+  said what the generic function is, beside an ordinary function
+  `#'area` that handed its arguments on: `(funcall *g* 3)` failed with
+  "is not a function", `functionp` said NIL of what `typep` called a
+  FUNCTION, and a method for `generic-function` was never chosen for
+  `#'area`, which was a plain FUNCTION to `class-of`. In Common Lisp the
+  two are one object, and here they are now: `(eq *g* #'area)`.
+  The generic function is the function that is called under its name,
+  and it carries a structure with what a generic function keeps, its
+  methods among it. A function has a word for that (`struct
+  lisp_function`, kernel/lisp/lisp.h), and the substrate two functions
+  that read and write it (`%FUNCTION-STRUCTURE`,
+  `%SET-FUNCTION-STRUCTURE`, kernel/lisp/builtin.c). Of a function that
+  carries a structure `%TYPE-OF` says the structure's type, so
+  `class-of` says STANDARD-GENERIC-FUNCTION, a kind of GENERIC-FUNCTION
+  and that a kind of FUNCTION; and the printer leaves it to
+  `print-object` as it leaves an instance, so `#'area` is written as
+  what `defgeneric` gave back was, `#<STANDARD-GENERIC-FUNCTION AREA
+  (1)>`. A call does not look at the word, and is what it was.
+  `no-applicable-method` and `no-next-method` are handed the function
+  where they were handed the structure, so a method of either can be
+  written for one generic function, `(eql #'area)`. A name has a
+  generic function when its function is one, and nothing is kept on
+  the name's property list any more: a name that was given the function
+  of another, `(setf (symbol-function 'alias) #'area)`, has its methods
+  added to that one, as in SBCL. Where the printer can ask nobody, in
+  an error of the substrate's, a generic function is `#<FUNCTION AREA>`.
+  DESIGN.md ("Objects") has the other ways, and why it is this one.
+  An image is laid out differently for the word (`FORMAT` 7,
+  kernel/lisp/image.c), which no machine notices: a world is started
+  by the system that saved it and by no other.
+  The tests. tools/objects.txt has eighteen forms more, which
+  lisp/clos.lisp under SBCL, SBCL's own object system and a kernel
+  answer alike: the issue's own; `funcall`, `apply` and `mapcar` of
+  what `defgeneric` gave back; `typep`, `class-of` and `type-of`; a
+  method for `generic-function` beside one for `function`; the same
+  function from a second `defgeneric`; a method of
+  `no-applicable-method` and one of `no-next-method` for one generic
+  function; a function `(setf name)`; a second name for a generic
+  function; and a `defun` over the name, after which the variable
+  still holds the generic function and calls it. Under SBCL the
+  function that carries is one of SBCL's own objects that can be
+  called (lisp/host/objects.lisp), another object than the function
+  that it was made of, which holds the file to using what it is given
+  back. Four checks ask lisp/clos.lisp alone: that what takes a generic
+  function says so when it is handed something else, that a function
+  which carries another structure is none, and that the structure,
+  should the printer come to one, is written like the function. The
+  self-test has five texts for the substrate's part
+  (kernel/lisp/lisp.c): the two functions, `%TYPE-OF`, a call, a second
+  function of the same code that carries nothing, what cannot be given
+  a structure, the printer asking for such a function wherever it
+  comes to it, and what it writes where nobody can be asked. And
+  tools/resumed.txt, on all three machines, has what only a kernel can
+  say: that a generic function comes back from a world that was saved
+  as what it was, and an error of the substrate's with one in it.
+  Twenty-four mistakes were planted, one at a time, and all were
+  noticed. Fourteen were in lisp/clos.lisp and the stand-in, each with
+  the host tests up to the end of the object system's section after
+  it: the transcript noticed the ones that hand out the structure, the
+  checks of lisp/clos.lisp alone the three that only they can, and the
+  rest stopped the file from loading. Ten were in lisp.h, builtin.c,
+  print.c and the one function of lisp/clos.lisp that only a kernel
+  runs, each in a built copy of the tree with the first boot after it,
+  and the resumed one where that was what should notice: the self-test
+  stopped eight boots, one of them the resumed one, where the texts
+  are evaluated in a world that has the object system, and
+  tools/resumed.txt found the other two.
+  Measured: a world that is made of the files has 2,836 functions to
+  compile where it had 2,832, on AArch64, and the self-test five texts
+  more, 561 for 556. The heap of such a world, at its first prompt and
+  after a collection, has 2,944 KiB in use where it had 2,918: that is
+  the word that every function has now, some 3,300 of them. The
+  kernel's own figure for loading the world, where x86_64 is emulated,
+  is 10.4 to 10.6 seconds on this build and 10.6 to 11.0 on the one
+  before, three boots of each in turn, and the boot takes 61 to 62
+  seconds where it took 62: nothing to see. On main's last run of CI
+  the first x86_64 boot had taken 88 seconds of its ninety and the host
+  tests 117.4 of their 120 (issues #213 and #122), so time was taken
+  off both. The first session has one form fewer: what `class-of` says
+  of eight objects is asked in tools/resumed.txt, in a world that came
+  back, where the generic function among them is one that was saved.
+  And the host tests ask the instances of classes that are defined
+  again their three hundred questions by a function of three numbers
+  in each world, where each question was a form with a `handler-case`
+  in it, which SBCL compiles before it evaluates it: the object
+  system's section takes 0.63 seconds on the Mac where it took 0.82,
+  three runs of each in turn, with twenty-five checks more, 29,875 for
+  29,850. A mistake planted in how an instance follows its class at a
+  call is noticed by those questions as it was before. `make test` on
+  the Mac, with a container and the checked boots running beside it,
+  takes 636 seconds, the first x86_64 boot 63 and the boot of the
+  transcript 24; in a container of Ubuntu 26.04, where both machines
+  are emulated as on CI, `make` and `make test` take 997 seconds, the
+  first x86_64 boot 75, the boot of the transcript 39 and the boot that
+  collects at every safe point 221, which is what they took before.
+  `make sanitize` passes in 19 seconds and the boots on checked kernels
+  in 641. A copy of the disk of Julio's machine, which ran 0.0.64, with
+  a copy of his work disk took the build at once, with the 21 forms of
+  his `/home/defined.lisp`; a generic function that was defined there
+  was called through a variable, and was the same function after a
+  start in the world that it saved.
+  What it left: `find-method`, `remove-method`, `add-method` and
+  `ensure-generic-function` are not there, so a method that was defined
+  by mistake stays (#263). And a method of `print-object` for
+  `function` is asked for a generic function only, when the methods
+  before it call on, and never for an ordinary function, which the
+  printer writes itself: that is of #73's family, and is said there.
 
 Infrastructure, for sessions with budget left over:
 
@@ -5322,12 +5432,13 @@ M20a, M20b and M20c, objects, what they left:
   silence where SBCL fails. The lists are there (`standard-method-keys`);
   what is missing is the check where what the methods come to is put
   together (`effective`). This is #71.
-- DEFGENERIC gives back what the generic function is, which is written
-  as `#<STANDARD-GENERIC-FUNCTION AREA (2)>` and cannot be called; the
-  function is `#'area`, an ordinary function that hands its arguments
-  on, and CLASS-OF says FUNCTION of it. In Common Lisp the two are one
-  object. Nothing here can make an object that is a structure and can be
-  called. This is #66.
+- DEFGENERIC gave back what the generic function is, an object that
+  could not be called, beside the function `#'area`, an ordinary one to
+  CLASS-OF. That was #66, and since 0.0.69 the two are one, as in Common
+  Lisp ("A generic function is a function", above). What takes or gives
+  a generic function is still missing: `find-method`, `remove-method`,
+  `add-method` and `ensure-generic-function`, so a method that was
+  defined by mistake stays. This is #263.
 - A condition is written by the printer as before, whatever method of
   PRINT-OBJECT is written for its type: the printer asks for structures
   only. DEFINE-CONDITION still refuses `:report`, which could now be had

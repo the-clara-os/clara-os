@@ -48,7 +48,7 @@
  * struct lisp_machine, what the functions that it names there take and
  * give, and the numbers of machine.h. A change to any of them is a new
  * number here, and no older image is taken after it. */
-#define FORMAT 6
+#define FORMAT 7
 
 struct image {
     char     magic[8];    /* "CLARAIMG" */
