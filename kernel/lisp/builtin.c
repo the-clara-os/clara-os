@@ -1052,14 +1052,16 @@ PRIMITIVE(p_structure_set) /* object name index value */
  * is an instance of when nothing more is known of it (lisp/clos.lisp,
  * which makes CLASS-OF and TYPE-OF of this). A structure is of its type,
  * and so is a condition; an instance of a class that DEFCLASS made is a
- * structure too, of the type STANDARD-OBJECT, and Lisp looks inside. What
- * has no class of its own is a T: a thread, a lock, an event. */
+ * structure too, of the type STANDARD-OBJECT, and Lisp looks inside. A
+ * function that carries a structure is of that structure's type, so a
+ * generic function is a STANDARD-GENERIC-FUNCTION and no plain FUNCTION.
+ * What has no class of its own is a T: a thread, a lock, an event. */
 PRIMITIVE(p_type_of)
 {
     static const char *const names[] = { "INTEGER", "CHARACTER", "NULL",     "SYMBOL",  "CONS",
                                          "STRING",  "VECTOR",    "FUNCTION", "PACKAGE", "T" };
     static lisp symbols[sizeof names / sizeof names[0]]; /* found once in a boot: symbols of COMMON-LISP, which stay */
-    lisp x = argv[0];
+    lisp x = lisp_carried(argv[0]) ? lisp_carried(argv[0]) : argv[0];
     unsigned i;
 
     if (lisp_is(x, LISP_STRUCTURE))
@@ -1096,6 +1098,33 @@ PRIMITIVE(p_address)
     if (lisp_is_fixnum(x) || (x & LISP_TAG_MASK) == LISP_TAG_IMMEDIATE)
         return NIL;
     return lisp_fixnum((int64_t)(x & ~LISP_TAG_MASK));
+}
+
+/* (%function-structure object): the structure that a function carries, or
+ * NIL, which is the answer for a function that carries none and for
+ * whatever is no function. (%set-function-structure function structure)
+ * gives a function one to carry, and gives the function back. A function
+ * is a thing to call, and this is how one comes to be something more
+ * besides: a generic function is the function that is called under its
+ * name, and carries a structure with its methods and the rest of what it
+ * keeps (lisp/clos.lisp). To %TYPE-OF and to the printer the function is
+ * then what the structure is; to a call it is the function that it was.
+ * The function is one that is written in Lisp, and one that nothing else
+ * has: a closure, fresh from the form that made it. */
+PRIMITIVE(p_function_structure)
+{
+    return lisp_carried(argv[0]) ? lisp_carried(argv[0]) : NIL;
+}
+
+PRIMITIVE(p_set_function_structure)
+{
+    if (!lisp_is(argv[0], LISP_FUNCTION) ||
+        (lisp_function_kind(argv[0]) != LISP_CLOSURE && lisp_function_kind(argv[0]) != LISP_COMPILED))
+        return lisp_wants("a function that is written in Lisp", argv[0]);
+    if (!lisp_is(argv[1], LISP_STRUCTURE))
+        return lisp_wants("a structure", argv[1]);
+    lisp_as_function(argv[0])->structure = argv[1];
+    return argv[0];
 }
 
 PRIMITIVE(p_copy_structure)
@@ -1870,6 +1899,8 @@ const struct lisp_primitive lisp_primitives[] = {
     { "COPY-STRUCTURE", p_copy_structure, 1, 1 },
     { "%TYPE-OF", p_type_of, 1, 1 },
     { "%ADDRESS", p_address, 1, 1 },
+    { "%FUNCTION-STRUCTURE", p_function_structure, 1, 1 },
+    { "%SET-FUNCTION-STRUCTURE", p_set_function_structure, 2, 2 },
     { "FUNCALL", p_funcall, 1, LISP_MANY },
     { "APPLY", p_apply, 2, LISP_MANY },
     { "VALUES", p_values, 0, LISP_MANY },

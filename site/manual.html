@@ -522,7 +522,25 @@ NOTHING-TO-DO
 (4 3 5 0 2 7 300)
 &gt; (size #\a)
 error: SIZE has no method for the arguments (#\a)</pre>
-    <p>The classes that the language begins with: <code>t</code>, which everything is; <code>number</code>, <code>real</code>, <code>rational</code> and <code>integer</code>; <code>character</code>; <code>symbol</code>; <code>sequence</code>, <code>list</code>, <code>cons</code> and <code>null</code>, which is the class of <code>nil</code>, a symbol and a list at once; <code>array</code>, <code>vector</code> and <code>string</code>; <code>function</code>, <code>package</code> and <code>stream</code>. A type that <code>defstruct</code> made is a class, below <code>structure-object</code>, and so is a type of condition.</p>
+    <p>A generic function is a function. What <code>defgeneric</code> gives back is the function itself, the same one that <code>#'double</code> names below: it can be called, kept in a variable and handed to <code>mapcar</code> like any other, and it is written with its name and the number of its methods. Its class is <code>standard-generic-function</code>, a kind of <code>generic-function</code>, which is a kind of <code>function</code>, so a method can be written for the functions that have methods and another for all the rest.</p>
+<pre class="session">&gt; (defvar *double*
+    (defgeneric double (thing) (:method ((thing integer)) (* 2 thing))))
+*DOUBLE*
+&gt; (list (funcall *double* 21) (eq *double* #'double) (functionp *double*))
+(42 T T)
+&gt; (defmethod double ((thing string)) (concatenate 'string thing thing))
+#&lt;STANDARD-METHOD DOUBLE (STRING)&gt;
+&gt; (list *double* (mapcar *double* '(1 "ab")))
+(#&lt;STANDARD-GENERIC-FUNCTION DOUBLE (2)&gt; (2 "abab"))
+&gt; (list #'withdraw (class-name (class-of #'withdraw)))
+(#&lt;STANDARD-GENERIC-FUNCTION WITHDRAW (3)&gt; STANDARD-GENERIC-FUNCTION)
+&gt; (defgeneric made-of (f)
+    (:method ((f function)) 'code)
+    (:method ((f generic-function)) 'methods))
+#&lt;STANDARD-GENERIC-FUNCTION MADE-OF (2)&gt;
+&gt; (mapcar #'made-of (list #'car #'double (lambda (x) x) #'made-of))
+(CODE METHODS CODE METHODS)</pre>
+    <p>The classes that the language begins with: <code>t</code>, which everything is; <code>number</code>, <code>real</code>, <code>rational</code> and <code>integer</code>; <code>character</code>; <code>symbol</code>; <code>sequence</code>, <code>list</code>, <code>cons</code> and <code>null</code>, which is the class of <code>nil</code>, a symbol and a list at once; <code>array</code>, <code>vector</code> and <code>string</code>; <code>function</code>, with <code>generic-function</code> and <code>standard-generic-function</code> below it; <code>package</code> and <code>stream</code>. A type that <code>defstruct</code> made is a class, below <code>structure-object</code>, and so is a type of condition.</p>
     <p>A function that <code>setf</code> writes with is a generic function of the name <code>(setf balance)</code>, which gets the new value before its other arguments: <code>:accessor</code> makes one, and <code>(defmethod (setf balance) :after (value (account account)) ...)</code> adds to it like to any other.</p>
 
     <h3 id="made">When an instance is made</h3>
@@ -599,7 +617,7 @@ KIND
       <li>Methods are put together in the one way that is described above, the standard one. There is no <code>define-method-combination</code>, and <code>defgeneric</code> takes <code>:method</code>, <code>:documentation</code> and nothing else.</li>
       <li>There is no <code>change-class</code>, and no metaobject protocol: a class is of the class <code>standard-class</code>, and <code>:metaclass</code> is refused. Only a class that <code>defclass</code> made can have a class below it.</li>
       <li>A function <code>(setf name)</code> is made by <code>defgeneric</code>, <code>defmethod</code>, <code>:accessor</code> or <code>:writer</code>. <code>(defun (setf name) ...)</code> and <code>#'(setf name)</code> are not there.</li>
-      <li>What <code>defgeneric</code> gives back says what the generic function is, and cannot be called: the function is <code>#'withdraw</code>, as for any name, and to <code>class-of</code> it is a <code>function</code>.</li>
+      <li>There is no <code>find-method</code>, <code>remove-method</code>, <code>add-method</code> or <code>ensure-generic-function</code>: a method that was defined by mistake stays, until one for the same classes takes its place.</li>
       <li>The keywords that a generic function is called with are not held against the ones its methods take, as they are when an instance is made.</li>
       <li>A condition is written as the system writes one, whatever method of <code>print-object</code> is written for its type.</li>
       <li>Only an instance is written with its address by itself. A function, a thread, a lock and an event have no text to read back either, and are written without one: two functions that have no name look alike.</li>

@@ -124,6 +124,11 @@ struct lisp_function {
     lisp entry; /* 0, or where the processor goes on when code for the processor calls this function: an address in
                    the region of such code (native.c), which is the same on every boot, and even, so a fixnum to
                    the collector */
+    lisp structure; /* 0, or a structure that the function carries: what else it is than something to call. A
+                       generic function is a function that carries its methods and the rest of what it keeps
+                       (lisp/clos.lisp). To %TYPE-OF such a function is of that structure's type, and where
+                       the printer leaves the structure to Lisp it leaves the function to Lisp too. A call
+                       does not look here */
 };
 
 /* The code of a compiled function: a vector with these items, which the
@@ -344,6 +349,14 @@ static inline enum lisp_function_kind lisp_function_kind(lisp function)
     return (enum lisp_function_kind)lisp_length(lisp_as_function(function)->header);
 }
 
+/* The structure that x carries, or 0: for a function that carries none, and for what is no function. */
+static inline lisp lisp_carried(lisp x)
+{
+    return lisp_is(x, LISP_FUNCTION) && lisp_is(lisp_as_function(x)->structure, LISP_STRUCTURE)
+               ? lisp_as_function(x)->structure
+               : 0;
+}
+
 /* Where interrupts come from that a Lisp thread can wait for (thread.c):
  * the timer, the serial port, and then the devices that send messages, in
  * the order they asked (kernel/interrupt.c). */
@@ -470,11 +483,12 @@ void lisp_princ(lisp x, void (*put)(void *to, char c), void *to);
 
 /* The same for a caller that can ask Lisp what a structure looks like
  * which Lisp is to write, an instance of a class for one (print.c says
- * which those are). Both words are places on the value stack, and one of
- * them is NULL: `found` collects such structures as the printer comes to
- * them, the last first, and nothing is written for them; `texts` is the
- * list of what Lisp said of them, in the order in which the printer comes
- * to them, and it takes one off for each. */
+ * which those are), or a function that carries one. Both words are places
+ * on the value stack, and one of them is NULL: `found` collects such
+ * objects as the printer comes to them, the last first, and nothing is
+ * written for them; `texts` is the list of what Lisp said of them, in the
+ * order in which the printer comes to them, and it takes one off for
+ * each. */
 struct lisp_printing {
     lisp *found;
     lisp *texts;

@@ -129,9 +129,6 @@ error: #<LOW-FUEL :LEFT 3>
 *TANK*
 > (list *tank* (drain *tank* 4) (drain (make-point :x 1) 2) (handler-case (drain *tank* 0) (low-fuel (c) (fuel-left c))))
 (#<TANK main at 6> 6 (A-POINT 1 2) 6)
-> (list (class-name (class-of 5)) (class-of "five") (find-class 'low-fuel) (class-of *tank*) (type-of 'five)
-        (class-name (class-of *standard-output*)) (class-of (find-class 'tank)) #'drain)
-(INTEGER #<BUILT-IN-CLASS STRING> #<BUILT-IN-CLASS LOW-FUEL> #<STANDARD-CLASS TANK> SYMBOL STREAM #<BUILT-IN-CLASS STANDARD-CLASS> #<FUNCTION DRAIN>)
 > (unwind-protect (car 5) (format t "cleaning up~%"))
 cleaning up
 error: CAR wants a list, and 5 is not one

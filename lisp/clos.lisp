@@ -10,13 +10,14 @@
 ;;;; Everything here is Lisp. An instance is a structure of three slots:
 ;;;; its class, the names of its slots in the order of their values, and
 ;;;; the values, in a vector of their own, so that an instance can be given
-;;;; other slots when its class is defined again. A class, a generic
-;;;; function and a method are structures too. A generic function is
-;;;; called through an ordinary function that closes over it and hands it
-;;;; the arguments (DISPATCH); what the methods that fit a list of classes
-;;;; come to, one function, is worked out the first time such arguments
-;;;; arrive and kept with the generic function until a method or a class
-;;;; changes.
+;;;; other slots when its class is defined again. A class and a method are
+;;;; structures too. A generic function is a function, the one that is
+;;;; called under its name: it hands the arguments on (DISPATCH), and it
+;;;; carries a structure with what a generic function keeps, its methods
+;;;; among it, which is what makes it a generic function to CLASS-OF and
+;;;; to the printer. What the methods that fit a list of classes come to,
+;;;; one function, is worked out the first time such arguments arrive and
+;;;; kept there until a method or a class changes.
 ;;;;
 ;;;; The names that Common Lisp has for all this are symbols of
 ;;;; COMMON-LISP, which this file exports from there, as lisp/boot.lisp
@@ -51,24 +52,36 @@
 (in-package "CLARA.CLOS")
 
 ;;; What the substrate knows, and SBCL in its place: the host tests define
-;;; these eight themselves, from what SBCL knows, before they read on
+;;; these ten themselves, from what SBCL knows, before they read on
 ;;; (lisp/host/objects.lisp).
 ;;;
 ;;; KIND-OF is what an object is to the substrate, as the name of a class:
 ;;; INTEGER, CONS, the name of a structure's type, the type of a condition,
-;;; and T for what has no class of its own. STRUCTURE-SLOTS is true of the
-;;; name of a structure's type, and CONDITION-PARENTS gives the types above
-;;; a type of condition, or :NONE for a name that is no such type.
-;;; FUNCTION-NAMED and INSTALL-FUNCTION are the function of a name, which is
-;;; a symbol or (SETF symbol). PRINTED-BY-METHOD tells the printer to ask
-;;; PRINT-OBJECT for the structures of a type, and PLAIN-TEXT is a
-;;; structure as the printer writes it when it asks nobody. ADDRESS-OF is
-;;; where an object lies in the heap, a number that it keeps for as long as
-;;; it is there, and NIL for an integer or a character, which lie nowhere.
+;;; and T for what has no class of its own. CARRY gives a function a
+;;; structure to carry and gives back the function that carries it, which
+;;; is the only one to use from then on; CARRIED is that structure, and
+;;; NIL for a function that carries none and for what is no function. To
+;;; KIND-OF such a function is what the structure is, and the printer asks
+;;; PRINT-OBJECT for it as it does for the structure. STRUCTURE-SLOTS is
+;;; true of the name of a structure's type, and CONDITION-PARENTS gives the
+;;; types above a type of condition, or :NONE for a name that is no such
+;;; type. FUNCTION-NAMED and INSTALL-FUNCTION are the function of a name,
+;;; which is a symbol or (SETF symbol). PRINTED-BY-METHOD tells the printer
+;;; to ask PRINT-OBJECT for the structures of a type, and PLAIN-TEXT is a
+;;; structure as the printer writes it when it asks nobody, and a function
+;;; that carries one as the function that it is. ADDRESS-OF is where an
+;;; object lies in the heap, a number that it keeps for as long as it is
+;;; there, and NIL for an integer or a character, which lie nowhere.
 #+clara
 (progn
   (defun kind-of (object)
     (cl::%type-of object))
+
+  (defun carry (function structure)
+    (cl::%set-function-structure function structure))
+
+  (defun carried (object)
+    (cl::%function-structure object))
 
   (defun address-of (object)
     (cl::%address object))
@@ -95,15 +108,18 @@
 
   (defun plain-text (object)
     (let ((slots (structure-slots (kind-of object))))
-      (if (and slots (get (car slots) 'cl::%printed))
-          (let ((index -1))
-            (format nil "#S(~S~A)" (car slots)
-                    (apply #'concatenate 'string
-                           (mapcar (lambda (slot)
-                                     (setq index (1+ index))
-                                     (format nil " :~A ~S" slot (cl::%structure-ref object (car slots) index)))
-                                   (cdr slots)))))
-          (prin1-to-string object)))))
+      (cond ((not (and slots (get (car slots) 'cl::%printed)))
+             (prin1-to-string object))
+            ((functionp object)
+             (format nil "#<FUNCTION ~S>" (nth-value 2 (function-lambda-expression object))))
+            (t
+             (let ((index -1))
+               (format nil "#S(~S~A)" (car slots)
+                       (apply #'concatenate 'string
+                              (mapcar (lambda (slot)
+                                        (setq index (1+ index))
+                                        (format nil " :~A ~S" slot (cl::%structure-ref object (car slots) index)))
+                                      (cdr slots))))))))))
 
 ;;; What a slot holds that has no value.
 (defvar *unbound* (make-symbol "UNBOUND"))
@@ -115,7 +131,9 @@
 
 ;;; The four kinds of object. The slots of an instance are in a vector of
 ;;; their own, in the order of LAYOUT, which is the vector of names that
-;;; its class had when the values were last put in order.
+;;; its class had when the values were last put in order. The structure of
+;;; a generic function is what the function carries, and stays in this
+;;; file: what a program is given, and gives, is the function (GENERIC-OF).
 (defstruct standard-object class layout slots)
 
 (defstruct class
@@ -150,7 +168,7 @@
   (depth 0)                  ; how many of the arguments some method cares about the class of
   particular                 ; true when some method is for one particular object
   (epoch 0)
-  function)                  ; the function that is called under its name
+  function)                  ; the function that is called under its name, which carries this: the generic function
 
 (defstruct standard-method
   generic-function
@@ -568,13 +586,27 @@
         (string= title "KEYWORD")
         (and (>= (length title) 5) (string= (subseq title 0 5) "CLARA")))))
 
-;; The generic function of a name: the one that was made for it, as long as
-;; the name's function is still the one that calls it.
+;; What a generic function keeps, from the function that it is, and NIL
+;; for an object that is no generic function. (The structure itself is
+;; taken too: it is of the same class, and it must not be what stops the
+;; printer, which could come to one in the slot of a method.)
+(defun generic-of (object)
+  (if (standard-generic-function-p object)
+      object
+      (let ((kept (carried object)))
+        (if (standard-generic-function-p kept) kept))))
+
+;; The same for a generic function that a program hands over, which has
+;; to be one.
+(defun kept-by (generic)
+  (or (generic-of generic)
+      (error "~S is not a generic function" generic)))
+
+;; The generic function of a name, as what it keeps: the function of the
+;; name has to be one. A name that DEFUN has since given another function
+;; has none.
 (defun generic-named (name)
-  (let ((generic (if (consp name) (get (cadr name) 'setf-generic) (get name 'generic))))
-    (and generic
-         (eq (function-named name) (standard-generic-function-function generic))
-         generic)))
+  (generic-of (function-named name)))
 
 (defun ensure-generic (name lambda-list maker explicit)
   (let ((generic (generic-named name)) (counts (parameter-counts lambda-list)))
@@ -583,10 +615,7 @@
              (error "~S is a function of the system's, and cannot be made a generic function" name))
            (setq generic (make-standard-generic-function :name name :lambda-list lambda-list
                                                          :required (car counts) :optional (cadr counts)))
-           (setf (standard-generic-function-function generic) (funcall maker generic))
-           (if (consp name)
-               (setf (get (cadr name) 'setf-generic) generic)
-               (setf (get name 'generic) generic))
+           (setf (standard-generic-function-function generic) (carry (funcall maker generic) generic))
            (install-function name (standard-generic-function-function generic)))
           (explicit
            (when (and (standard-generic-function-methods generic)
@@ -717,7 +746,8 @@
 (defun call-next (chain arguments)
   (if (cdr chain)
       (call-chain (cdr chain) arguments)
-      (apply #'no-next-method (standard-method-generic-function (car chain)) (car chain) arguments)))
+      (apply #'no-next-method (standard-generic-function-function (standard-method-generic-function (car chain)))
+             (car chain) arguments)))
 
 ;; What the methods that fit come to, as one function of the arguments in
 ;; a list: the :AROUND methods first, the most specific outermost; and when
@@ -735,7 +765,8 @@
               (t (setq primary (cons method primary))))))
     (setq around (reverse around) before (reverse before) primary (reverse primary))
     (cond ((and (null primary) (null around) (null before) (null after))
-           (lambda (arguments) (apply #'no-applicable-method generic arguments)))
+           (lambda (arguments)
+             (apply #'no-applicable-method (standard-generic-function-function generic) arguments)))
           ((null primary)
            (lambda (arguments)
              (error "~S has no method for the arguments ~S that gives a value: the ones that fit are ~S"
@@ -809,9 +840,10 @@
 
 ;;; The forms that define
 
-;; The function that a generic function is called through, as a form: it
-;; is given the generic function and makes a function of the name that
-;; hands the arguments on.
+;; The function that a generic function is, as a form: it is given what
+;; the generic function keeps and makes a function of the name that hands
+;; the arguments on, a new one at every call, which ENSURE-GENERIC then
+;; has carry what it was given.
 (defun maker-form (name)
   (let ((own (if (consp name) (make-symbol (format nil "(SETF ~A)" (cadr name))) name))
         (generic (gensym)) (arguments (gensym)))
@@ -905,7 +937,7 @@
     `(progn
        (ensure-generic ',name ',lambda-list ,(maker-form name) t)
        ,@methods
-       (generic-named ',name))))
+       (function-named ',name))))
 
 ;; A slot as DEFCLASS writes it, a name or (name option value...): the
 ;; form that makes what is kept of it, and the forms for the functions
@@ -1026,13 +1058,13 @@
 (defgeneric no-applicable-method (generic &rest arguments))
 
 (defmethod no-applicable-method (generic &rest arguments)
-  (error "~S has no method for the arguments ~S" (standard-generic-function-name generic) arguments))
+  (error "~S has no method for the arguments ~S" (standard-generic-function-name (kept-by generic)) arguments))
 
 (defgeneric no-next-method (generic method &rest arguments))
 
 (defmethod no-next-method (generic method &rest arguments)
   (declare (ignore method))
-  (error "~S has no next method for the arguments ~S" (standard-generic-function-name generic) arguments))
+  (error "~S has no next method for the arguments ~S" (standard-generic-function-name (kept-by generic)) arguments))
 
 (defgeneric shared-initialize (instance names &rest initargs))
 
@@ -1151,9 +1183,10 @@
   class)
 
 (defmethod print-object ((generic standard-generic-function) stream)
-  (print-unreadable-object (generic stream)
-    (format stream "STANDARD-GENERIC-FUNCTION ~S (~D)" (standard-generic-function-name generic)
-            (length (standard-generic-function-methods generic))))
+  (let ((kept (kept-by generic)))
+    (print-unreadable-object (generic stream)
+      (format stream "STANDARD-GENERIC-FUNCTION ~S (~D)" (standard-generic-function-name kept)
+              (length (standard-generic-function-methods kept)))))
   generic)
 
 (defmethod print-object ((method standard-method) stream)

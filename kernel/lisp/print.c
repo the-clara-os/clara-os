@@ -24,6 +24,11 @@
  * error of the substrate's says, for one. The address is what Lisp writes
  * for an instance too, so it says which one is meant.
  *
+ * A function that carries such a structure (lisp.h) is left to Lisp in
+ * the same way: a generic function is one, and is written by its method
+ * of PRINT-OBJECT like an instance. Where nobody can be asked it is the
+ * function that it also is, #<FUNCTION NAME>.
+ *
  * Lists nest by recursion in C here too: below LISP_DEPTH a list is
  * printed as #. Nothing looks out for a list that leads back into itself,
  * which RPLACD can make; the printer stops after LIMIT objects with three
@@ -208,26 +213,6 @@ static void print_list(struct printer *p, lisp x)
     put_char(p, ')');
 }
 
-static void print_function(struct printer *p, lisp x)
-{
-    static const char *const kinds[] = { "FUNCTION", "SPECIAL-OPERATOR", "FUNCTION", "MACRO", "FUNCTION" };
-    const struct lisp_function *f = lisp_as_function(x);
-
-    put_text(p, "#<");
-    put_text(p, kinds[lisp_function_kind(x)]);
-    put_char(p, ' ');
-    if (f->name != LISP_NIL)
-        print_object(p, f->name);
-    else {
-        put_text(p, "(LAMBDA ");
-        print_nested(p, lisp_is_cons(f->code)                     ? lisp_as_cons(f->code)->car
-                        : lisp_function_kind(x) == LISP_COMPILED ? lisp_as_vector(f->code)->items[LISP_CODE_LAMBDA_LIST]
-                                                                 : LISP_NIL);
-        put_char(p, ')');
-    }
-    put_char(p, '>');
-}
-
 /* Is this a structure that Lisp writes? Its type's name says so, with
  * %PRINTED on its property list. */
 static int written_by_lisp(struct printer *p, lisp name)
@@ -243,6 +228,56 @@ static int written_by_lisp(struct printer *p, lisp name)
     return 0;
 }
 
+/* An object that Lisp writes: with `found` it is noted and nothing of it
+ * is written this time, and with `texts` what Lisp said of it is written
+ * in its place. Says 0 when it is still the printer's to write, in words
+ * of its own: nobody was asked, or nothing was said. */
+static int left_to_lisp(struct printer *p, lisp x)
+{
+    lisp text = LISP_NIL;
+
+    if (p->ask && p->ask->found) {
+        *p->ask->found = lisp_cons(x, *p->ask->found); /* to be asked for */
+        return 1;
+    }
+    if (p->ask && p->ask->texts && lisp_is_cons(*p->ask->texts)) {
+        text = lisp_as_cons(*p->ask->texts)->car;
+        *p->ask->texts = lisp_as_cons(*p->ask->texts)->cdr;
+    }
+    if (!lisp_is(text, LISP_STRING))
+        return 0;
+    for (uint64_t i = 0; i < lisp_length(lisp_as_string(text)->header); i++) /* what Lisp said */
+        put_char(p, lisp_as_string(text)->chars[i]);
+    return 1;
+}
+
+/* A function that carries a structure which Lisp writes is Lisp's to
+ * write as well: a generic function is one. Where nobody can be asked it
+ * is written as the function that it also is. */
+static void print_function(struct printer *p, lisp x)
+{
+    static const char *const kinds[] = { "FUNCTION", "SPECIAL-OPERATOR", "FUNCTION", "MACRO", "FUNCTION" };
+    const struct lisp_function *f = lisp_as_function(x);
+    lisp carried = lisp_carried(x);
+
+    if (carried && lisp_is_cons(lisp_as_structure(carried)->type) &&
+        written_by_lisp(p, lisp_as_cons(lisp_as_structure(carried)->type)->car) && left_to_lisp(p, x))
+        return;
+    put_text(p, "#<");
+    put_text(p, kinds[lisp_function_kind(x)]);
+    put_char(p, ' ');
+    if (f->name != LISP_NIL)
+        print_object(p, f->name);
+    else {
+        put_text(p, "(LAMBDA ");
+        print_nested(p, lisp_is_cons(f->code)                     ? lisp_as_cons(f->code)->car
+                        : lisp_function_kind(x) == LISP_COMPILED ? lisp_as_vector(f->code)->items[LISP_CODE_LAMBDA_LIST]
+                                                                 : LISP_NIL);
+        put_char(p, ')');
+    }
+    put_char(p, '>');
+}
+
 /* #S(NAME :SLOT value ...): the names come from the structure's type. */
 static void print_structure(struct printer *p, lisp x)
 {
@@ -250,20 +285,7 @@ static void print_structure(struct printer *p, lisp x)
     lisp names = s->type;
 
     if (lisp_is_cons(names) && written_by_lisp(p, lisp_as_cons(names)->car)) {
-        lisp text = LISP_NIL;
-
-        if (p->ask && p->ask->found) {
-            *p->ask->found = lisp_cons(x, *p->ask->found); /* to be asked for: nothing of it is written this time */
-            return;
-        }
-        if (p->ask && p->ask->texts && lisp_is_cons(*p->ask->texts)) {
-            text = lisp_as_cons(*p->ask->texts)->car;
-            *p->ask->texts = lisp_as_cons(*p->ask->texts)->cdr;
-        }
-        if (lisp_is(text, LISP_STRING)) /* what Lisp said */
-            for (uint64_t i = 0; i < lisp_length(lisp_as_string(text)->header); i++)
-                put_char(p, lisp_as_string(text)->chars[i]);
-        else { /* nobody was asked, or nothing was said: its type, and its address as %ADDRESS gives it */
+        if (!left_to_lisp(p, x)) { /* its type, and its address as %ADDRESS gives it */
             put_text(p, "#<");
             print_name(p, lisp_as_symbol(lisp_as_cons(names)->car)->name);
             put_text(p, " {");

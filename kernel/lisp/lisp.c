@@ -988,6 +988,36 @@ static const struct {
       " (let ((said (handler-case (car (make-marked :a 1)) (error (c) (princ-to-string c)))))"
       " (list (subseq said 0 32) (subseq said (- (length said) 13)))))",
       "(\"CAR wants a list, and #<MARKED {\" \"}> is not one\")" },
+    /* a function that carries a structure (lisp/clos.lisp makes a generic function of one): it is of the
+       structure's type, and to a call the function that it was; another function of the same code carries
+       nothing; and only a function that is written in Lisp can be given one */
+    { "(progn (defstruct carried a)"
+      " (let* ((make (lambda (n) (lambda (x) (+ x n)))) (f (funcall make 1)) (g (funcall make 2))"
+      " (s (make-carried :a 7)))"
+      " (list (cl::%function-structure f) (eq (cl::%set-function-structure f s) f)"
+      " (eq (cl::%function-structure f) s) (cl::%type-of f) (cl::%type-of g) (cl::%function-structure g)"
+      " (funcall f 10) (functionp f) (cl::%function-structure #'car) (cl::%function-structure 5)"
+      " (cl::%function-structure s) (prin1-to-string f))))",
+      "(NIL T T CARRIED FUNCTION NIL 11 T NIL NIL NIL \"#<FUNCTION (LAMBDA (X))>\")" },
+    { "(cl::%set-function-structure #'car (make-carried))",
+      "error: %SET-FUNCTION-STRUCTURE wants a function that is written in Lisp, and #<FUNCTION CAR> is not one" },
+    { "(cl::%set-function-structure (lambda () 1) 5)",
+      "error: %SET-FUNCTION-STRUCTURE wants a structure, and 5 is not one" },
+    /* such a function is Lisp's to write when its structure is, wherever the printer comes to it; where nobody
+       can be asked it is written as the function that it also is */
+    { "(progn (defstruct marked a) (cl::%put 'marked 'cl::%printed t)"
+      " (let ((old (if (fboundp 'cl::%object-text) (symbol-function 'cl::%object-text) #'not))"
+      " (f (cl::%set-function-structure (lambda (x) x) (make-marked :a 6))))"
+      " (unwind-protect (progn (cl::%set-symbol-function 'cl::%object-text"
+      " (lambda (object) (format nil \"<~D>\" (marked-a (cl::%function-structure object)))))"
+      " (list (prin1-to-string (list f \"two\" f)) (format nil \"~A and ~S\" f (list f))))"
+      " (cl::%set-symbol-function 'cl::%object-text old))))",
+      "(\"(<6> \\\"two\\\" <6>)\" \"<6> and (<6>)\")" },
+    { "(progn (defstruct marked a) (cl::%put 'marked 'cl::%printed t)"
+      " (flet ((named (x) x))"
+      " (handler-case (car (cl::%set-function-structure #'named (make-marked :a 1)))"
+      " (error (c) (princ-to-string c)))))",
+      "\"CAR wants a list, and #<FUNCTION NAMED> is not one\"" },
     /* where an object lies: NIL is the first object of the heap, and an object has one address, which
        another has not; an integer or a character is a word by itself and lies nowhere */
     { "(let ((one (list 1)))"
