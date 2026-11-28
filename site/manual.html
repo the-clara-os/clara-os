@@ -523,14 +523,17 @@ NOTHING-TO-DO
 &gt; (size #\a)
 error: SIZE has no method for the arguments (#\a)</pre>
     <p>A generic function is a function. What <code>defgeneric</code> gives back is the function itself, the same one that <code>#'double</code> names below: it can be called, kept in a variable and handed to <code>mapcar</code> like any other, and it is written with its name and the number of its methods. Its class is <code>standard-generic-function</code>, a kind of <code>generic-function</code>, which is a kind of <code>function</code>, so a method can be written for the functions that have methods and another for all the rest.</p>
-<pre class="session">&gt; (defvar *double* (defgeneric double (thing) (:method ((thing integer)) (* 2 thing))))
+<pre class="session">&gt; (defvar *double*
+    (defgeneric double (thing) (:method ((thing integer)) (* 2 thing))))
 *DOUBLE*
-&gt; (list (funcall *double* 21) (eq *double* #'double) (functionp *double*) (class-name (class-of *double*)))
-(42 T T STANDARD-GENERIC-FUNCTION)
+&gt; (list (funcall *double* 21) (eq *double* #'double) (functionp *double*))
+(42 T T)
 &gt; (defmethod double ((thing string)) (concatenate 'string thing thing))
 #&lt;STANDARD-METHOD DOUBLE (STRING)&gt;
-&gt; (list *double* (mapcar *double* '(1 "ab")) #'withdraw)
-(#&lt;STANDARD-GENERIC-FUNCTION DOUBLE (2)&gt; (2 "abab") #&lt;STANDARD-GENERIC-FUNCTION WITHDRAW (3)&gt;)
+&gt; (list *double* (mapcar *double* '(1 "ab")))
+(#&lt;STANDARD-GENERIC-FUNCTION DOUBLE (2)&gt; (2 "abab"))
+&gt; (list #'withdraw (class-name (class-of #'withdraw)))
+(#&lt;STANDARD-GENERIC-FUNCTION WITHDRAW (3)&gt; STANDARD-GENERIC-FUNCTION)
 &gt; (defgeneric made-of (f)
     (:method ((f function)) 'code)
     (:method ((f generic-function)) 'methods))
