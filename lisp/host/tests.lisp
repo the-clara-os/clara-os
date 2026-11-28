@@ -6770,7 +6770,7 @@
 (defun font-file (glyphs characters &key (units 1000) (ascent 800) (descent -200) (gap 0) (form 4) ranges plain
                                          long metrics lines (under -100) (stroke 50) (through 250) (cut 50)
                                          (kind #x00010000) (magic #x5F0F3CF5) without short (platform 3) glyph-count
-                                         astray bearings last unended)
+                                         astray bearings last unended more)
   (let* ((count (length glyphs))
          (metrics (or metrics count))
          (places nil) (outlines nil) (at 0)
@@ -6819,7 +6819,9 @@
         (table "post" (append (four-bytes #x00030000) (four-bytes 0) (two-bytes under) (two-bytes stroke)
                               (make-list 20 :initial-element 0)))
         (table "OS/2" (append (make-list 26 :initial-element 0) (two-bytes cut) (two-bytes through)
-                              (make-list 48 :initial-element 0)))))
+                              (make-list 48 :initial-element 0))))
+      (dolist (table more)                       ; MORE: other tables, each (name . bytes)
+        (table (car table) (cdr table))))
     (setq tables (sort tables #'string< :key #'car))
     (when last                                   ; LAST: the table that the file ends with
       (setq tables (append (remove last tables :key #'car :test #'string=)
@@ -7137,7 +7139,7 @@
 ;; file, or by a file. The same is given every time that the same is asked
 ;; for, and no two that differ are the same.
 (new-type "Go-Regular.ttf" "Go-Bold.ttf" "Go-Italic.ttf" "Go-Bold-Italic.ttf" "Go-Mono.ttf")
-(check '("Sans" "Mono" "Serif") (clara.type:families))
+(check '("Sans" "Mono" "Serif" "Emoji") (clara.type:families))
 (let ((sans (clara.type:font "Sans" 16)))
   (check '(t "Sans" 16 nil nil) (list (clara.type:font-p sans) (clara.type:font-name sans) (clara.type:font-size sans)
                                       (clara.type:font-p "Sans") (clara.type:font-p nil)))
@@ -7171,12 +7173,12 @@
   ;; A family of the user's, whose missing files are stood in for by the nearest that it has; and one under a
   ;; name that is taken, which takes the name.
   (check "Plain" (clara.type:define-family "Plain" "Go-Mono.ttf" :bold "Go-Bold.ttf"))
-  (check '("Sans" "Mono" "Serif" "Plain") (clara.type:families))
+  (check '("Sans" "Mono" "Serif" "Emoji" "Plain") (clara.type:families))
   (check '("Go-Mono.ttf" "Go-Bold.ttf" "Go-Mono.ttf" "Go-Bold.ttf")
          (mapcar (lambda (style) (clara.type::font-file (apply #'clara.type:font "plain" 12 style)))
                  '(() (:bold t) (:italic t) (:bold t :italic t))))
   (clara.type:define-family "PLAIN" "Go-Italic.ttf")
-  (check '(("Sans" "Mono" "Serif" "PLAIN") "Go-Italic.ttf")
+  (check '(("Sans" "Mono" "Serif" "Emoji" "PLAIN") "Go-Italic.ttf")
          (list (clara.type:families) (clara.type::font-file (clara.type:font "Plain" 12 :bold t))))
   (check-condition error (clara.type:define-family "Plain" 'go))
   (setq clara.type::*families* (butlast clara.type::*families*)))
@@ -7211,7 +7213,8 @@
     ("Go-Mono-Bold.ttf" 2048 712 1935 -432 0 -275 100 512 102 967746671 249473842 912261539)
     ("Go-Mono-Italic.ttf" 2048 712 1935 -432 0 -275 50 512 102 967746671 249473842 696651842)
     ("Go-Mono.ttf" 2048 712 1935 -432 0 -275 50 512 102 967746671 249473842 849821356)
-    ("Go-Regular.ttf" 2048 712 1935 -432 0 -275 50 512 102 967746671 985691166 486208896)))
+    ("Go-Regular.ttf" 2048 712 1935 -432 0 -275 50 512 102 967746671 985691166 486208896)
+    ("Twemoji.Mozilla.ttf" 512 13723 477 -91 46 -37 25 132 25 677668147 124788817 322303204)))
 
 (defun sum-of (so-far number)
   (mod (+ (* so-far 1000003) number 100000) 1000000007))
@@ -7545,6 +7548,471 @@
                                                            characters))
          (clara.draw:cell-width (clara.type:font "made.ttf" 20))))
   (check '(18 18 10) (list (cell-of '((32 . 1))) (cell-of '((126 . 1))) (cell-of '((31 . 1) (127 . 1))))))
+
+;;; Emoji. Which characters are emoji is a table made of Unicode's list;
+;;; their pictures are a font's, glyphs laid over each other in colours,
+;;; and the font says which characters in a row have one picture between
+;;; them. The file that comes with the system is held against what FreeType
+;;; reads of its colours and against what HarfBuzz makes of some sequences;
+;;; the rules are tried on files that the tests put together.
+
+;; The table is runs of codes in rising order with a gap between any two,
+;; and a character is an emoji when a run has it.
+(check '(t 1424 146)
+       (let ((table clara.draw::*emoji*))
+         (list (loop for i from 0 below (length table) by 2
+                     always (let ((first (svref table i)) (last (svref table (1+ i))))
+                              (and (<= first last)
+                                   (or (= i 0) (< (1+ (svref table (- i 1))) first))
+                                   (clara.draw:emoji-p (code-char first)) (clara.draw:emoji-p (code-char last))
+                                   (not (clara.draw:emoji-p (code-char (1- first))))
+                                   (not (clara.draw:emoji-p (code-char (1+ last)))))))
+               (loop for i from 0 below (length table) by 2 sum (- (svref table (1+ i)) (svref table i) -1))
+               (floor (length table) 2))))
+(check '(nil nil nil t t t t nil t nil)
+       (mapcar (lambda (code) (clara.draw:emoji-p (code-char code)))
+               '(65 #xA9 #x2000 #x203C #x2764 #x1F600 #x1F1E6 #xFE0F #x1FAF8 #x10FFFF)))
+(check '(t t t t t nil nil nil)
+       (mapcar (lambda (code) (clara.draw::silent-p (code-char code))) '(#xFE00 #xFE0F #x200D #x20E3 #xE0067 #x1F3FB #x200C 65)))
+;; A text as it stands in cells, and the text of that again.
+(defun text-of (&rest codes)
+  (coerce (mapcar (lambda (code) (if (characterp code) code (code-char code))) codes) 'string))
+(let* ((plain "plain text")
+       (text (text-of #\a #x1F600 #\b #x2764 #xFE0F #x200D #\c))
+       (cells (clara.draw:in-cells text)))
+  (check '(t t #xFFFF) (list (eq plain (clara.draw:in-cells plain)) (eq plain (clara.draw:from-cells plain))
+                             (char-code clara.draw:+taken+)))
+  (check (text-of #\a #x1F600 #xFFFF #\b #x2764 #xFFFF #\c) cells)
+  (check (list cells (text-of #\a #x1F600 #\b #x2764 #\c) "" "")
+         (list (clara.draw:in-cells cells) (clara.draw:from-cells cells) (clara.draw:in-cells (text-of #xFE0F #xFFFF))
+               (clara.draw:from-cells (text-of #xFFFF)))))
+
+;; The colours of the file that comes with the system, against what
+;; FreeType says of them (`fontcheck colours` printed the row): how many
+;; glyphs are pictures, how many layers those have, and a sum over every
+;; layer of every one, its glyph, its colour's number and the colour.
+(defparameter *font-colours*
+  '(("Twemoji.Mozilla.ttf" 3689 33179 549554469)))
+(dolist (facts *font-colours*)
+  (new-type (first facts))
+  (let ((face (clara.type::face-of (first facts))) (pictures 0) (layers 0) (total 0))
+    (dotimes (glyph (clara.type::face-glyphs face))
+      (let ((found (clara.type::layers-of face glyph)))
+        (when found
+          (incf pictures)
+          (setq total (sum-of total glyph))
+          (dolist (layer found)
+            (incf layers)
+            (setq total (sum-of (sum-of total (car layer)) (cdr layer)))
+            (unless (= (cdr layer) 65535)
+              (multiple-value-bind (pixel shows) (clara.type::colour face (cdr layer))
+                (setq total (sum-of (sum-of total pixel) shows))))))))
+    (check facts (list (first facts) pictures layers total))))
+;; And its sequences, against the glyphs that HarfBuzz gives for them
+;; (hb-shape --no-glyph-names --no-positions --no-clusters
+;; --preserve-default-ignorables -u 1F1FA,1F1F8 fonts/Twemoji.Mozilla.ttf):
+;; a flag, a hand in a colour, a heart that is told to be a picture, the
+;; key of a digit, families, a flag whose region is spelt out, the longest
+;; that the file has, and rows that are no sequence, or one less a part.
+(new-type "Twemoji.Mozilla.ttf" "Go-Regular.ttf")
+(let ((face (clara.type::face-of "Twemoji.Mozilla.ttf")))
+  (check '((2947) (1905) (5137) (570) (167 188) (13695) (6 20) (5999) (6000) (4639) (481 17 255) (4652) (6675) (11562)
+           (5053) (2947 209) (884 490) (597 17) (6616) (13204) (209 884) (0 884))
+         (mapcar (lambda (codes)
+                   (let ((string (apply #'text-of codes)) (i 0) (glyphs nil))
+                     (loop while (< i (length string))
+                           do (let ((found (clara.type::joined face string i)))
+                                (push (if found (car found) (clara.type::index face (char-code (char string i)))) glyphs)
+                                (incf i (if found (cdr found) 1))))
+                     (nreverse glyphs)))
+                 '((#x1F1FA #x1F1F8) (#x1F1E9 #x1F1F4) (#x1F44D #x1F3FD) (#x1F44D) (#x2764 #xFE0F) (#x31 #xFE0F #x20E3)
+                   (#x31 #x20E3) (#x1F468 #x200D #x1F469 #x200D #x1F467)
+                   (#x1F468 #x200D #x1F469 #x200D #x1F467 #x200D #x1F466) (#x1F3F3 #xFE0F #x200D #x1F308)
+                   (#x1F3F3 #x200D #x1F308) (#x1F3F4 #xE0067 #xE0062 #xE0065 #xE006E #xE0067 #xE007F)
+                   (#x1F469 #x200D #x1F4BB)
+                   (#x1F9D1 #x1F3FB #x200D #x2764 #xFE0F #x200D #x1F48B #x200D #x1F9D1 #x1F3FC)
+                   (#x1F441 #xFE0F #x200D #x1F5E8 #xFE0F) (#x1F1FA #x1F1F8 #x1F1E9) (#x1F600 #x1F3FD) (#x1F468 #x200D)
+                   (#x1F469 #x1F3FF #x200D #x1F680) (#x23 #xFE0F #x20E3) (#x1F1E9 #x1F600) (#x41 #x1F600))))
+  ;; The pixels of a face at 32 to the em: how many it reaches, and how many are all of its yellow. A kernel
+  ;; is asked the same (tools/resumed.txt), and has to count the same.
+  (let ((s (clara.draw:allocate-surface 40 40)) (yellow (clara.draw:color 255 204 77)) (drawn 0) (whole 0))
+    (clara.draw:fill-rectangle s 0 0 40 40 0)
+    (clara.draw:draw-text s 4 2 (string (code-char 128512)) 0 nil (clara.type:font "Emoji" 32))
+    (dotimes (y 40)
+      (dotimes (x 40)
+        (let ((pixel (clara.draw:pixel s x y)))
+          (unless (zerop pixel) (setq drawn (1+ drawn)))
+          (when (= pixel yellow) (setq whole (1+ whole))))))
+    (clara.draw:free-surface s)
+    (check '(856 492) (list drawn whole)))
+  ;; Its lines at a size, the size that fits two cells of the console's, how many characters of the table it
+  ;; has a picture of, and how wide some texts are in a font of letters and in the console's: an emoji as wide
+  ;; as its picture, several characters that are one picture as wide as one, and nothing for the ones that
+  ;; only say how another is shown.
+  (let ((emoji (clara.type:font "Emoji" 16)) (sans (clara.type:font "Sans" 16)) (table clara.draw::*emoji*))
+    (check '(15 3 19 13 1390)
+           (list (clara.type:font-ascent emoji) (clara.type:font-descent emoji) (clara.type:font-height emoji)
+                 (clara.type:font-size (clara.type::among-letters))
+                 (loop for i from 0 below (length table) by 2
+                       sum (loop for code from (svref table i) to (svref table (1+ i))
+                                 count (clara.type::layers-of face (clara.type::index face code))))))
+    ;; How many characters the first thing that is drawn stands for.
+    (check '(2 2 2 5 2 3 7 1 1)
+           (mapcar (lambda (codes) (nth-value 1 (clara.type::next-glyph (apply #'text-of codes) 0 sans emoji)))
+                   '((#x1F1FA #x1F1F8) (#x1F44D #x1F3FB) (#x1F44D #x1F3FF) (#x1F468 #x200D #x1F469 #x200D #x1F467)
+                     (#x2764 #xFE0F) (#x31 #xFE0F #x20E3) (#x1F3F4 #xE0067 #xE0062 #xE0065 #xE006E #xE0067 #xE007F)
+                     (#x1F600 #\a) (#\a #x1F600))))
+    (check (list (list (+ 16 (clara.draw:text-width "a" sans)) 16 16 16 0 16 (clara.draw:text-width "1" sans) 16 16 16 16)
+                 '(24 16 16 16 0 16 8 16 16 16 16))
+           (loop for font in (list sans nil)
+                 collect (mapcar (lambda (codes) (clara.draw:text-width (apply #'text-of codes) font))
+                                 '((#\a #x1F600) (#x1F1FA #x1F1F8) (#x1F468 #x200D #x1F469 #x200D #x1F467) (#x2764 #xFE0F)
+                                   (#xFE0F #x200D) (#x31 #xFE0F #x20E3) (#x31 #xFE0F) (#x1F44D #x1F3FB) (#x1F44D #x1F3FF)
+                                   (#x1F3F4 #xE0067 #xE0062 #xE0065 #xE006E #xE0067 #xE007F) (#x2764 #xFE0E)))))))
+
+;; The tables of a font of pictures, as the tests put them together. Which
+;; glyphs are pictures: PICTURES, each (glyph (layer . colour) ...) in the
+;; order of their glyphs, or (glyph . :ASTRAY) for one whose layers are
+;; said to lie where the file has none, and (glyph . :AFTER) for one that
+;; is said to have the layer after the last that the file lists.
+(defun colour-layers (pictures)
+  (let ((records nil) (layers nil) (first 0))
+    (loop for (glyph . list) in pictures
+          do (cond ((eq list :astray)
+                    (setq records (append records (two-bytes glyph) (two-bytes 60000) (two-bytes 3))))
+                   ((eq list :after)
+                    (setq records (append records (two-bytes glyph) (two-bytes first) (two-bytes 1))))
+                   (t
+                    (setq records (append records (two-bytes glyph) (two-bytes first) (two-bytes (length list))))
+                    (dolist (layer list)
+                      (setq layers (append layers (two-bytes (car layer)) (two-bytes (cdr layer)))))
+                    (incf first (length list)))))
+    (append (two-bytes 0) (two-bytes (length pictures)) (four-bytes 14) (four-bytes (+ 14 (length records)))
+            (two-bytes first) records layers)))
+
+;; The colours: COLOURS, each (red green blue shows), in PALETTES lists of
+;; which the first is the one that is read, and which begin BEFORE colours
+;; into what the file has of them.
+(defun colour-palette (colours &key (palettes 1) (before 0))
+  (append (two-bytes 0) (two-bytes (length colours)) (two-bytes palettes) (two-bytes (+ before (length colours)))
+          (four-bytes (+ 12 (* 2 palettes))) (loop repeat palettes append (two-bytes before))
+          (loop repeat before append (list 9 9 9 9))
+          (loop for (red green blue shows) in colours append (list blue green red shows))))
+
+;; Which glyphs in a row are drawn as one: SETS, each (first (glyph following ...) ...) in the order of the
+;; first glyphs, the glyph that stands for the first and the ones that follow it. With RUNS the list of the
+;; first glyphs is written as runs of them, and with FAR the whole is where a list of another kind says.
+(defun join-table (sets &key runs far)
+  (let* ((set-bytes (mapcar (lambda (set)
+                              (let* ((entries (mapcar (lambda (entry)
+                                                        (append (two-bytes (car entry)) (two-bytes (length entry))
+                                                                (mapcan #'two-bytes (cdr entry))))
+                                                      (cdr set)))
+                                     (at (+ 2 (* 2 (length entries))))
+                                     (places nil))
+                                (dolist (entry entries)
+                                  (push at places)
+                                  (incf at (length entry)))
+                                (append (two-bytes (length entries)) (mapcan #'two-bytes (nreverse places))
+                                        (apply #'append entries))))
+                            sets))
+         (firsts (mapcar #'car sets))
+         (coverage (if runs
+                       (append (two-bytes 2) (two-bytes (length firsts))
+                               (loop for first in firsts for i from 0
+                                     append (append (two-bytes first) (two-bytes first) (two-bytes i))))
+                       (append (two-bytes 1) (two-bytes (length firsts)) (mapcan #'two-bytes firsts))))
+         (places nil) (at (+ 6 (* 2 (length sets)))))
+    (dolist (bytes set-bytes)
+      (push at places)
+      (incf at (length bytes)))
+    (let ((part (append (two-bytes 1) (two-bytes at) (two-bytes (length sets)) (mapcan #'two-bytes (nreverse places))
+                        (apply #'append set-bytes) coverage)))
+      (append (four-bytes #x00010000) (two-bytes 0) (two-bytes 0) (two-bytes 10)
+              (two-bytes 1) (two-bytes 4)
+              (if far
+                  (append (two-bytes 7) (two-bytes 0) (two-bytes 1) (two-bytes 8)
+                          (two-bytes 1) (two-bytes 4) (four-bytes 8) part)
+                  (append (two-bytes 4) (two-bytes 0) (two-bytes 1) (two-bytes 8) part))))))
+
+;; The font of pictures that the tests made up: an em is 1000 units.
+(defparameter *picture-glyphs*
+  (list (cons 500 (plain-glyph *box*))              ; 0: for a character that the font does not have
+        (cons 1000 nil)                             ; 1: a picture of three layers
+        (cons 700 (plain-glyph *square*))           ; 2, 3 and 4: what the layers are
+        (cons 600 (plain-glyph *round* :tight t))
+        (cons 600 (plain-glyph *hill* :tight t))
+        (cons 1000 nil)                             ; 5: the picture that the two letters of a country have between them
+        (cons 0 nil)                                ; 6: for the characters that show nothing
+        (cons 1000 nil)                             ; 7: a picture in the colour of the text
+        (cons 1000 nil)                             ; 8: one whose layers the file has not
+        (cons 1000 nil)                             ; 9 and 10: the two letters
+        (cons 1000 nil)
+        (cons 700 (plain-glyph *square*))           ; 11: a glyph that is its own outline, a digit's
+        (cons 1000 nil)))                           ; 12: the picture that three characters in a row have
+;; The sign of the euro is a character that the made-up letters have as well; and the last picture has a
+;; layer in the colour after the last of the palette's three, which is no colour of the file's.
+(defparameter *picture-characters*
+  '((#x31 . 11) (#x200D . 6) (#x20AC . 7) (#x2600 . 7) (#xFE0F . 6) (#x1F1E6 . 9) (#x1F1E7 . 10) (#x1F600 . 1) (#x1F602 . 8)))
+(defparameter *picture-layers*
+  '((1 (2 . 0) (3 . 1) (4 . 2)) (5 (4 . 0) (2 . 2)) (7 (3 . 65535)) (8 . :astray) (9 (2 . 1)) (10 (3 . 0))
+    (12 (2 . 0) (4 . 3))))
+(defparameter *picture-colours* '((255 0 0 255) (0 255 0 128) (0 0 255 255)))
+(defparameter *picture-joins* '((1 (12 6 1)) (9 (5 10)) (11 (12 6 6) (7 6))))
+
+(defun picture-font (&rest options &key (layers *picture-layers*) (colours *picture-colours*) (joins *picture-joins*)
+                                        runs far (palettes 1) (before 0) &allow-other-keys)
+  (apply #'font-file *picture-glyphs* *picture-characters* :form 12
+         :more (append (and layers (list (cons "COLR" (colour-layers layers))))
+                       (and colours (list (cons "CPAL" (colour-palette colours :palettes palettes :before before))))
+                       (and joins (list (cons "GSUB" (join-table joins :runs runs :far far)))))
+         (loop for (key value) on options by #'cddr
+               unless (member key '(:layers :colours :joins :runs :far :palettes :before))
+                 append (list key value))))
+
+;; A machine with the made-up letters as "made.ttf" and the made-up pictures as the file of the family Emoji,
+;; behind whose last byte nothing may be read.
+(defun new-pictures (&rest options)
+  (new-type)
+  (clara.host:put-system-file "made.ttf" (made-font))
+  (put-watched "Twemoji.Mozilla.ttf" (apply #'picture-font options)))
+
+;; What a pixel is once GLYPH was drawn with the place where its character begins on the baseline DX to its
+;; left and DY above it: what it was, with COLOR laid on by the glyph's shade, or with the colour of each of
+;; its layers laid on in turn, the lowest first, a layer without one in COLOR.
+(defun glyph-over (old glyph dx dy color)
+  (let ((pixel (mix old color (glyph-shade glyph dx dy))))
+    (dolist (layer (clara.type::glyph-layers glyph) pixel)
+      (setq pixel (mix pixel (or (cdr layer) color) (glyph-shade (car layer) dx dy))))))
+
+;; A picture is its layers, each the glyph that it names, in its colour and as much of that as shows.
+(dolist (options '(() (:runs t) (:far t) (:long t :runs t :far t) (:before 3)))
+  (apply #'new-pictures options)
+  (let* ((emoji (clara.type:font "Emoji" 20))
+         (face (clara.type::face-of "Twemoji.Mozilla.ttf"))
+         (grin (clara.type::glyph emoji #x1F600))
+         (layers (clara.type::glyph-layers grin)))
+    (check (list options 20 nil nil '(#xff0000 #x00ff00 #x0000ff) 0 t t)
+           (list options (clara.type::glyph-advance grin) (clara.type::glyph-shades grin) (clara.type::glyph-missing grin)
+                 (mapcar #'cdr layers)
+                 (furthest (car (first layers)) (at-size *square* 20 1000))
+                 ;; The second layer shows 128 parts of 255 of what its glyph is by itself.
+                 (every (lambda (whole faded) (= faded (nearest-of (* whole 128) 255)))
+                        (clara.type::glyph-shades (clara.type::plain emoji face 3)) (clara.type::glyph-shades (car (second layers))))
+                 (<= (furthest (car (third layers)) (at-size *hill* 20 1000)) 1)))
+    ;; A layer in the colour of the text; a picture whose layers the file has not, which shows nothing; a glyph
+    ;; of the font's that is its own outline; and each made once.
+    (check '((nil) (nil nil 20) (nil 0) t t)
+           (list (mapcar #'cdr (clara.type::glyph-layers (clara.type::glyph emoji #x2600)))
+                 (let ((glyph (clara.type::glyph emoji #x1F602)))
+                   (list (clara.type::glyph-layers glyph) (clara.type::glyph-shades glyph) (clara.type::glyph-advance glyph)))
+                 (let ((glyph (clara.type::glyph emoji #x31)))
+                   (list (clara.type::glyph-layers glyph) (furthest glyph (at-size *square* 20 1000))))
+                 (eq grin (clara.type::glyph emoji #x1F600))
+                 (eq (clara.type::numbered emoji 5) (clara.type::numbered emoji 5))))
+    (check '(t t nil nil nil (#xff0000 #x0000ff) (#xff0000 nil))
+           (list (clara.type::shows-p grin) (clara.type::shows-p (clara.type::glyph emoji #x31))
+                 (clara.type::shows-p (clara.type::glyph emoji 65)) (clara.type::shows-p (clara.type::glyph emoji #xFE0F))
+                 (clara.type::shows-p (clara.type::glyph emoji #x1F602))
+                 (mapcar #'cdr (clara.type::glyph-layers (clara.type::numbered emoji 5)))
+                 (mapcar #'cdr (clara.type::glyph-layers (clara.type::numbered emoji 12)))))
+    ;; Which characters in a row have one glyph between them: the first that fits of the ones that begin with
+    ;; the character's glyph, and none where the row ends before one does.
+    (check '((5 . 2) nil (12 . 3) (7 . 2) (12 . 3) nil nil (5 . 2))
+           (append (mapcar (lambda (codes) (clara.type::joined face (apply #'text-of codes) 0))
+                           '((#x1F1E6 #x1F1E7) (#x1F1E7 #x1F1E6) (#x1F600 #x200D #x1F600) (#x31 #xFE0F) (#x31 #xFE0F #x200D #\a)
+                             (#x1F600 #x200D) (#\A #x1F600)))
+                   (list (clara.type::joined face (text-of #\A #x1F1E6 #x1F1E7) 1))))))
+;; A file that says of its colours what it has no room for is no font, and one without colours has pictures
+;; that show nothing; one whose list of what goes together is cut short joins nothing, and draws.
+(check '("the font made.ttf says of its colours what its tables have no room for"
+         "the font made.ttf says of its colours what its tables have no room for"
+         "the font made.ttf says of its colours what its tables have no room for")
+       (mapcar (lambda (options)
+                 (subseq (refusal (apply #'picture-font options)) (length "made.ttf is not a font that can be had here: ")))
+               '((:short ("COLR")) (:short ("CPAL")) (:palettes 0))))
+;; A picture that is said to have the layer after the last one that the file lists, where its next table
+;; begins, shows nothing.
+(new-type)
+(put-watched "made.ttf" (picture-font :layers '((1 (2 . 0)) (8 . :after))))
+(check '(1 nil nil)
+       (let ((font (clara.type:font "made.ttf" 20)))
+         (list (length (clara.type::glyph-layers (clara.type::glyph font #x1F600)))
+               (clara.type::glyph-layers (clara.type::glyph font #x1F602)) (clara.type::glyph-shades (clara.type::glyph font #x1F602)))))
+;; A picture is of 256 layers at the most: one of more shows nothing.
+(check '(256 nil)
+       (mapcar (lambda (count)
+                 (new-type)
+                 (put-watched "made.ttf" (picture-font :layers (list (cons 1 (loop repeat count collect '(2 . 0))))))
+                 (let ((glyph (clara.type::glyph (clara.type:font "made.ttf" 20) #x1F600)))
+                   (and (clara.type::glyph-layers glyph) (length (clara.type::glyph-layers glyph)))))
+               '(256 257)))
+(new-type)
+(put-watched "made.ttf" (picture-font :colours nil :short '("GSUB")))
+(let ((font (clara.type:font "made.ttf" 20)))
+  (check '(nil nil nil 40)
+         (list (clara.type::glyph-layers (clara.type::glyph font #x1F600)) (clara.type::glyph-shades (clara.type::glyph font #x1F600))
+               (clara.type::joined (clara.type::face-of "made.ttf") (text-of #x31 #xFE0F) 0)
+               (clara.draw:text-width (text-of #x1F1E6 #x1F1E7) font))))
+
+;; A line of text. What it is drawn as is a row of glyphs, the text's font's and the pictures', each where
+;; the one before it ends: a character that the font of the text has no glyph for is the picture's font's
+;; when that has one, characters that it has one picture for between them are that picture, a character
+;; that is told to be a picture is one, and the ones that only say such things show nothing.
+(defun row-pixel (glyphs x y px py color background ground up down)
+  (let* ((wide (loop for glyph in glyphs sum (clara.type::glyph-advance glyph)))
+         (pixel (if (and background (<= x px (+ x wide -1)) (<= y py (+ y up down -1))) background ground))
+         (pen x))
+    (dolist (glyph glyphs pixel)
+      (setq pixel (glyph-over pixel glyph (- px pen) (- py y up) color))
+      (incf pen (clara.type::glyph-advance glyph)))))
+
+(new-pictures)
+(setq *canvas* (clara.draw:allocate-surface 90 30))
+(let* ((font (clara.type:font "made.ttf" 20)) (emoji (clara.type:font "Emoji" 20))
+       (ink #xf0e0d0) (ground #x102030) (paper #x405060)
+       (letter (lambda (code) (clara.type::glyph font code)))
+       (picture (lambda (code) (clara.type::glyph emoji code)))
+       (wrong nil))
+  (loop for (codes . glyphs)
+          in (list (list (list #\A #x1F600 #\B) (funcall letter 65) (funcall picture #x1F600) (funcall letter 66))
+                   (list (list #x1F1E6 #x1F1E7 #\A) (clara.type::numbered emoji 5) (funcall letter 65))
+                   (list (list #x1F1E7 #x1F1E6) (funcall picture #x1F1E7) (funcall picture #x1F1E6))
+                   (list (list #\A #xFE0F #\B #x200D) (funcall letter 65) (funcall letter 66))
+                   (list (list #x2600 #xFE0F #\A) (funcall picture #x2600) (funcall letter 65))
+                   (list (list #x2600 #\A) (funcall picture #x2600) (funcall letter 65))
+                   (list (list #x20AC #\A) (funcall letter #x20AC) (funcall letter 65))        ; a character that both have is
+                   (list (list #x20AC #xFE0F #\A) (funcall picture #x20AC) (funcall letter 65)) ; the letter, until it is told
+                   (list (list #\1 #\A) (funcall letter #x31) (funcall letter 65))             ; a letter is the font's to have,
+                   (list (list #\1 #x1F600) (funcall letter #x31) (funcall picture #x1F600))   ; whatever stands beside it
+                   (list (list #x1F602 #\A) (funcall letter #x1F602) (funcall letter 65))      ; a picture that shows nothing: the box
+                   (list (list #x3A9 #xFE0F #\A) (funcall letter #x3A9) (funcall letter 65))   ; neither has it: the box
+                   (list (list #\1 #xFE0F #x200D #\A) (clara.type::numbered emoji 12) (funcall letter 65))
+                   (list (list #x1F600 #x200D #x1F600 #x1F600) (clara.type::numbered emoji 12) (funcall picture #x1F600)))
+        do (let ((string (apply #'text-of codes)))
+             (unless (= (clara.draw:text-width string font) (loop for glyph in glyphs sum (clara.type::glyph-advance glyph)))
+               (push (list :width codes) wrong))
+             (dolist (background (list nil paper))
+               (clara.draw:fill-rectangle *canvas* 0 0 90 30 ground)
+               (clara.draw:draw-text *canvas* 3 2 string ink background font)
+               (unless (loop for py below 30
+                             always (loop for px below 90
+                                          always (= (word-at *canvas* px py)
+                                                    (row-pixel glyphs 3 2 px py ink background ground 16 4))))
+                 (push (list :pixels codes background) wrong)))))
+  (check nil wrong)
+  ;; And in the font of the pictures itself, which has no other to ask.
+  (clara.draw:fill-rectangle *canvas* 0 0 90 30 ground)
+  (clara.draw:draw-text *canvas* 3 2 (text-of #x1F600 #xFE0F #x1F1E6 #x1F1E7 #\1) ink nil emoji)
+  (check t (let ((glyphs (list (funcall picture #x1F600) (clara.type::numbered emoji 5) (funcall picture #x31))))
+             (loop for py below 30
+                   always (loop for px below 90
+                                always (= (word-at *canvas* px py) (row-pixel glyphs 3 2 px py ink nil ground 16 4)))))))
+
+;; Text in cells. An emoji that has its second cell after it is its picture in the middle of the two, on
+;; the baseline of the letters, and nothing of it lies outside them; one that has not, or of which there is
+;; no picture, is a character that the font has no glyph for, and the cell that it was to take is blank.
+(defun cells-pixel (font emoji string x y px py ink background ground wide high baseline)
+  (let* ((column (floor (- px x) wide))
+         (inside (and (<= 0 column (1- (length string))) (<= y py (+ y high -1))))
+         (under (if (and inside background) background ground))
+         (pair (lambda (first)
+                 (and emoji (<= 0 first) (< (1+ first) (length string)) (char= (char string (1+ first)) clara.draw:+taken+)
+                      (let ((glyph (clara.type::glyph emoji (char-code (char string first)))))
+                        (and (clara.type::shows-p glyph) (cons first glyph)))))))
+    (if (not inside)
+        ground
+        (let ((found (or (funcall pair column) (and (char= (char string column) clara.draw:+taken+) (funcall pair (1- column))))))
+          (cond (found
+                 (glyph-over under (cdr found)
+                             (- px (+ x (* (car found) wide) (floor (- (* 2 wide) (clara.type::glyph-advance (cdr found))) 2)))
+                             (- py baseline) ink))
+                ((char= (char string column) clara.draw:+taken+)
+                 under)
+                (t
+                 (cell-pixel font (char string column) (- px x (* column wide)) (- py y) ink under wide)))))))
+
+(let* ((font (clara.type:font "made.ttf" 20)) (emoji (clara.type:font "Emoji" 20))
+       (ink #xf0e0d0) (ground #x102030) (paper #x405060) (wrong nil))
+  (multiple-value-bind (wide high) (cell-size font)
+    (dolist (codes '((#\A #x1F600 #\B #x2600 #\C) (#x1F600 #x1F600) (#\A #x1F602 #\B) (#\A #x1F603 #\B)))
+      (dolist (string (list (clara.draw:in-cells (apply #'text-of codes)) (apply #'text-of codes)))
+        (dolist (background (list nil paper))
+          (loop for (x y) in '((2 3) (-9 -4) (55 14))
+                do (clara.draw:fill-rectangle *canvas* 0 0 90 30 ground)
+                   (clara.draw:draw-cells *canvas* x y string ink background font)
+                   (unless (loop for py below 30
+                                 always (loop for px below 90
+                                              always (= (word-at *canvas* px py)
+                                                        (cells-pixel font emoji string x y px py ink background ground
+                                                                     wide high (+ y 16)))))
+                     (push (list codes (length string) background x y) wrong))))))
+    (check '(14 20 nil) (list wide high wrong))))
+
+;; The same among the console's letters, where an emoji is in the font of the pictures at the largest size
+;; that two cells have room for: a line of text, in which several characters can be one picture, and text
+;; in cells. Without a file of pictures a text is what it was, a box for each.
+(let* ((emoji (clara.type::among-letters))
+       (ink #xf0e0d0) (ground #x102030) (paper #x405060) (wrong nil)
+       (baseline (+ (floor (- 16 (clara.type:font-ascent emoji) (clara.type:font-descent emoji)) 2) (clara.type:font-ascent emoji))))
+  (check '(15 12 3 12) (list (clara.type:font-size emoji) (clara.type:font-ascent emoji) (clara.type:font-descent emoji) baseline))
+  ;; A line: each case is its characters and what stands for them in cells, a string in which a picture's
+  ;; glyph is asked for by the character before +TAKEN+, or by the number of its glyph where that is given.
+  (loop for (codes cells numbered)
+          in (list (list (list #\A #x1F600 #\B) (text-of #\A #x1F600 #xFFFF #\B))
+                   (list (list #x1F1E6 #x1F1E7 #\A) (text-of #x1F1E6 #xFFFF #\A) 5)
+                   (list (list #x2600 #\A #x200D #\B) (text-of #x2600 #xFFFF #\A #\B))
+                   (list (list #x20AC #\A #x20AC #xFE0F) (text-of #x20AC #\A #x2600 #xFFFF)) ; no emoji, and a box, until it is told
+                   (list (list #x1F602 #\A) (text-of #x1F602 #\A))                 ; an emoji of which there is no picture: a box
+                   (list (list #\1 #xFE0F #\A #xE9) (text-of #x2600 #xFFFF #\A #xE9)) ; the digit and what follows are the glyph 7,
+                   (list (list #x3A9 #xFE0F #\A) (text-of #x3A9 #\A)))            ; as the sun is; and a letter that nobody has
+        do (let ((string (apply #'text-of codes)))
+             (unless (= (clara.draw:text-width string) (* 8 (length cells)))
+               (push (list :width codes) wrong))
+             (dolist (background (list nil paper))
+               (clara.draw:fill-rectangle *canvas* 0 0 90 30 ground)
+               (clara.draw:draw-text *canvas* 5 7 string ink background)
+               (unless (loop for py below 30
+                             always (loop for px below 90
+                                          always (= (word-at *canvas* px py)
+                                                    (if numbered
+                                                        (let ((glyph (clara.type::numbered emoji numbered)))
+                                                          (if (and (<= 5 px 20) (<= 7 py 22))
+                                                              (glyph-over (or background ground) glyph
+                                                                          (- px 5 (floor (- 16 (clara.type::glyph-advance glyph)) 2))
+                                                                          (- py 7 baseline) ink)
+                                                              (cells-pixel nil emoji (subseq cells 2) 21 7 px py ink background
+                                                                           ground 8 16 (+ 7 baseline))))
+                                                        (cells-pixel nil emoji cells 5 7 px py ink background ground 8 16
+                                                                     (+ 7 baseline))))))
+                 (push (list :line codes background) wrong)))))
+  ;; And cells.
+  (dolist (codes '((#\A #x1F600 #\B #x2600 #\C) (#x1F600 #x1F600) (#\A #x1F602 #\B) (#\A #x1F603 #\B)))
+    (dolist (string (list (clara.draw:in-cells (apply #'text-of codes)) (apply #'text-of codes)))
+      (dolist (background (list nil paper))
+        (loop for (x y) in '((2 3) (-9 -4) (70 20))
+              do (clara.draw:fill-rectangle *canvas* 0 0 90 30 ground)
+                 (clara.draw:draw-cells *canvas* x y string ink background)
+                 (unless (loop for py below 30
+                               always (loop for px below 90
+                                            always (= (word-at *canvas* px py)
+                                                      (cells-pixel nil emoji string x y px py ink background ground 8 16
+                                                                   (+ y baseline)))))
+                   (push (list :cells codes (length string) background x y) wrong))))))
+  (check nil wrong))
+(clara.draw:free-surface *canvas*)
+(new-made)
+(setq *canvas* (clara.draw:allocate-surface 90 30))
+(let ((string (text-of #\A #x1F600 #xFFFF #\B)) (ink #xf0e0d0) (ground #x102030))
+  (clara.draw:fill-rectangle *canvas* 0 0 90 30 ground)
+  (clara.draw:draw-cells *canvas* 2 3 string ink)
+  (check '(nil 32 t)
+         (list (clara.type::among-letters) (clara.draw:text-width string)
+               (loop for py below 30
+                     always (loop for px below 90
+                                  always (= (word-at *canvas* px py)
+                                            (cells-pixel nil nil string 2 3 px py ink nil ground 8 16 0)))))))
+(clara.draw:free-surface *canvas*)
 
 ;;; A world that was saved, and the machine after it. The fonts and the
 ;;; pictures of their glyphs are in the heap and come back; the bytes of
@@ -9076,6 +9544,157 @@
          (clara.windows:stop))
     (setq clara.windows:*text-font* nil)
     (setf (symbol-function 'clara.terminal:open-terminal) open-terminal)))
+
+;;; Emoji in a terminal. An emoji has two cells, its own and the next, and
+;;; the row has CLARA.DRAW:+TAKEN+ in the second; the characters that show
+;;; nothing by themselves have none. What a row should show is the letters
+;;; of its cells and, across the two cells of an emoji, its picture.
+
+;; The two cells from COLUMN on show the picture of CHARACTER, each on its
+;; own ground.
+(defun pair-shows-p (surface row column character &optional (ink +ink+) (paper +paper+) (second paper))
+  (multiple-value-bind (wide high) (cell-size *cell-font*)
+    (let* ((emoji (if *cell-font* (clara.type::pictures *cell-font*) (clara.type::among-letters)))
+           (picture (clara.type::glyph emoji (char-code character)))
+           (pen (+ (* column wide) (floor (- (* 2 wide) (clara.type::glyph-advance picture)) 2)))
+           (baseline (+ (* row high)
+                        (if *cell-font*
+                            (clara.type:font-ascent *cell-font*)
+                            (+ (floor (- high (clara.type:font-ascent emoji) (clara.type:font-descent emoji)) 2)
+                               (clara.type:font-ascent emoji))))))
+      (dotimes (y high t)
+        (dotimes (x (* 2 wide))
+          (unless (= (word-at surface (+ (* column wide) x) (+ (* row high) y))
+                     (glyph-over (if (< x wide) paper second) picture (- (+ (* column wide) x) pen)
+                                 (- (+ (* row high) y) baseline) ink))
+            (return-from pair-shows-p nil)))))))
+
+;; The cells of a row from its first on show TEXT, as it stands in cells, and blanks after it up to the
+;; tenth cell unless SHORT says that only its own cells are looked at, which is how a row with the cursor in
+;; it is asked about. The cells from FROM to before TO are on the highlight's ground.
+(defun cells-show-p (row text &optional (from 0) (to 0) short)
+  (let ((string (if short (clara.draw:in-cells text) (format nil "~10A" (clara.draw:in-cells text)))))
+    (flet ((ground (column) (if (and (<= from column) (< column to)) +highlight+ +paper+)))
+      (loop for column below (length string)
+            always (let ((character (char string column)))
+                     (cond ((and (< (1+ column) (length string)) (char= (char string (1+ column)) clara.draw:+taken+)
+                                 (clara.draw:emoji-p character))
+                            (pair-shows-p *face* row column character +ink+ (ground column) (ground (1+ column))))
+                           ((char= character clara.draw:+taken+)
+                            (or (and (plusp column) (clara.draw:emoji-p (char string (1- column))))
+                                (cell-shows-p *face* row column #\Space +ink+ (ground column))))
+                           (t
+                            (cell-shows-p *face* row column character +ink+ (ground column)))))))))
+(defun line-says ()
+  (clara.terminal::terminal-line *terminal*))
+(defun column-at ()
+  (clara.terminal::terminal-column *terminal*))
+
+(new-desk :width 300 :height 220 :fonts '("Twemoji.Mozilla.ttf"))
+(setq *terminal* (clara.terminal:open-terminal "Pictures" :columns 10 :rows 3)
+      *out* (clara.terminal:terminal-stream *terminal*)
+      *face* (clara.windows:window-surface (clara.terminal:terminal-window *terminal*))
+      *corner* (multiple-value-list (clara.windows:window-position (clara.terminal:terminal-window *terminal*))))
+(let ((grin (text-of #x1F600)) (heart (text-of #x2764)) (taken (text-of #xFFFF)))
+  ;; What is written: two cells for an emoji, and none for what only says how it is shown.
+  (write-string (concatenate 'string "ab" grin "c" heart (text-of #xFE0F #x200D) "d") *out*)
+  (check (list (concatenate 'string "ab" grin taken "c" heart taken "d  ") 8 t 0)
+         (list (line-says) (column-at) (cells-show-p 0 (concatenate 'string "ab" grin "c" heart "d")) (wrong-pixels)))
+  ;; An emoji that the row has one cell left for begins the next row, and that cell is nobody's; one that
+  ;; the row has just room for stays.
+  (write-string (concatenate 'string "e" grin "f") *out*)
+  (check (list '((9 9) (2 4) (2 4) (2 2) (8 10) (9 10)) (list (concatenate 'string "ab" grin taken "c" heart taken "de" taken)) '(t) 3 t t 0)
+         (list (loop for (from to) in '((9 9) (3 4) (2 3) (2 2) (8 9) (9 10))
+                     collect (multiple-value-list (clara.terminal::whole (first (kept-rows)) from to)))
+               (kept-rows) (list (clara.terminal::kept-joined *terminal* 0)) (column-at)
+               (cells-show-p 0 (concatenate 'string "ab" grin "c" heart "de")) (cells-show-p 1 (concatenate 'string grin "f"))
+               (wrong-pixels)))
+  (clara.terminal:clear *terminal*)
+  (write-string (concatenate 'string "12345678" grin "x") *out*)
+  (check (list (list (concatenate 'string "12345678" grin taken)) 1 t t)
+         (list (kept-rows) (column-at) (cells-show-p 0 (concatenate 'string "12345678" grin)) (cells-show-p 1 "x")))
+  ;; Rows that have left come back with their pictures, and go again.
+  (write-string (format nil "~%two ~A~%three~%four" heart) *out*)
+  (check '(t t t) (list (cells-show-p 0 (concatenate 'string "two " heart)) (cells-show-p 1 "three") (cells-show-p 2 "four")))
+  (page-up)
+  (check '(t t t 2 0) (list (cells-show-p 0 (concatenate 'string "12345678" grin)) (cells-show-p 1 "x")
+                            (cells-show-p 2 (concatenate 'string "two " heart)) (back) (wrong-pixels)))
+  (page-down)
+  (check '(t 0) (list (cells-show-p 0 (concatenate 'string "two " heart)) (back)))
+  ;; Half a picture is none: a cell of an emoji that is written over takes the other with it.
+  (clara.terminal:clear *terminal*)
+  (write-string (concatenate 'string "a" grin "b" (string #\Return) "xy") *out*)
+  (check '("xy b      " t) (list (line-says) (cells-show-p 0 "xy b")))
+  (write-string (concatenate 'string (string #\Return) grin (string #\Backspace) "z") *out*)
+  (check '(" z b      " t 0) (list (line-says) (cells-show-p 0 " z b") (wrong-pixels)))
+  ;; What the pointer highlights is whole emoji, and so is what is copied: the text, without what stands in
+  ;; their second cells.
+  (clara.terminal:clear *terminal*)
+  (write-string (concatenate 'string "a" grin heart "b") *out*)
+  (pointer-in 2 0 0)
+  (pointer-in 2 0 1)                             ; the button goes down in the middle of the first picture,
+  (pointer-in 4 0 1)                             ; and the pointer is dragged into the middle of the second
+  (check '(((0 . 2) 0 . 4) (1 . 5) t 0)
+         (list (marked) (clara.terminal::lit *terminal* 0 (marked)) (cells-show-p 0 (concatenate 'string "a" grin heart "b") 1 5)
+               (wrong-pixels)))
+  ;; A cell of an emoji that is drawn again by itself is its half of the picture, on its own ground.
+  (dotimes (column 6)
+    (clara.terminal::draw-cell *terminal* column 0 +paper+))
+  (check '(t 0) (list (cells-show-p 0 (concatenate 'string "a" grin heart "b") 1 5) (wrong-pixels)))
+  (pointer-in 4 0 0)
+  (clara.windows:key-typed 3)
+  (dotimes (column 6)
+    (clara.terminal::draw-cell *terminal* column 0 +paper+))
+  (check (list (concatenate 'string grin heart) nil t)
+         (list (clara.windows:clipboard) (marked) (cells-show-p 0 (concatenate 'string "a" grin heart "b"))))
+  ;; What is typed: an emoji comes by Ctrl-V, since no key has one. It is echoed in two cells, the cursor
+  ;; stands behind them, the key that takes a character back takes both, and one that is typed in the last
+  ;; cell of a row begins the next. A character that shows nothing is in the line all the same.
+  (clara.terminal:clear *terminal*)
+  (setf (clara.windows:clipboard) (concatenate 'string "q" grin (text-of #xFE0F)))
+  (let ((reader (reads-on "")))
+    (clara.windows:key-typed 22)
+    (check '(t t 3) (list (eventually (lambda () (cells-show-p 0 (concatenate 'string "q" grin) 0 0 t)))
+                          (eventually (lambda () (bar-at-p *face* 0 3 +ink+)))
+                          (length (clara.terminal::terminal-cells *terminal*))))
+    (clara.windows:key-typed 8)                  ; the character that shows nothing goes, and nothing is seen of it
+    (clara.windows:key-typed 8)                  ; and then the emoji
+    (check '(t t "q         ") (list (eventually (lambda () (bar-at-p *face* 0 1 +ink+)))
+                                     (eventually (lambda () (cells-show-p 0 "q" 0 0 t))) (line-says)))
+    (type-text "12345678")
+    (setf (clara.windows:clipboard) (concatenate 'string grin (text-of #xFE0F)))
+    (clara.windows:key-typed 22)                 ; nine cells are written, and the emoji has no room in the tenth
+    (check '(t t t t) (list (eventually (lambda () (bar-at-p *face* 1 2 +ink+)))
+                            (cells-show-p 1 grin 0 0 t) (cells-show-p 0 "q12345678")
+                            (equal (kept-rows) (list (concatenate 'string "q12345678" taken)))))
+    (dotimes (i 3)
+      (clara.windows:key-typed 8))               ; what was pasted, and the 8: the cell that was nobody's is blank again
+    (check '(t t nil) (list (eventually (lambda () (bar-at-p *face* 0 8 +ink+)))
+                            (eventually (lambda () (string= (line-says) "q1234567  ")))
+                            (kept-rows)))
+    (clara.windows:key-typed 22)
+    (type-text (string #\Newline))
+    (check (list (concatenate 'string "q1234567" grin (text-of #xFE0F)) 0)
+           (list (clara:join-thread reader) (wrong-pixels)))))
+;; And in a font of outlines, whose cells are other ones.
+(new-desk :width 300 :height 220 :fonts '("Go-Mono-Bold.ttf" "Twemoji.Mozilla.ttf"))
+(let ((*cell-font* (clara.type:font "Mono" 15 :bold t)) (grin (text-of #x1F600)) (sun (text-of #x2600)))
+  (setq *terminal* (clara.terminal:open-terminal "Pictures" :columns 10 :rows 3 :font *cell-font*)
+        *out* (clara.terminal:terminal-stream *terminal*)
+        *face* (clara.windows:window-surface (clara.terminal:terminal-window *terminal*))
+        *corner* (multiple-value-list (clara.windows:window-position (clara.terminal:terminal-window *terminal*))))
+  (write-string (concatenate 'string "jq" grin "(g)" sun "y" grin) *out*)
+  (check '(t t 0) (list (cells-show-p 0 (concatenate 'string "jq" grin "(g)" sun "y")) (cells-show-p 1 grin) (wrong-pixels)))
+  (pointer-in 1 0 0)
+  (pointer-in 1 0 1)
+  (pointer-in 3 0 1)                             ; to the middle of the picture: all of it is highlighted
+  (check '((1 . 4) t 0)
+         (list (clara.terminal::lit *terminal* 0 (marked)) (cells-show-p 0 (concatenate 'string "jq" grin "(g)" sun "y") 1 4)
+               (wrong-pixels)))
+  (pointer-in 3 0 0)
+  (clara.windows:key-typed 3)
+  (check (concatenate 'string "q" grin) (clara.windows:clipboard)))
+(setf (clara.windows:clipboard) "")
 
 ;;; What happens to a window, kept for its program: the keys that are typed
 ;;; while it has the focus, the buttons on its inside and its close box, in

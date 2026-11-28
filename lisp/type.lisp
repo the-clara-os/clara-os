@@ -14,10 +14,14 @@
 ;;;; degree. What is read of one is which glyph a character has (the table
 ;;;; "cmap", in its formats 4 and 12), how far a glyph moves on ("hmtx"),
 ;;;; its outline ("glyf"), also when it is put together of other glyphs, and
-;;;; where the lines of a font lie ("hhea", "post", "OS/2"). What is not
-;;;; read: the programs in a font that fit an outline to the pixels of a
-;;;; small size, kerning, and outlines of the other kind (CFF), whose files
-;;;; are refused.
+;;;; where the lines of a font lie ("hhea", "post", "OS/2"). And of a font
+;;;; of pictures, of emoji: which glyphs are laid over each other to make
+;;;; one, each in which colour ("COLR", "CPAL"), and which glyphs in a row
+;;;; are drawn as one, a flag for the two letters of its country ("GSUB",
+;;;; its lists of the kind that does that). What is not read: the programs
+;;;; in a font that fit an outline to the pixels of a small size, kerning,
+;;;; pictures in other forms than layers of one colour each, and outlines of
+;;;; the other kind (CFF), whose files are refused.
 ;;;;
 ;;;; A font, here, is such a file at a size: (font "Sans" 16) is one, and
 ;;;; CLARA.DRAW:DRAW-TEXT and TEXT-WIDTH take it. "Sans" is a family, the
@@ -26,7 +30,9 @@
 ;;;; Mono and Charter for Serif (fonts/README.md), are among the system's
 ;;;; own that the handoff read into memory, so they are there on a machine
 ;;;; with no disk that is known here; any other name is that of a file,
-;;;; which is read from its volume.
+;;;; which is read from its volume. A fourth family, Emoji, is the font of
+;;;; the pictures, Twemoji: a text in any font has its emoji from there, at
+;;;; the font's size, and so has a text in the console's letters.
 ;;;;
 ;;;; Text is drawn in a font in two ways. A line of it has each character
 ;;;; where the one before it ends, as wide as the character is. And text in
@@ -59,6 +65,9 @@
 (defconstant +cells+ 1048576)   ; the most shades that the fonts keep between them, before they are all let go
 (defconstant +work+ 16384)      ; the most points and parts that the outline of one glyph is put together of
 (defconstant +depth+ 8)         ; how deep a glyph may be made of glyphs that are made of glyphs
+(defconstant +layers+ 256)      ; the most layers that a picture is put together of
+(defconstant +joined+ 16)       ; the most characters that are drawn as one glyph between them
+(defconstant +lists+ 4096)      ; the most lists of glyphs that go together that are looked at in one file
 
 ;; A file of outlines, as it was read at this start.
 (defstruct face
@@ -83,7 +92,14 @@
   glyf      ; the outlines,
   outlines  ; how many bytes of them,
   map       ; and the table that says which glyph a character has,
-  kind)     ; whose format is 4 or 12
+  kind      ; whose format is 4 or 12
+  painted   ; where the glyphs are listed that are pictures in colours, when the file has any,
+  (paintings 0) ; and how many of them there are; each is so many layers,
+  layers    ; which are listed here, a glyph and the number of its colour each,
+  (layered 0)   ; so many in all,
+  palette   ; and the colours are here,
+  (colours 0)   ; so many of them
+  joins)    ; where the lists are of the glyphs that are drawn as one when they stand in a row
 
 ;; A file at a size. What was read and made for it is not in it but beside
 ;; it (*MADE*), so that a font which is printed at a prompt is a line, and
@@ -107,6 +123,8 @@
   face      ; its file, as it was read
   glyphs    ; the glyphs of the characters whose codes are below 256, where they were made, or NIL
   others    ; and of the others: (code . glyph)
+  joined    ; the glyphs that stand for several characters, by their numbers in the file: (number . glyph)
+  emoji     ; the font that the emoji of a text in this one are drawn in, or :NONE, once that was asked for
   wide)     ; how wide a cell of the font is, once that was asked for: CELL-WIDTH
 
 ;; What a character looks like in a font.
@@ -117,7 +135,10 @@
   width     ; the picture, in pixels
   height
   step      ; the shades of a row are this many items after those of the row above
-  shades)   ; a vector of them, or NIL for a glyph that shows nothing, a space
+  shades    ; a vector of them, or NIL for a glyph that shows nothing, a space
+  layers    ; for a picture in colours, which has no shades of its own: ((glyph . pixel) ...), the lowest first,
+            ; each glyph laid on in its pixel, or in the colour of the text where that is NIL
+  missing)  ; the font has no glyph for the character, and this is the one that it shows for those
 
 (defvar *start* (list 'start))  ; stands for this start of the machine
 (defvar *lock* (clara:make-lock "fonts")) ; one file is read at a time
@@ -125,13 +146,15 @@
 (defvar *fonts* nil)            ; the fonts that were made, each once
 (defvar *made* nil)             ; ((font . kept) ...): what was read and made for the ones that were used at this start
 (defvar *cells* 0)              ; how many shades are kept there
+(defvar *among* nil)            ; (start . font): the font of the emoji among the console's letters at that start, or NIL
 
 ;; The families: a name, and the files of its upright, bold, italic and
 ;; bold italic.
 (defvar *families*
   (list (list "Sans" "Go-Regular.ttf" "Go-Bold.ttf" "Go-Italic.ttf" "Go-Bold-Italic.ttf")
         (list "Mono" "Go-Mono.ttf" "Go-Mono-Bold.ttf" "Go-Mono-Italic.ttf" "Go-Mono-Bold-Italic.ttf")
-        (list "Serif" "Charter-Regular.ttf" "Charter-Bold.ttf" "Charter-Italic.ttf" "Charter-Bold-Italic.ttf")))
+        (list "Serif" "Charter-Regular.ttf" "Charter-Bold.ttf" "Charter-Italic.ttf" "Charter-Bold-Italic.ttf")
+        (list "Emoji" "Twemoji.Mozilla.ttf" "Twemoji.Mozilla.ttf" "Twemoji.Mozilla.ttf" "Twemoji.Mozilla.ttf")))
 
 ;;; Numbers
 
@@ -231,6 +254,65 @@
     (when (= best 0)
       (error "~A has no table of its characters by their codes in Unicode" (face-file face)))))
 
+;; A font of pictures has, for a glyph that is one, a list of other glyphs
+;; that are laid over each other, the lowest first, each in a colour of the
+;; font's own: the table "COLR", as far as it is such lists, and "CPAL", the
+;; colours, of which the first palette is read. What a file says of its
+;; colours is held against the two tables here, once, so that a layer and a
+;; colour are read by their numbers afterwards.
+(defun find-colours (face)
+  (multiple-value-bind (colr length) (table face "COLR" 14)
+    (multiple-value-bind (cpal room) (table face "CPAL" 12)
+      (when (and colr cpal)
+        (let ((glyphs (u16 face (+ colr 2)))
+              (glyphs-at (u32 face (+ colr 4)))
+              (layers-at (u32 face (+ colr 8)))
+              (layers (u16 face (+ colr 12)))
+              (colours (u16 face (+ cpal 2)))
+              (palettes (u16 face (+ cpal 4)))
+              (all (u16 face (+ cpal 6)))
+              (colours-at (u32 face (+ cpal 8))))
+          (unless (and (<= (+ glyphs-at (* 6 glyphs)) length)
+                       (<= (+ layers-at (* 4 layers)) length)
+                       (<= 1 palettes)
+                       (<= (+ 12 (* 2 palettes)) room)
+                       (<= (+ (u16 face (+ cpal 12)) colours) all)
+                       (<= (+ colours-at (* 4 all)) room))
+            (error "the font ~A says of its colours what its tables have no room for" (face-file face)))
+          (setf (face-painted face) (+ colr glyphs-at)
+                (face-paintings face) glyphs
+                (face-layers face) (+ colr layers-at)
+                (face-layered face) layers
+                (face-palette face) (+ cpal colours-at (* 4 (u16 face (+ cpal 12))))
+                (face-colours face) colours))))))
+
+;; And which glyphs in a row are drawn as one: the table "GSUB" is lists of
+;; several kinds, of which the kind 4 is read, glyphs that are replaced by
+;; one, in its one form. A list of the kind 7 says where one of another
+;; kind is, further away than two bytes can say.
+(defun find-joins (face)
+  (multiple-value-bind (gsub length) (table face "GSUB" 10)
+    (when gsub
+      (let* ((lists (+ gsub (u16 face (+ gsub 8))))
+             (count (u16 face lists))
+             (looked 0)
+             (joins nil))
+        (dotimes (i count)
+          (let* ((list (+ lists (u16 face (+ lists 2 (* 2 i)))))
+                 (kind (u16 face list))
+                 (parts (u16 face (+ list 4))))
+            (dotimes (k parts)
+              (let ((part (+ list (u16 face (+ list 6 (* 2 k))))) (is kind))
+                (setq looked (+ looked 1))
+                (when (> looked +lists+)
+                  (error "the font ~A has more than ~D lists of glyphs that go together" (face-file face) +lists+))
+                (when (and (= is 7) (= (u16 face part) 1))
+                  (setq is (u16 face (+ part 2))
+                        part (+ part (u32 face (+ part 4)))))
+                (when (and (= is 4) (< part (+ gsub length)) (= (u16 face part) 1))
+                  (setq joins (cons part joins)))))))
+        (setf (face-joins face) (nreverse joins))))))
+
 ;; What a file says of itself, before any glyph is asked for.
 (defun read-tables (face)
   (let ((kind (u32 face 0)))
@@ -259,6 +341,8 @@
     (setf (face-glyf face) glyf
           (face-outlines face) length))
   (find-map face)
+  (find-colours face)
+  (find-joins face)
   ;; Where its lines lie. A font that does not say has them where most do.
   (let ((post (table face "post" 12)) (os2 (table face "OS/2" 30)) (units (face-units face)))
     (setf (face-under face) (if post (i16 face (+ post 8)) (- 0 (floor units 10)))
@@ -369,6 +453,108 @@
                  (if (< glyph metrics)
                      (+ (* 4 glyph) 2)
                      (+ (* 4 metrics) (* 2 (- glyph metrics))))))))
+
+;;; Pictures in colours, and glyphs that stand for several characters
+
+;; The layers of the glyph of that number, when the file has it as a
+;; picture in colours: ((glyph . colour) ...), the lowest first, each a
+;; glyph's number and the number of its colour. NIL for a glyph that is
+;; drawn as its own outline. The glyphs that are pictures are listed in the
+;; order of their numbers.
+(defun layers-of (face glyph)
+  (let ((low 0) (high (- (face-paintings face) 1)) (at (face-painted face)))
+    (when (>= high 0)
+      (loop
+        (when (>= low high)
+          (return))
+        (let ((middle (floor (+ low high) 2)))
+          (if (< (u16 face (+ at (* 6 middle))) glyph)
+              (setq low (+ middle 1))
+              (setq high middle))))
+      (let ((entry (+ at (* 6 low))))
+        (when (= (u16 face entry) glyph)
+          (let ((first (u16 face (+ entry 2))) (count (u16 face (+ entry 4))) (layers nil))
+            (when (or (> count +layers+) (> (+ first count) (face-layered face)))
+              (error "a picture of the font ~A is put together of more than ~D layers, or of layers that the font has not"
+                     (face-file face) +layers+))
+            (dotimes (i count)
+              (let ((layer (+ (face-layers face) (* 4 (+ first i)))))
+                (setq layers (cons (cons (u16 face layer) (u16 face (+ layer 2))) layers))))
+            (nreverse layers)))))))
+
+;; The colour of that number in the font's palette: its pixel, and how much
+;; of it shows, from 0 to 255. A number that the palette does not have, the
+;; 65535 that a font writes for it among them, is the colour of the text:
+;; NIL, and all of it.
+(defun colour (face number)
+  (if (< number (face-colours face))
+      (let ((at (+ (face-palette face) (* 4 number))))
+        (values (clara.draw:color (u8 face (+ at 2)) (u8 face (+ at 1)) (u8 face at)) (u8 face (+ at 3))))
+      (values nil 255)))
+
+;; Which of the glyphs that a list covers GLYPH is, counted from 0, or NIL
+;; when it is none of them. The list at AT is the numbers of the glyphs in
+;; rising order, or runs of them, the first and the last of each and which
+;; the first is.
+(defun covered (face at glyph)
+  (let ((form (u16 face at)) (low 0) (high (- (u16 face (+ at 2)) 1)))
+    (when (>= high 0)
+      (cond ((= form 1)
+             (loop
+               (when (>= low high)
+                 (return))
+               (let ((middle (floor (+ low high) 2)))
+                 (if (< (u16 face (+ at 4 (* 2 middle))) glyph)
+                     (setq low (+ middle 1))
+                     (setq high middle))))
+             (and (= (u16 face (+ at 4 (* 2 low))) glyph) low))
+            ((= form 2)
+             (loop
+               (when (>= low high)
+                 (return))
+               (let ((middle (floor (+ low high) 2)))
+                 (if (< (u16 face (+ at 6 (* 6 middle))) glyph)
+                     (setq low (+ middle 1))
+                     (setq high middle))))
+             (let ((run (+ at 4 (* 6 low))))
+               (and (<= (u16 face run) glyph) (<= glyph (u16 face (+ run 2)))
+                    (+ (u16 face (+ run 4)) (- glyph (u16 face run))))))))))
+
+;; The glyph that the characters of STRING from START on are drawn as when
+;; the font has one for several of them between them, and how many of them
+;; that is: (glyph . count), or NIL when it joins nothing there. A list has, for
+;; each glyph that something begins with, what may follow it and the glyph
+;; that stands for all of it, and the first that fits is the one, which a
+;; font writes with the longest first. A list that cannot be read joins
+;; nothing, and is no error: the characters are still drawn, each by itself.
+(defun joined (face string start)
+  (handler-case (joined-in face string start)
+    (error () nil)))
+
+(defun joined-in (face string start)
+  (let ((joins (face-joins face)) (end (length string)))
+    (when joins
+      (let ((first (index face (char-code (char string start))))
+            (numbers (make-array +joined+ :initial-element nil)))
+        (unless (= first 0)
+          (dolist (part joins)
+            (let ((which (covered face (+ part (u16 face (+ part 2))) first)))
+              (when (and which (< which (u16 face (+ part 4))))
+                (let* ((set (+ part (u16 face (+ part 6 (* 2 which)))))
+                       (count (u16 face set)))
+                  (dotimes (i count)
+                    (let* ((entry (+ set (u16 face (+ set 2 (* 2 i)))))
+                           (parts (u16 face (+ entry 2)))
+                           (k 1))
+                      (when (and (<= 2 parts) (<= parts +joined+) (<= (+ start parts) end))
+                        (loop
+                          (when (= k parts)
+                            (return-from joined-in (cons (u16 face entry) parts)))
+                          (unless (svref numbers k)
+                            (setf (svref numbers k) (index face (char-code (char string (+ start k))))))
+                          (unless (= (svref numbers k) (u16 face (+ entry 2 (* 2 k))))
+                            (return))
+                          (setq k (+ k 1)))))))))))))))
 
 ;;; Outlines
 ;;;
@@ -826,14 +1012,14 @@
   (setq *made* nil
         *cells* 0))
 
-;; The glyph of a character in a font, made: its outline brought to the
-;; font's size, in 256ths of a pixel, and turned over, since a font counts
-;; upwards from its baseline and a picture downwards from its top; and the
-;; picture of that. An outline that cannot be read is a glyph that shows
-;; nothing, and is no error: a window still has its other letters.
-(defun shape (font face code)
-  (let* ((number (index face code))
-         (size (font-size font))
+;; The glyph of that number in a font as its own outline makes it: the
+;; outline brought to the font's size, in 256ths of a pixel, and turned
+;; over, since a font counts upwards from its baseline and a picture
+;; downwards from its top; and the picture of that. An outline that cannot
+;; be read is a glyph that shows nothing, and is no error: a window still
+;; has its other letters.
+(defun plain (font face number)
+  (let* ((size (font-size font))
          (units (face-units face))
          (budget (list +work+))
          (contours (handler-case (outline face number 0 budget)
@@ -853,6 +1039,49 @@
                      (make-glyph :left 0 :top 0 :width 0 :height 0 :step 0 :shades nil))))
       (setf (glyph-advance glyph) (nearest (* advance size) units))
       glyph)))
+
+;; The glyph of that number in a font, made: a picture in colours when the
+;; file has it as one, each of its layers the glyph that it names, in its
+;; colour, and as much of that as the colour says shows; and what its own
+;; outline makes otherwise. A picture whose layers cannot be read shows
+;; nothing, like an outline that cannot.
+(defun form (font face number)
+  (let ((layers (handler-case (layers-of face number)
+                  (error () nil))))
+    (if (null layers)
+        (plain font face number)
+        (let ((made nil))
+          (dolist (layer layers)
+            (let ((part (plain font face (car layer))))
+              (when (glyph-shades part)
+                (multiple-value-bind (pixel shows) (colour face (cdr layer))
+                  (unless (= shows 255)
+                    (let ((shades (glyph-shades part)))
+                      (dotimes (i (length shades))
+                        (setf (svref shades i) (nearest (* (svref shades i) shows) 255)))))
+                  (setq made (cons (cons part pixel) made))))))
+          (make-glyph :advance (nearest (* (advance face number) (font-size font)) (face-units face))
+                      :left 0 :top 0 :width 0 :height 0 :step 0 :shades nil :layers (nreverse made))))))
+
+;; The glyph of a character in a font, made.
+(defun shape (font face code)
+  (let* ((number (index face code))
+         (glyph (form font face number)))
+    (setf (glyph-missing glyph) (= number 0))
+    glyph))
+
+;; How many shades GLYPH holds, in itself or in its layers.
+(defun shades-in (glyph)
+  (let ((count (length (glyph-shades glyph))))
+    (dolist (layer (glyph-layers glyph) count)
+      (setq count (+ count (length (glyph-shades (car layer))))))))
+
+;; Has the font something of its own to show for the character that GLYPH
+;; was made for?
+(defun shows-p (glyph)
+  (and (not (glyph-missing glyph))
+       (or (glyph-layers glyph) (glyph-shades glyph))
+       t))
 
 ;; Where the lines of FONT lie, in pixels, by what FACE says, which is its
 ;; file. A line of text is high enough for whatever the font says its
@@ -896,7 +1125,7 @@
          (face (kept-face kept)))
     (flet ((made ()
              (let ((glyph (shape font face code)))
-               (setq *cells* (+ *cells* (length (glyph-shades glyph))))
+               (setq *cells* (+ *cells* (shades-in glyph)))
                glyph)))
       (cond ((< code 256)
              (unless (kept-glyphs kept)
@@ -910,6 +1139,20 @@
                    (let ((glyph (made)))
                      (setf (kept-others kept) (cons (cons code glyph) (kept-others kept)))
                      glyph))))))))
+
+;; The glyph of that number in a font, which no character has by itself:
+;; the one that stands for several.
+(defun numbered (font number)
+  (when (> *cells* +cells+)
+    (shed))
+  (let* ((kept (live font))
+         (found (assoc number (kept-joined kept))))
+    (if found
+        (cdr found)
+        (let ((glyph (form font (kept-face kept) number)))
+          (setq *cells* (+ *cells* (shades-in glyph)))
+          (setf (kept-joined kept) (cons (cons number glyph) (kept-joined kept)))
+          glyph))))
 
 ;;; Fonts
 
@@ -939,8 +1182,8 @@
           (t (cadr family)))))
 
 ;; The font of that name at SIZE pixels to the em: the same one every time
-;; that the same is asked for. NAME is a family, "Sans", "Mono", "Serif" or
-;; one that DEFINE-FAMILY made, of which BOLD and ITALIC pick the file, or
+;; that the same is asked for. NAME is a family, "Sans", "Mono", "Serif",
+;; "Emoji" or one that DEFINE-FAMILY made, of which BOLD and ITALIC pick the file, or
 ;; it is the name of a file of outlines. With UNDERLINE a line is drawn under its
 ;; text, and with STRIKE one through it.
 (defun font (name size &key bold italic underline strike)
@@ -977,14 +1220,101 @@
   (live font)
   (+ (font-up font) (font-down font) (font-gap font)))
 
+;;; Emoji
+;;;
+;;; A text has its emoji from the family Emoji, whatever font it is in: a
+;;; character from the code 8192 on that the text's font has no glyph for is
+;;; the picture that the font of pictures has of it, when it has one, at the
+;;; same size and on the same baseline. And characters that the font of pictures has one glyph for
+;;; between them are that glyph: the two letters of a country its flag, a
+;;; hand and a colour the hand in that colour, two people and what joins
+;;; them a pair. A character that only says such a thing shows nothing by
+;;; itself (CLARA.DRAW::SILENT-P).
+
+;; The font that the emoji of a text in FONT are drawn in: the family Emoji
+;; at FONT's size, or NIL when there is no such file, or when FONT is of
+;; that file itself.
+(defun pictures (font)
+  (let ((kept (live font)))
+    (unless (kept-emoji kept)
+      (let ((emoji (handler-case (font "Emoji" (font-size font))
+                     (error () nil))))
+        (setf (kept-emoji kept)
+              (if (and emoji (not (string= (font-file emoji) (font-file font)))) emoji :none))))
+    (and (font-p (kept-emoji kept)) (kept-emoji kept))))
+
+;; Can the character of the code NEXT make one picture with the one of the
+;; code CODE before it? One that shows nothing by itself, one of the five
+;; colours of a hand or a face, and the second letter of a country.
+(defun goes-with-p (code next)
+  (or (<= #xFE00 next #xFE0F) (= next #x200D) (= next #x20E3) (<= #x1F3FB next #x1F3FF) (<= #xE0020 next #xE007F)
+      (and (<= #x1F1E6 next #x1F1FF) (<= #x1F1E6 code #x1F1FF))))
+
+;; What is drawn for the characters of STRING from START on in FONT, and how
+;; many of them it is drawn for: a glyph, or NIL for a character that shows
+;; nothing. EMOJI is the font of the pictures, or NIL for none.
+(defun next-glyph (string start font emoji)
+  (let* ((code (char-code (char string start)))
+         (next (and (< (+ start 1) (length string)) (char-code (char string (+ start 1)))))
+         (with (or emoji font)))
+    (when (and next (goes-with-p code next))
+      (let ((found (joined (kept-face (live with)) string start)))
+        (when found
+          (return-from next-glyph (values (numbered with (car found)) (cdr found)))))
+      ;; A character that is told to be a picture is one, when there is a picture of it.
+      (when (and emoji (= next #xFE0F))
+        (let ((picture (glyph emoji code)))
+          (when (shows-p picture)
+            (return-from next-glyph (values picture 2))))))
+    (if (clara.draw::silent-p (char string start))
+        (values nil 1)
+        (let ((glyph (glyph font code)))
+          ;; The letters below 8192 are the font's own to have or not, in every text.
+          (if (and emoji (glyph-missing glyph) (>= code #x2000))
+              (let ((picture (glyph emoji code)))
+                (values (if (shows-p picture) picture glyph) 1))
+              (values glyph 1))))))
+
+;; GLYPH with the place where its character begins on the baseline at X and
+;; Y: in COLOR, or a picture in its own colours. Says whether anything of it
+;; was drawn.
+(defun put-glyph (surface x y glyph color)
+  (let ((drew nil))
+    (when (glyph-shades glyph)
+      (when (clara.draw:draw-shades surface (+ x (glyph-left glyph)) (+ y (glyph-top glyph)) (glyph-shades glyph)
+                                    (glyph-width glyph) (glyph-height glyph) color (glyph-step glyph))
+        (setq drew t)))
+    (dolist (layer (glyph-layers glyph))
+      (let ((part (car layer)))
+        (when (clara.draw:draw-shades surface (+ x (glyph-left part)) (+ y (glyph-top part)) (glyph-shades part)
+                                      (glyph-width part) (glyph-height part) (or (cdr layer) color) (glyph-step part))
+          (setq drew t))))
+    drew))
+
+;; A picture across two cells of WIDTH by HEIGHT pixels, the first of which
+;; has its upper left corner at X and Y, the picture's baseline at BASELINE:
+;; in the middle of the two, and nothing of it outside them.
+(defun draw-pair (surface x y width height baseline picture color)
+  (clara.draw:with-clip (surface x y (* 2 width) height)
+    (put-glyph surface (+ x (floor (- (* 2 width) (glyph-advance picture)) 2)) baseline picture color)))
+
 ;;; Text
 
 ;; How many pixels wide STRING is in FONT: every glyph moves on by a whole
 ;; number of them.
 (defun width (string font)
   (let ((width 0))
-    (dotimes (i (length string) width)
-      (setq width (+ width (glyph-advance (glyph font (char-code (char string i)))))))))
+    (if (clara.draw::plain-p string)
+        (dotimes (i (length string) width)
+          (setq width (+ width (glyph-advance (glyph font (char-code (char string i)))))))
+        (let ((emoji (pictures font)) (i 0) (end (length string)))
+          (loop
+            (when (>= i end)
+              (return width))
+            (multiple-value-bind (glyph count) (next-glyph string i font emoji)
+              (when glyph
+                (setq width (+ width (glyph-advance glyph))))
+              (setq i (+ i count))))))))
 
 ;; STRING in FONT, the upper left corner of its line at X and Y, in COLOR.
 ;; With BACKGROUND the line is filled with that first, as wide as the text
@@ -993,19 +1323,26 @@
   (live font)
   (let* ((baseline (+ y (font-up font)))
          (wide (width string font))
+         (plain (clara.draw::plain-p string))
+         (emoji (and (not plain) (pictures font)))
          (pen x)
+         (i 0)
+         (end (length string))
          (drew nil))
     (when (and background (> wide 0))
       (when (clara.draw:fill-rectangle surface x y wide (+ (font-up font) (font-down font)) background)
         (setq drew t)))
-    (dotimes (i (length string))
-      (let ((glyph (glyph font (char-code (char string i)))))
-        (when (glyph-shades glyph)
-          (when (clara.draw:draw-shades surface (+ pen (glyph-left glyph)) (+ baseline (glyph-top glyph))
-                                        (glyph-shades glyph) (glyph-width glyph) (glyph-height glyph) color
-                                        (glyph-step glyph))
-            (setq drew t)))
-        (setq pen (+ pen (glyph-advance glyph)))))
+    (loop
+      (when (>= i end)
+        (return))
+      (multiple-value-bind (glyph count) (if plain
+                                             (values (glyph font (char-code (char string i))) 1)
+                                             (next-glyph string i font emoji))
+        (when glyph
+          (when (put-glyph surface pen baseline glyph color)
+            (setq drew t))
+          (setq pen (+ pen (glyph-advance glyph))))
+        (setq i (+ i count))))
     (when (and (font-underline font) (> wide 0))
       (when (clara.draw:fill-rectangle surface x (+ baseline (font-under font)) wide (font-stroke font) color)
         (setq drew t)))
@@ -1022,7 +1359,9 @@
 ;;; space to the tilde, moves on, which in a font of one width is how far
 ;;; every one of them does, and as high as a line of the font. A character
 ;;; stands in the middle of its cell, and nothing of it is drawn outside:
-;;; a cell is drawn again by itself, whatever is in the cells around it.
+;;; a cell is drawn again by itself, whatever is in the cells around it. An
+;;; emoji has two cells, its own and the next, in which the string has
+;;; CLARA.DRAW:+TAKEN+, and its picture stands in the middle of the two.
 
 ;; How wide a cell of FONT is, in pixels.
 (defun cell-width (font)
@@ -1047,28 +1386,39 @@
          (up (font-up font))
          (height (+ up (font-down font) (font-gap font)))
          (count (length string))
+         (emoji (and (not (clara.draw::plain-p string)) (pictures font)))
          (drew nil))
     (when (> count 0)
       (when background
         (when (clara.draw:fill-rectangle surface x y (* count width) height background)
           (setq drew t)))
       (dotimes (i count)
-        (let ((glyph (glyph font (char-code (char string i)))))
-          (when (glyph-shades glyph)
-            ;; Where the picture lies in its cell, from the cell's upper left corner.
-            (let ((cell (+ x (* i width)))
-                  (left (+ (floor (- width (glyph-advance glyph)) 2) (glyph-left glyph)))
-                  (top (+ up (glyph-top glyph))))
-              (if (and (>= left 0) (>= top 0)
-                       (<= (+ left (glyph-width glyph)) width) (<= (+ top (glyph-height glyph)) height))
-                  (when (clara.draw:draw-shades surface (+ cell left) (+ y top) (glyph-shades glyph)
-                                                (glyph-width glyph) (glyph-height glyph) color (glyph-step glyph))
-                    (setq drew t))
-                  ;; Some of it lies outside the cell, and is left out.
-                  (clara.draw:with-clip (surface cell y width height)
-                    (when (clara.draw:draw-shades surface (+ cell left) (+ y top) (glyph-shades glyph)
-                                                  (glyph-width glyph) (glyph-height glyph) color (glyph-step glyph))
-                      (setq drew t))))))))
+        (let* ((character (char string i))
+               (cell (+ x (* i width)))
+               ;; The picture of an emoji that has its second cell after it.
+               (picture (and emoji (< (+ i 1) count) (char= (char string (+ i 1)) clara.draw:+taken+)
+                             (let ((glyph (glyph emoji (char-code character))))
+                               (and (shows-p glyph) glyph)))))
+          (cond (picture
+                 (when (draw-pair surface cell y width height (+ y up) picture color)
+                   (setq drew t)))
+                ((char= character clara.draw:+taken+))
+                (t
+                 (let ((glyph (glyph font (char-code character))))
+                   (when (glyph-shades glyph)
+                     ;; Where the picture lies in its cell, from the cell's upper left corner.
+                     (let ((left (+ (floor (- width (glyph-advance glyph)) 2) (glyph-left glyph)))
+                           (top (+ up (glyph-top glyph))))
+                       (if (and (>= left 0) (>= top 0)
+                                (<= (+ left (glyph-width glyph)) width) (<= (+ top (glyph-height glyph)) height))
+                           (when (clara.draw:draw-shades surface (+ cell left) (+ y top) (glyph-shades glyph)
+                                                         (glyph-width glyph) (glyph-height glyph) color (glyph-step glyph))
+                             (setq drew t))
+                           ;; Some of it lies outside the cell, and is left out.
+                           (clara.draw:with-clip (surface cell y width height)
+                             (when (clara.draw:draw-shades surface (+ cell left) (+ y top) (glyph-shades glyph)
+                                                           (glyph-width glyph) (glyph-height glyph) color (glyph-step glyph))
+                               (setq drew t)))))))))))
       ;; As much of either line as lies within the cells, which may be none of it.
       (when (font-underline font)
         (let ((top (+ up (font-under font))))
@@ -1082,6 +1432,153 @@
           (when (clara.draw:fill-rectangle surface x (+ y top) (* count width) (- bottom top) color)
             (setq drew t)))))
     drew))
+
+;;; Emoji among the console's letters
+;;;
+;;; The console's letters are pictures of 8 by 16 pixels, of the characters
+;;; from the space to the tilde. An emoji among them has two of their cells,
+;;; a line of text as well as a text in cells, and is drawn in the family
+;;; Emoji at the largest size whose line is no higher than a cell and whose
+;;; pictures, which are an em wide, are no wider than two.
+
+;; That font at the largest size at which a picture is no wider than WIDTH
+;; pixels and a line no higher than HEIGHT; NIL when there is no such file,
+;; or no such size.
+(defun fitting (width height)
+  (let ((face (handler-case (face-of (file-of "Emoji" nil nil))
+                (error () nil))))
+    (when face
+      (let ((size (min width height +largest+))
+            (units (face-units face))
+            (below (if (< (face-descent face) 0) (- 0 (face-descent face)) (face-descent face))))
+        (loop
+          (when (< size +smallest+)
+            (return nil))
+          (when (<= (+ (max 1 (at-least (* (face-ascent face) size) units)) (max 0 (at-least (* below size) units)))
+                    height)
+            (return (handler-case (font "Emoji" size)
+                      (error () nil))))
+          (setq size (- size 1)))))))
+
+;; The font of the emoji among the console's letters, found once at every
+;; start; NIL when there is none.
+(defun among-letters ()
+  (let ((found *among*))
+    (if (and found (eq (car found) *start*))
+        (cdr found)
+        (let ((font (fitting (* 2 clara.font:+width+) clara.font:+height+)))
+          (setq *among* (cons *start* font))
+          font))))
+
+;; What is drawn for the characters of STRING from START on in the console's
+;; letters, and how many of them it is drawn for: a glyph of EMOJI for a
+;; picture, T for one cell of the console's, the character's letter or the
+;; box of one that has none, and NIL for a character that shows nothing.
+(defun next-letter (string start emoji)
+  (let* ((character (char string start))
+         (code (char-code character))
+         (next (and (< (+ start 1) (length string)) (char-code (char string (+ start 1))))))
+    (when (and next (goes-with-p code next))
+      (let ((found (joined (kept-face (live emoji)) string start)))
+        (when found
+          (return-from next-letter (values (numbered emoji (car found)) (cdr found)))))
+      (when (= next #xFE0F)
+        (let ((picture (glyph emoji code)))
+          (when (shows-p picture)
+            (return-from next-letter (values picture 2))))))
+    (cond ((clara.draw::silent-p character)
+           (values nil 1))
+          ((clara.draw:emoji-p character)
+           (let ((picture (glyph emoji code)))
+             (values (if (shows-p picture) picture t) 1)))
+          (t
+           (values t 1)))))
+
+;; How many pixels wide STRING is in the console's letters.
+(defun letters-width (string)
+  (let ((emoji (among-letters)) (wide clara.font:+width+))
+    (if (null emoji)
+        (* wide (length string))
+        (let ((width 0) (i 0) (end (length string)))
+          (loop
+            (when (>= i end)
+              (return width))
+            (multiple-value-bind (item count) (next-letter string i emoji)
+              (cond ((eq item t)
+                     (setq width (+ width wide)))
+                    (item
+                     (setq width (+ width wide wide))))
+              (setq i (+ i count))))))))
+
+;; Where the baseline of a picture of EMOJI lies in a cell of the console's
+;; whose top is at Y: its line in the middle of the cell.
+(defun letters-baseline (emoji y)
+  (+ y (floor (- clara.font:+height+ (font-up emoji) (font-down emoji)) 2) (font-up emoji)))
+
+;; STRING as a line of the console's letters, its upper left corner at X and
+;; Y: the letters a run at a time, and the pictures between them.
+(defun draw-among-letters (surface x y string color background)
+  (let ((emoji (among-letters)))
+    (if (null emoji)
+        (clara.draw::draw-letters surface x y string color background)
+        (let ((wide clara.font:+width+) (high clara.font:+height+) (baseline (letters-baseline emoji y))
+              (pen x) (from nil) (i 0) (end (length string)) (drew nil))
+          (flet ((letters (to)
+                   ;; The letters that have waited, from FROM to before TO.
+                   (when from
+                     (when (clara.draw::draw-letters surface pen y (subseq string from to) color background)
+                       (setq drew t))
+                     (setq pen (+ pen (* wide (- to from)))
+                           from nil))))
+            (loop
+              (when (>= i end)
+                (return))
+              (multiple-value-bind (item count) (next-letter string i emoji)
+                (cond ((eq item t)
+                       (unless from
+                         (setq from i)))
+                      (t
+                       (letters i)
+                       (when item
+                         (when (and background (clara.draw:fill-rectangle surface pen y (* 2 wide) high background))
+                           (setq drew t))
+                         (when (draw-pair surface pen y wide high baseline item color)
+                           (setq drew t))
+                         (setq pen (+ pen wide wide)))))
+                (setq i (+ i count))))
+            (letters end))
+          drew))))
+
+;; STRING in the console's letters, a character to the cell: an emoji that
+;; has its second cell after it is its picture across the two.
+(defun cells-among-letters (surface x y string color background)
+  (let ((emoji (among-letters)))
+    (if (null emoji)
+        (clara.draw::draw-letters surface x y string color background)
+        (let ((wide clara.font:+width+) (high clara.font:+height+) (baseline (letters-baseline emoji y))
+              (count (length string)) (from 0) (i 0) (drew nil))
+          (loop
+            (when (>= i count)
+              (return))
+            (let ((picture (and (< (+ i 1) count) (char= (char string (+ i 1)) clara.draw:+taken+)
+                                (let ((glyph (glyph emoji (char-code (char string i)))))
+                                  (and (shows-p glyph) glyph)))))
+              (cond (picture
+                     (when (< from i)
+                       (when (clara.draw::draw-letters surface (+ x (* wide from)) y (subseq string from i) color background)
+                         (setq drew t)))
+                     (when (and background (clara.draw:fill-rectangle surface (+ x (* wide i)) y (* 2 wide) high background))
+                       (setq drew t))
+                     (when (draw-pair surface (+ x (* wide i)) y wide high baseline picture color)
+                       (setq drew t))
+                     (setq i (+ i 2)
+                           from i))
+                    (t
+                     (setq i (+ i 1))))))
+          (when (< from count)
+            (when (clara.draw::draw-letters surface (+ x (* wide from)) y (subseq string from count) color background)
+              (setq drew t)))
+          drew))))
 
 ;;; The machine
 
@@ -1131,11 +1628,17 @@
 
 ;; What draws takes it from here when it is handed a font: how wide a
 ;; string is and the string drawn, and for text in cells how wide and how
-;; high a cell is, and a string drawn a character to the cell.
+;; high a cell is, and a string drawn a character to the cell. And the same
+;; three for a text in the console's letters that has emoji in it.
 (clara.draw:provide-fonts (lambda (string font) (width string font))
                           (lambda (surface x y string color background font)
                             (draw surface x y string color background font))
                           (lambda (font) (cell-width font))
                           (lambda (font) (font-height font))
                           (lambda (surface x y string color background font)
-                            (draw-cells surface x y string color background font)))
+                            (draw-cells surface x y string color background font))
+                          (lambda (string) (letters-width string))
+                          (lambda (surface x y string color background)
+                            (draw-among-letters surface x y string color background))
+                          (lambda (surface x y string color background)
+                            (cells-among-letters surface x y string color background)))

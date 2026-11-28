@@ -3,6 +3,7 @@
  * usage: fontcheck facts <file>...
  *        fontcheck shades <file> <size> <first code> <last code>
  *        fontcheck points <file> [<glyph>]
+ *        fontcheck colours <file>...
  *
  * lisp/type.lisp reads TrueType files and makes pictures of their glyphs,
  * and nobody here wrote FreeType, which does the same: this is the second
@@ -32,6 +33,15 @@
  * outline of one glyph, a contour to the line, each point as it is across
  * and up and whether the contour goes through it; or, without a glyph, the
  * sum over the points of each glyph by itself.
+ *
+ * `colours` prints, for each file, a row of the table FONT-COLOURS in
+ * lisp/host/tests.lisp: how many of its glyphs are pictures in colours,
+ * how many layers those have between them, and a sum over every such glyph
+ * in the order of their numbers: its number, then for each of its layers
+ * the layer's glyph, the number of its colour, and unless that is 65535,
+ * the colour of the text, the colour itself, its red, green and blue as
+ * one number, and how much of it shows. The colours are those of the
+ * file's first palette.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -40,6 +50,7 @@
 #include <ft2build.h>
 #include FT_FREETYPE_H
 #include FT_TRUETYPE_TABLES_H
+#include FT_COLOR_H
 
 #define MODULUS 1000000007ULL
 
@@ -165,6 +176,45 @@ static void points(FT_Library library, const char *file, long only)
     FT_Done_Face(face);
 }
 
+static void colours(FT_Library library, const char *file)
+{
+    FT_Face face;
+    const char *name = strrchr(file, '/');
+    FT_Color *palette = NULL;
+    unsigned long long total = 0;
+    long pictures = 0, layers = 0;
+
+    if (FT_New_Face(library, file, 0, &face)) {
+        fprintf(stderr, "fontcheck: FreeType cannot read %s\n", file);
+        exit(1);
+    }
+    if (FT_Palette_Select(face, 0, &palette))
+        palette = NULL;
+    for (FT_UInt glyph = 0; glyph < (FT_UInt)face->num_glyphs; glyph++) {
+        FT_LayerIterator iterator;
+        FT_UInt layer, colour;
+        int first = 1;
+
+        iterator.p = NULL;
+        while (FT_Get_Color_Glyph_Layer(face, glyph, &layer, &colour, &iterator)) {
+            if (first) {
+                total = sum(total, (long)glyph);
+                pictures++;
+                first = 0;
+            }
+            total = sum(total, (long)layer);
+            total = sum(total, (long)colour);
+            if (colour != 0xFFFF && palette) {
+                total = sum(total, ((long)palette[colour].red << 16) | ((long)palette[colour].green << 8) | palette[colour].blue);
+                total = sum(total, palette[colour].alpha);
+            }
+            layers++;
+        }
+    }
+    printf("    (\"%s\" %ld %ld %llu)\n", name ? name + 1 : file, pictures, layers, total);
+    FT_Done_Face(face);
+}
+
 int main(int argc, char **argv)
 {
     FT_Library library;
@@ -174,13 +224,16 @@ int main(int argc, char **argv)
     if (argc >= 3 && !strcmp(argv[1], "facts"))
         for (int i = 2; i < argc; i++)
             facts(library, argv[i]);
+    else if (argc >= 3 && !strcmp(argv[1], "colours"))
+        for (int i = 2; i < argc; i++)
+            colours(library, argv[i]);
     else if (argc == 6 && !strcmp(argv[1], "shades"))
         shades(library, argv[2], atoi(argv[3]), atol(argv[4]), atol(argv[5]));
     else if ((argc == 3 || argc == 4) && !strcmp(argv[1], "points"))
         points(library, argv[2], argc == 4 ? atol(argv[3]) : -1);
     else {
         fprintf(stderr, "usage: fontcheck facts <file>...\n       fontcheck shades <file> <size> <first code> <last code>\n"
-                        "       fontcheck points <file> [<glyph>]\n");
+                        "       fontcheck points <file> [<glyph>]\n       fontcheck colours <file>...\n");
         return 2;
     }
     return 0;

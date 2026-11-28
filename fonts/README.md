@@ -43,8 +43,30 @@ stands. Their SHA-256 sums:
     f459d9b7aad4265984d87ed0e38f2c912131488f8a3b91027ef0bed567239506  Charter-Italic.ttf
     5fad789c56e24d323dfa017dffa5305220f03f89b8e43b28594284554df70437  Charter-Regular.ttf
 
-The Go fonts are the families `Sans` and `Mono` of `lisp/type.lisp`, and
-Charter is its family `Serif`. It reads them as they are: every
+`Twemoji.Mozilla.ttf` is Twemoji, the emoji that Twitter and others
+drew (https://github.com/twitter/twemoji), as the font that Mozilla made
+of them for Firefox: https://github.com/mozilla/twemoji-colr, the file
+`Twemoji.Mozilla.ttf` of its release v0.7.0 (commit
+c0460fdb2654dee584e75c4913bfa9fd2f873338), unmodified. The pictures are
+distributed under the Creative Commons Attribution 4.0 International
+license, and the font was made with code under the Apache License 2.0:
+`LICENSE.twemoji` is that repository's `LICENSE.md` as it stands, which
+says both. Its SHA-256 sum:
+
+    6d90152ee0d29e82fe2a87793af5aa4b7ad13e6538360889e141e81ed299ee8e  Twemoji.Mozilla.ttf
+
+It has 13,723 glyphs, of which 3,689 are pictures: each of those is a
+list of other glyphs that are laid over each other, 33,179 layers in
+all, every one in a colour of the file's palette of 1,063 (the tables
+`COLR`, in its first form, and `CPAL`). 1,418 characters have a glyph,
+the emoji of Unicode 14 among them, and 2,298 rows of characters have
+one between them, a flag for the two letters of its country (the table
+`GSUB`). The glyphs of the digits, of `#` and of `*` have no outline:
+they are there to begin the row of a key.
+
+The Go fonts are the families `Sans` and `Mono` of `lisp/type.lisp`,
+Charter is its family `Serif`, and Twemoji its family `Emoji`, where the
+emoji of a text in any font come from. It reads them as they are: every
 `fonts/*.ttf` goes into the system's directory on the boot volume, and
 the handoff reads it into memory with the system's other files. The Go
 fonts have the letters of Latin, Greek and Cyrillic writing, 712 glyphs
@@ -55,4 +77,9 @@ below nought: `lisp/type.lisp` takes it for the same either way. A font that is 
 `clara.type::*families*`, its license beside it, and its row in the table
 `*font-facts*` of `lisp/host/tests.lisp`, which `tools/fontcheck.c` prints:
 what FreeType says of the file, for the host tests to hold against what
-`lisp/type.lisp` reads.
+`lisp/type.lisp` reads. A font of pictures gets a row in `*font-colours*`
+as well, which `fontcheck colours` prints: FreeType's word on every layer
+of every picture and on its colour. Which glyph a row of characters comes
+to is HarfBuzz's to say (`hb-shape --no-glyph-names --no-positions
+--no-clusters --preserve-default-ignorables -u 1F1FA,1F1F8 <file>`), and
+the host tests have a sample of its answers for this file.

@@ -3854,6 +3854,125 @@ program is, and it takes two ways, because this C is a kernel.
   the kernel's runs in either. Neither job is a check that the ruleset on
   main asks for; that is Julio's to say (issue #241).
 
+## Emoji (decided for issue #62, 2026-11-27)
+
+- The issue asks for emoji across the system (Julio: "Emoji support
+  across the system."). The language had them from its first day: a
+  character is a code of Unicode, a string holds any of them, and text
+  outside the heap is UTF-8, so an emoji could be read, kept in a file
+  and written to the serial port. The screen was what had none, and
+  showed a box. So this is about pictures: where they come from, which
+  characters get one, and what a window of cells does with a character
+  that is wider than a letter.
+- The pictures are a font's, and the font is Twemoji: the emoji that
+  Twitter drew and gave away, as the font that Mozilla made of them for
+  Firefox, version 0.7.0, 3,689 pictures in 1.4 MiB, which are the emoji
+  of Unicode 14. It is the one font of emoji that is what the renderer
+  already reads. Its glyphs are outlines of TrueType's kind, and a
+  picture is so many of them laid over each other, each in one colour:
+  the tables "COLR", in its first form, and "CPAL". So a picture is the
+  rasterizer that there is, called once for each layer, and the
+  substrate's function that lays a colour on by shades. The others are
+  pictures of other kinds. Google's Noto Color Emoji is bitmaps in PNG,
+  10 MiB of them, or layers with gradients that run from colour to
+  colour, the second form of "COLR"; Apple's is bitmaps and nobody's to
+  hand on; and a font of emoji as plain outlines, Noto Emoji, is line
+  drawings in the colour of the text, which is not what anybody means by
+  the word.
+- The price is the size. The system's directory grows from 4.2 MiB to
+  5.6, a third, and that much more is fetched and copied by a machine
+  that takes a newer system, and lies on its volume twice for a moment.
+  The file is among the system's fonts, read into memory by the handoff
+  with the others, so that the pictures are there wherever the letters
+  are; reading it is too little of a boot to measure (#256).
+- A picture is a glyph like a letter's, made when it is first drawn and
+  kept beside its font: its layers, each the shades of the glyph that it
+  names and the pixel of its colour, laid on in their order. A colour
+  that shows only in part fades the shades of its layer once, when the
+  picture is made. A layer may say that it is in the colour of the text,
+  and a font of emoji that is plain outlines is drawn in that colour
+  throughout: `clara.type:define-family` gives the name Emoji to another
+  file.
+- One rule says which font a character is drawn in: the text's own, and
+  the pictures' for a character from the code 8192 on that the text's
+  font has no glyph for. An emoji is at the size of the text and on its
+  baseline. So the heart that Sans has is the heart of Sans, in the
+  colour of the text, as the trade mark sign in a page is a letter and
+  no blue square; the character that Unicode has for saying "as a
+  picture", U+FE0F, makes either the picture. The other rule, every
+  character of Unicode's list a picture wherever it stands, is simpler
+  to say and wrong in every page that has such a sign in a sentence.
+  The other characters that are there to be passed over, the space of
+  no width for one, are no part of this and are the box that they were
+  (#258).
+- The font says which characters are one picture between them: the two
+  letters of a country, a hand and a colour of skin, people and the
+  character that joins them, a digit and the frame of a key. That is the
+  table "GSUB", in its lists of the kind that puts one glyph in the place
+  of several, and nothing else of it is read. A list is asked only where
+  the next character is one that can go with the one before it, since
+  the lists are long and most text has no such character. What the font
+  has no picture for between them is drawn a character at a time, and
+  the characters that only say something, the joiner and the ones that
+  pick a form, show nothing by themselves. The font has each row in one
+  spelling, with U+FE0F wherever Unicode wants it, and a row that is
+  written without is not one picture (#257).
+- Which characters are emoji is Unicode's list and not the font's: a
+  table in lisp/draw.lisp, 1,424 characters, which tools/emoji.py makes
+  of Unicode's file. It is what says that a character takes two cells,
+  and that must not depend on a file that a machine may be without, or
+  on which file it is: a row is laid out before anything of it is drawn.
+  The table is that of Unicode 17 and the font's emoji are those of 14,
+  so thirty-four characters have their two cells and a box (#255).
+- A window of text stays a grid with a character to the cell, and an
+  emoji takes two cells. The string that is drawn has a character of its
+  own in the second cell, `clara.draw:+taken+`, the code 65535, which
+  Unicode keeps free of characters for good: so a place in such a string
+  is still a cell, and whatever counts cells by characters goes on doing
+  so, the cursor, what is highlighted, the colours of a row, where each
+  character of a line that is read was drawn. The other way, strings as
+  the text has them and every place worked out from the widths before
+  it, changes every sum in every window. The price is that what stands
+  in cells is no longer the text: `clara.draw:in-cells` makes the one of
+  the other and `from-cells` the text again, and a terminal, which keeps
+  cells, does not keep the characters that show nothing. Nor is anything
+  joined in cells: a flag there is two letters, each a picture. A cell
+  that held several characters would be another kind of row (#252).
+- In cells every emoji of the table is a picture, also the few that a
+  font of letters has a shape for, thirteen in Mono: there the width has
+  to be known from the character alone (#254). Among the console's letters, which are 8 pixels
+  wide, a picture is in the family Emoji at the largest size whose line
+  is no higher than a cell and whose pictures are no wider than two, 13
+  pixels to the em for Twemoji.
+- A window takes part by making its rows with `in-cells`. The terminal
+  does, and so the REPL: it writes an emoji into two cells, begins the
+  next row when one is left, leaving that cell nobody's, takes both back
+  at the key that takes a character back, highlights and copies an emoji
+  whole, and blanks the half that is left when the other half is written
+  over. Emma, Jaid, Parker and Settings do not yet (#249, #250), and
+  show what they showed, a box in one cell, since an emoji that has no
+  `+taken+` after it is drawn as any character that the font has no
+  glyph for: nothing changed for a window that was not taught. The
+  console before the window manager is not taught either: it is the
+  substrate's twin, cell for cell, and has to work without a file
+  (#253). And no key types an emoji (#251).
+- Nothing in the file is trusted, as with the letters. What it says of
+  its colours is held against its tables once, when a font is first made
+  of it, and a file that says more than it has room for is refused; a
+  picture of more than 256 layers, or of layers that the file has not,
+  shows nothing; no more than 16 characters are one glyph, and no more
+  than 4096 lists are looked at; a list that cannot be read joins
+  nothing. None of that is an error at the time of drawing.
+- It is tested against what it did not make. FreeType says which layers
+  every glyph of the file has and in which colours, as a sum
+  (`fontcheck colours`), and the host tests work the same sum out.
+  HarfBuzz says which glyphs a row of characters comes to: for a sample
+  in the host tests, and by hand for every sequence of Unicode's
+  emoji-test.txt, 5,225 of them, with not one that differed. The rules
+  are tried on files that the tests put together, right ones and wrong
+  ones, with every pixel held against the layers; and a kernel and SBCL
+  count the same pixels of one face.
+
 ## Conventions
 
 - C: lower_snake_case for functions and files. Kernel-wide symbols carry

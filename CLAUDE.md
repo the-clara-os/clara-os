@@ -1785,14 +1785,66 @@ Rules:
   at 15 pixels, bold, because some of its glyphs reach out of their cells
   (`reaches-out-p`): cells in a font whose glyphs all fit say nothing about
   the cut. An expectation that names the row with the cursor in it ends
-  before the cursor's cell, as everywhere. tools/session.txt opens a
+  before the cursor's cell, as everywhere. tools/resumed.txt opens a
   terminal in two fonts and counts the pixels of its window, numbers that
-  the same forms give under SBCL, and launches the REPL, Emma and Jaid in a
+  the same forms give under SBCL: that was the first session's until
+  0.0.67, and cost the first x86_64 boot most of a second that it has not
+  got (issue #213). tools/session.txt launches the REPL, Emma and Jaid in a
   font; it unloads Emma again, since the session of the world that came back
   wants no package of hers there. The files of Serif say how far their
   letters reach below the baseline as a distance, 236, where a number below
   nought is meant, and `fit` takes either: `*font-facts*` has what FreeType
   reads, the number as it stands.
+- Emoji (lisp/draw.lisp, lisp/type.lisp, lisp/terminal.lisp, Julio's issue
+  #62; DESIGN.md has what was decided). Which characters are emoji is the
+  table `clara.draw::*emoji*`, which `python3 -I tools/emoji.py
+  emoji-data.txt` prints from Unicode's file
+  (https://www.unicode.org/Public/17.0.0/ucd/emoji/emoji-data.txt): it is
+  pasted and never typed, and a table of another Unicode changes the
+  count that the host tests and the manual say, 1,424. It says how many
+  cells a character takes, so it does not follow the font. The pictures
+  are the family Emoji, fonts/Twemoji.Mozilla.ttf, and one rule says
+  which font a character of a text is drawn in, written twice:
+  `next-glyph` for a text in a font and `next-letter` for one in the
+  console's letters (lisp/type.lisp). A change to one is a change to the
+  other, and to the rules that the tests hold every pixel against
+  (`row-pixel`, `cells-pixel`, `glyph-over`). A string with no character
+  from the code 8192 on never comes there (`clara.draw::plain-p`): it is
+  drawn the way it always was, so what is changed of that way is tried
+  with both kinds of string. A font file of pictures that is added, or
+  put in the place of this one, gets its rows in `*font-facts*` and
+  `*font-colours*` (`build/fontcheck facts` and `colours`), and its
+  sequences are held against HarfBuzz: the sample in the host tests, each
+  line of it from `hb-shape --no-glyph-names --no-positions --no-clusters
+  --preserve-default-ignorables -u 1F1FA,1F1F8 <file>`, and by hand every
+  sequence of Unicode's emoji-test.txt, with `--text-file` and a cut copy
+  of the host tests that writes what `clara.type::joined` and `index`
+  come to for the same lines (ROADMAP.md, "Emoji", has what came of it).
+  A string that stands in cells has `clara.draw:+taken+` after each
+  emoji, and `clara.draw:draw-cells` draws a picture only for an emoji
+  that has it: a window of cells takes part by making its rows with
+  `clara.draw:in-cells` and by giving text back through `from-cells`,
+  and one that does neither shows a box, as it did. In the terminal,
+  whatever writes a row goes through `put`, which blanks the half of an
+  emoji that is left when the other is written over; whatever may come
+  to the last cell of a row with an emoji asks `make-room` first; and
+  whatever takes cells for text asks `whole`, so that half an emoji is
+  never highlighted or copied. In the tests `cells-show-p` and
+  `pair-shows-p` are what a row with emoji is held against, the first
+  with SHORT for a row that has the cursor in it; `new-pictures` is a
+  machine with a made-up font of pictures under the family's file name,
+  and `picture-font` that file, right or wrong in the ways its options
+  say. Making a picture under SBCL takes milliseconds, and the host
+  tests have none to spare (issue #122): a test that wants to know
+  whether the font has a picture asks `clara.type::layers-of`, and makes
+  the few that it looks at. tools/resumed.txt counts the pixels of a
+  face, `(856 492)`, and the host tests ask the same form: a change to
+  the pictures that is meant changes that line on all three machines.
+  Its last form opens the window of emoji that the picture on the
+  website shows, so what it writes there is in the `alt` of
+  site/index.html. A function there cannot be called ROOM, which is
+  Common Lisp's, and a session cannot call MAP, which the kernel's Lisp
+  has not.
 - The clock (lisp/windows.lisp, Julio's issue #57; DESIGN.md has what was
   decided). What the right-hand end of the bar says is `*time*`, the words
   that the function of `clara.windows:*clock*` made of a time, and before
