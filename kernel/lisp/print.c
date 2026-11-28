@@ -18,9 +18,11 @@
  * `found` it leaves such a structure out and notes it there; with `texts`
  * it writes the next text of that list in its place, which is what Lisp
  * said when the caller asked (kernel/lisp/builtin.c). With neither, as
- * lisp_print and lisp_princ are, it writes the name of the type between
- * #< and >, which is all that can be said where nobody can be asked: in
- * what an error of the substrate's says, for one.
+ * lisp_print and lisp_princ are, it writes the name of the type and the
+ * structure's address between #< and >, #<STANDARD-OBJECT {40000012A458}>,
+ * which is all that can be said where nobody can be asked: in what an
+ * error of the substrate's says, for one. The address is what Lisp writes
+ * for an instance too, so it says which one is meant.
  *
  * Lists nest by recursion in C here too: below LISP_DEPTH a list is
  * printed as #. Nothing looks out for a list that leads back into itself,
@@ -261,10 +263,12 @@ static void print_structure(struct printer *p, lisp x)
         if (lisp_is(text, LISP_STRING)) /* what Lisp said */
             for (uint64_t i = 0; i < lisp_length(lisp_as_string(text)->header); i++)
                 put_char(p, lisp_as_string(text)->chars[i]);
-        else { /* nobody was asked, or nothing was said */
+        else { /* nobody was asked, or nothing was said: its type, and its address as %ADDRESS gives it */
             put_text(p, "#<");
             print_name(p, lisp_as_symbol(lisp_as_cons(names)->car)->name);
-            put_char(p, '>');
+            put_text(p, " {");
+            put_number(p, x & ~LISP_TAG_MASK, 16);
+            put_text(p, "}>");
         }
         return;
     }

@@ -430,6 +430,30 @@
       (entry))
     (reverse entries)))
 
+;; An address is not compared, here as in tools/boottest.sh: an object
+;; with no text to read back is written with the address at which it lies,
+;; in hexadecimal between braces and last before the >, and that is another
+;; number at every run. Whatever digits stand there are {...} to a
+;; comparison.
+(defun without-addresses (line)
+  (with-output-to-string (out)
+    (let ((i 0))
+      (loop
+        (when (= i (length line))
+          (return))
+        (let ((end (and (char= (char line i) #\{)
+                        (position-if-not (lambda (c) (find c "0123456789ABCDEF")) line :start (1+ i)))))
+          (cond ((and end (> end (1+ i)) (starts-with "}>" (subseq line end)))
+                 (write-string "{...}" out)
+                 (setq i (1+ end)))
+                (t (write-char (char line i) out)
+                   (incf i))))))))
+
+(check '("#<BOX {...}>" "(#<A {...}> \"#<B it {...}>\" #<{...}>)" "{12AB} {} {}> {12ab}> {12AG}> #<C {...}>")
+       (mapcar #'without-addresses
+               '("#<BOX {40000012A458}>" "(#<A {4000002D25B0}> \"#<B it {0}>\" #<{...}>)"
+                 "{12AB} {} {}> {12ab}> {12AG}> #<C {F}>")))
+
 ;; What a listener answers to a text that is read in PACKAGE, as
 ;; lisp/listener.lisp does it: what the forms write, the values of each on
 ;; a line of its own, or the error; and whether there was an error. What
@@ -471,14 +495,15 @@
 ;; error it has to fail, in whatever words, and where the answer shows an
 ;; object that has no text to read back, a #<, it has to go well. So a form
 ;; of that file says nothing that the two systems put differently, and
-;; every error in it is one that lisp/clos.lisp words itself.
+;; every error in it is one that lisp/clos.lisp words itself. The letter
+;; is everything but an address, which the file has as {...}.
 (let ((entries (transcript "tools/objects.txt")))
   (check t (> (length entries) 150))
   (dolist (entry entries)
     (destructuring-bind (text expected) entry
       (incf *checks*)
       (let ((ours (answer-of text *ours*)))
-        (unless (equal ours expected)
+        (unless (equal (mapcar #'without-addresses ours) (mapcar #'without-addresses expected))
           (failed "~A~%   lisp/clos.lisp answers ~S~%   and tools/objects.txt has ~S" text ours expected)))
       (multiple-value-bind (theirs error) (answer-of text *theirs*)
         (cond ((some (lambda (line) (starts-with "error: " line)) expected)
@@ -515,7 +540,30 @@
          (ours "(handler-case (defclass a (d) ()) (error () 'refused))
                 (let ((d (make-instance 'd)))
                   (list (list (x d) (y d)) (mapcar #'class-name (clara.clos::class-precedence-list (find-class 'd)))
-                        (mapcar #'clara.clos::slot-name (clara.clos::class-direct-slots (find-class 'a)))))")))
+                        (mapcar #'clara.clos::slot-name (clara.clos::class-direct-slots (find-class 'a)))))"))
+  ;; The address that an object is written with is the number that the substrate says it lies at, in
+  ;; hexadecimal with capital letters, whatever the transcript's {...} leaves unasked: here the
+  ;; substrate is lisp/host/objects.lisp, which hands out numbers of its own. NIL lies where the heap
+  ;; begins, and an integer or a character nowhere. SBCL writes an address of its own for all of them.
+  (ours "(defclass somewhere () ())")
+  (check '("(T T T T (\"#<{400000000000}>\" \"#<>\" \"#<>\"))")
+         (ours "(let ((one (make-instance 'somewhere)) (text (make-string 3)))
+                  (flet ((written (object)
+                           (with-output-to-string (stream) (print-unreadable-object (object stream :identity t)))))
+                    (list (equal (prin1-to-string one) (format nil \"#<SOMEWHERE {~X}>\" (clara.clos::address-of one)))
+                          (equal (written text) (format nil \"#<{~X}>\" (clara.clos::address-of text)))
+                          (< #x400000000000 (clara.clos::address-of one) (clara.clos::address-of text))
+                          ;; three hundred more, in whose addresses every digit comes up
+                          (every (lambda (object) (equal (written object) (format nil \"#<{~X}>\" (clara.clos::address-of object))))
+                                 (loop repeat 300 collect (list 1)))
+                          (list (written nil) (written 5) (written #\\a)))))"))
+  ;; The numbers that are handed out here are an object's own, as an address is on the machine.
+  (check '(t nil nil 0)
+         (let ((one (list 1)) (other (list 1)))
+           (list (eql (clara.clos::address-of one) (clara.clos::address-of one))
+                 (eql (clara.clos::address-of one) (clara.clos::address-of other))
+                 (clara.clos::address-of 5)
+                 (mod (clara.clos::address-of other) 8)))))
 
 ;; The same text in both worlds, which have to answer alike: both with an
 ;; error, or both with the same values, as far as a value has a text that

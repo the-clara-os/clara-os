@@ -962,7 +962,7 @@ static const struct {
       " (cl::%type-of (make-condition 'simple-error :format-control \"x\"))))",
       "(TY (TY A) SIMPLE-ERROR)" },
     /* a structure that Lisp writes: the printer asks for its text, between its rounds, wherever it comes to
-       one; where nobody can be asked, in what an error of the substrate's says, it is its type and no more.
+       one; where nobody can be asked, in what an error of the substrate's says, it is its type and its address.
        (What the text puts back when nothing was there to ask is NOT, which says NIL of a structure and
        is a function in C: a function of the text's own would hold a symbol of the text's package, and
        the package with all that the texts defined would stay in the heap for as long as it is there.) */
@@ -982,9 +982,18 @@ static const struct {
       " (error (c) (list asked (princ-to-string c)))))"
       " (cl::%set-symbol-function 'cl::%object-text old))))",
       "(1 \"2 cannot be shown\")" },
+    /* (its address stands between the braces, another at every boot: tools/resumed.txt holds the digits
+       against %ADDRESS at a kernel) */
     { "(progn (defstruct marked a) (cl::%put 'marked 'cl::%printed t)"
-      " (handler-case (car (make-marked :a 1)) (error (c) (princ-to-string c))))",
-      "\"CAR wants a list, and #<MARKED> is not one\"" },
+      " (let ((said (handler-case (car (make-marked :a 1)) (error (c) (princ-to-string c)))))"
+      " (list (subseq said 0 32) (subseq said (- (length said) 13)))))",
+      "(\"CAR wants a list, and #<MARKED {\" \"}> is not one\")" },
+    /* where an object lies: NIL is the first object of the heap, and an object has one address, which
+       another has not; an integer or a character is a word by itself and lies nowhere */
+    { "(let ((one (list 1)))"
+      " (list (cl::%address nil) (cl::%address 5) (cl::%address #\\a) (= (cl::%address one) (cl::%address one))"
+      " (= (cl::%address one) (cl::%address (list 1)))))",
+      "(70368744177664 NIL NIL T NIL)" },
     /* characters, strings, symbols and packages */
     { "(list (char \"abc\" 1) (char-code #\\A) (code-char 955) (length \"four\"))", "(#\\b 65 #\\\xce\xbb 4)" },
     { "(char \"abc\" 3)", "error: CHAR wants an index that is inside what it is given, and 3 is not one" },

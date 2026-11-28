@@ -34,6 +34,20 @@
 #<STANDARD-CLASS TANK>
 > (list (unit *tank*) (level *tank*) *tank* (handler-case (drain *tank* 0) (low-fuel (c) (fuel-left c))))
 (LITRES 5 #<TANK main at 5> 5)
+> (car *tank*)
+error: CAR wants a list, and #<STANDARD-OBJECT {...}> is not one
+> (defclass crate () ())
+#<STANDARD-CLASS CRATE>
+> (let* ((crate (make-instance 'crate)) (text (prin1-to-string crate)) (where (cl::%address crate)))
+    (cl::%collect)
+    (list crate (make-instance 'crate) (string= text (format nil "#<CRATE {~X}>" where)) (string= text (prin1-to-string crate))
+          (string= (handler-case (car crate) (error (c) (princ-to-string c)))
+                   (format nil "CAR wants a list, and #<STANDARD-OBJECT {~X}> is not one" where))))
+(#<CRATE {...}> #<CRATE {...}> T T T)
+> (let ((one (list 1)))
+    (list (cl::%address nil) (cl::%address 5) (cl::%address #\a) (= (cl::%address one) (cl::%address one))
+          (= (cl::%address one) (cl::%address (list 1))) (mod (cl::%address "here") 8)))
+(70368744177664 NIL NIL T NIL 0)
 > (handler-case (error 'low-fuel :left 3) (low-fuel (c) (fuel-left c)))
 3
 > (list *jobs* *from-a-file* (clara:thread-alive-p *spinner*))

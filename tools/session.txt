@@ -132,8 +132,6 @@ error: #<LOW-FUEL :LEFT 3>
 > (list (class-name (class-of 5)) (class-of "five") (find-class 'low-fuel) (class-of *tank*) (type-of 'five)
         (class-name (class-of *standard-output*)) (class-of (find-class 'tank)) #'drain)
 (INTEGER #<BUILT-IN-CLASS STRING> #<BUILT-IN-CLASS LOW-FUEL> #<STANDARD-CLASS TANK> SYMBOL STREAM #<BUILT-IN-CLASS STANDARD-CLASS> #<FUNCTION DRAIN>)
-> (car *tank*)
-error: CAR wants a list, and #<STANDARD-OBJECT> is not one
 > (unwind-protect (car 5) (format t "cleaning up~%"))
 cleaning up
 error: CAR wants a list, and 5 is not one

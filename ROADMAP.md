@@ -3168,6 +3168,96 @@ Infrastructure, done:
   without its U+FE0F is not one picture (#257); and, found beside it,
   the characters that are there to be passed over and are no part of
   emoji are still a box (#258).
+- **The address of an instance** (2026-11-28, version 0.0.68). An instance
+  is written with the address at which it lies, `#<ACCOUNT
+  {400000141968}>`, which is Julio's issue #65: two instances of a class
+  looked the same wherever they were written, `(#<ACCOUNT> #<ACCOUNT>)`,
+  unless the class had a method of `print-object`, and `:identity t` of
+  `print-unreadable-object` was taken and added nothing. That keyword
+  now writes the address of the object that it is given, in hexadecimal
+  between braces and last before the `>`, the way SBCL writes one, with
+  a space before it when something stands there. The method of
+  `print-object` for `standard-object` asks for it, and so can a method
+  of a program's own, for an instance or for a structure: `#<AUDITED
+  Gray {4000003AD318}>`. The address is the object's own for as long as
+  it is there, since nothing in the heap moves and a world that was
+  saved comes back with every object where it was: two objects never
+  show the same one, and one shows the same every time. An integer or a
+  character is a word by itself, lies nowhere and gets none. The
+  substrate has one function more for it, `%ADDRESS`
+  (kernel/lisp/builtin.c), and the printer in C writes the same number
+  after the type of a structure that it can ask nobody about, so that an
+  error of the substrate's says which instance it met: `CAR wants a
+  list, and #<STANDARD-OBJECT {400000141968}> is not one`. A class, a
+  generic function and a method are written as they were, and so is
+  what the printer writes by itself, a function, a thread, a lock.
+  The issue had two ways, the address and a number counted for each
+  class, and DESIGN.md says why it is the address. Its price is paid in
+  the tests: an address is another on every machine and at every boot,
+  so nothing that is compared can have one. tools/boottest.sh takes
+  whatever digits stand between braces before a `>` for `{...}`, in the
+  session and in what the kernel said, and the host tests do the same
+  for tools/objects.txt. A session writes `#<BOX {...}>`; the manual
+  writes the addresses that a screen showed, and is held to everything
+  but the digits. What is to be known of an address is asked in Lisp,
+  with an answer that has none in it. That two objects differ and one
+  stays the same is asked of their texts, in tools/objects.txt, which
+  has sixteen forms more, for an instance, for a method with
+  `:identity` and with every pair of the two keywords, for a structure,
+  and for the order in which the four things are evaluated. That the
+  digits are the address is asked against FORMAT's `~X`: under SBCL for
+  three hundred objects in whose addresses every digit comes up, and at
+  a kernel for an instance, for the printer's own text of it, and after
+  a collection (tools/resumed.txt, on all three machines). Under SBCL
+  the address is not SBCL's, whose collector moves objects and their
+  addresses with them: lisp/host/objects.lisp hands out numbers that an
+  object keeps. A text of the kernel's self-test showed a structure as
+  the printer writes it, and now holds what stands before and after the
+  address; one more text asks `%ADDRESS` what the others take for
+  granted, that NIL is where the heap begins.
+  Fifty-five mistakes were planted, one at a time. Forty were in
+  lisp/clos.lisp, the stand-in, the tests' own comparison and the
+  transcript, each with the host tests up to the end of the object
+  system's section after it, two seconds a case; thirty-seven were
+  noticed. Two showed what the tests had not asked: a wrong letter for
+  the digit fifteen, which no address of the tests had, and braces with
+  nothing between them. Both have their check now and are noticed. The
+  third cannot show: a comparison that holds an answer against itself.
+  Fifteen were in builtin.c, print.c and tools/boottest.sh, each in a
+  built copy of the tree with four boots after it, and all were
+  noticed: the five in `%ADDRESS` and three in the printer by the
+  self-test, which stops the boot, the three in the printer's digits by
+  tools/resumed.txt alone, and the four in the boot test by the
+  sessions.
+  Measured: a world that is made of the files has 2,833 functions to
+  compile where it had 2,831, and the self-test one text more, 556 for
+  555. The kernel's own figure for loading the world, where x86_64 is
+  emulated, is 10.6 to 10.8 seconds on this build and 10.8 to 11.1 on
+  the one before, three boots of each in turn, so there is nothing to
+  see; a text is some seven thousandths of a second of such a boot, by
+  what the four passes take for all of them. On main's last run of CI
+  the first x86_64 boot had taken 89 seconds of its ninety and the host
+  tests 117.3 of their 120 (issues #213 and #122), so the first session
+  has one form fewer: the error of the substrate's with an instance in
+  it is asked in tools/resumed.txt, whose boots take ten seconds, and
+  more closely there, with its digits held against `%ADDRESS`. The host
+  tests have 29,850 checks where they had 29,830; the object system's
+  section takes 0.82 seconds on the Mac where it took 0.80, five runs
+  of each in turn, and nothing was taken off for that. `make test` on
+  the Mac, with a container running beside it, takes 650 seconds, the
+  first x86_64 boot 63 and the boot of the transcript 23; in a
+  container of Ubuntu 26.04, where both machines are emulated as on CI,
+  `make`, `make test` and `make site` take 992 seconds, the first
+  x86_64 boot 75 and the boot that collects at every safe point 224,
+  which is what they took before. `make sanitize` passes in 20 seconds
+  and the boots on checked kernels in 641. Copies of Julio's two disks
+  took the build at once, with the 21 forms of his `/home/defined.lisp`,
+  and two instances that were made there showed the same two addresses
+  after a start in the world that it saved.
+  What it left: what the printer writes by itself has no address, two
+  functions without a name look alike, and so do two locks, and a
+  method is written without one (#260); and nothing takes an
+  address that was written back to its object (#261).
 
 Infrastructure, for sessions with budget left over:
 
@@ -5238,16 +5328,13 @@ M20a, M20b and M20c, objects, what they left:
   on, and CLASS-OF says FUNCTION of it. In Common Lisp the two are one
   object. Nothing here can make an object that is a structure and can be
   called. This is #66.
-- An instance is written without a number of its own (DESIGN.md says
-  why), so `:identity t` of PRINT-UNREADABLE-OBJECT adds nothing. A
-  condition is written by the printer as before, whatever method of
+- A condition is written by the printer as before, whatever method of
   PRINT-OBJECT is written for its type: the printer asks for structures
   only. DEFINE-CONDITION still refuses `:report`, which could now be had
   the same way, a function that writes to a stream when the condition is
   made. And a method of PRINT-OBJECT for STRUCTURE-OBJECT or for T is not
   asked for a structure: the mark is on the name of a type, and is put
-  there by a method for that type's own class. The number is #65; the
-  condition, `:report` and the method for STRUCTURE-OBJECT are #73.
+  there by a method for that type's own class. This is #73.
 - Types. TYPEP knows the classes, ATOM, KEYWORD, FIXNUM and BOOLEAN, and
   OR, AND, NOT, MEMBER, EQL and SATISFIES. Not `(integer 0 9)`, not
   `(unsigned-byte 8)`, not `(vector ...)`, and there is no SUBTYPEP,
@@ -5302,11 +5389,13 @@ M20a, M20b and M20c, objects, what they left:
   instance, and Lisp runs between the first and the second. A method of
   PRINT-OBJECT that changes what is being printed can leave the second
   round with other instances than the first found: what has no text then
-  is written as its type between `#<` and `>`, and nothing is written
+  is written as its type between `#<` and `>`, since 0.0.68 with its
+  address, and nothing is written
   past the length that was counted. A method that prints the object it
   was given, by `~S` of itself, goes round until the stack is full, which
   is an error like any other. And an error of the substrate's own cannot
-  ask at all: `CAR wants a list, and #<STANDARD-OBJECT> is not one`.
+  ask at all: `CAR wants a list, and #<STANDARD-OBJECT {40000012A458}> is
+  not one`.
 - What was checked by hand and by planted mistakes. 132 mistakes were put
   into lisp/clos.lisp, the printer, the evaluator, the compiler,
   lisp/boot.lisp, lisp/system.lisp and the collector, one at a time, and

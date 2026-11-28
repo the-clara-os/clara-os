@@ -4,7 +4,7 @@
 ;;;; own under the same names. The tests read that file into the package
 ;;;; CLARA.CLOS with those names hidden behind symbols of that package
 ;;;; (lisp/host/tests.lisp), so the two live side by side and can be held
-;;;; against each other. What the file asks of the kernel, seven functions,
+;;;; against each other. What the file asks of the kernel, eight functions,
 ;;;; is answered here from what SBCL knows: this file is loaded after the
 ;;;; package is made and before the rest of lisp/clos.lisp is read.
 ;;;;
@@ -59,3 +59,20 @@
       (with-output-to-string (stream)
         (sb-kernel:default-structure-print object stream 0))
       (prin1-to-string object)))
+
+;; Where an object lies. On the machine that is a number which the object
+;; keeps, since nothing in its heap moves. SBCL's collector moves what it
+;; keeps, so SBCL's own address of an object is not that: here an object
+;; is given a number the first time that it is asked for, one that looks
+;; like an address of the machine's heap, a multiple of eight above where
+;; that heap begins, and it has the same one whenever it is asked for
+;; again. NIL lies where the heap begins, and an integer or a character
+;; lies nowhere, as on the machine.
+(defvar *addresses* (make-hash-table :test 'eq :weakness :key))
+(defvar *last-address* #x400000000000)
+
+(defun address-of (object)
+  (cond ((cl:typep object '(or cl:integer cl:character)) nil)
+        ((null object) #x400000000000)
+        ((gethash object *addresses*))
+        (t (setf (gethash object *addresses*) (incf *last-address* 24)))))
