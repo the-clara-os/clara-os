@@ -60,7 +60,8 @@
   (row 0)
   ink         ; the pixel of a glyph,
   paper       ; and the pixel around it
-  line        ; what the row says that is being written: a string as long as a row, with spaces where nothing is
+  line        ; what the row says that is being written: a string as long as a row, with spaces where nothing is,
+              ; and CLARA.DRAW:+TAKEN+ in the second cell of an emoji, which has two
   tints       ; the cells of that row that are in another colour than the ink: a list of (column . pixel)
   kept        ; what the rows before it say, without the spaces at their ends: a ring of strings,
   tinted      ; and a ring like it of their cells in other colours,
@@ -227,6 +228,19 @@
   (or (< (car a) (car b))
       (and (= (car a) (car b)) (< (cdr a) (cdr b)))))
 
+;; The cells of a row that says SAYS from the column FROM to before the
+;; column TO, with both cells of an emoji that has one of them among those:
+;; two values, the first column and the one after the last. An emoji is
+;; highlighted and copied whole or not at all, and no cells are still none.
+(defun whole (says from to)
+  (when (< from to)
+    (when (and (< 0 from (length says)) (char= (char says from) clara.draw:+taken+)
+               (clara.draw:emoji-p (char says (1- from))))
+      (setq from (1- from)))
+    (when (and (< to (length says)) (char= (char says to) clara.draw:+taken+))
+      (setq to (1+ to))))
+  (values from to))
+
 ;; The cells of the row of that number that are highlighted when MARKED is:
 ;; (from . to), from the one column to before the other, or NIL when none
 ;; is. A row is highlighted as far as it says something. Where its line ends
@@ -244,7 +258,8 @@
                           (t (min columns (1+ (length says))))))
                (from (if (= number (car (car marked))) (cdr (car marked)) 0))
                (to (if last (min end (cdr (cdr marked))) end)))
-          (and (< from to) (cons from to)))))))
+          (multiple-value-bind (from to) (whole says from to)
+            (and (< from to) (cons from to))))))))
 
 ;; The pixel that the cell at COLUMN of the window's row ROW stands on:
 ;; PAPER, or the highlight's when the cell is highlighted and PAPER is the
@@ -259,14 +274,31 @@
         paper)))
 
 ;; The cell at COLUMN of the row ROW of the window is drawn again, from what
-;; the row says there, on PAPER, or on the highlight's ground.
+;; the row says there, on PAPER, or on the highlight's ground. A cell of an
+;; emoji is its half of the picture: the two cells are drawn, and only what
+;; lies in this one is kept.
 (defun draw-cell (terminal column row paper)
   (multiple-value-bind (says tints) (shown-row terminal row)
-    (let ((tint (assoc column tints)))
-      (clara.draw:draw-cells (terminal-surface terminal) (* column (terminal-wide terminal)) (* row (terminal-high terminal))
-                             (if (< column (length says)) (string (char says column)) " ")
-                             (if tint (cdr tint) (terminal-ink terminal)) (ground terminal column row paper)
-                             (terminal-font terminal)))))
+    (let* ((tint (assoc column tints))
+           (surface (terminal-surface terminal))
+           (wide (terminal-wide terminal))
+           (high (terminal-high terminal))
+           (x (* column wide))
+           (y (* row high))
+           (ink (if tint (cdr tint) (terminal-ink terminal)))
+           (ground (ground terminal column row paper))
+           (font (terminal-font terminal))
+           (character (if (< column (length says)) (char says column) #\Space))
+           (first (cond ((and (plusp column) (char= character clara.draw:+taken+))
+                         (1- column))
+                        ((and (< (1+ column) (length says)) (char= (char says (1+ column)) clara.draw:+taken+))
+                         column))))
+      (cond (first
+             (clara.draw:fill-rectangle surface x y wide high ground)
+             (clara.draw:with-clip (surface x y wide high)
+               (clara.draw:draw-cells surface (* first wide) y (subseq says first (+ first 2)) ink nil font)))
+            (t
+             (clara.draw:draw-cells surface x y (string character) ink ground font))))))
 
 ;; The row ROW of the window is drawn again, from what it says and in the
 ;; colours that it says it in, with what is highlighted of it on that
@@ -334,14 +366,27 @@
 
 ;; The characters of STRING from START to END, which the row has room for,
 ;; where the next character goes: in the terminal's ink, or in INK, which
-;; the row then remembers of those cells.
+;; the row then remembers of those cells. STRING stands in cells
+;; (CLARA.DRAW:IN-CELLS), and an emoji of it is here with its second cell.
+;; Where one cell of an emoji that the row had is written over and the other
+;; is not, the other is blank from then on: half a picture is none.
 (defun put (terminal string start end &optional ink)
   (let* ((line (terminal-line terminal)) (column (terminal-column terminal)) (after (+ column (- end start)))
-         (tints (terminal-tints terminal)))
+         (tints (terminal-tints terminal))
+         (halves (and (< start end)
+                      (list (and (plusp column) (char= (char line column) clara.draw:+taken+)
+                                 (clara.draw:emoji-p (char line (1- column)))
+                                 (1- column))
+                            (and (< after (terminal-columns terminal)) (char= (char line after) clara.draw:+taken+)
+                                 after)))))
     (dotimes (i (- end start))
       (setf (char line (+ column i)) (char string (+ start i))))
+    (dolist (half halves)
+      (when half
+        (setf (char line half) #\Space)))
     (when tints
-      (setq tints (remove-if (lambda (tint) (and (>= (car tint) column) (< (car tint) after))) tints)))
+      (setq tints (remove-if (lambda (tint) (or (and (>= (car tint) column) (< (car tint) after)) (member (car tint) halves)))
+                             tints)))
     (when ink
       (dotimes (i (- end start))
         (setq tints (cons (cons (+ column i) ink) tints))))
@@ -352,9 +397,21 @@
                              (* (terminal-row terminal) (terminal-high terminal))
                              (subseq string start end) (or ink (terminal-ink terminal)) (terminal-paper terminal)
                              (terminal-font terminal))
+      (dolist (half halves)
+        (when half
+          (draw-cell terminal half (terminal-row terminal) (terminal-paper terminal))))
       (when (terminal-marked terminal)
         (relight terminal column after)))
     (setf (terminal-column terminal) after)))
+
+;; The next character is an emoji, which has two cells: when the row has
+;; one left, that one is nobody's, and the emoji begins the next row. A
+;; terminal of one column has no room for an emoji anywhere, and shows what
+;; it can.
+(defun make-room (terminal)
+  (when (and (= (terminal-column terminal) (1- (terminal-columns terminal))) (> (terminal-columns terminal) 1))
+    (put terminal (string clara.draw:+taken+) 0 1)
+    (new-row terminal t)))
 
 ;; A tab: spaces up to the next column that is a multiple of eight.
 (defun tab (terminal)
@@ -409,11 +466,13 @@
 
 ;; A string: its characters are drawn, as many to the call as a row has
 ;; room for, and then the window shows what has changed. No other thread's
-;; string gets in between.
-(defun write-text (terminal string)
+;; string gets in between. An emoji has two cells, and the characters that
+;; show nothing by themselves have none (CLARA.DRAW:IN-CELLS): a terminal is
+;; cells, and what it shows of a text is what a cell can hold.
+(defun write-text (terminal text)
   (clara:with-lock-held ((terminal-lock terminal))
     (hide-cursor terminal)
-    (let ((start 0) (length (length string)))
+    (let* ((string (clara.draw:in-cells text)) (start 0) (length (length string)))
       (loop
         (when (= start length)
           (return))
@@ -432,19 +491,24 @@
                  (tab terminal)
                  (setq start (1+ start)))
                 (t
-                 (when (= (terminal-column terminal) (terminal-columns terminal))
-                   (new-row terminal t))
+                 (if (= (terminal-column terminal) (terminal-columns terminal))
+                     (new-row terminal t)
+                     (when (and (< (1+ start) length) (char= (char string (1+ start)) clara.draw:+taken+))
+                       (make-room terminal)))
                  (let ((end (1+ start))
                        (limit (min length (+ start (- (terminal-columns terminal) (terminal-column terminal))))))
                    (loop
                      (when (or (= end limit) (moves-p (char-code (char string end))))
                        (return))
                      (setq end (1+ end)))
+                   ;; An emoji whose second cell the row has no room for waits for the next row.
+                   (when (and (< end length) (> end (1+ start)) (char= (char string end) clara.draw:+taken+))
+                     (setq end (1- end)))
                    (put terminal string start end)
                    (setq start end)))))))
     (show-cursor terminal)
     (clara.windows:show (terminal-window terminal)))
-  string)
+  text)
 
 ;; Every cell is blank, the next character goes to the first, and no row
 ;; is kept: there is nothing to go back to, no parenthesis to point at, and
@@ -552,8 +616,9 @@
             (let* ((says (if joined (padded says (terminal-columns terminal)) says))
                    (from (if (= number first) (min (cdr (car marked)) (length says)) 0))
                    (to (if (= number last) (min (cdr (cdr marked)) (length says)) (length says))))
-              (when (< from to)
-                (write-string (subseq says from to) out))
+              (multiple-value-bind (from to) (whole says from to)
+                (when (< from to)
+                  (write-string (clara.draw:from-cells (subseq says from to)) out)))
               (unless (or joined (= number last))
                 (write-char #\Newline out)))))))))
 
@@ -779,7 +844,9 @@
 ;; The line that is being read is LINE now: it has gained CHARACTER, which
 ;; is drawn where the next character goes, a parenthesis that counts in the
 ;; colour of its pair; or it has lost its last character, when that is NIL.
-;; Either way the hint is for the character that is its last now.
+;; Either way the hint is for the character that is its last now. An emoji
+;; is drawn in two cells, and a character that shows nothing by itself in
+;; none: each is remembered by the cell where it began, or would have.
 (defun echo (terminal line character)
   (clara:with-lock-held ((terminal-lock terminal))
     (hide-cursor terminal)
@@ -792,11 +859,14 @@
       ;; Is its last character a parenthesis that counts?
       (let ((last (and index (= index (1- (length line))))))
         (cond (character
-               (when (= (terminal-column terminal) (terminal-columns terminal))
-                 (new-row terminal t))
-               (setf (terminal-cells terminal)
-                     (cons (cons (terminal-count terminal) (terminal-column terminal)) (terminal-cells terminal)))
-               (put terminal (string character) 0 1 (and last (clara.syntax:color level))))
+               (let ((cells (clara.draw:in-cells (string character))))
+                 (if (= (terminal-column terminal) (terminal-columns terminal))
+                     (new-row terminal t)
+                     (when (= (length cells) 2)
+                       (make-room terminal)))
+                 (setf (terminal-cells terminal)
+                       (cons (cons (terminal-count terminal) (terminal-column terminal)) (terminal-cells terminal)))
+                 (put terminal cells 0 (length cells) (and last (clara.syntax:color level)))))
               (t
                (take-back terminal)))
         (setf (terminal-match terminal) (and last open (place terminal line open)))))

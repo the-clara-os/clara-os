@@ -60,7 +60,10 @@ at any size (lisp/type.lisp): `(clara.type:font "Sans" 24)` is one, of
 the three families that come with the system, Sans, Mono and Serif, each
 with a bold and an italic, read from their TrueType files and made into
 pictures in which a pixel at the edge of a letter takes a part of the
-colour. The windows of text, the REPL's, Emma's, Jaid's and Parker's, are
+colour. An emoji is a picture in colours, from a fourth family, Emoji,
+which is Twemoji: in a line of text, where a flag, a hand in one of its
+colours and people who are joined are one picture, and two cells wide in
+a terminal. The windows of text, the REPL's, Emma's, Jaid's and Parker's, are
 in the console's letters or in any such font
 (`clara.windows:*text-font*`). And there is a window manager (lisp/windows.lisp):
 `(clara.windows:start)` takes the screen from the console and puts windows
@@ -252,7 +255,8 @@ Layout:
                      all of which the kernel loads as it starts, and the four applications, emma.lisp, jaid.lisp, ares.lisp and settings.lisp, which the launcher loads when they are picked;
                      the build copies them to the system's directory on the ESP, \clara\<its name>, read at boot
     fonts/           the console font, Spleen 8x16, which tools/bdf2c.py turns into kernel/font.c, and the
-                     fonts of outlines, the Go fonts and Charter, which go onto the boot volume as they are
+                     fonts of outlines, the Go fonts, Charter and Twemoji, the pictures of the emoji, which go
+                     onto the boot volume as they are
     packages/        the packages that https://claraos.org/packages/ has, a directory each: the package's
                      files, and a file "package" that says what it is (the manual, "A package of your own")
     site/            the website: the front page and the user manual (manual.html), filled in from the
@@ -266,6 +270,7 @@ Layout:
                      laid out as a release, and packages laid out with their index), heard.py (what a machine played, from the file that QEMU wrote
                      of it), mkimage.sh (UTM disk), fontcheck.c (what FreeType says of a
                      font file, for the tests of lisp/type.lisp; built by hand, and no part of `make test`),
+                     emoji.py (the table of the characters that are emoji, of lisp/draw.lisp, made of Unicode's list),
                      pagecheck.py (what Chrome makes of a page, for the tests of lisp/ares.lisp: the trees of
                      lisp/host/pages.lisp; run by hand, and no part of `make test` either), host/ (the machine
                      that `make sanitize` runs the kernel's C on, and the Lisp world as far as it comes there)
@@ -321,4 +326,8 @@ Cambus, under the BSD 2-Clause license in
 the Go fonts by Bigelow & Holmes, under the BSD 3-Clause license in
 [fonts/LICENSE.go](fonts/LICENSE.go), and Charter, which Matthew Carter
 drew for Bitstream and Bitstream gave to the X Consortium, under the
-notice in [fonts/LICENSE.charter](fonts/LICENSE.charter).
+notice in [fonts/LICENSE.charter](fonts/LICENSE.charter). The pictures of
+the emoji are [Twemoji](https://github.com/twitter/twemoji), which Twitter
+and others drew, under CC BY 4.0, as the font that Mozilla made of them,
+[twemoji-colr](https://github.com/mozilla/twemoji-colr), unchanged: both
+licenses are in [fonts/LICENSE.twemoji](fonts/LICENSE.twemoji).

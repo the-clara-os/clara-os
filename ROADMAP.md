@@ -3042,6 +3042,132 @@ Infrastructure, done:
   for a processor (#238); nothing is fuzzed, as hash's parser is (#239);
   nothing looks for memory that is read before it is written (#240);
   neither job is a check that the ruleset on main asks for (#241).
+- **Emoji** (2026-11-27, version 0.0.67). An emoji is a picture in its
+  own colours wherever a text is a line, and in the REPL, which is the
+  first part of Julio's issue #62, "Emoji support across the system". The
+  language had the characters from its first day, a string holds any
+  code of Unicode and a file is UTF-8, and the screen showed a box for
+  each. The pictures are a font's, a fourth family beside Sans, Mono and
+  Serif: `Emoji`, which is Twemoji, the emoji that Twitter drew, as the
+  font that Mozilla made of them, fonts/Twemoji.Mozilla.ttf, 3,689
+  pictures in 1.4 MiB, the emoji of Unicode 14. A text in any font has
+  its emoji from there, at the font's size and on its baseline, and a
+  text in the console's letters has them two letters wide.
+  A picture is glyphs of the font laid over each other, each in a colour
+  of the font's palette (lisp/type.lisp reads the tables "COLR" and
+  "CPAL"), and is made and kept like a letter: the shades of each layer
+  and the pixel of its colour, laid on in their order by the function
+  that lays a letter on. In a line of text, characters that the font has
+  one picture for between them are that picture, which it says in its
+  table "GSUB": the two letters of a country are its flag, a hand and one
+  of the five colours of skin the hand in that colour, people and the
+  character that joins them a family, a digit and the frame of a key the
+  key, 2,298 such rows. A character that only says how another is shown,
+  the joiner and the sixteen that pick a form, shows nothing by itself;
+  U+FE0F after a character that a font of letters has makes it the
+  picture, and without it the character is the font's, so the trade mark
+  sign in a page is a letter. That is the bar, the titles of the windows
+  and the launcher's list, a page in Ares, and whatever a program draws
+  with `clara.draw:draw-text`.
+  In cells an emoji takes two, its own and the next, and nothing is
+  joined there. Which characters are emoji is Unicode's list, a table of
+  1,424 characters in lisp/draw.lisp that tools/emoji.py makes, asked
+  with `clara.draw:emoji-p`; `clara.draw:in-cells` makes of a text the
+  string that stands in cells, with `clara.draw:+taken+`, the code
+  65535, in the second cell of every emoji and without the characters
+  that show nothing, and `clara.draw:from-cells` the text of it again;
+  and `clara.draw:draw-cells` draws the picture of an emoji that has
+  `+taken+` after it across the two cells. A terminal lays what is
+  written to it and typed in it out that way, the REPL's among them: an
+  emoji that a row has one cell left for begins the next row, the key
+  that takes a character back takes both cells, what the pointer
+  highlights and Ctrl-C copies is whole emoji, as the text was written,
+  and half an emoji that is written over takes the other half with it.
+  No key types one: `(code-char 128640)`, `#\U+1F680`, the serial port,
+  and Ctrl-V for one that was copied.
+  Emma, Jaid, Parker and Settings are not taught: an emoji there is the
+  box that it was, in one cell, and is kept as it is. So is the screen
+  before the window manager has it. The system's directory is 5.6 MiB
+  where it was 4.2. Nothing of what an object is has changed, nor a
+  function in C, so the format of an image is the one it was.
+  The second opinions are FreeType's and HarfBuzz's. `fontcheck colours`
+  (tools/fontcheck.c) prints what FreeType reads of a file's pictures:
+  3,689 glyphs in colours, 33,179 layers, and a sum over every layer's
+  glyph and colour, which the host tests come to as well, beside the
+  file's row of facts. What a row of characters comes to was held
+  against HarfBuzz 15.1.0 by hand, for every line of Unicode 17's
+  emoji-test.txt, 5,225 sequences: `hb-shape --no-glyph-names
+  --no-positions --no-clusters --preserve-default-ignorables
+  --text-file=...`, and a cut copy of the host tests that wrote what
+  `clara.type::joined` and `index` come to for the same lines. Not one
+  differed; 3,669 of them are one glyph, and the rest are written
+  without their U+FE0F, which the font has no row for, or are newer
+  than the font. Twenty-two of those lines are in the host tests with
+  HarfBuzz's glyphs. The rest of the tests is on files that they put
+  together, with every pixel held against a rule: a picture's layers and
+  their colours, one that shows in part, one in the colour of the text;
+  what a file may say wrongly of its colours, which is refused, and of
+  its layers and lists, which then show and join nothing; a line of text
+  in a font and in the console's letters, with a character from each
+  font, several that are one picture, and the ones that show nothing;
+  cells in both kinds of letters, with and without `+taken+`; and a
+  terminal's rows as they are written, wrapped, scrolled, highlighted,
+  copied, typed and taken back, in the console's letters and in Mono.
+  A kernel and SBCL count the same pixels of one face at 32 pixels to
+  the em, 856 of which 492 are all of its yellow (tools/resumed.txt, on
+  all three machines), and the last form of that session opens a window
+  of emoji, which the picture on the website shows.
+  A hundred and five mistakes were planted in lisp/draw.lisp,
+  lisp/type.lisp and lisp/terminal.lisp, one at a time, in copies of the
+  tree, with the host tests up to the end of the terminal's section after
+  each. Ninety-seven were noticed. Six of the others showed what the
+  tests had not asked: a picture that is said to have the layer after
+  the last of the file's, a colour one past the palette, a flag whose
+  region is spelt out, U+FE0F after a character that the text's font
+  has, a character from the code 8192 on that both fonts have, and what
+  is highlighted beside a cell that is nobody's. Each has its check now
+  and is noticed, and so is a seventh, by which U+FE0F is taken with the
+  character before it or left to show nothing by itself, which comes to
+  the same picture. The one that is left is a guard in the terminal's
+  `put` that nothing leads to at present.
+  Measured: sixty pictures at 16 pixels to the em are made in less than
+  a tick of the clock where the processor is the computer's own, and a
+  row of five characters that is one picture is found in 20 millionths
+  of a second. The handoff reads the font too quickly to tell: three
+  x86_64 boots of this build and three of the one before said "the
+  machine is ours" between 1.35 and 1.40 seconds after QEMU was started,
+  but for one of the older build's at 1.71. What costs is the code. A
+  world that is made of the files has 2,831 functions to compile where
+  it had 2,775, and where x86_64 is emulated that takes 11.4 to 11.6
+  seconds where it took 11.0 to 11.2: four tenths of a second of the
+  first boot of every machine, and on a slow runner of CI the first
+  x86_64 boot had one second left of its ninety (issue #213). So the
+  check of a terminal in two fonts, which the first session had, is
+  tools/resumed.txt's now, whose boots take ten seconds. Typed, compiled
+  and run it was three quarters of a second of the first x86_64 boot by
+  a clock on every form of the session, of which the running is an
+  eighth of a second. That should leave the boot a little shorter than
+  it was; whole boots of the two builds in turn differ by less than
+  their noise, which is a second. The host tests have 29,830 checks where
+  they had 29,671, and three sections that take two tenths of a second
+  each on the Mac, the file's facts, the emoji and the terminal; a whole
+  run takes 88.2 and 88.5 seconds where main's took 88.7 and 88.9.
+  `make test` on the Mac, with a container running beside it, takes
+  643 seconds, the first x86_64 boot 62; in a container of
+  Ubuntu 26.04, where both machines are emulated as on CI, `make`,
+  `make test` and `make site` take 995 seconds, the first x86_64 boot
+  75 and the boot that collects at every safe point 222, which is what
+  they took before.
+  What it left: Emma shows a box for an emoji (#249), and so do Jaid,
+  Parker and Settings (#250); no key types one (#251); in cells nothing
+  is joined, and a terminal does not keep the characters that show
+  nothing (#252); the screen before the window manager shows a box
+  (#253); thirteen characters that Mono has letters for are pictures in
+  a terminal (#254); the pictures are those of Unicode 14 (#255); the
+  font is a quarter of every system (#256); a sequence that is written
+  without its U+FE0F is not one picture (#257); and, found beside it,
+  the characters that are there to be passed over and are no part of
+  emoji are still a box (#258).
 
 Infrastructure, for sessions with budget left over:
 

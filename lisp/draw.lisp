@@ -10,7 +10,8 @@
 ;;;; for each character, or in a font of outlines, at any size, which is the
 ;;;; business of lisp/type.lisp: as a line, each character as wide as it is,
 ;;;; or a character to the cell, in cells of one size, which is what a
-;;;; window of text is made of.
+;;;; window of text is made of. A character that is an emoji is a picture in
+;;;; colours, from a font of those, and takes two cells.
 ;;;;
 ;;;; Whatever is drawn is cut to what the surface has of it, and to the part
 ;;;; of the surface that drawing is kept to for the time being (WITH-CLIP):
@@ -32,6 +33,7 @@
            "ALLOCATE-SURFACE" "FREE-SURFACE" "SURFACE-P" "SURFACE-WIDTH" "SURFACE-HEIGHT" "PIXEL"
            "FILL-RECTANGLE" "DRAW-RECTANGLE" "COPY-RECTANGLE" "DRAW-BITMAP" "DRAW-SHADES" "DRAW-TEXT" "TEXT-WIDTH"
            "DRAW-CELLS" "CELL-WIDTH" "CELL-HEIGHT" "PROVIDE-FONTS"
+           "EMOJI-P" "+TAKEN+" "IN-CELLS" "FROM-CELLS"
            "WITH-CLIP" "DAMAGE" "ADD-DAMAGE" "TAKE-DAMAGE" "SHOW"))
 (in-package "CLARA.DRAW")
 
@@ -66,7 +68,7 @@
 (defvar *red* '(16 . 8))           ; where red is in a pixel: how far up its bits begin, and how many there are
 (defvar *green* '(8 . 8))
 (defvar *blue* '(0 . 8))
-(defvar *fonts* nil)               ; what lisp/type.lisp handed over: five functions in a list, or NIL
+(defvar *fonts* nil)               ; what lisp/type.lisp handed over: eight functions in a list, or NIL
 
 ;; SURFACE, when it is one that can be drawn on.
 (defun live (surface)
@@ -320,31 +322,138 @@
 ;; is loaded after this file and hands over its functions: how wide a
 ;; string is in a font, and the string drawn; and for text in cells how wide
 ;; a cell of a font is, how high, and a string drawn a character to the cell.
-(defun provide-fonts (width draw cell-width cell-height cells)
-  (setq *fonts* (list width draw cell-width cell-height cells))
+;; The last three are for a text in the console's letters that has emoji in
+;; it, whose pictures are a font's: how wide it is, the text drawn, and the
+;; text drawn a character to the cell.
+(defun provide-fonts (width draw cell-width cell-height cells &optional letters-width letters letter-cells)
+  (setq *fonts* (list width draw cell-width cell-height cells letters-width letters letter-cells))
   t)
 
 (defun fonts ()
   (or *fonts*
       (error "there is nothing here that draws in a font: lisp/type.lisp is not loaded")))
 
+;;; Emoji
+;;;
+;;; A character that is a picture and not a letter. Which characters those
+;;; are is Unicode's to say, by the property that it calls Emoji, and the
+;;; table here is made of its list (tools/emoji.py). The pictures are a
+;;; font's, the family Emoji of lisp/type.lisp, which draws them: in a line
+;;; of text an emoji is as wide as its picture, and several characters that
+;;; the font has one picture for between them, a flag, a hand in one of its
+;;; colours, are that picture. In cells an emoji takes two, its own and the
+;;; one after it, and nothing is put together: a cell is a character. The
+;;; string that is drawn has +TAKEN+ in the second cell, a character that
+;;; stands for a cell which another's picture lies in and shows nothing of
+;;; its own, so that a place in such a string is still a cell. IN-CELLS
+;;; makes that string of a text, and FROM-CELLS the text of it again.
+
+;; Unicode 17.0: 1424 characters in 146 runs. Made by tools/emoji.py, and not by hand.
+(defvar *emoji*
+  #(#x203C #x203C #x2049 #x2049 #x2122 #x2122 #x2139 #x2139 #x2194 #x2199 #x21A9 #x21AA #x231A #x231B #x2328 #x2328
+    #x23CF #x23CF #x23E9 #x23F3 #x23F8 #x23FA #x24C2 #x24C2 #x25AA #x25AB #x25B6 #x25B6 #x25C0 #x25C0 #x25FB #x25FE
+    #x2600 #x2604 #x260E #x260E #x2611 #x2611 #x2614 #x2615 #x2618 #x2618 #x261D #x261D #x2620 #x2620 #x2622 #x2623
+    #x2626 #x2626 #x262A #x262A #x262E #x262F #x2638 #x263A #x2640 #x2640 #x2642 #x2642 #x2648 #x2653 #x265F #x2660
+    #x2663 #x2663 #x2665 #x2666 #x2668 #x2668 #x267B #x267B #x267E #x267F #x2692 #x2697 #x2699 #x2699 #x269B #x269C
+    #x26A0 #x26A1 #x26A7 #x26A7 #x26AA #x26AB #x26B0 #x26B1 #x26BD #x26BE #x26C4 #x26C5 #x26C8 #x26C8 #x26CE #x26CF
+    #x26D1 #x26D1 #x26D3 #x26D4 #x26E9 #x26EA #x26F0 #x26F5 #x26F7 #x26FA #x26FD #x26FD #x2702 #x2702 #x2705 #x2705
+    #x2708 #x270D #x270F #x270F #x2712 #x2712 #x2714 #x2714 #x2716 #x2716 #x271D #x271D #x2721 #x2721 #x2728 #x2728
+    #x2733 #x2734 #x2744 #x2744 #x2747 #x2747 #x274C #x274C #x274E #x274E #x2753 #x2755 #x2757 #x2757 #x2763 #x2764
+    #x2795 #x2797 #x27A1 #x27A1 #x27B0 #x27B0 #x27BF #x27BF #x2934 #x2935 #x2B05 #x2B07 #x2B1B #x2B1C #x2B50 #x2B50
+    #x2B55 #x2B55 #x3030 #x3030 #x303D #x303D #x3297 #x3297 #x3299 #x3299 #x1F004 #x1F004 #x1F0CF #x1F0CF #x1F170 #x1F171
+    #x1F17E #x1F17F #x1F18E #x1F18E #x1F191 #x1F19A #x1F1E6 #x1F1FF #x1F201 #x1F202 #x1F21A #x1F21A #x1F22F #x1F22F #x1F232 #x1F23A
+    #x1F250 #x1F251 #x1F300 #x1F321 #x1F324 #x1F393 #x1F396 #x1F397 #x1F399 #x1F39B #x1F39E #x1F3F0 #x1F3F3 #x1F3F5 #x1F3F7 #x1F4FD
+    #x1F4FF #x1F53D #x1F549 #x1F54E #x1F550 #x1F567 #x1F56F #x1F570 #x1F573 #x1F57A #x1F587 #x1F587 #x1F58A #x1F58D #x1F590 #x1F590
+    #x1F595 #x1F596 #x1F5A4 #x1F5A5 #x1F5A8 #x1F5A8 #x1F5B1 #x1F5B2 #x1F5BC #x1F5BC #x1F5C2 #x1F5C4 #x1F5D1 #x1F5D3 #x1F5DC #x1F5DE
+    #x1F5E1 #x1F5E1 #x1F5E3 #x1F5E3 #x1F5E8 #x1F5E8 #x1F5EF #x1F5EF #x1F5F3 #x1F5F3 #x1F5FA #x1F64F #x1F680 #x1F6C5 #x1F6CB #x1F6D2
+    #x1F6D5 #x1F6D8 #x1F6DC #x1F6E5 #x1F6E9 #x1F6E9 #x1F6EB #x1F6EC #x1F6F0 #x1F6F0 #x1F6F3 #x1F6FC #x1F7E0 #x1F7EB #x1F7F0 #x1F7F0
+    #x1F90C #x1F93A #x1F93C #x1F945 #x1F947 #x1F9FF #x1FA70 #x1FA7C #x1FA80 #x1FA8A #x1FA8E #x1FAC6 #x1FAC8 #x1FAC8 #x1FACD #x1FADC
+    #x1FADF #x1FAEA #x1FAEF #x1FAF8))
+
+;; What stands in the cell after an emoji's: the last code of the first
+;; 65536, which Unicode keeps free of characters for good.
+(defconstant +taken+ (code-char #xFFFF))
+
+;; Is CHARACTER an emoji?
+(defun emoji-p (character)
+  (let ((code (char-code character)) (low 0) (high (- (floor (length *emoji*) 2) 1)))
+    ;; The first run that ends at the code or after it.
+    (loop
+      (when (>= low high)
+        (return))
+      (let ((middle (floor (+ low high) 2)))
+        (if (< (svref *emoji* (+ middle middle 1)) code)
+            (setq low (+ middle 1))
+            (setq high middle))))
+    (and (<= (svref *emoji* (+ low low)) code) (<= code (svref *emoji* (+ low low 1))))))
+
+;; Does CHARACTER show nothing by itself? The sixteen that say which of its
+;; forms the character before them is to be shown in, the one that joins
+;; two into one picture, the frame of a key around a digit, and the letters
+;; that the region of a flag is spelt in.
+(defun silent-p (character)
+  (let ((code (char-code character)))
+    (or (<= #xFE00 code #xFE0F) (= code #x200D) (= code #x20E3) (<= #xE0020 code #xE007F))))
+
+;; Is STRING one that is drawn as it always was: no emoji in it, and none of
+;; the characters that go with one? Every one of those has a code from 8192
+;; on, and so has +TAKEN+.
+(defun plain-p (string)
+  (dotimes (i (length string) t)
+    (when (>= (char-code (char string i)) #x2000)
+      (return nil))))
+
+;; STRING as it stands in cells: +TAKEN+ after every emoji, and none of the
+;; characters that show nothing by themselves. The string itself when it
+;; has neither. A +TAKEN+ that it had is left out too, so a string that
+;; stands in cells already comes back as it is.
+(defun in-cells (string)
+  (if (plain-p string)
+      string
+      (with-output-to-string (out)
+        (dotimes (i (length string))
+          (let ((character (char string i)))
+            (unless (or (char= character +taken+) (silent-p character))
+              (write-char character out)
+              (when (emoji-p character)
+                (write-char +taken+ out))))))))
+
+;; The text of a string that stands in cells: STRING without its +TAKEN+s,
+;; or itself when it has none.
+(defun from-cells (string)
+  (if (plain-p string)
+      string
+      (with-output-to-string (out)
+        (dotimes (i (length string))
+          (let ((character (char string i)))
+            (unless (char= character +taken+)
+              (write-char character out)))))))
+
 ;; How many pixels wide STRING is when it is drawn: in the console's font,
-;; in which it is CLARA.FONT:+HEIGHT+ high, or in FONT, one of
-;; CLARA.TYPE:FONT's.
+;; in which it is CLARA.FONT:+HEIGHT+ high and an emoji as wide as two of
+;; its letters, or in FONT, one of CLARA.TYPE:FONT's.
 (defun text-width (string &optional font)
-  (if font
-      (funcall (nth 0 (fonts)) string font)
-      (* clara.font:+width+ (length string))))
+  (cond (font
+         (funcall (nth 0 (fonts)) string font))
+        ((or (null (nth 5 *fonts*)) (plain-p string))
+         (* clara.font:+width+ (length string)))
+        (t
+         (funcall (nth 5 *fonts*) string))))
 
 ;; STRING, its first character's upper left corner at X and Y, all on one
-;; line: in the console's font, or in FONT. A character that the font has no
-;; glyph for shows as the glyph that the font has for those, a box. The
-;; glyphs are drawn in COLOR, and what is around them in BACKGROUND, or not
-;; at all without one.
+;; line: in the console's font, or in FONT. An emoji is its picture, in the
+;; picture's own colours, and so are characters that the font of the
+;; pictures draws as one. Any other character that the font has no glyph
+;; for shows as the glyph that the font has for those, a box. The glyphs
+;; are drawn in COLOR, and what is around them in BACKGROUND, or not at all
+;; without one.
 (defun draw-text (surface x y string color &optional background font)
-  (if font
-      (funcall (nth 1 (fonts)) surface x y string color background font)
-      (draw-letters surface x y string color background)))
+  (cond (font
+         (funcall (nth 1 (fonts)) surface x y string color background font))
+        ((or (null (nth 6 *fonts*)) (plain-p string))
+         (draw-letters surface x y string color background))
+        (t
+         (funcall (nth 6 *fonts*) surface x y string color background))))
 
 ;; Text in cells: a character to the cell, and every cell of one size, so
 ;; that a row of text is so many cells, whatever its characters are. That
@@ -365,16 +474,24 @@
 
 ;; STRING, a character to the cell, the first cell's upper left corner at X
 ;; and Y, in the console's font or in FONT. A character stands in the middle
-;; of its cell, and what of it lies outside the cell is not drawn. The
-;; glyphs are drawn in COLOR, and the cells are filled with BACKGROUND
-;; first, or left as they are without one.
+;; of its cell, and what of it lies outside the cell is not drawn. An emoji
+;; that has +TAKEN+ after it is its picture, in the middle of the two cells;
+;; one that has not is a character that the font has no glyph for, like any
+;; other. The glyphs are drawn in COLOR, and the cells are filled with
+;; BACKGROUND first, or left as they are without one.
 (defun draw-cells (surface x y string color &optional background font)
-  (if font
-      (funcall (nth 4 (fonts)) surface x y string color background font)
-      (draw-letters surface x y string color background)))
+  (cond (font
+         (funcall (nth 4 (fonts)) surface x y string color background font))
+        ((or (null (nth 7 *fonts*)) (plain-p string))
+         (draw-letters surface x y string color background))
+        (t
+         (funcall (nth 7 *fonts*) surface x y string color background))))
 
+;; STRING in the console's letters, a character to the cell: its letter, or
+;; the box that stands for a character without one, and nothing for +TAKEN+.
 (defun draw-letters (surface x y string color background)
-  (multiple-value-bind (left top right bottom) (inside surface x y (text-width string) clara.font:+height+)
+  (multiple-value-bind (left top right bottom)
+      (inside surface x y (* clara.font:+width+ (length string)) clara.font:+height+)
     (when left
       (let ((row (+ (surface-address surface) (* top (surface-pitch surface))))
             (pitch (surface-pitch surface))
@@ -391,7 +508,9 @@
              (+ row (* 4 from)) pitch clara.font:*glyphs*
              (+ (- top y)
                 (* clara.font:+height+
-                   (- (if (<= clara.font:+first+ code clara.font:+last+) code (1+ clara.font:+last+))
+                   (- (cond ((<= clara.font:+first+ code clara.font:+last+) code)
+                            ((= code #xFFFF) 32)
+                            (t (1+ clara.font:+last+)))
                       clara.font:+first+)))
              (- bottom top) (- to from) color background (- (+ cell clara.font:+width+) to)))
           (setq i (1+ i))))

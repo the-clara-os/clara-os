@@ -134,6 +134,40 @@ error: this surface is of a machine that was switched off: a world is saved with
           (clara.draw:surface-height face) (clara.windows:close-window (clara.terminal:terminal-window terminal))
           clara.windows:*text-font*))
 (12 24 72 24 NIL NIL)
+> (mapcar (lambda (said)                                                 ; text in cells, in a font: a terminal whose cells
+            (let* ((font (apply #'clara.type:font said))                ; are as large as the font's. How many pixels of
+                   (terminal (clara.terminal:open-terminal "Letters" :columns 12 :rows 2 :font font :x 300 :y 300))
+                   (face (clara.windows:window-surface (clara.terminal:terminal-window terminal))) ; its window are the
+                   (ink (clara.draw:color 232 227 244)) (paper (clara.draw:color 30 27 46)) (full 0) (part 0)) ; ink's,
+              (write-string "(g_j) W%K" (clara.terminal:terminal-stream terminal))             ; and how many lie between
+              (dotimes (y (clara.draw:surface-height face))                                    ; that and the paper
+                (dotimes (x (clara.draw:surface-width face))
+                  (let ((p (clara.draw:pixel face x y)))
+                    (cond ((= p ink) (setq full (+ full 1)))
+                          ((/= p paper) (setq part (+ part 1)))))))
+              (list (clara.draw:cell-width font) (clara.draw:cell-height font) (clara.draw:surface-width face)
+                    (clara.draw:surface-height face) full part
+                    (clara.windows:close-window (clara.terminal:terminal-window terminal)))))
+          '(("Mono" 15 :bold t) ("Serif" 18 :bold t :italic t :underline t)))
+((9 19 108 38 113 414 NIL) (18 23 216 46 424 509 NIL))
+> (let ((s (clara.draw:allocate-surface 40 40)) (yellow (clara.draw:color 255 204 77)) (drawn 0) (whole 0)) ; an emoji is a
+    (clara.draw:fill-rectangle s 0 0 40 40 0)                                    ; picture in colours of its own, layers of
+    (clara.draw:draw-text s 4 2 (string (code-char 128512)) 0 nil (clara.type:font "Emoji" 32)) ; the font's glyphs: how
+    (dotimes (y 40)                                                              ; many pixels of a face it reaches, and how
+      (dotimes (x 40)                                                            ; many are all of the face's yellow
+        (let ((pixel (clara.draw:pixel s x y)))
+          (unless (zerop pixel) (setq drawn (1+ drawn)))
+          (when (= pixel yellow) (setq whole (1+ whole))))))
+    (clara.draw:free-surface s)
+    (list drawn whole))
+(856 492)
+> (let* ((rocket (string (code-char 128640))) (sans (clara.type:font "Sans" 13)) ; as wide as its picture in a line, two of
+         (flag (format nil "~a~a" (code-char 127482) (code-char 127475))))        ; the console's letters among those; the two
+    (list (clara.draw:emoji-p (code-char 128640)) (clara.draw:text-width rocket) (clara.draw:text-width rocket sans) ; letters
+          (clara.draw:text-width flag) (clara.draw:text-width flag sans)         ; of a flag are one picture; and in cells
+          (string= (clara.draw:in-cells (format nil "a~a~ab" rocket (code-char 65039))) ; an emoji has a second one, and
+                   (format nil "a~a~ab" rocket clara.draw:+taken+))))            ; what says how it is shown has none
+(T 16 13 16 13 T)
 > (list (clara.windows:window-surface *window*) (clara.windows:close-window *window*))
 (NIL NIL)
 > (progn (setq *window* (clara.windows:open-window "A picture" 200 120 :x 540 :y 410))
@@ -148,3 +182,8 @@ error: this surface is of a machine that was switched off: a world is saved with
         (until (= (clara.draw:pixel (clara.windows:window-surface (cadr (clara.windows:windows))) 0 0)
                   (clara.draw:color 232 227 244))))
 (OK OK)
+> (let ((terminal (clara.terminal:open-terminal (format nil "Emoji ~a" (code-char 127774)) :columns 24 :rows 2 :x 64 :y 262)))
+    (format (clara.terminal:terminal-stream terminal) " ~{~a ~}"                 ; a window of emoji: two cells each, and
+            (mapcar #'code-char '(9728 127752 128640 127881 128075 10084 128187))) ; one in the letters of its title
+    (list (length (clara.windows:window-title (clara.terminal:terminal-window terminal))) (length (clara.windows:windows))))
+(7 5)
