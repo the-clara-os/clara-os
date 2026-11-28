@@ -2385,14 +2385,29 @@ architectures (kernel/vm.c).
   and the chain of methods that it is the first of, and is the only kind
   that makes a closure when it is called.
 - The classes that the language begins with are the standard's, under
-  the standard's names, and no others: the class of 5 is INTEGER, where
-  SBCL says FIXNUM, since a method for FIXNUM is a program that runs
-  under one Common Lisp and not the next. A type that DEFSTRUCT made and
-  a type of condition are classes, made when they are first asked for;
-  what has no class of its own, a thread, is a T. A method can be
-  written for any of them. Only a class that DEFCLASS made can have a
-  class below it, and there is one kind of such class: no metaobject
-  protocol.
+  the standard's names, and one more: FIXNUM, below INTEGER, which is
+  the class of every integer (Julio's issue #67). The standard has
+  FIXNUM as a type and names no class for it, and until 0.0.70 the class
+  of 5 was INTEGER here on that ground: a method for FIXNUM is a program
+  that runs under one Common Lisp and maybe not the next. But the Common
+  Lisps that such programs are written against have the class, all four
+  that were asked, SBCL, CCL, ECL and ABCL, and a program with a method
+  for FIXNUM was refused here where each of them takes it. A method for
+  INTEGER fits every integer as before, and is still the one that the
+  standard promises. Every integer is a FIXNUM because there are no
+  larger ones: the substrate says INTEGER of each, and CLASS-OF and a
+  call make the class FIXNUM of that (`class-of-kind`, lisp/clos.lisp).
+  The day there are larger integers they are of another class below
+  INTEGER, BIGNUM in those four, and the substrate has to say which an
+  integer is; until then there is no class BIGNUM, which nothing would
+  be of. TYPEP takes FIXNUM as it takes any class. TYPE-OF is the name
+  of the class, so the type of 5 is FIXNUM, where the four say four
+  things, `(INTEGER 0 4611686018427387903)` in SBCL: a type in a list,
+  which TYPEP does not know here. A type that DEFSTRUCT made and a type
+  of condition are classes, made when they are first asked for; what has
+  no class of its own, a thread, is a T. A method can be written for any
+  of them. Only a class that DEFCLASS made can have a class below it,
+  and there is one kind of such class: no metaobject protocol.
 - MAKE-INSTANCE refuses a keyword that fills no slot and that no method
   of INITIALIZE-INSTANCE or SHARED-INITIALIZE takes, as the standard has
   it: that is what finds a keyword that was typed wrongly. A call of any

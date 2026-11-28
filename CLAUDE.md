@@ -1189,7 +1189,7 @@ Rules:
   where the answer is an error and to go well where the answer shows a
   `#<`, and to give the same text otherwise; and by a kernel,
   x86_64-objects of `make test`. So a form
-  there shows nothing that the two systems put differently (the class of
+  there shows nothing that the two systems put differently (the type of
   5, the text of an error of the substrate's), and every error in it is
   one that lisp/clos.lisp words itself. What only a kernel can answer is
   in tools/session.txt, tools/resumed.txt and the manual. A new thing in
@@ -1204,7 +1204,15 @@ Rules:
   that it refused among the ones below the classes it was to be a kind
   of, and fails when one of those is defined again, which is why the
   classes that are defined again there are a family that is never
-  refused.
+  refused. Under SBCL a form for lisp/clos.lisp is evaluated by SBCL's
+  interpreter, and the same form for SBCL's own object system is
+  compiled (`answer-of`, lisp/host/tests.lisp): the file itself is
+  compiled, a form asks the same of it either way, and compiling every
+  form was a quarter of what that section of the host tests takes.
+  SBCL's side stays compiled, as its users' forms are: interpreted, it
+  answers one form of the transcript differently (the next MAKE-INSTANCE
+  fills a slot again that the instances share and that was made
+  unbound).
 - The directives of FORMAT (lisp/format.lisp, the package CLARA.FORMAT,
   Julio's issues #56 and #81; DESIGN.md has what was decided). The
   substrate does five, `~A ~S ~D ~%` and `~~` with nothing between the
@@ -1339,6 +1347,24 @@ Rules:
   lies: `address-of` there hands out numbers of its own, which an object
   keeps. A self-test text (kernel/lisp/lisp.c) that shows a marked
   structure cuts the address out of what it compares.
+- The class of an integer is FIXNUM, below INTEGER (Julio's issue #67;
+  DESIGN.md has what was decided). The substrate says INTEGER of every
+  integer (`%TYPE-OF`), and `class-of-kind` makes the class FIXNUM of
+  that, for CLASS-OF and for a call alike (`class-in-call`): a class
+  that the language begins with and that the substrate has no name for
+  is a row of the table in lisp/clos.lisp and a line there. TYPEP has no
+  line of its own for FIXNUM, which is a class like any other to it, and
+  TYPE-OF is the name of the class. There is no class BIGNUM: the day
+  there are larger integers the substrate has to say which an integer
+  is, and the class comes with them. SBCL says FIXNUM of the class too,
+  so tools/objects.txt asks both systems for it, and for a method for
+  FIXNUM beside one for INTEGER. What SBCL puts differently stays out
+  of that file: the type of an integer that is not negative, which is
+  `(INTEGER 0 4611686018427387903)` there and BIT for a 0 or a 1 (of a
+  negative one it says FIXNUM, and that is asked), and the class BIGNUM,
+  which it has. Those are asked of lisp/clos.lisp alone in the host
+  tests, with what SBCL says beside them, and of a kernel in the manual
+  and in tools/resumed.txt.
 - A function that SETF writes with, `(setf name)`, lives in a symbol that
   the name keeps under `cl::%setf` (`%setf-name`, lisp/boot.lisp). `%setf`
   calls that symbol when it has a function as the form is expanded, and

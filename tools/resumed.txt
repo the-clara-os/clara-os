@@ -38,7 +38,7 @@
 error: CAR wants a list, and #<STANDARD-OBJECT {...}> is not one
 > (list (class-name (class-of 5)) (class-of "five") (find-class 'low-fuel) (class-of *tank*) (type-of 'five)
         (class-name (class-of *standard-output*)) (class-of (find-class 'tank)) #'drain)
-(INTEGER #<BUILT-IN-CLASS STRING> #<BUILT-IN-CLASS LOW-FUEL> #<STANDARD-CLASS TANK> SYMBOL STREAM #<BUILT-IN-CLASS STANDARD-CLASS> #<STANDARD-GENERIC-FUNCTION DRAIN (3)>)
+(FIXNUM #<BUILT-IN-CLASS STRING> #<BUILT-IN-CLASS LOW-FUEL> #<STANDARD-CLASS TANK> SYMBOL STREAM #<BUILT-IN-CLASS STANDARD-CLASS> #<STANDARD-GENERIC-FUNCTION DRAIN (3)>)
 > (list (functionp #'drain) (typep #'drain 'generic-function) (class-name (class-of #'drain))
         (funcall (symbol-function 'drain) (make-point :x 4) 5) (clara.clos::plain-text #'drain))
 (T T STANDARD-GENERIC-FUNCTION (A-POINT 4 5) "#<FUNCTION DRAIN>")
